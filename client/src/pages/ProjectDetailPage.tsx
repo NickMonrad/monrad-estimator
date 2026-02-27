@@ -30,6 +30,7 @@ export default function ProjectDetailPage() {
     { label: 'Timeline', href: `/projects/${id}/timeline`, icon: '📅', desc: 'Plan and schedule work' },
     { label: 'Resource Profile', href: `/projects/${id}/resources`, icon: '👥', desc: 'Engineering and overlay profile' },
     { label: 'Documents', href: `/projects/${id}/documents`, icon: '📄', desc: 'Generate scope doc and SOW' },
+    { label: 'Template Library', href: `/templates`, icon: '🧩', desc: 'Browse and manage feature templates' },
   ]
 
   return (
@@ -39,9 +40,9 @@ export default function ProjectDetailPage() {
           <div className="flex items-center gap-3">
             <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
               <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
-                <span className="text-white text-xs font-bold">W</span>
+                <span className="text-white text-xs font-bold">M</span>
               </div>
-              <span className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">Westpac Estimator</span>
+              <span className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">Monrad Estimator</span>
             </button>
             <span className="text-gray-300">/</span>
             <span className="text-gray-600 text-sm">{project.name}</span>

@@ -28,7 +28,7 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="w-full max-w-md bg-white rounded-xl shadow-md p-8">
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">Westpac Estimator</h1>
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">Monrad Estimator</h1>
         <p className="text-gray-500 mb-6">Create your account</p>
         {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>}
         <form onSubmit={handleSubmit} className="space-y-4">

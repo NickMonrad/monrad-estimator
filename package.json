@@ -1,5 +1,5 @@
 {
-  "name": "westpac-estimator",
+  "name": "monrad-estimator",
   "private": true,
   "workspaces": ["client", "server"],
   "scripts": {

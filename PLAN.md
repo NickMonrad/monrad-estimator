@@ -1,4 +1,4 @@
-# Westpac Estimator — Implementation Plan
+# Monrad Estimator — Implementation Plan
 
 ## Problem
 Replace a spreadsheet-based estimation process with a structured web application that manages project backlogs, resource profiling, scheduling, and generates customer-facing documents.
@@ -98,7 +98,7 @@ Epic
 
 ## Phased Build Plan
 
-### Phase 1 — Foundation
+### Phase 1 — Foundation ✅
 - Repo setup (monorepo: `/client`, `/server`)
 - Vite + React + TypeScript + Tailwind (client)
 - Express + TypeScript + Prisma + PostgreSQL (server)
@@ -106,13 +106,15 @@ Epic
 - Auth (JWT login/register)
 - Project CRUD
 
-### Phase 2 — Backlog
+### Phase 2 — Backlog ✅
 - Backlog hierarchy data model + API
 - Backlog tree UI (Epic/Feature/Story/Task)
 - Manual item creation/editing
 - Resource type management
+- Project search by name
+- Bidirectional hours/days task input (default 7.6h/day)
 
-### Phase 3 — Templates
+### Phase 3 — Templates ✅
 - Feature Template data model + API
 - Template Library UI (admin)
 - Template-based backlog generation (select template + complexity → creates tasks)
@@ -155,6 +157,12 @@ Epic
 - "Suggest templates" feature: AI reads brief → recommends Feature Templates at appropriate S/M/L/XL complexity
 
 ---
+
+## Backlog (future enhancements)
+
+| Item | Description |
+|---|---|
+| Password Reset | Forgot password / reset flow. Email provider (SendGrid or Resend) sends reset link. UI: forgot password link on login page → email entry → token link → new password form. Server: time-limited hashed reset token stored in DB. |
 
 ## Key Decisions / Notes
 - Hours are stored at Task level; days are derived (assume configurable hours/day, default 8)
