@@ -139,6 +139,21 @@ Epic
 - Statement of Work template (PDF + Word)
 - Document config UI (section toggles, branding)
 
+### Phase 8 — Cost Basis & Rate Cards
+- Global default hourly rates per resource type (admin-managed)
+- Per-project rate overrides (locked at project level, versioned)
+- Per-resource-type discounts applied to P×Q subtotals
+- Project-level discounts (value threshold, duration threshold, manual) — additive, applied to subtotal or grand total
+- Cost summary: hours × rate per resource type → subtotals → discount lines → net total
+- Cost section added to SOW document output
+
+### Phase 9 — AI Backlog Generator
+- Configurable AI provider (OpenAI GPT-4o and Anthropic Claude, switchable)
+- API key management (server-side env config)
+- "Generate from brief" flow: paste customer brief → AI returns structured draft backlog (Epics/Features/Stories/Tasks with hours + resource types)
+- Preview and edit generated backlog before importing
+- "Suggest templates" feature: AI reads brief → recommends Feature Templates at appropriate S/M/L/XL complexity
+
 ---
 
 ## Key Decisions / Notes
@@ -146,4 +161,5 @@ Epic
 - Multiple projects are fully isolated
 - Template library is shared across all projects (global)
 - Resource types are project-scoped but seeded from a global default set
-- SOW cost basis is optional (hours × rate) — can be added as Phase 8
+- SOW cost basis: per-resource discounts on P×Q subtotals; project-level discounts (value/duration/manual) are additive on subtotal or grand total
+- AI provider is configurable (OpenAI GPT-4o or Anthropic Claude), API keys stored server-side

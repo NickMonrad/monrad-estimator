@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String
+  password  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  projects  Project[]
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  customer    String?
+  status      ProjectStatus @default(DRAFT)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  owner       User          @relation(fields: [ownerId], references: [id])
+  ownerId     String
+  epics       Epic[]
+  resourceTypes ResourceType[]
+}
+
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  REVIEW
+  COMPLETE
+  ARCHIVED
+}
+
+model ResourceType {
+  id        String           @id @default(cuid())
+  name      String
+  category  ResourceCategory
+  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  tasks     Task[]
+  templateTasks TemplateTask[]
+}
+
+enum ResourceCategory {
+  ENGINEERING
+  GOVERNANCE
+  PROJECT_MANAGEMENT
+}
+
+model Epic {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  order       Int      @default(0)
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  features    Feature[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Feature {
+  id           String      @id @default(cuid())
+  name         String
+  description  String?
+  assumptions  String?
+  order        Int         @default(0)
+  epic         Epic        @relation(fields: [epicId], references: [id], onDelete: Cascade)
+  epicId       String
+  userStories  UserStory[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+model UserStory {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  assumptions String?
+  order       Int      @default(0)
+  feature     Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  featureId   String
+  tasks       Task[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Task {
+  id             String       @id @default(cuid())
+  name           String
+  description    String?
+  assumptions    String?
+  hoursEffort    Float        @default(0)
+  order          Int          @default(0)
+  userStory      UserStory    @relation(fields: [userStoryId], references: [id], onDelete: Cascade)
+  userStoryId    String
+  resourceType   ResourceType @relation(fields: [resourceTypeId], references: [id])
+  resourceTypeId String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+// Global feature templates (shared across all projects)
+model FeatureTemplate {
+  id          String         @id @default(cuid())
+  name        String
+  category    String?
+  description String?
+  tasks       TemplateTask[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model TemplateTask {
+  id                String          @id @default(cuid())
+  name              String
+  hoursSmall        Float           @default(0)
+  hoursMedium       Float           @default(0)
+  hoursLarge        Float           @default(0)
+  hoursExtraLarge   Float           @default(0)
+  template          FeatureTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  templateId        String
+  resourceType      ResourceType?   @relation(fields: [resourceTypeId], references: [id])
+  resourceTypeId    String?
+  resourceTypeName  String          // fallback name if no project-scoped resource type linked
+}
