@@ -6,6 +6,12 @@ import { useAuth } from '../hooks/useAuth'
 
 const HOURS_PER_DAY = 7.6
 
+interface GlobalResourceType {
+  id: string
+  name: string
+  category: string
+}
+
 interface TemplateTask {
   id: string
   templateId: string
@@ -41,6 +47,11 @@ export default function TemplateLibraryPage() {
   const { data: templates = [], isLoading } = useQuery<FeatureTemplate[]>({
     queryKey: ['templates'],
     queryFn: () => api.get('/templates').then(r => r.data),
+  })
+
+  const { data: globalResourceTypes = [] } = useQuery<GlobalResourceType[]>({
+    queryKey: ['global-resource-types'],
+    queryFn: () => api.get('/global-resource-types').then(r => r.data),
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['templates'] })
@@ -182,6 +193,7 @@ export default function TemplateLibraryPage() {
                                 <td colSpan={7} className="py-2">
                                   <TaskForm
                                     initial={{ name: task.name, hoursSmall: task.hoursSmall, hoursMedium: task.hoursMedium, hoursLarge: task.hoursLarge, hoursExtraLarge: task.hoursExtraLarge, resourceTypeName: task.resourceTypeName }}
+                                    globalResourceTypes={globalResourceTypes}
                                     onSave={(data) => updateTask.mutate({ templateId: tpl.id, taskId: task.id, data })}
                                     onCancel={() => setEditingTaskId(null)}
                                     saving={updateTask.isPending}
@@ -212,6 +224,7 @@ export default function TemplateLibraryPage() {
                     {addingTaskForId === tpl.id ? (
                       <TaskForm
                         initial={taskForm}
+                        globalResourceTypes={globalResourceTypes}
                         onSave={(data) => createTask.mutate({ templateId: tpl.id, data })}
                         onCancel={() => setAddingTaskForId(null)}
                         saving={createTask.isPending}
@@ -271,14 +284,15 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
   )
 }
 
-function TaskForm({ initial, onSave, onCancel, saving }: {
+function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
   initial: { name: string; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number; resourceTypeName: string }
+  globalResourceTypes: GlobalResourceType[]
   onSave: (data: typeof initial) => void
   onCancel: () => void
   saving: boolean
 }) {
   const [form, setForm] = useState(initial)
-  const fText = (field: 'name' | 'resourceTypeName') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const fText = (field: 'name') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(v => ({ ...v, [field]: e.target.value }))
   const fNum = (field: 'hoursSmall' | 'hoursMedium' | 'hoursLarge' | 'hoursExtraLarge') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(v => ({ ...v, [field]: parseFloat(e.target.value) || 0 }))
@@ -288,8 +302,16 @@ function TaskForm({ initial, onSave, onCancel, saving }: {
       <div className="grid grid-cols-2 gap-2">
         <input placeholder="Task name *" value={form.name} onChange={fText('name')}
           className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
-        <input placeholder="Resource type name *" value={form.resourceTypeName} onChange={fText('resourceTypeName')}
-          className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        {globalResourceTypes.length > 0 ? (
+          <select value={form.resourceTypeName} onChange={e => setForm(v => ({ ...v, resourceTypeName: e.target.value }))}
+            className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400">
+            <option value="">Resource type *</option>
+            {globalResourceTypes.map(gt => <option key={gt.id} value={gt.name}>{gt.name}</option>)}
+          </select>
+        ) : (
+          <input placeholder="Resource type name *" value={form.resourceTypeName} onChange={e => setForm(v => ({ ...v, resourceTypeName: e.target.value }))}
+            className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        )}
       </div>
       <div className="grid grid-cols-4 gap-2">
         {(['hoursSmall', 'hoursMedium', 'hoursLarge', 'hoursExtraLarge'] as const).map((field, i) => (
