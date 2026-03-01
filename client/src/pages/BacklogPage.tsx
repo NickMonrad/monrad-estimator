@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
-import type { Epic, ResourceType } from '../types/backlog'
+import type { Epic, ResourceType, Project } from '../types/backlog'
 import FeatureList from '../components/backlog/FeatureList'
 
 export default function BacklogPage() {
@@ -17,7 +17,7 @@ export default function BacklogPage() {
   const [editingEpicId, setEditingEpicId] = useState<string | null>(null)
   const [epicForm, setEpicForm] = useState({ name: '', description: '' })
 
-  const { data: project } = useQuery({
+  const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
     queryFn: () => api.get(`/projects/${projectId}`).then(r => r.data),
   })
@@ -32,7 +32,7 @@ export default function BacklogPage() {
     queryFn: () => api.get(`/projects/${projectId}/resource-types`).then(r => r.data),
   })
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  const hoursPerDay = project?.hoursPerDay ?? 7.6
 
   const createEpic = useMutation({
     mutationFn: (data: typeof epicForm) => api.post(`/projects/${projectId}/epics`, data),
@@ -84,7 +84,7 @@ export default function BacklogPage() {
             <h1 className="text-xl font-semibold text-gray-900">Backlog</h1>
             {epics.length > 0 && (
               <p className="text-sm text-gray-500 mt-0.5">
-                {epics.length} epic{epics.length !== 1 ? 's' : ''} · {grandTotal}h total ({(grandTotal / 8).toFixed(1)} days)
+                {epics.length} epic{epics.length !== 1 ? 's' : ''} · {grandTotal}h total ({(grandTotal / hoursPerDay).toFixed(1)} days)
               </p>
             )}
           </div>
@@ -126,7 +126,7 @@ export default function BacklogPage() {
                 )}
                 {expandedEpics.has(epic.id) && (
                   <div className="border-t border-gray-100 px-3 pb-3 pt-2">
-                    <FeatureList epicId={epic.id} features={epic.features} resourceTypes={resourceTypes} projectId={projectId!} />
+                    <FeatureList epicId={epic.id} features={epic.features} resourceTypes={resourceTypes} projectId={projectId!} hoursPerDay={hoursPerDay} />
                   </div>
                 )}
               </div>

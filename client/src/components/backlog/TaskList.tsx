@@ -8,11 +8,10 @@ interface Props {
   tasks: Task[]
   resourceTypes: ResourceType[]
   projectId: string
+  hoursPerDay: number
 }
 
-const HOURS_PER_DAY = 7.6
-
-export default function TaskList({ storyId, tasks, resourceTypes, projectId }: Props) {
+export default function TaskList({ storyId, tasks, resourceTypes, projectId, hoursPerDay }: Props) {
   const qc = useQueryClient()
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -45,6 +44,7 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId }: P
             <TaskForm
               initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId }}
               resourceTypes={resourceTypes}
+              hoursPerDay={hoursPerDay}
               onSave={(data) => updateTask.mutate({ id: task.id, data })}
               onCancel={() => setEditingId(null)}
               saving={updateTask.isPending}
@@ -57,7 +57,7 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId }: P
                   <span className="text-sm text-gray-800">{task.name}</span>
                   <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{task.resourceType.name}</span>
                   <span className="text-xs font-medium text-gray-700 ml-auto">
-                    {task.hoursEffort}h / {(task.hoursEffort / HOURS_PER_DAY).toFixed(1)}d
+                    {task.hoursEffort}h / {(task.hoursEffort / hoursPerDay).toFixed(1)}d
                   </span>
                 </div>
                 {task.description && <p className="text-xs text-gray-500 mt-0.5 ml-0 truncate">{task.description}</p>}
@@ -76,6 +76,7 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId }: P
           <TaskForm
             initial={form}
             resourceTypes={resourceTypes}
+            hoursPerDay={hoursPerDay}
             onSave={(data) => createTask.mutate(data)}
             onCancel={() => setAdding(false)}
             saving={createTask.isPending}
@@ -90,9 +91,10 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId }: P
   )
 }
 
-function TaskForm({ initial, resourceTypes, onSave, onCancel, saving }: {
+function TaskForm({ initial, resourceTypes, hoursPerDay, onSave, onCancel, saving }: {
   initial: { name: string; description: string; assumptions: string; hoursEffort: string; resourceTypeId: string }
   resourceTypes: ResourceType[]
+  hoursPerDay: number
   onSave: (data: typeof initial) => void
   onCancel: () => void
   saving: boolean
@@ -100,7 +102,7 @@ function TaskForm({ initial, resourceTypes, onSave, onCancel, saving }: {
   const [form, setForm] = useState(initial)
   const [days, setDays] = useState(
     initial.hoursEffort && parseFloat(initial.hoursEffort) > 0
-      ? String(parseFloat((parseFloat(initial.hoursEffort) / HOURS_PER_DAY).toFixed(2)))
+      ? String(parseFloat((parseFloat(initial.hoursEffort) / hoursPerDay).toFixed(2)))
       : ''
   )
 
@@ -111,14 +113,14 @@ function TaskForm({ initial, resourceTypes, onSave, onCancel, saving }: {
     const h = e.target.value
     setForm(v => ({ ...v, hoursEffort: h }))
     const parsed = parseFloat(h)
-    setDays(!isNaN(parsed) && parsed > 0 ? String(parseFloat((parsed / HOURS_PER_DAY).toFixed(2))) : '')
+    setDays(!isNaN(parsed) && parsed > 0 ? String(parseFloat((parsed / hoursPerDay).toFixed(2))) : '')
   }
 
   const onDaysChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const d = e.target.value
     setDays(d)
     const parsed = parseFloat(d)
-    setForm(v => ({ ...v, hoursEffort: !isNaN(parsed) && parsed > 0 ? String(parseFloat((parsed * HOURS_PER_DAY).toFixed(2))) : '' }))
+    setForm(v => ({ ...v, hoursEffort: !isNaN(parsed) && parsed > 0 ? String(parseFloat((parsed * hoursPerDay).toFixed(2))) : '' }))
   }
 
   return (
@@ -134,7 +136,7 @@ function TaskForm({ initial, resourceTypes, onSave, onCancel, saving }: {
           <input type="number" placeholder="0" min="0" step="0.5" value={form.hoursEffort} onChange={onHoursChange} className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-0.5">Days (@ {HOURS_PER_DAY}h)</label>
+          <label className="block text-xs text-gray-500 mb-0.5">Days (@ {hoursPerDay}h)</label>
           <input type="number" placeholder="0" min="0" step="0.1" value={days} onChange={onDaysChange} className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
         </div>
         <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={1} className="col-span-2 border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />

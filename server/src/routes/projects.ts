@@ -30,6 +30,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   const { name, description, customer } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
 
+  // Fetch global types to link by name
+  const globalTypes = await prisma.globalResourceType.findMany()
+  const nameToGlobalId = new Map(globalTypes.map(gt => [gt.name, gt.id]))
+
   const project = await prisma.project.create({
     data: {
       name,
@@ -39,12 +43,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       // Seed default resource types
       resourceTypes: {
         create: [
-          { name: 'Business Analyst', category: 'ENGINEERING' },
-          { name: 'Developer', category: 'ENGINEERING' },
-          { name: 'Tech Lead', category: 'ENGINEERING' },
-          { name: 'QA Engineer', category: 'ENGINEERING' },
-          { name: 'Tech Governance', category: 'GOVERNANCE' },
-          { name: 'Project Manager', category: 'PROJECT_MANAGEMENT' },
+          { name: 'Business Analyst', category: 'ENGINEERING', globalTypeId: nameToGlobalId.get('Business Analyst') },
+          { name: 'Developer', category: 'ENGINEERING', globalTypeId: nameToGlobalId.get('Developer') },
+          { name: 'Tech Lead', category: 'ENGINEERING', globalTypeId: nameToGlobalId.get('Tech Lead') },
+          { name: 'QA Engineer', category: 'ENGINEERING', globalTypeId: nameToGlobalId.get('QA Engineer') },
+          { name: 'Tech Governance', category: 'GOVERNANCE', globalTypeId: nameToGlobalId.get('Tech Governance') },
+          { name: 'Project Manager', category: 'PROJECT_MANAGEMENT', globalTypeId: nameToGlobalId.get('Project Manager') },
         ],
       },
     },
@@ -55,12 +59,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
 // Update project
 router.put('/:id', async (req: AuthRequest, res: Response) => {
-  const { name, description, customer, status } = req.body
+  const { name, description, customer, status, hoursPerDay } = req.body
   const existing = await prisma.project.findFirst({ where: { id: req.params.id as string, ownerId: req.userId } })
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   const project = await prisma.project.update({
     where: { id: req.params.id as string },
-    data: { name, description, customer, status },
+    data: { name, description, customer, status, hoursPerDay },
   })
   res.json(project)
 })

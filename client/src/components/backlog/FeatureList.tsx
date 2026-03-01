@@ -10,9 +10,10 @@ interface Props {
   features: Feature[]
   resourceTypes: ResourceType[]
   projectId: string
+  hoursPerDay: number
 }
 
-export default function FeatureList({ epicId, features, resourceTypes, projectId }: Props) {
+export default function FeatureList({ epicId, features, resourceTypes, projectId, hoursPerDay }: Props) {
   const qc = useQueryClient()
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
@@ -78,7 +79,7 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
             </div>
           )}
           {expandedIds.has(feature.id) && (
-            <StoryList featureId={feature.id} stories={feature.userStories} resourceTypes={resourceTypes} projectId={projectId} />
+            <StoryList featureId={feature.id} stories={feature.userStories} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} />
           )}
         </div>
       ))}
