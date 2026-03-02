@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useDroppable } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { api } from '../../lib/api'
 import type { Feature, ResourceType } from '../../types/backlog'
 import StoryList from './StoryList'
@@ -13,6 +16,60 @@ interface Props {
   hoursPerDay: number
 }
 
+function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay }: {
+  feature: Feature
+  isEditing: boolean
+  expanded: boolean
+  onToggle: () => void
+  onEdit: () => void
+  onCancelEdit: () => void
+  onSave: (data: { name: string; description: string; assumptions: string }) => void
+  onDelete: () => void
+  isSaving: boolean
+  onApplyTemplate: () => void
+  resourceTypes: ResourceType[]
+  projectId: string
+  hoursPerDay: number
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'feature-' + feature.id })
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
+  const totalHours = feature.userStories.reduce((s, st) => s + st.tasks.reduce((a, t) => a + t.hoursEffort, 0), 0)
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes}>
+      {isEditing ? (
+        <InlineForm
+          label="Feature"
+          initial={{ name: feature.name, description: feature.description ?? '', assumptions: feature.assumptions ?? '' }}
+          onSave={onSave}
+          onCancel={onCancelEdit}
+          saving={isSaving}
+        />
+      ) : (
+        <div className="group flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 hover:border-blue-300 cursor-pointer"
+          onClick={onToggle}>
+          <button {...listeners} className="cursor-grab active:cursor-grabbing text-blue-300 hover:text-blue-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
+          <span className="text-blue-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
+          <span className="text-xs text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded">Feature</span>
+          <span className="text-sm text-gray-800 flex-1 truncate">{feature.name}</span>
+          <span className="text-xs text-gray-400">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours}h</span>
+          <button onClick={e => { e.stopPropagation(); onApplyTemplate() }}
+            className="text-xs text-purple-500 hover:text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2 py-0.5 rounded transition-colors">
+            + Template
+          </button>
+          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+            <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+            <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
+          </div>
+        </div>
+      )}
+      {expanded && (
+        <StoryList featureId={feature.id} stories={feature.userStories} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} />
+      )}
+    </div>
+  )
+}
+
 export default function FeatureList({ epicId, features, resourceTypes, projectId, hoursPerDay }: Props) {
   const qc = useQueryClient()
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
@@ -20,6 +77,8 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState({ name: '', description: '', assumptions: '' })
   const [applyTemplateFeatureId, setApplyTemplateFeatureId] = useState<string | null>(null)
+
+  const { setNodeRef } = useDroppable({ id: 'epic-container-' + epicId })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
 
@@ -42,11 +101,8 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
   const toggle = (id: string) =>
     setExpandedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
-  const totalHours = (feature: Feature) =>
-    feature.userStories.reduce((s, st) => s + st.tasks.reduce((a, t) => a + t.hoursEffort, 0), 0)
-
   return (
-    <div className="ml-4 mt-1 space-y-1">
+    <div ref={setNodeRef} className="ml-4 mt-1 space-y-1">
       {applyTemplateFeatureId && (
         <ApplyTemplateModal
           featureId={applyTemplateFeatureId}
@@ -54,38 +110,26 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
           onClose={() => setApplyTemplateFeatureId(null)}
         />
       )}
-      {features.map(feature => (
-        <div key={feature.id}>
-          {editingId === feature.id ? (
-            <InlineForm
-              label="Feature"
-              initial={{ name: feature.name, description: feature.description ?? '', assumptions: feature.assumptions ?? '' }}
-              onSave={(data) => updateFeature.mutate({ id: feature.id, data })}
-              onCancel={() => setEditingId(null)}
-              saving={updateFeature.isPending}
-            />
-          ) : (
-            <div className="group flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 hover:border-blue-300 cursor-pointer"
-              onClick={() => toggle(feature.id)}>
-              <span className="text-blue-500 text-xs select-none">{expandedIds.has(feature.id) ? '▼' : '▶'}</span>
-              <span className="text-xs text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded">Feature</span>
-              <span className="text-sm text-gray-800 flex-1 truncate">{feature.name}</span>
-              <span className="text-xs text-gray-400">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours(feature)}h</span>
-              <button onClick={e => { e.stopPropagation(); setApplyTemplateFeatureId(feature.id) }}
-                className="text-xs text-purple-500 hover:text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2 py-0.5 rounded transition-colors">
-                + Template
-              </button>
-              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                <button onClick={() => setEditingId(feature.id)} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
-                <button onClick={() => deleteFeature.mutate(feature.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
-              </div>
-            </div>
-          )}
-          {expandedIds.has(feature.id) && (
-            <StoryList featureId={feature.id} stories={feature.userStories} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} />
-          )}
-        </div>
-      ))}
+      <SortableContext items={features.map(f => 'feature-' + f.id)} strategy={verticalListSortingStrategy}>
+        {features.map(feature => (
+          <SortableFeatureItem
+            key={feature.id}
+            feature={feature}
+            isEditing={editingId === feature.id}
+            expanded={expandedIds.has(feature.id)}
+            onToggle={() => toggle(feature.id)}
+            onEdit={() => setEditingId(feature.id)}
+            onCancelEdit={() => setEditingId(null)}
+            onSave={(data) => updateFeature.mutate({ id: feature.id, data })}
+            onDelete={() => deleteFeature.mutate(feature.id)}
+            isSaving={updateFeature.isPending}
+            onApplyTemplate={() => setApplyTemplateFeatureId(feature.id)}
+            resourceTypes={resourceTypes}
+            projectId={projectId}
+            hoursPerDay={hoursPerDay}
+          />
+        ))}
+      </SortableContext>
 
       {adding ? (
         <InlineForm

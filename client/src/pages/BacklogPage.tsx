@@ -1,9 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors,
+  type DragStartEvent, type DragOverEvent, type DragEndEvent,
+} from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
-import type { Epic, ResourceType, Project } from '../types/backlog'
+import { useReorderEpics, useReorderFeatures, useReorderStories, useReorderTasks } from '../hooks/useReorder'
+import type { Epic, Feature, UserStory, Task, ResourceType, Project } from '../types/backlog'
 import FeatureList from '../components/backlog/FeatureList'
 import CsvImportModal from '../components/backlog/CsvImportModal'
 
@@ -22,6 +29,9 @@ export default function BacklogPage() {
   const [snapshotLabel, setSnapshotLabel] = useState('')
   const [diffId, setDiffId] = useState<string | null>(null)
 
+  const [tree, setTree] = useState<Epic[]>([])
+  const [activeItem, setActiveItem] = useState<{ name: string } | null>(null)
+
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
     queryFn: () => api.get(`/projects/${projectId}`).then(r => r.data),
@@ -36,6 +46,21 @@ export default function BacklogPage() {
     queryKey: ['resource-types', projectId],
     queryFn: () => api.get(`/projects/${projectId}/resource-types`).then(r => r.data),
   })
+
+  const reorderEpics = useReorderEpics(projectId!)
+  const reorderFeatures = useReorderFeatures(projectId!)
+  const reorderStories = useReorderStories(projectId!)
+  const reorderTasks = useReorderTasks(projectId!)
+
+  const isMutating = reorderEpics.isPending || reorderFeatures.isPending || reorderStories.isPending || reorderTasks.isPending
+
+  useEffect(() => {
+    if (!activeItem && !isMutating) {
+      setTree(epics)
+    }
+  }, [epics, activeItem, isMutating])
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
 
   const hoursPerDay = project?.hoursPerDay ?? 7.6
 
@@ -66,7 +91,7 @@ export default function BacklogPage() {
     enabled: showHistory,
   })
 
-  const { data: diffData, refetch: refetchDiff } = useQuery<Diff>({
+  const { data: diffData } = useQuery<Diff>({
     queryKey: ['snapshot-diff', projectId, diffId],
     queryFn: () => api.get(`/projects/${projectId}/snapshots/${diffId}/diff`).then(r => r.data),
     enabled: !!diffId,
@@ -90,7 +115,71 @@ export default function BacklogPage() {
       s + f.userStories.reduce((ss, st) =>
         ss + st.tasks.reduce((a, t) => a + t.hoursEffort, 0), 0), 0)
 
-  const grandTotal = epics.reduce((s, e) => s + epicTotalHours(e), 0)
+  const grandTotal = tree.reduce((s, e) => s + epicTotalHours(e), 0)
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const activeId = String(event.active.id)
+    let name = ''
+    if (activeId.startsWith('epic-') && !activeId.startsWith('epic-container-')) {
+      name = tree.find(e => e.id === activeId.slice('epic-'.length))?.name ?? ''
+    } else if (activeId.startsWith('feature-') && !activeId.startsWith('feature-container-')) {
+      const fid = activeId.slice('feature-'.length)
+      for (const epic of tree) { const f = epic.features.find(f => f.id === fid); if (f) { name = f.name; break } }
+    } else if (activeId.startsWith('story-') && !activeId.startsWith('story-container-')) {
+      const sid = activeId.slice('story-'.length)
+      for (const epic of tree) { for (const feat of epic.features) { const s = feat.userStories.find(s => s.id === sid); if (s) { name = s.name; break } } if (name) break }
+    } else if (activeId.startsWith('task-') && !activeId.startsWith('task-container-')) {
+      const tid = activeId.slice('task-'.length)
+      outer: for (const epic of tree) { for (const feat of epic.features) { for (const story of feat.userStories) { const t = story.tasks.find(t => t.id === tid); if (t) { name = t.name; break outer } } } }
+    }
+    setActiveItem({ name })
+  }
+
+  const handleDragOver = (event: DragOverEvent) => {
+    const { active, over } = event
+    if (!over) return
+    const activeId = String(active.id)
+    const overId = String(over.id)
+    if (activeId === overId) return
+
+    setTree(prev => {
+      if (activeId.startsWith('epic-') && !activeId.startsWith('epic-container-')) {
+        return moveEpicInTree(prev, activeId.slice('epic-'.length), overId)
+      }
+      if (activeId.startsWith('feature-') && !activeId.startsWith('feature-container-')) {
+        return moveFeatureInTree(prev, activeId.slice('feature-'.length), overId)
+      }
+      if (activeId.startsWith('story-') && !activeId.startsWith('story-container-')) {
+        return moveStoryInTree(prev, activeId.slice('story-'.length), overId)
+      }
+      if (activeId.startsWith('task-') && !activeId.startsWith('task-container-')) {
+        return moveTaskInTree(prev, activeId.slice('task-'.length), overId)
+      }
+      return prev
+    })
+  }
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active } = event
+    const activeId = String(active.id)
+    setActiveItem(null)
+
+    if (activeId.startsWith('epic-') && !activeId.startsWith('epic-container-')) {
+      reorderEpics.mutate(tree.map((e, i) => ({ id: e.id, order: i })))
+    } else if (activeId.startsWith('feature-') && !activeId.startsWith('feature-container-')) {
+      const items: Array<{ id: string; order: number; epicId: string }> = []
+      for (const epic of tree) epic.features.forEach((f, i) => items.push({ id: f.id, order: i, epicId: epic.id }))
+      reorderFeatures.mutate(items)
+    } else if (activeId.startsWith('story-') && !activeId.startsWith('story-container-')) {
+      const items: Array<{ id: string; order: number; featureId: string }> = []
+      for (const epic of tree) for (const feat of epic.features) feat.userStories.forEach((s, i) => items.push({ id: s.id, order: i, featureId: feat.id }))
+      reorderStories.mutate(items)
+    } else if (activeId.startsWith('task-') && !activeId.startsWith('task-container-')) {
+      const items: Array<{ id: string; order: number; storyId: string }> = []
+      for (const epic of tree) for (const feat of epic.features) for (const story of feat.userStories) story.tasks.forEach((t, i) => items.push({ id: t.id, order: i, storyId: story.id }))
+      reorderTasks.mutate(items)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -147,59 +236,61 @@ export default function BacklogPage() {
         {isLoading ? (
           <div className="text-center py-12 text-gray-400">Loading…</div>
         ) : (
-          <div className="space-y-2">
-            {epics.map(epic => (
-              <div key={epic.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                {editingEpicId === epic.id ? (
-                  <div className="p-3">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCorners}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={tree.map(e => 'epic-' + e.id)} strategy={verticalListSortingStrategy}>
+              <div className="space-y-2">
+                {tree.map(epic => (
+                  <SortableEpicRow
+                    key={epic.id}
+                    epic={epic}
+                    expanded={expandedEpics.has(epic.id)}
+                    onToggle={() => toggle(epic.id)}
+                    isEditing={editingEpicId === epic.id}
+                    onEdit={() => setEditingEpicId(epic.id)}
+                    onSaveEdit={(data) => updateEpic.mutate({ id: epic.id, data })}
+                    onCancelEdit={() => setEditingEpicId(null)}
+                    editSaving={updateEpic.isPending}
+                    onDelete={() => deleteEpic.mutate(epic.id)}
+                    epicTotalHours={epicTotalHours(epic)}
+                    resourceTypes={resourceTypes}
+                    projectId={projectId!}
+                    hoursPerDay={hoursPerDay}
+                  />
+                ))}
+
+                {addingEpic && (
+                  <div className="bg-white rounded-xl border border-blue-200 p-4">
                     <EpicForm
-                      initial={{ name: epic.name, description: epic.description ?? '' }}
-                      onSave={(data) => updateEpic.mutate({ id: epic.id, data })}
-                      onCancel={() => setEditingEpicId(null)}
-                      saving={updateEpic.isPending}
+                      initial={epicForm}
+                      onSave={(data) => createEpic.mutate(data)}
+                      onCancel={() => setAddingEpic(false)}
+                      saving={createEpic.isPending}
                     />
                   </div>
-                ) : (
-                  <div className="group flex items-center gap-2 px-4 py-3 cursor-pointer hover:bg-gray-50"
-                    onClick={() => toggle(epic.id)}>
-                    <span className="text-gray-400 text-sm select-none">{expandedEpics.has(epic.id) ? '▼' : '▶'}</span>
-                    <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded font-medium">Epic</span>
-                    <span className="font-medium text-gray-900 flex-1">{epic.name}</span>
-                    <span className="text-sm text-gray-400">
-                      {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours(epic)}h
-                    </span>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                      <button onClick={() => setEditingEpicId(epic.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
-                      <button onClick={() => deleteEpic.mutate(epic.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
-                    </div>
-                  </div>
                 )}
-                {expandedEpics.has(epic.id) && (
-                  <div className="border-t border-gray-100 px-3 pb-3 pt-2">
-                    <FeatureList epicId={epic.id} features={epic.features} resourceTypes={resourceTypes} projectId={projectId!} hoursPerDay={hoursPerDay} />
+
+                {tree.length === 0 && !addingEpic && (
+                  <div className="text-center py-16 text-gray-400">
+                    <p className="text-lg mb-1">Backlog is empty</p>
+                    <p className="text-sm">Add an epic to get started, or use AI to generate a starter backlog</p>
                   </div>
                 )}
               </div>
-            ))}
-
-            {addingEpic && (
-              <div className="bg-white rounded-xl border border-blue-200 p-4">
-                <EpicForm
-                  initial={epicForm}
-                  onSave={(data) => createEpic.mutate(data)}
-                  onCancel={() => setAddingEpic(false)}
-                  saving={createEpic.isPending}
-                />
-              </div>
-            )}
-
-            {epics.length === 0 && !addingEpic && (
-              <div className="text-center py-16 text-gray-400">
-                <p className="text-lg mb-1">Backlog is empty</p>
-                <p className="text-sm">Add an epic to get started, or use AI to generate a starter backlog</p>
-              </div>
-            )}
-          </div>
+            </SortableContext>
+            <DragOverlay>
+              {activeItem && (
+                <div className="bg-white border-2 border-blue-400 rounded-lg px-3 py-2 shadow-lg text-sm font-medium opacity-90">
+                  {activeItem.name}
+                </div>
+              )}
+            </DragOverlay>
+          </DndContext>
         )}
 
         {showHistory && (
@@ -285,6 +376,265 @@ export default function BacklogPage() {
       )}
     </div>
   )
+}
+
+function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, epicTotalHours, resourceTypes, projectId, hoursPerDay }: {
+  epic: Epic
+  expanded: boolean
+  onToggle: () => void
+  isEditing: boolean
+  onEdit: () => void
+  onSaveEdit: (data: { name: string; description: string }) => void
+  onCancelEdit: () => void
+  editSaving: boolean
+  onDelete: () => void
+  epicTotalHours: number
+  resourceTypes: ResourceType[]
+  projectId: string
+  hoursPerDay: number
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'epic-' + epic.id })
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      {isEditing ? (
+        <div className="p-3">
+          <EpicForm
+            initial={{ name: epic.name, description: epic.description ?? '' }}
+            onSave={onSaveEdit}
+            onCancel={onCancelEdit}
+            saving={editSaving}
+          />
+        </div>
+      ) : (
+        <div className="group flex items-center gap-2 px-4 py-3 cursor-pointer hover:bg-gray-50" onClick={onToggle}>
+          <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0 px-0.5 text-base leading-none mr-1" onClick={e => e.stopPropagation()}>⠿</button>
+          <span className="text-gray-400 text-sm select-none">{expanded ? '▼' : '▶'}</span>
+          <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded font-medium">Epic</span>
+          <span className="font-medium text-gray-900 flex-1">{epic.name}</span>
+          <span className="text-sm text-gray-400">
+            {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours}h
+          </span>
+          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+            <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
+            <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
+          </div>
+        </div>
+      )}
+      {expanded && (
+        <div className="border-t border-gray-100 px-3 pb-3 pt-2">
+          <FeatureList epicId={epic.id} features={epic.features} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function moveEpicInTree(tree: Epic[], epicId: string, overId: string): Epic[] {
+  if (!overId.startsWith('epic-') || overId.startsWith('epic-container-')) return tree
+  const overEpicId = overId.slice('epic-'.length)
+  if (epicId === overEpicId) return tree
+  const fromIdx = tree.findIndex(e => e.id === epicId)
+  const toIdx = tree.findIndex(e => e.id === overEpicId)
+  if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return tree
+  return arrayMove(tree, fromIdx, toIdx)
+}
+
+function moveFeatureInTree(tree: Epic[], featureId: string, overId: string): Epic[] {
+  let sourceEpicId = ''
+  let sourceFeature: Feature | null = null
+  for (const epic of tree) {
+    const f = epic.features.find(f => f.id === featureId)
+    if (f) { sourceEpicId = epic.id; sourceFeature = f; break }
+  }
+  if (!sourceFeature) return tree
+
+  let targetEpicId = ''
+  let insertBeforeId: string | null = null
+
+  if (overId.startsWith('epic-container-')) {
+    targetEpicId = overId.slice('epic-container-'.length)
+  } else if (overId.startsWith('feature-') && !overId.startsWith('feature-container-')) {
+    const overFeatureId = overId.slice('feature-'.length)
+    if (overFeatureId === featureId) return tree
+    for (const epic of tree) {
+      if (epic.features.some(f => f.id === overFeatureId)) {
+        targetEpicId = epic.id; insertBeforeId = overFeatureId; break
+      }
+    }
+  }
+  if (!targetEpicId) return tree
+
+  if (targetEpicId === sourceEpicId) {
+    if (!insertBeforeId) return tree
+    const epic = tree.find(e => e.id === sourceEpicId)!
+    const fromIdx = epic.features.findIndex(f => f.id === featureId)
+    const toIdx = epic.features.findIndex(f => f.id === insertBeforeId)
+    if (fromIdx === toIdx) return tree
+    return tree.map(e => e.id === sourceEpicId ? { ...e, features: arrayMove(e.features, fromIdx, toIdx) } : e)
+  }
+
+  let moved: Feature | undefined
+  const removed = tree.map(epic => {
+    if (epic.id === sourceEpicId) { moved = epic.features.find(f => f.id === featureId); return { ...epic, features: epic.features.filter(f => f.id !== featureId) } }
+    return epic
+  })
+  if (!moved) return tree
+  return removed.map(epic => {
+    if (epic.id === targetEpicId) {
+      const idx = insertBeforeId ? epic.features.findIndex(f => f.id === insertBeforeId) : epic.features.length
+      const newFeatures = [...epic.features]
+      newFeatures.splice(idx === -1 ? newFeatures.length : idx, 0, { ...moved!, epicId: targetEpicId })
+      return { ...epic, features: newFeatures }
+    }
+    return epic
+  })
+}
+
+function moveStoryInTree(tree: Epic[], storyId: string, overId: string): Epic[] {
+  let sourceFeatureId = ''
+  let sourceStory: UserStory | null = null
+  outer1: for (const epic of tree) {
+    for (const feat of epic.features) {
+      const s = feat.userStories.find(s => s.id === storyId)
+      if (s) { sourceFeatureId = feat.id; sourceStory = s; break outer1 }
+    }
+  }
+  if (!sourceStory) return tree
+
+  let targetFeatureId = ''
+  let insertBeforeId: string | null = null
+
+  if (overId.startsWith('feature-container-')) {
+    targetFeatureId = overId.slice('feature-container-'.length)
+  } else if (overId.startsWith('story-') && !overId.startsWith('story-container-')) {
+    const overStoryId = overId.slice('story-'.length)
+    if (overStoryId === storyId) return tree
+    outer2: for (const epic of tree) {
+      for (const feat of epic.features) {
+        if (feat.userStories.some(s => s.id === overStoryId)) {
+          targetFeatureId = feat.id; insertBeforeId = overStoryId; break outer2
+        }
+      }
+    }
+  }
+  if (!targetFeatureId) return tree
+
+  if (targetFeatureId === sourceFeatureId) {
+    if (!insertBeforeId) return tree
+    return tree.map(epic => ({
+      ...epic,
+      features: epic.features.map(feat => {
+        if (feat.id !== sourceFeatureId) return feat
+        const fromIdx = feat.userStories.findIndex(s => s.id === storyId)
+        const toIdx = feat.userStories.findIndex(s => s.id === insertBeforeId)
+        if (fromIdx === toIdx) return feat
+        return { ...feat, userStories: arrayMove(feat.userStories, fromIdx, toIdx) }
+      }),
+    }))
+  }
+
+  let moved: UserStory | undefined
+  const removed = tree.map(epic => ({
+    ...epic,
+    features: epic.features.map(feat => {
+      if (feat.id === sourceFeatureId) { moved = feat.userStories.find(s => s.id === storyId); return { ...feat, userStories: feat.userStories.filter(s => s.id !== storyId) } }
+      return feat
+    }),
+  }))
+  if (!moved) return tree
+  return removed.map(epic => ({
+    ...epic,
+    features: epic.features.map(feat => {
+      if (feat.id === targetFeatureId) {
+        const idx = insertBeforeId ? feat.userStories.findIndex(s => s.id === insertBeforeId) : feat.userStories.length
+        const newStories = [...feat.userStories]
+        newStories.splice(idx === -1 ? newStories.length : idx, 0, { ...moved!, featureId: targetFeatureId })
+        return { ...feat, userStories: newStories }
+      }
+      return feat
+    }),
+  }))
+}
+
+function moveTaskInTree(tree: Epic[], taskId: string, overId: string): Epic[] {
+  let sourceStoryId = ''
+  let sourceTask: Task | null = null
+  outer1: for (const epic of tree) {
+    for (const feat of epic.features) {
+      for (const story of feat.userStories) {
+        const t = story.tasks.find(t => t.id === taskId)
+        if (t) { sourceStoryId = story.id; sourceTask = t; break outer1 }
+      }
+    }
+  }
+  if (!sourceTask) return tree
+
+  let targetStoryId = ''
+  let insertBeforeId: string | null = null
+
+  if (overId.startsWith('story-container-')) {
+    targetStoryId = overId.slice('story-container-'.length)
+  } else if (overId.startsWith('task-') && !overId.startsWith('task-container-')) {
+    const overTaskId = overId.slice('task-'.length)
+    if (overTaskId === taskId) return tree
+    outer2: for (const epic of tree) {
+      for (const feat of epic.features) {
+        for (const story of feat.userStories) {
+          if (story.tasks.some(t => t.id === overTaskId)) {
+            targetStoryId = story.id; insertBeforeId = overTaskId; break outer2
+          }
+        }
+      }
+    }
+  }
+  if (!targetStoryId) return tree
+
+  if (targetStoryId === sourceStoryId) {
+    if (!insertBeforeId) return tree
+    return tree.map(epic => ({
+      ...epic,
+      features: epic.features.map(feat => ({
+        ...feat,
+        userStories: feat.userStories.map(story => {
+          if (story.id !== sourceStoryId) return story
+          const fromIdx = story.tasks.findIndex(t => t.id === taskId)
+          const toIdx = story.tasks.findIndex(t => t.id === insertBeforeId)
+          if (fromIdx === toIdx) return story
+          return { ...story, tasks: arrayMove(story.tasks, fromIdx, toIdx) }
+        }),
+      })),
+    }))
+  }
+
+  let moved: Task | undefined
+  const removed = tree.map(epic => ({
+    ...epic,
+    features: epic.features.map(feat => ({
+      ...feat,
+      userStories: feat.userStories.map(story => {
+        if (story.id === sourceStoryId) { moved = story.tasks.find(t => t.id === taskId); return { ...story, tasks: story.tasks.filter(t => t.id !== taskId) } }
+        return story
+      }),
+    })),
+  }))
+  if (!moved) return tree
+  return removed.map(epic => ({
+    ...epic,
+    features: epic.features.map(feat => ({
+      ...feat,
+      userStories: feat.userStories.map(story => {
+        if (story.id === targetStoryId) {
+          const idx = insertBeforeId ? story.tasks.findIndex(t => t.id === insertBeforeId) : story.tasks.length
+          const newTasks = [...story.tasks]
+          newTasks.splice(idx === -1 ? newTasks.length : idx, 0, { ...moved!, userStoryId: targetStoryId })
+          return { ...story, tasks: newTasks }
+        }
+        return story
+      }),
+    })),
+  }))
 }
 
 function EpicForm({ initial, onSave, onCancel, saving }: {

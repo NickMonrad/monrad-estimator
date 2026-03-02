@@ -5,6 +5,7 @@ import { api } from '../../lib/api'
 interface TemplateTask {
   id: string
   name: string
+  hoursExtraSmall: number
   hoursSmall: number
   hoursMedium: number
   hoursLarge: number
@@ -20,9 +21,10 @@ interface FeatureTemplate {
   tasks: TemplateTask[]
 }
 
-type Complexity = 'SMALL' | 'MEDIUM' | 'LARGE' | 'EXTRA_LARGE'
+type Complexity = 'EXTRA_SMALL' | 'SMALL' | 'MEDIUM' | 'LARGE' | 'EXTRA_LARGE'
 
 const COMPLEXITY_LABELS: Record<Complexity, string> = {
+  EXTRA_SMALL: 'XS',
   SMALL: 'S',
   MEDIUM: 'M',
   LARGE: 'L',

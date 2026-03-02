@@ -50,7 +50,7 @@ export default function TimelinePage() {
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
     queryFn: () => api.get(`/projects/${projectId}`).then(r => r.data),
-    onSuccess: (p) => {
+    onSuccess: (p: Project) => {
       if (p.startDate && !startDateInput) {
         setStartDateInput(p.startDate.slice(0, 10))
       }
