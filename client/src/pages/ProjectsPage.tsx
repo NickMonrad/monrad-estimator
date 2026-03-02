@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 
@@ -55,6 +55,7 @@ export default function ProjectsPage() {
               <span className="text-white text-xs font-bold">M</span>
             </div>
             <span className="font-semibold text-gray-900">Monrad Estimator</span>
+            <Link to="/resource-types" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Resource Types</Link>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-500">{user?.name}</span>
