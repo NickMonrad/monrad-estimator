@@ -10,16 +10,18 @@ test.describe('Backlog', () => {
   test.beforeEach(async ({ page }) => {
     await login(page)
     await createProject(page, PROJECT_NAME)
-    await page.getByText(PROJECT_NAME).click()
+    await page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first().click()
+    // Wait for the project detail hub to fully render
+    await page.getByRole('button', { name: /backlog/i }).waitFor()
   })
 
   test('backlog page loads with Add epic button', async ({ page }) => {
-    await page.getByRole('link', { name: /backlog/i }).click()
+    await page.getByRole('button', { name: /backlog/i }).click()
     await expect(page.getByRole('button', { name: /add epic/i })).toBeVisible()
   })
 
   test('can add an epic', async ({ page }) => {
-    await page.getByRole('link', { name: /backlog/i }).click()
+    await page.getByRole('button', { name: /backlog/i }).click()
     await page.getByRole('button', { name: /add epic/i }).click()
     await page.getByPlaceholder(/epic name/i).fill('E2E Epic')
     await page.getByRole('button', { name: /save epic/i }).click()
@@ -27,24 +29,24 @@ test.describe('Backlog', () => {
   })
 
   test('CSV import button is visible', async ({ page }) => {
-    await page.getByRole('link', { name: /backlog/i }).click()
+    await page.getByRole('button', { name: /backlog/i }).click()
     await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible()
   })
 
   test('CSV export button is visible', async ({ page }) => {
-    await page.getByRole('link', { name: /backlog/i }).click()
+    await page.getByRole('button', { name: /backlog/i }).click()
     await expect(page.getByRole('button', { name: /export csv/i })).toBeVisible()
   })
 
   test('CSV import modal opens and shows template download link', async ({ page }) => {
-    await page.getByRole('link', { name: /backlog/i }).click()
+    await page.getByRole('button', { name: /backlog/i }).click()
     await page.getByRole('button', { name: /import csv/i }).click()
     await expect(page.getByText(/download blank csv template/i)).toBeVisible()
     await expect(page.getByRole('button', { name: /choose csv file/i })).toBeVisible()
   })
 
   test('CSV import shows parse errors on bad file', async ({ page }) => {
-    await page.getByRole('link', { name: /backlog/i }).click()
+    await page.getByRole('button', { name: /backlog/i }).click()
     await page.getByRole('button', { name: /import csv/i }).click()
 
     // Write a badly formatted CSV to a temp file
@@ -64,7 +66,7 @@ test.describe('Backlog', () => {
   })
 
   test('History button toggles history panel', async ({ page }) => {
-    await page.getByRole('link', { name: /backlog/i }).click()
+    await page.getByRole('button', { name: /backlog/i }).click()
     await page.getByRole('button', { name: /history/i }).click()
     await expect(page.getByText(/backlog history/i)).toBeVisible()
   })

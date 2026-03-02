@@ -7,29 +7,25 @@ test.describe('Template Library', () => {
   })
 
   test('template library page loads', async ({ page }) => {
-    await page.goto('/')
-    await page.getByRole('link', { name: /templates/i }).click()
-    await expect(page.getByText(/template library/i)).toBeVisible()
+    await page.goto('/templates')
+    await expect(page.getByRole('heading', { name: /template library/i })).toBeVisible()
   })
 
   test('can create a new template', async ({ page }) => {
-    await page.goto('/')
-    await page.getByRole('link', { name: /templates/i }).click()
+    await page.goto('/templates')
     await page.getByRole('button', { name: /new template/i }).click()
     await page.getByPlaceholder(/template name/i).fill('E2E Template')
     await page.getByRole('button', { name: /save/i }).click()
-    await expect(page.getByText('E2E Template')).toBeVisible()
+    await expect(page.getByText('E2E Template').first()).toBeVisible()
   })
 
   test('Export CSV button is visible', async ({ page }) => {
-    await page.goto('/')
-    await page.getByRole('link', { name: /templates/i }).click()
+    await page.goto('/templates')
     await expect(page.getByRole('button', { name: /export csv/i })).toBeVisible()
   })
 
   test('Import CSV button opens modal with template download', async ({ page }) => {
-    await page.goto('/')
-    await page.getByRole('link', { name: /templates/i }).click()
+    await page.goto('/templates')
     await page.getByRole('button', { name: /import csv/i }).click()
     await expect(page.getByText(/download blank csv template/i)).toBeVisible()
   })

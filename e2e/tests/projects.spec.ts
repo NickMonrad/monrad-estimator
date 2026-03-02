@@ -9,18 +9,18 @@ test.describe('Projects', () => {
   })
 
   test('projects page loads', async ({ page }) => {
-    await expect(page.getByText(/projects/i)).toBeVisible()
+    await expect(page.getByRole('heading', { name: /^projects$/i })).toBeVisible()
   })
 
   test('can create a new project', async ({ page }) => {
     await createProject(page, PROJECT_NAME)
-    await expect(page.getByText(PROJECT_NAME)).toBeVisible()
+    await expect(page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first()).toBeVisible()
   })
 
   test('can open a project backlog', async ({ page }) => {
     await createProject(page, PROJECT_NAME)
-    await page.getByText(PROJECT_NAME).click()
-    // Should navigate to project hub or backlog
+    await page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first().click()
+    // Should navigate to project hub
     await expect(page).toHaveURL(/\/projects\/.+/)
   })
 
@@ -29,9 +29,9 @@ test.describe('Projects', () => {
     const searchInput = page.getByPlaceholder(/search/i)
     if (await searchInput.isVisible()) {
       await searchInput.fill(PROJECT_NAME)
-      await expect(page.getByText(PROJECT_NAME)).toBeVisible()
+      await expect(page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first()).toBeVisible()
       await searchInput.fill('zzznomatch')
-      await expect(page.getByText(PROJECT_NAME)).not.toBeVisible()
+      await expect(page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first()).not.toBeVisible()
     }
   })
 })
