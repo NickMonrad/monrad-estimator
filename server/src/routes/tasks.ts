@@ -41,10 +41,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
-  const { name, description, assumptions, hoursEffort, resourceTypeId, order } = req.body
+  const { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays } = req.body
   const task = await prisma.task.update({
     where: { id: req.params.id as string },
-    data: { name, description, assumptions, hoursEffort, resourceTypeId, order },
+    data: { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays },
     include: { resourceType: true },
   })
   res.json(task)

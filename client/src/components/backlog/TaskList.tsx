@@ -15,19 +15,19 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId, hou
   const qc = useQueryClient()
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState({ name: '', description: '', assumptions: '', hoursEffort: '0', resourceTypeId: '' })
+  const [form, setForm] = useState({ name: '', description: '', assumptions: '', hoursEffort: '0', resourceTypeId: '', durationDays: '' })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
 
   const createTask = useMutation({
     mutationFn: (data: typeof form) =>
-      api.post(`/stories/${storyId}/tasks`, { ...data, hoursEffort: parseFloat(data.hoursEffort) }),
-    onSuccess: () => { invalidate(); setAdding(false); setForm({ name: '', description: '', assumptions: '', hoursEffort: '0', resourceTypeId: '' }) },
+      api.post(`/stories/${storyId}/tasks`, { ...data, hoursEffort: parseFloat(data.hoursEffort), durationDays: data.durationDays ? parseFloat(data.durationDays) : null }),
+    onSuccess: () => { invalidate(); setAdding(false); setForm({ name: '', description: '', assumptions: '', hoursEffort: '0', resourceTypeId: '', durationDays: '' }) },
   })
 
   const updateTask = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<typeof form> }) =>
-      api.put(`/stories/${storyId}/tasks/${id}`, { ...data, hoursEffort: data.hoursEffort ? parseFloat(data.hoursEffort) : undefined }),
+      api.put(`/stories/${storyId}/tasks/${id}`, { ...data, hoursEffort: data.hoursEffort ? parseFloat(data.hoursEffort) : undefined, durationDays: data.durationDays !== undefined ? (data.durationDays ? parseFloat(data.durationDays) : null) : undefined }),
     onSuccess: () => { invalidate(); setEditingId(null) },
   })
 
@@ -42,7 +42,7 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId, hou
         <div key={task.id} className="group flex items-start gap-2 bg-white border border-gray-100 rounded-lg px-3 py-2 hover:border-gray-300">
           {editingId === task.id ? (
             <TaskForm
-              initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId }}
+              initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId, durationDays: task.durationDays != null ? String(task.durationDays) : '' }}
               resourceTypes={resourceTypes}
               hoursPerDay={hoursPerDay}
               onSave={(data) => updateTask.mutate({ id: task.id, data })}
@@ -92,7 +92,7 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId, hou
 }
 
 function TaskForm({ initial, resourceTypes, hoursPerDay, onSave, onCancel, saving }: {
-  initial: { name: string; description: string; assumptions: string; hoursEffort: string; resourceTypeId: string }
+  initial: { name: string; description: string; assumptions: string; hoursEffort: string; resourceTypeId: string; durationDays: string }
   resourceTypes: ResourceType[]
   hoursPerDay: number
   onSave: (data: typeof initial) => void
@@ -141,6 +141,10 @@ function TaskForm({ initial, resourceTypes, hoursPerDay, onSave, onCancel, savin
         </div>
         <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={1} className="col-span-2 border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
         <textarea placeholder="Assumptions" value={form.assumptions} onChange={f('assumptions')} rows={1} className="col-span-2 border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        <div className="col-span-2">
+          <label className="block text-xs text-gray-400 mb-0.5">Duration override (days) — optional</label>
+          <input type="number" placeholder="Leave blank to use hours/day rate" min="0" step="0.5" value={form.durationDays} onChange={f('durationDays')} className="w-full border border-gray-200 rounded px-2 py-1 text-xs text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        </div>
       </div>
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || !form.resourceTypeId || saving}

@@ -23,6 +23,7 @@ export interface Task {
   description?: string
   assumptions?: string
   hoursEffort: number
+  durationDays?: number
   order: number
   userStoryId: string
   resourceTypeId: string
@@ -65,5 +66,25 @@ export interface Project {
   customer?: string
   status: string
   hoursPerDay: number
+  startDate?: string
   updatedAt: string
+}
+
+export interface TimelineEntry {
+  featureId: string
+  featureName: string
+  epicId: string
+  epicName: string
+  startWeek: number
+  durationWeeks: number
+  isManual: boolean
+  startDate: string | null
+  endDate: string | null
+}
+
+export interface TimelineSummary {
+  projectId: string
+  startDate: string | null
+  hoursPerDay: number
+  entries: TimelineEntry[]
 }
