@@ -2,28 +2,28 @@
 
 ## Branching Strategy
 
-- `master` is the stable, reviewed branch. All completed work must be merged here via PR.
+- `main` is the stable, reviewed branch. All completed work must be merged here via PR.
 - Feature branches follow the pattern `feature/phase-N-<name>` (e.g. `feature/phase-4-effort`).
-- **All feature branches must target `master` directly** — do not chain branches (e.g. phase-2 → phase-1 → master). Each phase PR should have `master` as its base.
+- **All feature branches must target `main` directly** — do not chain branches (e.g. phase-2 → phase-1 → main). Each phase PR should have `main` as its base.
 - One branch per phase. Small fixes or enhancements within a phase go on the same branch before the PR is raised.
 
 ## Pull Request Process
 
 1. **Complete the phase** — all code written, tests passing, TypeScript clean.
-2. **Raise a PR** against `master` using the PR template (`.github/pull_request_template.md`).
+2. **Raise a PR** against `main` using the PR template (`.github/pull_request_template.md`).
 3. **Wait for human approval** — Copilot raises the PR but must NOT merge it. The repo owner reviews and merges.
 4. **Close the related GitHub issue** in the PR body using `Closes #N`.
-5. **Merge** — performed by the repo owner only. Squash or merge commit, never rebase onto master.
-6. **Start the next phase** from the updated `master` after merge.
+5. **Merge** — performed by the repo owner only. Squash or merge commit, never rebase onto main.
+6. **Start the next phase** from the updated `main` after merge.
 
 ## Phase Workflow (Copilot CLI)
 
 When building a new phase:
 ```
-git checkout master && git pull
+git checkout main && git pull
 git checkout -b feature/phase-N-<name>
 # ... build, test, commit ...
-gh pr create --base master --head feature/phase-N-<name>
+gh pr create --base main --head feature/phase-N-<name>
 # Wait for review + merge before starting next phase
 ```
 
