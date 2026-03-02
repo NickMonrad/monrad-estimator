@@ -8,7 +8,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e:cleanup": "tsx scripts/e2e-cleanup.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
