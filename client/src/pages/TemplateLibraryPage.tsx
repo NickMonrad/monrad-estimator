@@ -297,7 +297,20 @@ export default function TemplateLibraryPage() {
               <button onClick={() => { setShowTplImport(false); setTplImportCsv(''); setTplImportError(null) }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
             <div className="p-6">
-              <p className="text-sm text-gray-500 mb-4">Upload a CSV with columns: <code className="bg-gray-100 px-1 rounded text-xs">TemplateName, Category, TaskName, ResourceTypeName, HoursSmall, HoursMedium, HoursLarge, HoursExtraLarge</code></p>
+              <p className="text-sm text-gray-500 mb-2">Upload a CSV with columns: <code className="bg-gray-100 px-1 rounded text-xs">TemplateName, Category, TaskName, ResourceTypeName, HoursSmall, HoursMedium, HoursLarge, HoursExtraLarge</code></p>
+              <button
+                onClick={() => {
+                  const headers = 'TemplateName,Category,TaskName,ResourceTypeName,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge'
+                  const example = 'My Template,Engineering,My Task,Developer,2,4,8,16'
+                  const blob = new Blob([headers + '\n' + example], { type: 'text/csv' })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a'); a.href = url; a.download = 'template-format.csv'; a.click()
+                  URL.revokeObjectURL(url)
+                }}
+                className="text-red-600 underline text-sm hover:text-red-700 mb-4 inline-block"
+              >
+                ⬇ Download blank CSV template
+              </button>
               {tplImportError && <div className="mb-4 bg-red-50 text-red-700 text-sm px-4 py-3 rounded-lg border border-red-200">{tplImportError}</div>}
               <input
                 type="file" accept=".csv"
