@@ -302,8 +302,8 @@ export default function TemplateLibraryPage() {
               <p className="text-sm text-gray-500 mb-2">Upload a CSV with columns: <code className="bg-gray-100 px-1 rounded text-xs">TemplateName, Category, TaskName, ResourceTypeName, HoursSmall, HoursMedium, HoursLarge, HoursExtraLarge</code></p>
               <button
                 onClick={() => {
-                  const headers = 'TemplateName,Category,TaskName,ResourceTypeName,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge'
-                  const example = 'My Template,Engineering,My Task,Developer,2,4,8,16'
+                  const headers = 'TemplateName,Category,TaskName,ResourceTypeName,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge'
+                  const example = 'My Template,Engineering,My Task,Developer,1,2,4,8,16'
                   const blob = new Blob([headers + '\n' + example], { type: 'text/csv' })
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a'); a.href = url; a.download = 'template-format.csv'; a.click()

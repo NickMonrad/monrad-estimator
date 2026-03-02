@@ -131,8 +131,8 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
               <p className="text-gray-500 mb-2 text-sm">Upload a CSV with your backlog data. Not sure of the format?</p>
               <button
                 onClick={() => {
-                  const headers = 'Epic,Feature,Story,Task,ResourceType,HoursEffort,DurationDays,Description,Assumptions'
-                  const example = 'My Epic,My Feature,My Story,Development task,Developer,8,1,Optional description,Optional assumptions'
+                  const headers = 'Epic,Feature,Story,Task,ResourceType,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge,HoursEffort,DurationDays,Description,Assumptions'
+                  const example = 'My Epic,My Feature,My Story,Development task,Developer,1,2,4,8,16,8,1,Optional description,Optional assumptions'
                   const blob = new Blob([headers + '\n' + example], { type: 'text/csv' })
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a'); a.href = url; a.download = 'backlog-template.csv'; a.click()
