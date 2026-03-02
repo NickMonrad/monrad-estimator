@@ -50,7 +50,14 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 - Every phase must include tests before the PR is raised.
 - Server: API integration tests in `server/src/test/` using Vitest + supertest.
 - Client: Component tests in `client/src/test/` using Vitest + React Testing Library.
-- Run `npm test` in `/server` and `npx tsc --noEmit` in both `/client` and `/server` before raising a PR.
+- E2E: Browser tests in `e2e/tests/` using Playwright (Chromium).
+- Run all three before raising a PR:
+  ```bash
+  npm test                  # in /server
+  npx tsc --noEmit          # in /server and /client
+  npm run test:e2e          # from repo root (requires both dev servers running)
+  ```
+- When adding new features, add a matching Playwright test to the relevant spec file in `e2e/tests/`.
 
 ## GitHub Issues
 

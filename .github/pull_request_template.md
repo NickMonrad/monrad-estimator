@@ -18,6 +18,7 @@ Closes #
 - [ ] `npm test` passes in `/server`
 - [ ] `npx tsc --noEmit` passes in `/server`
 - [ ] `npx tsc --noEmit` passes in `/client`
+- [ ] `npm run test:e2e` passes (Playwright — requires dev servers on :3001 and :5173)
 
 ## Notes
 

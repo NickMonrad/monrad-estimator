@@ -1,0 +1,19 @@
+{
+  "name": "monrad-estimator-e2e",
+  "version": "1.0.0",
+  "description": "Playwright E2E tests for Monrad Estimator",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report playwright-report"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}
+

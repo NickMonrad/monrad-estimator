@@ -84,6 +84,29 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
 1. `npm test` passes in `/server` (58 passing; 36 pre-existing failures are known and unrelated)
 2. `npx tsc --noEmit` passes in `/server`
 3. `npx tsc --noEmit` passes in `/client`
+4. `npm run test:e2e` passes from the repo root — requires both dev servers running (API on :3001, Vite on :5173)
+
+## E2E Tests (Playwright)
+
+Tests live in `/e2e/tests/`. Run from repo root:
+
+```bash
+npm run test:e2e            # headless (CI)
+npm run test:e2e:headed     # with browser window
+npm run test:e2e:report     # open last HTML report
+```
+
+**Test files:**
+- `auth.spec.ts` — login, register, sign out
+- `projects.spec.ts` — create project, open backlog
+- `backlog.spec.ts` — add epic, CSV import/export, history panel
+- `templates.spec.ts` — template library, CSV export/import
+
+**Config:** `e2e/playwright.config.ts` — base URL defaults to `http://localhost:5173`, override with `BASE_URL` env var.
+
+**Credentials:** Default test user `test@example.com` / `password123`. Override with `TEST_EMAIL` / `TEST_PASSWORD` env vars.
+
+When adding new features, add a matching test to the relevant spec file before raising the PR.
 
 ## Code Conventions
 
