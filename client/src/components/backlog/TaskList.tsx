@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useDroppable } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { api } from '../../lib/api'
 import type { Task, ResourceType } from '../../types/backlog'
 
@@ -11,11 +14,64 @@ interface Props {
   hoursPerDay: number
 }
 
+function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDelete, isSaving, resourceTypes, hoursPerDay }: {
+  task: Task
+  isEditing: boolean
+  onEdit: () => void
+  onCancelEdit: () => void
+  onSave: (data: { name: string; description: string; assumptions: string; hoursEffort: string; resourceTypeId: string; durationDays: string }) => void
+  onDelete: () => void
+  isSaving: boolean
+  resourceTypes: ResourceType[]
+  hoursPerDay: number
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'task-' + task.id })
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
+
+  if (isEditing) {
+    return (
+      <div ref={setNodeRef} style={style} {...attributes} className="bg-white border border-blue-200 rounded-lg px-3 py-2">
+        <TaskForm
+          initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId, durationDays: task.durationDays != null ? String(task.durationDays) : '' }}
+          resourceTypes={resourceTypes}
+          hoursPerDay={hoursPerDay}
+          onSave={onSave}
+          onCancel={onCancelEdit}
+          saving={isSaving}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} className="group flex items-start gap-2 bg-white border border-gray-100 rounded-lg px-3 py-2 hover:border-gray-300">
+      <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 self-center shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">Task</span>
+          <span className="text-sm text-gray-800">{task.name}</span>
+          <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{task.resourceType.name}</span>
+          <span className="text-xs font-medium text-gray-700 ml-auto">
+            {task.hoursEffort}h / {(task.hoursEffort / hoursPerDay).toFixed(1)}d
+          </span>
+        </div>
+        {task.description && <p className="text-xs text-gray-500 mt-0.5 ml-0 truncate">{task.description}</p>}
+      </div>
+      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+        <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
+      </div>
+    </div>
+  )
+}
+
 export default function TaskList({ storyId, tasks, resourceTypes, projectId, hoursPerDay }: Props) {
   const qc = useQueryClient()
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState({ name: '', description: '', assumptions: '', hoursEffort: '0', resourceTypeId: '', durationDays: '' })
+
+  const { setNodeRef } = useDroppable({ id: 'story-container-' + storyId })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
 
@@ -37,39 +93,23 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId, hou
   })
 
   return (
-    <div className="ml-6 mt-1 space-y-1">
-      {tasks.map(task => (
-        <div key={task.id} className="group flex items-start gap-2 bg-white border border-gray-100 rounded-lg px-3 py-2 hover:border-gray-300">
-          {editingId === task.id ? (
-            <TaskForm
-              initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId, durationDays: task.durationDays != null ? String(task.durationDays) : '' }}
-              resourceTypes={resourceTypes}
-              hoursPerDay={hoursPerDay}
-              onSave={(data) => updateTask.mutate({ id: task.id, data })}
-              onCancel={() => setEditingId(null)}
-              saving={updateTask.isPending}
-            />
-          ) : (
-            <>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">Task</span>
-                  <span className="text-sm text-gray-800">{task.name}</span>
-                  <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{task.resourceType.name}</span>
-                  <span className="text-xs font-medium text-gray-700 ml-auto">
-                    {task.hoursEffort}h / {(task.hoursEffort / hoursPerDay).toFixed(1)}d
-                  </span>
-                </div>
-                {task.description && <p className="text-xs text-gray-500 mt-0.5 ml-0 truncate">{task.description}</p>}
-              </div>
-              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                <button onClick={() => setEditingId(task.id)} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
-                <button onClick={() => deleteTask.mutate(task.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
-              </div>
-            </>
-          )}
-        </div>
-      ))}
+    <div ref={setNodeRef} className="ml-6 mt-1 space-y-1">
+      <SortableContext items={tasks.map(t => 'task-' + t.id)} strategy={verticalListSortingStrategy}>
+        {tasks.map(task => (
+          <SortableTaskItem
+            key={task.id}
+            task={task}
+            isEditing={editingId === task.id}
+            onEdit={() => setEditingId(task.id)}
+            onCancelEdit={() => setEditingId(null)}
+            onSave={(data) => updateTask.mutate({ id: task.id, data })}
+            onDelete={() => deleteTask.mutate(task.id)}
+            isSaving={updateTask.isPending}
+            resourceTypes={resourceTypes}
+            hoursPerDay={hoursPerDay}
+          />
+        ))}
+      </SortableContext>
 
       {adding ? (
         <div className="bg-white border border-blue-200 rounded-lg px-3 py-2">

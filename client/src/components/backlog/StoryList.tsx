@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useDroppable } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { api } from '../../lib/api'
 import type { UserStory, ResourceType } from '../../types/backlog'
 import TaskList from './TaskList'
@@ -12,12 +15,70 @@ interface Props {
   hoursPerDay: number
 }
 
+function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, isSaving, onRefresh, resourceTypes, projectId, hoursPerDay }: {
+  story: UserStory
+  isEditing: boolean
+  expanded: boolean
+  onToggle: () => void
+  onEdit: () => void
+  onCancelEdit: () => void
+  onSave: (data: { name: string; description: string; assumptions: string }) => void
+  onDelete: () => void
+  isSaving: boolean
+  onRefresh: () => void
+  resourceTypes: ResourceType[]
+  projectId: string
+  hoursPerDay: number
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'story-' + story.id })
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
+  const totalHours = story.tasks.reduce((s, t) => s + t.hoursEffort, 0)
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes}>
+      {isEditing ? (
+        <InlineForm
+          label="Story"
+          initial={{ name: story.name, description: story.description ?? '', assumptions: story.assumptions ?? '' }}
+          onSave={onSave}
+          onCancel={onCancelEdit}
+          saving={isSaving}
+        />
+      ) : (
+        <div className="group flex items-center gap-2 bg-purple-50 border border-purple-100 rounded-lg px-3 py-2 hover:border-purple-300 cursor-pointer"
+          onClick={onToggle}>
+          <button {...listeners} className="cursor-grab active:cursor-grabbing text-purple-300 hover:text-purple-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
+          <span className="text-purple-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
+          <span className="text-xs text-purple-500 bg-purple-100 px-1.5 py-0.5 rounded">Story</span>
+          <span className="text-sm text-gray-800 flex-1 truncate">{story.name}</span>
+          <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours}h</span>
+          {story.appliedTemplateId && (
+            <button onClick={e => { e.stopPropagation(); onRefresh() }} title="Refresh tasks from template"
+              className="text-xs text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors">
+              ↺ Refresh
+            </button>
+          )}
+          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+            <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+            <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
+          </div>
+        </div>
+      )}
+      {expanded && (
+        <TaskList storyId={story.id} tasks={story.tasks} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} />
+      )}
+    </div>
+  )
+}
+
 export default function StoryList({ featureId, stories, resourceTypes, projectId, hoursPerDay }: Props) {
   const qc = useQueryClient()
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState({ name: '', description: '', assumptions: '' })
+
+  const { setNodeRef } = useDroppable({ id: 'feature-container-' + featureId })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
 
@@ -40,7 +101,7 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
   const refreshFromTemplate = useMutation({
     mutationFn: ({ storyId, complexity }: { storyId: string; complexity: string }) =>
       api.post(`/features/${featureId}/refresh-template/${storyId}`, { complexity }),
-    onSuccess: (res, { storyId }) => {
+    onSuccess: (res) => {
       invalidate()
       const added = res.data.added as number
       setRefreshMsg(added > 0 ? `Added ${added} new task${added !== 1 ? 's' : ''}` : 'Already up to date')
@@ -54,53 +115,37 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
   const toggle = (id: string) =>
     setExpandedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
-  const totalHours = (story: UserStory) => story.tasks.reduce((s, t) => s + t.hoursEffort, 0)
-
   return (
-    <div className="ml-4 mt-1 space-y-1">
-      {stories.map(story => (
-        <div key={story.id}>
-          {editingId === story.id ? (
-            <InlineForm
-              label="Story"
-              initial={{ name: story.name, description: story.description ?? '', assumptions: story.assumptions ?? '' }}
-              onSave={(data) => updateStory.mutate({ id: story.id, data })}
-              onCancel={() => setEditingId(null)}
-              saving={updateStory.isPending}
-            />
-          ) : (
-            <div className="group flex items-center gap-2 bg-purple-50 border border-purple-100 rounded-lg px-3 py-2 hover:border-purple-300 cursor-pointer"
-              onClick={() => toggle(story.id)}>
-              <span className="text-purple-500 text-xs select-none">{expandedIds.has(story.id) ? '▼' : '▶'}</span>
-              <span className="text-xs text-purple-500 bg-purple-100 px-1.5 py-0.5 rounded">Story</span>
-              <span className="text-sm text-gray-800 flex-1 truncate">{story.name}</span>
-              <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours(story)}h</span>
-              {story.appliedTemplateId && (
-                <button onClick={e => { e.stopPropagation(); setRefreshingId(story.id) }} title="Refresh tasks from template"
-                  className="text-xs text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors">
-                  ↺ Refresh
-                </button>
-              )}
-              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                <button onClick={() => setEditingId(story.id)} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
-                <button onClick={() => deleteStory.mutate(story.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
-              </div>
-            </div>
-          )}
-          {expandedIds.has(story.id) && (
-            <TaskList storyId={story.id} tasks={story.tasks} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} />
-          )}
-        </div>
-      ))}
+    <div ref={setNodeRef} className="ml-4 mt-1 space-y-1">
+      <SortableContext items={stories.map(s => 'story-' + s.id)} strategy={verticalListSortingStrategy}>
+        {stories.map(story => (
+          <SortableStoryItem
+            key={story.id}
+            story={story}
+            isEditing={editingId === story.id}
+            expanded={expandedIds.has(story.id)}
+            onToggle={() => toggle(story.id)}
+            onEdit={() => setEditingId(story.id)}
+            onCancelEdit={() => setEditingId(null)}
+            onSave={(data) => updateStory.mutate({ id: story.id, data })}
+            onDelete={() => deleteStory.mutate(story.id)}
+            isSaving={updateStory.isPending}
+            onRefresh={() => setRefreshingId(story.id)}
+            resourceTypes={resourceTypes}
+            projectId={projectId}
+            hoursPerDay={hoursPerDay}
+          />
+        ))}
+      </SortableContext>
 
       {refreshingId && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 flex items-center gap-3">
           <span>Refresh complexity:</span>
-          {(['SMALL', 'MEDIUM', 'LARGE', 'EXTRA_LARGE'] as const).map(c => (
+          {(['EXTRA_SMALL', 'SMALL', 'MEDIUM', 'LARGE', 'EXTRA_LARGE'] as const).map(c => (
             <button key={c} onClick={() => refreshFromTemplate.mutate({ storyId: refreshingId, complexity: c })}
               disabled={refreshFromTemplate.isPending}
               className="font-medium hover:text-blue-900 disabled:opacity-50">
-              {c === 'EXTRA_LARGE' ? 'XL' : c[0]}
+              {c === 'EXTRA_SMALL' ? 'XS' : c === 'EXTRA_LARGE' ? 'XL' : c[0]}
             </button>
           ))}
           <button onClick={() => setRefreshingId(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>

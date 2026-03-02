@@ -20,6 +20,7 @@ interface TemplateTask {
   id: string
   templateId: string
   name: string
+  hoursExtraSmall: number
   hoursSmall: number
   hoursMedium: number
   hoursLarge: number
@@ -46,7 +47,7 @@ export default function TemplateLibraryPage() {
   const [templateForm, setTemplateForm] = useState({ name: '', category: '', description: '' })
   const [addingTaskForId, setAddingTaskForId] = useState<string | null>(null)
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
-  const [taskForm, setTaskForm] = useState({ name: '', hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' })
+  const [taskForm, setTaskForm] = useState({ name: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' })
   const [showTplImport, setShowTplImport] = useState(false)
   const [tplImportCsv, setTplImportCsv] = useState('')
   const [tplImportError, setTplImportError] = useState<string | null>(null)
@@ -82,7 +83,7 @@ export default function TemplateLibraryPage() {
   const createTask = useMutation({
     mutationFn: ({ templateId, data }: { templateId: string; data: typeof taskForm }) =>
       api.post(`/templates/${templateId}/tasks`, data),
-    onSuccess: () => { invalidate(); setAddingTaskForId(null); setTaskForm({ name: '', hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' }) },
+    onSuccess: () => { invalidate(); setAddingTaskForId(null); setTaskForm({ name: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' }) },
   })
 
   const updateTask = useMutation({
@@ -224,6 +225,7 @@ export default function TemplateLibraryPage() {
                                 <th className="pb-2 w-5"></th>
                                 <th className="text-left pb-2 font-medium">Task</th>
                                 <th className="text-left pb-2 font-medium">Resource type</th>
+                                <th className="text-right pb-2 font-medium">XS</th>
                                 <th className="text-right pb-2 font-medium">S</th>
                                 <th className="text-right pb-2 font-medium">M</th>
                                 <th className="text-right pb-2 font-medium">L</th>
@@ -235,9 +237,9 @@ export default function TemplateLibraryPage() {
                               {tpl.tasks.map(task => (
                                 editingTaskId === task.id ? (
                                   <tr key={task.id}>
-                                    <td colSpan={8} className="py-2">
+                                    <td colSpan={9} className="py-2">
                                       <TaskForm
-                                        initial={{ name: task.name, hoursSmall: task.hoursSmall, hoursMedium: task.hoursMedium, hoursLarge: task.hoursLarge, hoursExtraLarge: task.hoursExtraLarge, resourceTypeName: task.resourceTypeName }}
+                                       initial={{ name: task.name, hoursExtraSmall: task.hoursExtraSmall, hoursSmall: task.hoursSmall, hoursMedium: task.hoursMedium, hoursLarge: task.hoursLarge, hoursExtraLarge: task.hoursExtraLarge, resourceTypeName: task.resourceTypeName }}
                                         globalResourceTypes={globalResourceTypes}
                                         onSave={(data) => updateTask.mutate({ templateId: tpl.id, taskId: task.id, data })}
                                         onCancel={() => setEditingTaskId(null)}
@@ -300,8 +302,8 @@ export default function TemplateLibraryPage() {
               <p className="text-sm text-gray-500 mb-2">Upload a CSV with columns: <code className="bg-gray-100 px-1 rounded text-xs">TemplateName, Category, TaskName, ResourceTypeName, HoursSmall, HoursMedium, HoursLarge, HoursExtraLarge</code></p>
               <button
                 onClick={() => {
-                  const headers = 'TemplateName,Category,TaskName,ResourceTypeName,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge'
-                  const example = 'My Template,Engineering,My Task,Developer,2,4,8,16'
+                  const headers = 'TemplateName,Category,TaskName,ResourceTypeName,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge'
+                  const example = 'My Template,Engineering,My Task,Developer,1,2,4,8,16'
                   const blob = new Blob([headers + '\n' + example], { type: 'text/csv' })
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a'); a.href = url; a.download = 'template-format.csv'; a.click()
@@ -379,7 +381,7 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
 }
 
 function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
-  initial: { name: string; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number; resourceTypeName: string }
+  initial: { name: string; hoursExtraSmall: number; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number; resourceTypeName: string }
   globalResourceTypes: GlobalResourceType[]
   onSave: (data: typeof initial) => void
   onCancel: () => void
@@ -388,7 +390,7 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
   const [form, setForm] = useState(initial)
   const fText = (field: 'name') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(v => ({ ...v, [field]: e.target.value }))
-  const fNum = (field: 'hoursSmall' | 'hoursMedium' | 'hoursLarge' | 'hoursExtraLarge') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const fNum = (field: 'hoursExtraSmall' | 'hoursSmall' | 'hoursMedium' | 'hoursLarge' | 'hoursExtraLarge') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(v => ({ ...v, [field]: parseFloat(e.target.value) || 0 }))
 
   return (
@@ -407,10 +409,10 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
             className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
         )}
       </div>
-      <div className="grid grid-cols-4 gap-2">
-        {(['hoursSmall', 'hoursMedium', 'hoursLarge', 'hoursExtraLarge'] as const).map((field, i) => (
+      <div className="grid grid-cols-5 gap-2">
+        {(['hoursExtraSmall', 'hoursSmall', 'hoursMedium', 'hoursLarge', 'hoursExtraLarge'] as const).map((field, i) => (
           <div key={field}>
-            <label className="text-xs text-gray-400 block mb-1">{['S', 'M', 'L', 'XL'][i]} hours</label>
+            <label className="text-xs text-gray-400 block mb-1">{['XS', 'S', 'M', 'L', 'XL'][i]} hours</label>
             <input type="number" min="0" step="0.5" value={form[field]} onChange={fNum(field)}
               className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
           </div>
@@ -446,6 +448,7 @@ function SortableTaskRow({ task, fmt, onEdit, onDelete }: {
       </td>
       <td className="py-2 pr-4 text-gray-800">{task.name}</td>
       <td className="py-2 pr-4 text-gray-500">{task.resourceTypeName}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursExtraSmall)}</td>
       <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursSmall)}</td>
       <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursMedium)}</td>
       <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursLarge)}</td>

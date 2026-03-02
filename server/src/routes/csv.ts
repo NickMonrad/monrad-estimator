@@ -10,7 +10,7 @@ router.use(authenticate)
 const CSV_HEADERS = [
   'Epic', 'Feature', 'Story', 'Task',
   'ResourceType',
-  'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge',
+  'HoursExtraSmall', 'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge',
   'HoursEffort', 'DurationDays',
   'Description', 'Assumptions',
 ]
@@ -21,6 +21,7 @@ interface CsvRow {
   Story: string
   Task: string
   ResourceType: string
+  HoursExtraSmall: string
   HoursSmall: string
   HoursMedium: string
   HoursLarge: string
@@ -86,7 +87,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
 
   if (epics.length === 0) {
     // blank template with one example row
-    rows.push(['My Epic', 'My Feature', 'My Story', 'My Task', 'Developer', '2', '4', '8', '16', '', '', '', ''])
+    rows.push(['My Epic', 'My Feature', 'My Story', 'My Task', 'Developer', '1', '2', '4', '8', '16', '', '', '', ''])
   } else {
     for (const epic of epics) {
       for (const feature of epic.features) {
@@ -98,10 +99,11 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
               story.name,
               task.name,
               task.resourceType?.name ?? '',
-              '',
-              '',
-              '',
-              '',
+              '', // HoursExtraSmall (template field, not applicable to exported tasks)
+              '', // HoursSmall
+              '', // HoursMedium
+              '', // HoursLarge
+              '', // HoursExtraLarge
               String(task.hoursEffort),
               String(task.durationDays ?? ''),
               task.description ?? '',
@@ -109,7 +111,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
             ])
           }
           if (story.tasks.length === 0) {
-            rows.push([epic.name, feature.name, story.name, '', '', '', '', '', '', '', '', story.description ?? '', story.assumptions ?? ''])
+            rows.push([epic.name, feature.name, story.name, '', '', '', '', '', '', '', '', '', story.description ?? '', story.assumptions ?? ''])
           }
         }
       }
@@ -177,6 +179,7 @@ router.post('/stage-csv', async (req: AuthRequest, res: Response) => {
       story,
       task,
       resourceType,
+      hoursExtraSmall: parseNum(raw.HoursExtraSmall),
       hoursSmall: parseNum(raw.HoursSmall),
       hoursMedium: parseNum(raw.HoursMedium),
       hoursLarge: parseNum(raw.HoursLarge),
@@ -215,6 +218,7 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
   }
 
   // Fetch resource types for matching
+  const hoursPerDay = project.hoursPerDay ?? 7.6
   const resourceTypes = await prisma.resourceType.findMany({ where: { projectId } })
   const rtByName = new Map(resourceTypes.map(r => [r.name.toLowerCase(), r.id]))
 
@@ -299,7 +303,7 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
         order: taskCount,
         resourceTypeId,
         hoursEffort: row.hoursEffort,
-        durationDays: row.durationDays || null,
+        durationDays: row.durationDays || (row.hoursEffort / hoursPerDay),
         description: row.description || null,
         assumptions: row.assumptions || null,
       },

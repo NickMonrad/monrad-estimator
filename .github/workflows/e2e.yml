@@ -40,18 +40,27 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      # ── Server ──────────────────────────────────────────────────
-      - name: Install server dependencies
-        working-directory: server
+      # ── Install all workspace dependencies at once ──────────────
+      - name: Install all dependencies
         run: npm ci
 
+      # ── Server ──────────────────────────────────────────────────
       - name: Run database migrations
         working-directory: server
         run: npx prisma migrate deploy
 
+      - name: Generate Prisma client
+        working-directory: server
+        run: npx prisma generate
+
       - name: Seed database (creates E2E test user)
         working-directory: server
         run: npx tsx prisma/seed.ts
+
+      - name: Verify seed user exists
+        run: |
+          PGPASSWORD=postgres psql -U postgres -h localhost -d monrad_estimator \
+            -c 'SELECT email, length(password) as pwd_len FROM "User" WHERE email = $$test@example.com$$;'
 
       - name: Build server
         working-directory: server
@@ -62,10 +71,6 @@ jobs:
         run: node dist/index.js &
 
       # ── Client ──────────────────────────────────────────────────
-      - name: Install client dependencies
-        working-directory: client
-        run: npm ci
-
       - name: Build client
         working-directory: client
         run: npm run build
@@ -73,17 +78,24 @@ jobs:
           VITE_API_URL: http://localhost:3001
 
       - name: Serve client build
-        run: npx --yes serve -s client/dist -l 5173 &
+        working-directory: client
+        run: npx vite preview --port 5173 --host &
 
       # ── Wait for servers ─────────────────────────────────────────
       - name: Wait for API and client to be ready
         run: npx --yes wait-on http://localhost:3001/health http://localhost:5173 --timeout 30000
 
-      # ── Playwright ───────────────────────────────────────────────
-      - name: Install Playwright dependencies
-        working-directory: e2e
-        run: npm ci
+      - name: Smoke test API login
+        run: |
+          echo "Health check:"
+          curl -s http://localhost:3001/health
+          echo ""
+          echo "Login response:"
+          curl -s -w "\nHTTP %{http_code}" -X POST http://localhost:3001/api/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"test@example.com","password":"password123"}'
 
+      # ── Playwright ───────────────────────────────────────────────
       - name: Install Chromium
         working-directory: e2e
         run: npx playwright install --with-deps chromium
@@ -99,6 +111,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ github.sha }}
           path: e2e/playwright-report/
           retention-days: 14

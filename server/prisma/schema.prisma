@@ -146,6 +146,7 @@ model TemplateTask {
   id                String          @id @default(cuid())
   name              String
   order             Int             @default(0)
+  hoursExtraSmall   Float           @default(0)
   hoursSmall        Float           @default(0)
   hoursMedium       Float           @default(0)
   hoursLarge        Float           @default(0)

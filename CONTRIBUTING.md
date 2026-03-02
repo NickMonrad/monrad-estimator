@@ -59,6 +59,14 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
   ```
 - When adding new features, add a matching Playwright test to the relevant spec file in `e2e/tests/`.
 
+## README
+
+- `README.md` at the repo root documents the project overview, tech stack, phases, and shipped enhancements.
+- **After a PR is merged to `main`, update `README.md`** to reflect any new phases completed, enhancements shipped, or issues resolved.
+- Add merged enhancements to the "Shipped Enhancements" table with the PR number.
+- Update phase status (`🚧` → `✅`) when a phase PR is merged.
+- Keep the "Open Issues & Backlog" table current — remove closed issues, add new ones.
+
 ## GitHub Issues
 
 - Each phase has a corresponding GitHub issue (labelled `phase`).
