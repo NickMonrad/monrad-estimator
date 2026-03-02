@@ -9,7 +9,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test:watch": "vitest",
-    "e2e:cleanup": "tsx scripts/e2e-cleanup.ts"
+    "e2e:cleanup": "tsx scripts/e2e-cleanup.ts",
+    "postinstall": "prisma generate"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
