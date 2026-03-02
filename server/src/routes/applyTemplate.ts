@@ -5,9 +5,10 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 const router = Router()
 router.use(authenticate)
 
-type Complexity = 'SMALL' | 'MEDIUM' | 'LARGE' | 'EXTRA_LARGE'
+type Complexity = 'EXTRA_SMALL' | 'SMALL' | 'MEDIUM' | 'LARGE' | 'EXTRA_LARGE'
 
-const HOURS_FIELD: Record<Complexity, 'hoursSmall' | 'hoursMedium' | 'hoursLarge' | 'hoursExtraLarge'> = {
+const HOURS_FIELD: Record<Complexity, 'hoursExtraSmall' | 'hoursSmall' | 'hoursMedium' | 'hoursLarge' | 'hoursExtraLarge'> = {
+  EXTRA_SMALL: 'hoursExtraSmall',
   SMALL: 'hoursSmall',
   MEDIUM: 'hoursMedium',
   LARGE: 'hoursLarge',
@@ -20,7 +21,7 @@ router.post('/:featureId/apply-template', async (req: AuthRequest, res: Response
   const { templateId, complexity } = req.body as { templateId: string; complexity: Complexity }
 
   if (!templateId || !complexity || !HOURS_FIELD[complexity]) {
-    res.status(400).json({ error: 'templateId and complexity (SMALL|MEDIUM|LARGE|EXTRA_LARGE) are required' })
+    res.status(400).json({ error: 'templateId and complexity (EXTRA_SMALL|SMALL|MEDIUM|LARGE|EXTRA_LARGE) are required' })
     return
   }
 
@@ -85,7 +86,7 @@ router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, re
   const { complexity } = req.body as { complexity: Complexity }
 
   if (!complexity || !HOURS_FIELD[complexity]) {
-    res.status(400).json({ error: 'complexity (SMALL|MEDIUM|LARGE|EXTRA_LARGE) is required' }); return
+    res.status(400).json({ error: 'complexity (EXTRA_SMALL|SMALL|MEDIUM|LARGE|EXTRA_LARGE) is required' }); return
   }
 
   const story = await prisma.userStory.findFirst({

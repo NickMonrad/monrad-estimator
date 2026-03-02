@@ -57,13 +57,14 @@ router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
 
 // POST /api/templates/:id/tasks — auth required
 router.post('/:id/tasks', authenticate, async (req: AuthRequest, res: Response) => {
-  const { name, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
+  const { name, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
   if (!name || !resourceTypeName) { res.status(400).json({ error: 'name and resourceTypeName are required' }); return }
   const count = await prisma.templateTask.count({ where: { templateId: req.params.id as string } })
   const task = await prisma.templateTask.create({
     data: {
       name,
       order: count,
+      hoursExtraSmall: hoursExtraSmall ?? 0,
       hoursSmall: hoursSmall ?? 0,
       hoursMedium: hoursMedium ?? 0,
       hoursLarge: hoursLarge ?? 0,
@@ -91,10 +92,10 @@ router.put('/:id/tasks/reorder', authenticate, async (req: AuthRequest, res: Res
 
 // PUT /api/templates/:id/tasks/:taskId — auth required
 router.put('/:id/tasks/:taskId', authenticate, async (req: AuthRequest, res: Response) => {
-  const { name, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
+  const { name, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
   const task = await prisma.templateTask.update({
     where: { id: req.params.taskId as string },
-    data: { name, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName },
+    data: { name, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName },
   })
   res.json(task)
 })
@@ -114,11 +115,11 @@ router.get('/export-csv', async (_req, res: Response) => {
     include: { tasks: { orderBy: { order: 'asc' } } },
   })
 
-  const headers = ['TemplateName', 'Category', 'TaskName', 'ResourceTypeName', 'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge']
+  const headers = ['TemplateName', 'Category', 'TaskName', 'ResourceTypeName', 'HoursExtraSmall', 'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge']
   const rows: string[][] = [headers]
 
   if (templates.length === 0) {
-    rows.push(['My Template', 'Engineering', 'My Task', 'Developer', '2', '4', '8', '16'])
+    rows.push(['My Template', 'Engineering', 'My Task', 'Developer', '1', '2', '4', '8', '16'])
   } else {
     for (const tpl of templates) {
       for (const task of tpl.tasks) {
@@ -127,6 +128,7 @@ router.get('/export-csv', async (_req, res: Response) => {
           tpl.category ?? '',
           task.name,
           task.resourceTypeName,
+          String(task.hoursExtraSmall),
           String(task.hoursSmall),
           String(task.hoursMedium),
           String(task.hoursLarge),
@@ -134,7 +136,7 @@ router.get('/export-csv', async (_req, res: Response) => {
         ])
       }
       if (tpl.tasks.length === 0) {
-        rows.push([tpl.name, tpl.category ?? '', '', '', '', '', '', ''])
+        rows.push([tpl.name, tpl.category ?? '', '', '', '', '', '', '', ''])
       }
     }
   }
@@ -150,7 +152,7 @@ router.post('/import-csv', authenticate, async (req: AuthRequest, res: Response)
   const csvText: string = req.body.csv
   if (!csvText) { res.status(400).json({ error: 'csv field is required' }); return }
 
-  interface TplRow { TemplateName: string; Category: string; TaskName: string; ResourceTypeName: string; HoursSmall: string; HoursMedium: string; HoursLarge: string; HoursExtraLarge: string }
+  interface TplRow { TemplateName: string; Category: string; TaskName: string; ResourceTypeName: string; HoursExtraSmall: string; HoursSmall: string; HoursMedium: string; HoursLarge: string; HoursExtraLarge: string }
   let rows: TplRow[]
   try {
     rows = parse(csvText, { columns: true, skip_empty_lines: true, trim: true }) as TplRow[]
@@ -180,6 +182,7 @@ router.post('/import-csv', authenticate, async (req: AuthRequest, res: Response)
       data: {
         name: row.TaskName.trim(),
         resourceTypeName: row.ResourceTypeName?.trim() || 'Unassigned',
+        hoursExtraSmall: parseFloat(row.HoursExtraSmall) || 0,
         hoursSmall: parseFloat(row.HoursSmall) || 0,
         hoursMedium: parseFloat(row.HoursMedium) || 0,
         hoursLarge: parseFloat(row.HoursLarge) || 0,
