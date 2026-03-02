@@ -50,7 +50,7 @@ npx playwright test --ui                   # interactive UI mode
 
 ---
 
-### `backlog.spec.ts` — Backlog (7 tests)
+### `backlog.spec.ts` — Backlog (8 tests)
 
 | Test | Description |
 |------|-------------|
@@ -61,15 +61,17 @@ npx playwright test --ui                   # interactive UI mode
 | CSV import modal opens and shows template download link | Modal opens → "Download blank CSV template" link visible |
 | CSV import shows parse errors on bad file | Uploading malformed CSV shows error/validation message |
 | History button toggles history panel | "🕐 History" button reveals Backlog History panel |
+| drag handle is visible on epics for reordering | Hovering an epic row reveals the ⠿ drag handle for DnD reorder |
 
 ---
 
-### `templates.spec.ts` — Template Library (4 tests)
+### `templates.spec.ts` — Template Library (5 tests)
 
 | Test | Description |
 |------|-------------|
 | template library page loads | Templates nav link → "Template Library" heading |
 | can create a new template | New Template button → form → template card appears |
+| can create a template task with XS complexity hours | Add task form shows "XS hours" field; XS column visible in task table |
 | Export CSV button is visible | "⬇ Export CSV" button present on Templates page |
 | Import CSV button opens modal with template download | Import modal shows "Download blank CSV template" link |
 

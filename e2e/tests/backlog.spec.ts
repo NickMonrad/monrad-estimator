@@ -70,4 +70,22 @@ test.describe('Backlog', () => {
     await page.getByRole('button', { name: /history/i }).click()
     await expect(page.getByText(/backlog history/i)).toBeVisible()
   })
+
+  test('drag handle is visible on epics for reordering', async ({ page }) => {
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    // Create two epics
+    await page.getByRole('button', { name: /add epic/i }).click()
+    await page.getByPlaceholder(/epic name/i).fill('E2E Epic Alpha')
+    await page.getByRole('button', { name: /save epic/i }).click()
+
+    await page.getByRole('button', { name: /add epic/i }).click()
+    await page.getByPlaceholder(/epic name/i).fill('E2E Epic Beta')
+    await page.getByRole('button', { name: /save epic/i }).click()
+
+    // Drag handles (⠿) should be visible on hover
+    const epicRows = page.locator('.group').filter({ hasText: /E2E Epic Alpha/ })
+    await epicRows.first().hover()
+    await expect(epicRows.first().locator('text=⠿')).toBeVisible()
+  })
 })
