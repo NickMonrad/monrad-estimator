@@ -73,11 +73,10 @@ jobs:
       - name: Build client
         working-directory: client
         run: npm run build
-        env:
-          VITE_API_URL: http://localhost:3001
 
       - name: Serve client build
-        run: npx --yes serve -s client/dist -l 5173 &
+        working-directory: client
+        run: npx vite preview --port 5173 --host &
 
       # ── Wait for servers ─────────────────────────────────────────
       - name: Wait for API and client to be ready
