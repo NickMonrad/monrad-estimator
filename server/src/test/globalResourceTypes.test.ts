@@ -50,3 +50,58 @@ describe('POST /api/global-resource-types', () => {
     expect(res.status).toBe(400)
   })
 })
+
+describe('PUT /api/global-resource-types/:id', () => {
+  it('returns 401 without auth', async () => {
+    const res = await request(app)
+      .put('/api/global-resource-types/grt-1')
+      .send({ name: 'Dev', category: 'ENGINEERING' })
+    expect(res.status).toBe(401)
+  })
+
+  it('updates a resource type successfully', async () => {
+    const updated = { ...mockGRT, name: 'Senior Developer' }
+    vi.mocked(prisma.globalResourceType.findFirst).mockResolvedValue(mockGRT)
+    vi.mocked(prisma.globalResourceType.update).mockResolvedValue(updated)
+    const res = await request(app)
+      .put('/api/global-resource-types/grt-1')
+      .set('Authorization', authHeader)
+      .send({ name: 'Senior Developer', category: 'ENGINEERING' })
+    expect(res.status).toBe(200)
+    expect(res.body.name).toBe('Senior Developer')
+  })
+
+  it('returns 400 if name is missing', async () => {
+    const res = await request(app)
+      .put('/api/global-resource-types/grt-1')
+      .set('Authorization', authHeader)
+      .send({ category: 'ENGINEERING' })
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('DELETE /api/global-resource-types/:id', () => {
+  it('returns 401 without auth', async () => {
+    const res = await request(app)
+      .delete('/api/global-resource-types/grt-1')
+    expect(res.status).toBe(401)
+  })
+
+  it('removes a resource type and returns 204', async () => {
+    const nonDefault = { ...mockGRT, id: 'grt-2', isDefault: false }
+    vi.mocked(prisma.globalResourceType.findFirst).mockResolvedValue(nonDefault)
+    vi.mocked(prisma.globalResourceType.delete).mockResolvedValue(nonDefault)
+    const res = await request(app)
+      .delete('/api/global-resource-types/grt-2')
+      .set('Authorization', authHeader)
+    expect(res.status).toBe(204)
+  })
+
+  it('returns 404 for non-existent resource type', async () => {
+    vi.mocked(prisma.globalResourceType.findFirst).mockResolvedValue(null)
+    const res = await request(app)
+      .delete('/api/global-resource-types/nonexistent')
+      .set('Authorization', authHeader)
+    expect(res.status).toBe(404)
+  })
+})
