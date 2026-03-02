@@ -49,6 +49,10 @@ jobs:
         working-directory: server
         run: npx prisma migrate deploy
 
+      - name: Generate Prisma client
+        working-directory: server
+        run: npx prisma generate
+
       - name: Seed database (creates E2E test user)
         working-directory: server
         run: npx tsx prisma/seed.ts
