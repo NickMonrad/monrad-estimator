@@ -1,7 +1,19 @@
+export interface GlobalResourceType {
+  id: string
+  name: string
+  category: string
+  description?: string
+  isDefault: boolean
+}
+
 export interface ResourceType {
   id: string
   name: string
   category: 'ENGINEERING' | 'GOVERNANCE' | 'PROJECT_MANAGEMENT'
+  count: number
+  proposedName?: string
+  globalTypeId?: string
+  globalType?: GlobalResourceType
   projectId: string
 }
 
@@ -44,4 +56,14 @@ export interface Epic {
   order: number
   projectId: string
   features: Feature[]
+}
+
+export interface Project {
+  id: string
+  name: string
+  description?: string
+  customer?: string
+  status: string
+  hoursPerDay: number
+  updatedAt: string
 }

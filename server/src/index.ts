@@ -10,6 +10,7 @@ import taskRoutes from './routes/tasks.js'
 import resourceTypeRoutes from './routes/resourceTypes.js'
 import templateRoutes from './routes/templates.js'
 import applyTemplateRoutes from './routes/applyTemplate.js'
+import globalResourceTypeRoutes from './routes/globalResourceTypes.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3001
@@ -27,6 +28,7 @@ app.use('/api/features/:featureId/stories', storyRoutes)
 app.use('/api/stories/:storyId/tasks', taskRoutes)
 app.use('/api/templates', templateRoutes)
 app.use('/api/features', applyTemplateRoutes)
+app.use('/api/global-resource-types', globalResourceTypeRoutes)
 
 export { app }
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`))

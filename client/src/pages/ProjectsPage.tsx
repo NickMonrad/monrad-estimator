@@ -10,6 +10,7 @@ interface Project {
   description?: string
   customer?: string
   status: string
+  hoursPerDay: number
   updatedAt: string
   _count: { epics: number }
 }
