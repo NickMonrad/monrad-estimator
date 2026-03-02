@@ -34,6 +34,8 @@ export default function BacklogPage() {
 
   const hoursPerDay = project?.hoursPerDay ?? 7.6
 
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+
   const createEpic = useMutation({
     mutationFn: (data: typeof epicForm) => api.post(`/projects/${projectId}/epics`, data),
     onSuccess: () => { invalidate(); setAddingEpic(false); setEpicForm({ name: '', description: '' }) },
