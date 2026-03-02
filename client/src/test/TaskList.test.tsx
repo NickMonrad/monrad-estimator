@@ -13,7 +13,7 @@ vi.mock('../../lib/api', () => ({
 }))
 
 const resourceTypes: ResourceType[] = [
-  { id: 'rt-1', name: 'Developer', category: 'ENGINEERING', projectId: 'proj-1' },
+  { id: 'rt-1', name: 'Developer', category: 'ENGINEERING', count: 1, projectId: 'proj-1' },
 ]
 
 const tasks: Task[] = [
@@ -26,25 +26,25 @@ function wrapper({ children }: { children: React.ReactNode }) {
 
 describe('TaskList', () => {
   it('renders task name and hours', () => {
-    render(<TaskList storyId="s-1" tasks={tasks} resourceTypes={resourceTypes} projectId="proj-1" />, { wrapper })
+    render(<TaskList storyId="s-1" tasks={tasks} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
     expect(screen.getByText('Implement login')).toBeInTheDocument()
     expect(screen.getByText(/4h/)).toBeInTheDocument()
     expect(screen.getByText('Developer')).toBeInTheDocument()
   })
 
   it('shows add task button', () => {
-    render(<TaskList storyId="s-1" tasks={[]} resourceTypes={resourceTypes} projectId="proj-1" />, { wrapper })
+    render(<TaskList storyId="s-1" tasks={[]} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
     expect(screen.getByText('+ Add task')).toBeInTheDocument()
   })
 
   it('shows task form when add task clicked', () => {
-    render(<TaskList storyId="s-1" tasks={[]} resourceTypes={resourceTypes} projectId="proj-1" />, { wrapper })
+    render(<TaskList storyId="s-1" tasks={[]} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
     fireEvent.click(screen.getByText('+ Add task'))
     expect(screen.getByPlaceholderText('Task name *')).toBeInTheDocument()
   })
 
   it('shows hours in days too', () => {
-    render(<TaskList storyId="s-1" tasks={tasks} resourceTypes={resourceTypes} projectId="proj-1" />, { wrapper })
+    render(<TaskList storyId="s-1" tasks={tasks} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
     expect(screen.getByText(/0\.5d/)).toBeInTheDocument()
   })
 })

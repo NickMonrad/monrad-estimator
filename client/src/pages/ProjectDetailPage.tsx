@@ -31,6 +31,7 @@ export default function ProjectDetailPage() {
     { label: 'Resource Profile', href: `/projects/${id}/resources`, icon: '👥', desc: 'Engineering and overlay profile' },
     { label: 'Documents', href: `/projects/${id}/documents`, icon: '📄', desc: 'Generate scope doc and SOW' },
     { label: 'Template Library', href: `/templates`, icon: '🧩', desc: 'Browse and manage feature templates' },
+    { label: 'Settings', href: `/projects/${id}/settings`, icon: '⚙️', desc: 'Edit project name, customer, hours per day' },
   ]
 
   return (
@@ -61,6 +62,7 @@ export default function ProjectDetailPage() {
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOURS[project.status]}`}>
               {project.status}
             </span>
+            <button onClick={() => navigate(`/projects/${id}/settings`)} title="Edit project settings" className="text-gray-400 hover:text-red-600 transition-colors">✏️</button>
           </div>
           {project.customer && <p className="text-sm text-gray-500">Customer: {project.customer}</p>}
           {project.description && <p className="text-sm text-gray-600 mt-1">{project.description}</p>}

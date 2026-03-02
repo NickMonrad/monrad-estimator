@@ -16,6 +16,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   const types = await prisma.resourceType.findMany({
     where: { projectId: req.params.projectId as string },
     orderBy: { name: 'asc' },
+    include: { globalType: { select: { id: true, name: true, category: true } } },
   })
   res.json(types)
 })
@@ -36,10 +37,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  const { name, category } = req.body
+  const { name, category, count, proposedName } = req.body
   const rt = await prisma.resourceType.update({
     where: { id: req.params.id as string },
-    data: { name, category },
+    data: { name, category, count, proposedName },
   })
   res.json(rt)
 })
