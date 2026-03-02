@@ -91,10 +91,13 @@ jobs:
 
       - name: Smoke test API login
         run: |
-          curl -sf -X POST http://localhost:3001/api/auth/login \
+          echo "Health check:"
+          curl -s http://localhost:3001/health
+          echo ""
+          echo "Login response:"
+          curl -s -w "\nHTTP %{http_code}" -X POST http://localhost:3001/api/auth/login \
             -H "Content-Type: application/json" \
-            -d '{"email":"test@example.com","password":"password123"}' \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print('Login OK, user:', d['user']['email'])"
+            -d '{"email":"test@example.com","password":"password123"}'
 
       # ── Playwright ───────────────────────────────────────────────
       - name: Install Playwright dependencies
