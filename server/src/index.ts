@@ -13,6 +13,7 @@ import applyTemplateRoutes from './routes/applyTemplate.js'
 import globalResourceTypeRoutes from './routes/globalResourceTypes.js'
 import effortRoutes from './routes/effort.js'
 import timelineRoutes from './routes/timeline.js'
+import snapshotRoutes from './routes/snapshots.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3001
@@ -33,6 +34,7 @@ app.use('/api/features', applyTemplateRoutes)
 app.use('/api/global-resource-types', globalResourceTypeRoutes)
 app.use('/api/projects/:projectId/effort', effortRoutes)
 app.use('/api/projects/:projectId/timeline', timelineRoutes)
+app.use('/api/projects/:projectId/snapshots', snapshotRoutes)
 
 export { app }
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`))

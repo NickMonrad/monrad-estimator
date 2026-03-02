@@ -16,6 +16,9 @@ export default function BacklogPage() {
   const [addingEpic, setAddingEpic] = useState(false)
   const [editingEpicId, setEditingEpicId] = useState<string | null>(null)
   const [epicForm, setEpicForm] = useState({ name: '', description: '' })
+  const [showHistory, setShowHistory] = useState(false)
+  const [snapshotLabel, setSnapshotLabel] = useState('')
+  const [diffId, setDiffId] = useState<string | null>(null)
 
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
@@ -50,6 +53,31 @@ export default function BacklogPage() {
   const deleteEpic = useMutation({
     mutationFn: (id: string) => api.delete(`/projects/${projectId}/epics/${id}`),
     onSuccess: invalidate,
+  })
+
+  interface Snapshot { id: string; label: string | null; trigger: string; createdAt: string }
+  interface Diff { added: string[]; removed: string[]; snapshotAt: string }
+
+  const { data: snapshots = [], refetch: refetchSnapshots } = useQuery<Snapshot[]>({
+    queryKey: ['snapshots', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/snapshots`).then(r => r.data),
+    enabled: showHistory,
+  })
+
+  const { data: diffData, refetch: refetchDiff } = useQuery<Diff>({
+    queryKey: ['snapshot-diff', projectId, diffId],
+    queryFn: () => api.get(`/projects/${projectId}/snapshots/${diffId}/diff`).then(r => r.data),
+    enabled: !!diffId,
+  })
+
+  const saveSnapshot = useMutation({
+    mutationFn: (label: string) => api.post(`/projects/${projectId}/snapshots`, { label }),
+    onSuccess: () => { setSnapshotLabel(''); refetchSnapshots() },
+  })
+
+  const rollback = useMutation({
+    mutationFn: (snapshotId: string) => api.post(`/projects/${projectId}/snapshots/${snapshotId}/rollback`, {}),
+    onSuccess: () => { invalidate(); refetchSnapshots() },
   })
 
   const toggle = (id: string) =>
@@ -93,6 +121,10 @@ export default function BacklogPage() {
           <button onClick={() => setAddingEpic(true)}
             className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors">
             + Add epic
+          </button>
+          <button onClick={() => setShowHistory(h => !h)}
+            className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+            🕐 History
           </button>
         </div>
 
@@ -150,6 +182,80 @@ export default function BacklogPage() {
                 <p className="text-lg mb-1">Backlog is empty</p>
                 <p className="text-sm">Add an epic to get started, or use AI to generate a starter backlog</p>
               </div>
+            )}
+          </div>
+        )}
+
+        {showHistory && (
+          <div className="mt-6 bg-white rounded-xl border border-gray-200 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-gray-800">Backlog History</h2>
+              <div className="flex gap-2">
+                <input
+                  placeholder="Snapshot label (optional)"
+                  value={snapshotLabel}
+                  onChange={e => setSnapshotLabel(e.target.value)}
+                  className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-red-400 w-48"
+                />
+                <button
+                  onClick={() => saveSnapshot.mutate(snapshotLabel)}
+                  disabled={saveSnapshot.isPending}
+                  className="bg-red-600 text-white px-3 py-1 rounded text-xs font-medium hover:bg-red-700 disabled:opacity-50">
+                  {saveSnapshot.isPending ? 'Saving…' : 'Save snapshot'}
+                </button>
+              </div>
+            </div>
+            {snapshots.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-4">No snapshots yet</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-400 border-b border-gray-100">
+                    <th className="text-left pb-2 font-medium">Label</th>
+                    <th className="text-left pb-2 font-medium">Trigger</th>
+                    <th className="text-left pb-2 font-medium">Saved</th>
+                    <th className="pb-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshots.map(snap => (
+                    <>
+                      <tr key={snap.id} className="border-b border-gray-50 last:border-0">
+                        <td className="py-2 pr-4 text-gray-700">{snap.label ?? <span className="text-gray-400 italic">unlabelled</span>}</td>
+                        <td className="py-2 pr-4"><span className="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{snap.trigger}</span></td>
+                        <td className="py-2 pr-4 text-gray-500">{new Date(snap.createdAt).toLocaleString()}</td>
+                        <td className="py-2">
+                          <div className="flex gap-2">
+                            <button onClick={() => setDiffId(d => d === snap.id ? null : snap.id)} className="text-blue-500 hover:text-blue-700">
+                              {diffId === snap.id ? 'Hide diff' : 'Diff'}
+                            </button>
+                            <button
+                              onClick={() => { if (confirm('Roll back to this snapshot? Current state will be auto-saved first.')) rollback.mutate(snap.id) }}
+                              disabled={rollback.isPending}
+                              className="text-red-500 hover:text-red-700 disabled:opacity-50">
+                              Rollback
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {diffId === snap.id && diffData && (
+                        <tr key={`diff-${snap.id}`}>
+                          <td colSpan={4} className="pb-3 pt-1">
+                            <div className="bg-gray-50 rounded-lg p-3 text-xs font-mono space-y-1">
+                              <p className="text-gray-500 mb-2">Comparing snapshot ({new Date(diffData.snapshotAt).toLocaleString()}) to current:</p>
+                              {diffData.added.map((line, i) => <div key={i} className="text-green-700">+ {line}</div>)}
+                              {diffData.removed.map((line, i) => <div key={i} className="text-red-600">- {line}</div>)}
+                              {diffData.added.length === 0 && diffData.removed.length === 0 && (
+                                <div className="text-gray-400">No differences</div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         )}
