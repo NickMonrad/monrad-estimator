@@ -37,6 +37,20 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
     onSuccess: invalidate,
   })
 
+  const refreshFromTemplate = useMutation({
+    mutationFn: ({ storyId, complexity }: { storyId: string; complexity: string }) =>
+      api.post(`/features/${featureId}/refresh-template/${storyId}`, { complexity }),
+    onSuccess: (res, { storyId }) => {
+      invalidate()
+      const added = res.data.added as number
+      setRefreshMsg(added > 0 ? `Added ${added} new task${added !== 1 ? 's' : ''}` : 'Already up to date')
+      setRefreshingId(null)
+    },
+  })
+
+  const [refreshingId, setRefreshingId] = useState<string | null>(null)
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null)
+
   const toggle = (id: string) =>
     setExpandedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
@@ -63,6 +77,9 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
               <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours(story)}h</span>
               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
                 <button onClick={() => setEditingId(story.id)} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+                {story.appliedTemplateId && (
+                  <button onClick={() => setRefreshingId(story.id)} title="Refresh from template" className="text-xs text-blue-400 hover:text-blue-600 px-1">↺ Refresh</button>
+                )}
                 <button onClick={() => deleteStory.mutate(story.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
               </div>
             </div>
@@ -72,6 +89,25 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
           )}
         </div>
       ))}
+
+      {refreshingId && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 flex items-center gap-3">
+          <span>Refresh complexity:</span>
+          {(['SMALL', 'MEDIUM', 'LARGE', 'EXTRA_LARGE'] as const).map(c => (
+            <button key={c} onClick={() => refreshFromTemplate.mutate({ storyId: refreshingId, complexity: c })}
+              disabled={refreshFromTemplate.isPending}
+              className="font-medium hover:text-blue-900 disabled:opacity-50">
+              {c === 'EXTRA_LARGE' ? 'XL' : c[0]}
+            </button>
+          ))}
+          <button onClick={() => setRefreshingId(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
+        </div>
+      )}
+      {refreshMsg && (
+        <div className="text-xs text-green-600 py-1 pl-2">{refreshMsg}
+          <button onClick={() => setRefreshMsg(null)} className="ml-2 text-gray-400">✕</button>
+        </div>
+      )}
 
       {adding ? (
         <InlineForm

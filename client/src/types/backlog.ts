@@ -37,6 +37,7 @@ export interface UserStory {
   assumptions?: string
   order: number
   featureId: string
+  appliedTemplateId?: string | null
   tasks: Task[]
 }
 

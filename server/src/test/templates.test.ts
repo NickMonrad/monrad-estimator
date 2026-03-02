@@ -72,6 +72,7 @@ describe('POST /api/templates', () => {
 
 describe('POST /api/templates/:id/tasks', () => {
   it('adds a task to template', async () => {
+    vi.mocked(prisma.templateTask.count).mockResolvedValue(2)
     vi.mocked(prisma.templateTask.create).mockResolvedValue(mockTask as any)
 
     const res = await request(app)
