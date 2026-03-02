@@ -8,6 +8,7 @@ router.use(authenticate)
 async function ownedStory(storyId: string, userId: string) {
   return prisma.userStory.findFirst({
     where: { id: storyId, feature: { epic: { project: { ownerId: userId } } } },
+    include: { feature: { include: { epic: { include: { project: { select: { hoursPerDay: true } } } } } } },
   })
 }
 
@@ -29,9 +30,17 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   const { name, description, assumptions, hoursEffort, resourceTypeId } = req.body
   if (!name || !resourceTypeId) { res.status(400).json({ error: 'name and resourceTypeId are required' }); return }
+  const hoursPerDay = story.feature.epic.project.hoursPerDay ?? 7.6
   const count = await prisma.task.findMany({ where: { userStoryId: req.params.storyId as string } })
   const task = await prisma.task.create({
-    data: { name, description, assumptions, hoursEffort: hoursEffort ?? 0, resourceTypeId, userStoryId: req.params.storyId as string, order: count.length },
+    data: {
+      name, description, assumptions,
+      hoursEffort: hoursEffort ?? 0,
+      durationDays: (hoursEffort ?? 0) / hoursPerDay,
+      resourceTypeId,
+      userStoryId: req.params.storyId as string,
+      order: count.length,
+    },
     include: { resourceType: true },
   })
   res.status(201).json(task)
@@ -42,9 +51,13 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   const { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays } = req.body
+  const hoursPerDay = story.feature.epic.project.hoursPerDay ?? 7.6
+  const resolvedDuration = durationDays !== undefined ? durationDays
+    : hoursEffort !== undefined ? hoursEffort / hoursPerDay
+    : undefined
   const task = await prisma.task.update({
     where: { id: req.params.id as string },
-    data: { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays },
+    data: { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays: resolvedDuration },
     include: { resourceType: true },
   })
   res.json(task)

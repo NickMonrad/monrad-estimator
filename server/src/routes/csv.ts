@@ -218,6 +218,7 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
   }
 
   // Fetch resource types for matching
+  const hoursPerDay = project.hoursPerDay ?? 7.6
   const resourceTypes = await prisma.resourceType.findMany({ where: { projectId } })
   const rtByName = new Map(resourceTypes.map(r => [r.name.toLowerCase(), r.id]))
 
@@ -302,7 +303,7 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
         order: taskCount,
         resourceTypeId,
         hoursEffort: row.hoursEffort,
-        durationDays: row.durationDays || null,
+        durationDays: row.durationDays || (row.hoursEffort / hoursPerDay),
         description: row.description || null,
         assumptions: row.assumptions || null,
       },
