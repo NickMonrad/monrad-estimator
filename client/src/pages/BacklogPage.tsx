@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import type { Epic, ResourceType, Project } from '../types/backlog'
 import FeatureList from '../components/backlog/FeatureList'
+import CsvImportModal from '../components/backlog/CsvImportModal'
 
 export default function BacklogPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -17,6 +18,7 @@ export default function BacklogPage() {
   const [editingEpicId, setEditingEpicId] = useState<string | null>(null)
   const [epicForm, setEpicForm] = useState({ name: '', description: '' })
   const [showHistory, setShowHistory] = useState(false)
+  const [showCsvImport, setShowCsvImport] = useState(false)
   const [snapshotLabel, setSnapshotLabel] = useState('')
   const [diffId, setDiffId] = useState<string | null>(null)
 
@@ -121,6 +123,20 @@ export default function BacklogPage() {
           <button onClick={() => setAddingEpic(true)}
             className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors">
             + Add epic
+          </button>
+          <button onClick={() => setShowCsvImport(true)}
+            className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+            ⬆ Import CSV
+          </button>
+          <button
+            onClick={async () => {
+              const res = await api.get(`/projects/${projectId}/backlog/export-csv`, { responseType: 'blob' })
+              const url = URL.createObjectURL(res.data)
+              const a = document.createElement('a'); a.href = url; a.download = `backlog-${projectId}.csv`; a.click()
+              URL.revokeObjectURL(url)
+            }}
+            className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+            ⬇ Export CSV
           </button>
           <button onClick={() => setShowHistory(h => !h)}
             className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
@@ -260,6 +276,13 @@ export default function BacklogPage() {
           </div>
         )}
       </main>
+      {showCsvImport && (
+        <CsvImportModal
+          projectId={projectId!}
+          onClose={() => setShowCsvImport(false)}
+          onImported={invalidate}
+        />
+      )}
     </div>
   )
 }

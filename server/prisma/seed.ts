@@ -1,5 +1,6 @@
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
+import bcrypt from 'bcryptjs'
 import 'dotenv/config'
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL })
@@ -13,6 +14,13 @@ const DEFAULT_GLOBAL_TYPES = [
   { name: 'Tech Governance', category: 'GOVERNANCE' as const },
   { name: 'Project Manager', category: 'PROJECT_MANAGEMENT' as const },
 ]
+
+// E2E test user — credentials must match TEST_EMAIL / TEST_PASSWORD in playwright config
+const E2E_USER = {
+  email: process.env.TEST_EMAIL ?? 'test@example.com',
+  name: 'E2E Test User',
+  password: process.env.TEST_PASSWORD ?? 'password123',
+}
 
 async function main() {
   // Upsert global resource types
@@ -36,6 +44,14 @@ async function main() {
       await prisma.resourceType.update({ where: { id: rt.id }, data: { globalTypeId } })
     }
   }
+
+  // Upsert E2E test user
+  const hashed = await bcrypt.hash(E2E_USER.password, 10)
+  await prisma.user.upsert({
+    where: { email: E2E_USER.email },
+    create: { email: E2E_USER.email, name: E2E_USER.name, password: hashed },
+    update: {},
+  })
 
   console.log('Seed complete.')
 }

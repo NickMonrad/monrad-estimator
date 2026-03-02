@@ -49,7 +49,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     epicName: string
     hoursEffort: number
     daysEffort: number
-    resourceTypeId: string
+    resourceTypeId: string | null
   }
 
   const allTasks: TaskEntry[] = []
@@ -73,7 +73,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   }
 
   // Group tasks by resourceTypeId
-  const tasksByRt = new Map<string, TaskEntry[]>()
+  const tasksByRt = new Map<string | null, TaskEntry[]>()
   for (const t of allTasks) {
     const arr = tasksByRt.get(t.resourceTypeId) ?? []
     arr.push(t)
