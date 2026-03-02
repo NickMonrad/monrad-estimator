@@ -136,6 +136,10 @@ export default function GlobalResourceTypesPage() {
   const deleteType = useMutation({
     mutationFn: (id: string) => api.delete(`/global-resource-types/${id}`),
     onSuccess: invalidate,
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error ?? 'Failed to delete resource type'
+      alert(msg)
+    },
   })
 
   const handleDelete = (t: GlobalResourceType) => {
