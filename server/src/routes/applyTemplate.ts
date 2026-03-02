@@ -47,6 +47,7 @@ router.post('/:featureId/apply-template', async (req: AuthRequest, res: Response
       name: `${template.name} \u2014 ${complexity}`,
       featureId,
       order: existingStories.length,
+      appliedTemplateId: templateId,
     },
   })
 
@@ -75,6 +76,65 @@ router.post('/:featureId/apply-template', async (req: AuthRequest, res: Response
   })
 
   res.status(201).json(result)
+})
+
+// POST /api/features/:featureId/refresh-template/:storyId
+// Additive refresh: adds any template tasks not already present in the story
+router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, res: Response) => {
+  const { featureId, storyId } = req.params as { featureId: string; storyId: string }
+  const { complexity } = req.body as { complexity: Complexity }
+
+  if (!complexity || !HOURS_FIELD[complexity]) {
+    res.status(400).json({ error: 'complexity (SMALL|MEDIUM|LARGE|EXTRA_LARGE) is required' }); return
+  }
+
+  const story = await prisma.userStory.findFirst({
+    where: { id: storyId, featureId, feature: { epic: { project: { ownerId: req.userId! } } } },
+    include: { tasks: true },
+  })
+  if (!story) { res.status(404).json({ error: 'Story not found' }); return }
+  if (!story.appliedTemplateId) { res.status(400).json({ error: 'Story was not created from a template' }); return }
+
+  const template = await prisma.featureTemplate.findUnique({
+    where: { id: story.appliedTemplateId },
+    include: { tasks: { orderBy: { order: 'asc' } } },
+  })
+  if (!template) { res.status(404).json({ error: 'Template not found' }); return }
+
+  const feature = await prisma.feature.findUnique({
+    where: { id: featureId },
+    include: { epic: { include: { project: true } } },
+  })
+  const projectId = feature!.epic.projectId
+  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId } })
+  const hoursField = HOURS_FIELD[complexity]
+
+  const existingTaskNames = new Set(story.tasks.map(t => t.name.toLowerCase()))
+  const newTasks = template.tasks.filter(t => !existingTaskNames.has(t.name.toLowerCase()))
+  const baseOrder = story.tasks.length
+
+  for (let i = 0; i < newTasks.length; i++) {
+    const tmplTask = newTasks[i]
+    const matchedRt = resourceTypes.find(
+      rt => rt.name.toLowerCase() === tmplTask.resourceTypeName.toLowerCase()
+    ) ?? resourceTypes[0]
+    if (!matchedRt) continue
+    await prisma.task.create({
+      data: {
+        name: tmplTask.name,
+        hoursEffort: tmplTask[hoursField],
+        resourceTypeId: matchedRt.id,
+        userStoryId: storyId,
+        order: baseOrder + i,
+      },
+    })
+  }
+
+  const result = await prisma.userStory.findUnique({
+    where: { id: storyId },
+    include: { tasks: { orderBy: { order: 'asc' }, include: { resourceType: true } } },
+  })
+  res.json({ added: newTasks.length, story: result })
 })
 
 export default router

@@ -4,7 +4,7 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 
 const router = Router()
 
-const templateInclude = { tasks: { orderBy: { id: 'asc' as const } } }
+const templateInclude = { tasks: { orderBy: { order: 'asc' as const } } }
 
 // GET /api/templates — no auth required
 router.get('/', async (_req, res: Response) => {
@@ -57,9 +57,11 @@ router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
 router.post('/:id/tasks', authenticate, async (req: AuthRequest, res: Response) => {
   const { name, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
   if (!name || !resourceTypeName) { res.status(400).json({ error: 'name and resourceTypeName are required' }); return }
+  const count = await prisma.templateTask.count({ where: { templateId: req.params.id as string } })
   const task = await prisma.templateTask.create({
     data: {
       name,
+      order: count,
       hoursSmall: hoursSmall ?? 0,
       hoursMedium: hoursMedium ?? 0,
       hoursLarge: hoursLarge ?? 0,
@@ -69,6 +71,20 @@ router.post('/:id/tasks', authenticate, async (req: AuthRequest, res: Response) 
     },
   })
   res.status(201).json(task)
+})
+
+// PUT /api/templates/:id/tasks/reorder — auth required
+router.put('/:id/tasks/reorder', authenticate, async (req: AuthRequest, res: Response) => {
+  const items = req.body as { id: string; order: number }[]
+  if (!Array.isArray(items)) { res.status(400).json({ error: 'Expected array of { id, order }' }); return }
+  await Promise.all(items.map(({ id, order }) =>
+    prisma.templateTask.update({ where: { id }, data: { order } })
+  ))
+  const template = await prisma.featureTemplate.findUnique({
+    where: { id: req.params.id as string },
+    include: templateInclude,
+  })
+  res.json(template)
 })
 
 // PUT /api/templates/:id/tasks/:taskId — auth required
