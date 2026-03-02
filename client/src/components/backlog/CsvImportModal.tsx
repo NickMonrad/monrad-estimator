@@ -45,8 +45,10 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
       setSummary(res.data.summary)
       setStep('staging')
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to parse CSV'
-      setError(msg)
+      const data = (err as { response?: { data?: { error?: string; detail?: string } } })?.response?.data
+      const msg = data?.error ?? 'Failed to parse CSV'
+      const detail = data?.detail
+      setError(detail ? `${msg}: ${detail}` : msg)
     } finally {
       setLoading(false)
     }
@@ -157,17 +159,49 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
           {step === 'staging' && (
             <div>
               {summary && (
-                <div className="flex gap-4 mb-4 text-sm">
+                <div className="flex gap-3 mb-4 text-sm flex-wrap">
                   <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">{summary.total} rows</span>
-                  {summary.errorCount > 0 && <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full">{summary.errorCount} errors</span>}
-                  {summary.warningCount > 0 && <span className="bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full">{summary.warningCount} warnings</span>}
+                  {summary.errorCount > 0 && <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full font-medium">⚠ {summary.errorCount} row{summary.errorCount !== 1 ? 's' : ''} with errors</span>}
+                  {summary.warningCount > 0 && <span className="bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full">⚡ {summary.warningCount} warning{summary.warningCount !== 1 ? 's' : ''}</span>}
                 </div>
               )}
+
+              {/* Error detail panel */}
+              {staged.some(r => r.errors.length > 0) && (
+                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
+                  <p className="text-sm font-semibold text-red-700 mb-2">Fix or remove these rows before importing:</p>
+                  <ul className="space-y-1">
+                    {staged.filter(r => r.errors.length > 0).map(r => (
+                      <li key={r.rowIndex} className="text-xs text-red-700">
+                        <span className="font-medium">Row {r.rowIndex}:</span>{' '}
+                        {r.errors.join(' · ')}
+                        {(r.epic || r.task) && <span className="text-red-400 ml-1">({[r.epic, r.feature, r.story, r.task].filter(Boolean).join(' › ')})</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Warning detail panel */}
+              {staged.some(r => r.warnings.length > 0) && (
+                <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                  <p className="text-sm font-semibold text-yellow-700 mb-2">Warnings (import will still proceed):</p>
+                  <ul className="space-y-1">
+                    {staged.filter(r => r.warnings.length > 0).map(r => (
+                      <li key={r.rowIndex} className="text-xs text-yellow-700">
+                        <span className="font-medium">Row {r.rowIndex}:</span>{' '}
+                        {r.warnings.join(' · ')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="overflow-x-auto border border-gray-200 rounded-lg">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      {['Row', 'Epic', 'Feature', 'Story', 'Task', 'Resource Type', 'Hours', 'Days', 'Issues', ''].map(h => (
+                      {['Row', 'Epic', 'Feature', 'Story', 'Task', 'Resource Type', 'Hours', 'Days', ''].map(h => (
                         <th key={h} className="text-left px-3 py-2 text-gray-500 font-medium whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -175,7 +209,9 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                   <tbody>
                     {staged.map((row, i) => (
                       <tr key={i} className={`border-b border-gray-100 ${row.errors.length > 0 ? 'bg-red-50' : row.warnings.length > 0 ? 'bg-yellow-50' : ''}`}>
-                        <td className="px-3 py-2 text-gray-400">{row.rowIndex}</td>
+                        <td className="px-3 py-2 text-gray-400">
+                          {row.errors.length > 0 ? <span className="text-red-500 font-bold">⚠ {row.rowIndex}</span> : row.rowIndex}
+                        </td>
                         {(['epic', 'feature', 'story', 'task', 'resourceType'] as const).map(field => (
                           <td key={field} className="px-2 py-1">
                             {editingRow === i ? (
@@ -197,10 +233,6 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                           )}
                         </td>
                         <td className="px-2 py-1 text-gray-500">{row.durationDays || '—'}</td>
-                        <td className="px-2 py-1">
-                          {row.errors.map((e, j) => <div key={j} className="text-red-600">⚠ {e}</div>)}
-                          {row.warnings.map((w, j) => <div key={j} className="text-yellow-600">⚡ {w}</div>)}
-                        </td>
                         <td className="px-2 py-1">
                           <button onClick={() => removeRow(i)} className="text-gray-400 hover:text-red-600 text-xs">✕</button>
                         </td>
@@ -242,9 +274,12 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
               <button
                 onClick={() => setStep('confirm')}
                 disabled={staged.filter(r => r.errors.length > 0).length > 0}
+                title={staged.filter(r => r.errors.length > 0).length > 0 ? 'Fix or remove all error rows before proceeding' : undefined}
                 className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                Review & Confirm →
+                {staged.filter(r => r.errors.length > 0).length > 0
+                  ? `Fix ${staged.filter(r => r.errors.length > 0).length} error${staged.filter(r => r.errors.length > 0).length !== 1 ? 's' : ''} to continue`
+                  : 'Review & Confirm →'}
               </button>
             )}
             {step === 'confirm' && (
