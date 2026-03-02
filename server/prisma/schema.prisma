@@ -35,12 +35,14 @@ model Project {
   customer    String?
   status      ProjectStatus @default(DRAFT)
   hoursPerDay Float         @default(7.6)
+  startDate   DateTime?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   owner       User          @relation(fields: [ownerId], references: [id])
   ownerId     String
   epics       Epic[]
   resourceTypes ResourceType[]
+  timelineEntries TimelineEntry[]
 }
 
 enum ProjectStatus {
@@ -84,16 +86,17 @@ model Epic {
 }
 
 model Feature {
-  id           String      @id @default(cuid())
-  name         String
-  description  String?
-  assumptions  String?
-  order        Int         @default(0)
-  epic         Epic        @relation(fields: [epicId], references: [id], onDelete: Cascade)
-  epicId       String
-  userStories  UserStory[]
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id             String         @id @default(cuid())
+  name           String
+  description    String?
+  assumptions    String?
+  order          Int            @default(0)
+  epic           Epic           @relation(fields: [epicId], references: [id], onDelete: Cascade)
+  epicId         String
+  userStories    UserStory[]
+  timelineEntry  TimelineEntry?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 }
 
 model UserStory {
@@ -115,6 +118,7 @@ model Task {
   description    String?
   assumptions    String?
   hoursEffort    Float        @default(0)
+  durationDays   Float?
   order          Int          @default(0)
   userStory      UserStory    @relation(fields: [userStoryId], references: [id], onDelete: Cascade)
   userStoryId    String
@@ -147,4 +151,17 @@ model TemplateTask {
   resourceType      ResourceType?   @relation(fields: [resourceTypeId], references: [id])
   resourceTypeId    String?
   resourceTypeName  String          // fallback name if no project-scoped resource type linked
+}
+
+model TimelineEntry {
+  id            String   @id @default(cuid())
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId     String
+  feature       Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  featureId     String   @unique
+  startWeek     Int
+  durationWeeks Int
+  isManual      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
