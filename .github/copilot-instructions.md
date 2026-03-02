@@ -96,6 +96,16 @@ npm run test:e2e:headed     # with browser window
 npm run test:e2e:report     # open last HTML report
 ```
 
+## E2E Tests (Playwright)
+
+Tests live in `/e2e/tests/`. Run from repo root:
+
+```bash
+npm run test:e2e            # headless (CI)
+npm run test:e2e:headed     # with browser window
+npm run test:e2e:report     # open last HTML report
+```
+
 **Test files:**
 - `auth.spec.ts` — login, register, sign out
 - `projects.spec.ts` — create project, open backlog
@@ -106,7 +116,12 @@ npm run test:e2e:report     # open last HTML report
 
 **Credentials:** Default test user `test@example.com` / `password123`. Override with `TEST_EMAIL` / `TEST_PASSWORD` env vars.
 
-When adding new features, add a matching test to the relevant spec file before raising the PR.
+**When adding new features:**
+1. Add a matching Playwright test to the relevant spec file (or create a new `*.spec.ts`)
+2. **Update `e2e/TESTS.md`** — add a row to the table and update the test count
+3. Run `npm run test:e2e` to confirm all tests pass before raising the PR
+
+Full Playwright authoring conventions are in `.github/instructions/playwright.instructions.md` — this file is auto-loaded by Copilot when working in the `e2e/` directory.
 
 ## Code Conventions
 
