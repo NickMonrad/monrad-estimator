@@ -99,10 +99,11 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
               story.name,
               task.name,
               task.resourceType?.name ?? '',
-              '',
-              '',
-              '',
-              '',
+              '', // HoursExtraSmall (template field, not applicable to exported tasks)
+              '', // HoursSmall
+              '', // HoursMedium
+              '', // HoursLarge
+              '', // HoursExtraLarge
               String(task.hoursEffort),
               String(task.durationDays ?? ''),
               task.description ?? '',
@@ -110,7 +111,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
             ])
           }
           if (story.tasks.length === 0) {
-            rows.push([epic.name, feature.name, story.name, '', '', '', '', '', '', '', '', story.description ?? '', story.assumptions ?? ''])
+            rows.push([epic.name, feature.name, story.name, '', '', '', '', '', '', '', '', '', story.description ?? '', story.assumptions ?? ''])
           }
         }
       }
