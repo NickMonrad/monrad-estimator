@@ -100,16 +100,17 @@ model Feature {
 }
 
 model UserStory {
-  id          String   @id @default(cuid())
-  name        String
-  description String?
-  assumptions String?
-  order       Int      @default(0)
-  feature     Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
-  featureId   String
-  tasks       Task[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                String   @id @default(cuid())
+  name              String
+  description       String?
+  assumptions       String?
+  order             Int      @default(0)
+  appliedTemplateId String?
+  feature           Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  featureId         String
+  tasks             Task[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model Task {
@@ -142,6 +143,7 @@ model FeatureTemplate {
 model TemplateTask {
   id                String          @id @default(cuid())
   name              String
+  order             Int             @default(0)
   hoursSmall        Float           @default(0)
   hoursMedium       Float           @default(0)
   hoursLarge        Float           @default(0)

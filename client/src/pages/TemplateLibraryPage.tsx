@@ -89,6 +89,21 @@ export default function TemplateLibraryPage() {
     onSuccess: invalidate,
   })
 
+  const reorderTasks = useMutation({
+    mutationFn: ({ templateId, items }: { templateId: string; items: { id: string; order: number }[] }) =>
+      api.put(`/templates/${templateId}/tasks/reorder`, items),
+    onSuccess: invalidate,
+  })
+
+  const moveTask = (tpl: FeatureTemplate, taskId: string, direction: -1 | 1) => {
+    const tasks = [...tpl.tasks]
+    const idx = tasks.findIndex(t => t.id === taskId)
+    const newIdx = idx + direction
+    if (newIdx < 0 || newIdx >= tasks.length) return
+    ;[tasks[idx], tasks[newIdx]] = [tasks[newIdx], tasks[idx]]
+    reorderTasks.mutate({ templateId: tpl.id, items: tasks.map((t, i) => ({ id: t.id, order: i })) })
+  }
+
   const toggle = (id: string) =>
     setExpandedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
@@ -210,6 +225,8 @@ export default function TemplateLibraryPage() {
                                 <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursExtraLarge)}</td>
                                 <td className="py-2">
                                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button onClick={() => moveTask(tpl, task.id, -1)} title="Move up" className="text-gray-400 hover:text-gray-700 px-1 text-xs">↑</button>
+                                    <button onClick={() => moveTask(tpl, task.id, 1)} title="Move down" className="text-gray-400 hover:text-gray-700 px-1 text-xs">↓</button>
                                     <button onClick={() => setEditingTaskId(task.id)} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
                                     <button onClick={() => deleteTask.mutate({ templateId: tpl.id, taskId: task.id })} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
                                   </div>
