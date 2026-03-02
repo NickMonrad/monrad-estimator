@@ -142,6 +142,16 @@ Full Playwright authoring conventions are in `.github/instructions/playwright.in
 - Always show loading states and empty states
 - Toast/inline feedback preferred over `alert()`
 
+## README
+
+`README.md` is the human-facing project overview. **Keep it current:**
+
+- After any PR is merged to `main`, update `README.md`:
+  - Add the enhancement to the "Shipped Enhancements" table with its PR number
+  - Update phase status (`🚧` → `✅`) if a phase is completed
+  - Keep the "Open Issues & Backlog" table current (remove closed, add new)
+- Commit the README update as `docs: update README for <feature>` on the feature branch before raising the PR, or as a follow-up commit to `main` after merge.
+
 ## GitHub Issues
 
 - Phases are tracked as issues labelled `phase`

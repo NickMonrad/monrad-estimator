@@ -1,0 +1,160 @@
+# Monrad Estimator
+
+A full-stack project estimation tool that replaces a manual spreadsheet process. It produces scoped backlogs, effort summaries, resource profiles, timelines, and eventually SOW documents.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React + Vite + TypeScript + Tailwind CSS |
+| Backend | Node.js + Express + TypeScript |
+| ORM | Prisma 7 (driver adapter mode) |
+| Database | PostgreSQL |
+| Auth | JWT (Bearer token) |
+| Testing | Vitest + Supertest (server), Vitest + React Testing Library (client), Playwright (E2E) |
+
+---
+
+## Project Structure
+
+```
+/client        React + Vite frontend
+/server        Express + Prisma API
+  /prisma      Schema + migrations
+  /scripts     Utility scripts (e.g. e2e:cleanup)
+/e2e           Playwright E2E tests
+```
+
+---
+
+## Getting Started
+
+### Prerequisites
+- Node.js 20+
+- PostgreSQL running locally (default: `localhost:5432`, database: `monrad_estimator`)
+- Docker (optional — a `westpac-pg` container is used in development)
+
+### Install dependencies
+
+```bash
+cd server && npm install
+cd ../client && npm install
+cd ../e2e && npm install
+```
+
+### Configure environment
+
+Create `server/.env`:
+```env
+DATABASE_URL=postgresql://postgres:password@localhost:5432/monrad_estimator
+JWT_SECRET=your-secret-here
+```
+
+### Run database migrations
+
+```bash
+cd server
+npx prisma migrate deploy
+npx prisma generate
+```
+
+### Start development servers
+
+```bash
+# Terminal 1 — API (port 3001)
+cd server && npx tsx src/index.ts
+
+# Terminal 2 — Client (port 5173)
+cd client && npm run dev
+```
+
+### Run tests
+
+```bash
+# Server unit/integration tests
+cd server && npm test
+
+# TypeScript check
+cd server && npx tsc --noEmit
+cd client && npx tsc --noEmit
+
+# E2E (requires both dev servers running)
+cd e2e && ./node_modules/.bin/playwright test --workers=1
+```
+
+---
+
+## Phases & Progress
+
+### ✅ Phase 1 — Foundation
+Repo setup, Vite + React + TypeScript + Tailwind, Express + Prisma, DB schema, JWT auth, project CRUD.
+
+### ✅ Phase 2 — Backlog Builder
+Backlog hierarchy (Epic → Feature → Story → Task), tree view UI, manual entry, resource type management, bidirectional hours/days input.
+
+### ✅ Phase 3 — Template Library
+Feature Template data model + API, Template Library UI, template-based backlog generation (select template + complexity → creates tasks).
+
+### ✅ Phase 4 — Effort Review
+Effort summary API grouped by resource type, Effort Review UI with table and charts, hours override support.
+
+### ✅ Phase 5 — Timeline Planner
+Timeline/sprint data model + API, auto-scheduler, dependency management, Gantt-style period view.
+
+### 🚧 Phase 6 — Resource Profile *(not started)*
+Resource profile calculation, governance + PM overlay configuration, resource profile table + chart, CSV/Excel export. See [#6](https://github.com/NickMonrad/monrad-estimator/issues/6).
+
+### 🚧 Phase 7 — Document Generation *(not started)*
+Scope document and Statement of Work as PDF + Word (.docx), configurable branding and section toggles. See [#7](https://github.com/NickMonrad/monrad-estimator/issues/7).
+
+### 🚧 Phase 8 — Cost Basis & Rate Cards *(not started)*
+Hourly rates per resource type, per-project overrides, discount tiers, cost section in SOW. See [#8](https://github.com/NickMonrad/monrad-estimator/issues/8).
+
+### 🚧 Phase 9 — AI Backlog Generator *(not started)*
+"Generate from brief" using OpenAI or Claude, AI-suggested templates at appropriate complexity. See [#9](https://github.com/NickMonrad/monrad-estimator/issues/9).
+
+---
+
+## Shipped Enhancements (post-phase)
+
+| Enhancement | PR |
+|---|---|
+| Global resource type catalog + project instances | #27 |
+| Configurable hours/day per project + project settings | #20 |
+| Resource type propagation + referential integrity | #32 |
+| Backlog UX — auto-expand after creation | #31 |
+| Template task reorder, refresh from template, backlog version history | #36 |
+| Backlog CSV export/import with 3-step staging workflow | #37 |
+| Backlog drag-and-drop reorder (all levels + cross-parent moves) | #40 |
+| XS (extra small) complexity level | #40 |
+| DurationDays auto-calculated from hoursEffort across all creation paths | #40 |
+
+---
+
+## Open Issues & Backlog
+
+| # | Title |
+|---|---|
+| [#38](https://github.com/NickMonrad/monrad-estimator/issues/38) | UI: Format all hours/days totals to 2 decimal places |
+| [#39](https://github.com/NickMonrad/monrad-estimator/issues/39) | Template CSV: bulk update + review screen + per-template history |
+| [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — snapshots, diff, and rollback |
+| [#29](https://github.com/NickMonrad/monrad-estimator/issues/29) | Backlog: Refresh/sync tasks from template |
+| [#26](https://github.com/NickMonrad/monrad-estimator/issues/26) | Rich Gantt chart — drag-and-drop, dependencies, milestones |
+| [#24](https://github.com/NickMonrad/monrad-estimator/issues/24) | Per-resource overhead configuration |
+| [#23](https://github.com/NickMonrad/monrad-estimator/issues/23) | Governance & PM overhead percentages on Effort Review |
+| [#22](https://github.com/NickMonrad/monrad-estimator/issues/22) | Project sharing / multi-user collaboration |
+| [#10](https://github.com/NickMonrad/monrad-estimator/issues/10) | Password reset flow |
+
+---
+
+## E2E Tests
+
+Playwright tests are documented in [`e2e/TESTS.md`](e2e/TESTS.md). See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to run them and what's required before raising a PR.
+
+---
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branching strategy, PR process, commit message format, and testing standards.
