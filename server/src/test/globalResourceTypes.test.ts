@@ -25,14 +25,19 @@ describe('GET /api/global-resource-types', () => {
 })
 
 describe('POST /api/global-resource-types', () => {
-  it('creates a global resource type when authenticated', async () => {
+  it('creates a global resource type and seeds into existing projects', async () => {
     vi.mocked(prisma.globalResourceType.create).mockResolvedValue(mockGRT)
+    vi.mocked(prisma.project.findMany).mockResolvedValue([{ id: 'proj-1' }] as any)
+    vi.mocked(prisma.resourceType.createMany).mockResolvedValue({ count: 1 })
     const res = await request(app)
       .post('/api/global-resource-types')
       .set('Authorization', authHeader)
       .send({ name: 'Developer', category: 'ENGINEERING' })
     expect(res.status).toBe(201)
     expect(res.body.name).toBe('Developer')
+    expect(prisma.resourceType.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.arrayContaining([expect.objectContaining({ projectId: 'proj-1', globalTypeId: 'grt-1' })]) })
+    )
   })
 
   it('returns 401 without auth', async () => {
@@ -59,16 +64,20 @@ describe('PUT /api/global-resource-types/:id', () => {
     expect(res.status).toBe(401)
   })
 
-  it('updates a resource type successfully', async () => {
+  it('updates global type and syncs to all linked project resource types', async () => {
     const updated = { ...mockGRT, name: 'Senior Developer' }
     vi.mocked(prisma.globalResourceType.findFirst).mockResolvedValue(mockGRT)
     vi.mocked(prisma.globalResourceType.update).mockResolvedValue(updated)
+    vi.mocked(prisma.resourceType.updateMany).mockResolvedValue({ count: 2 })
     const res = await request(app)
       .put('/api/global-resource-types/grt-1')
       .set('Authorization', authHeader)
       .send({ name: 'Senior Developer', category: 'ENGINEERING' })
     expect(res.status).toBe(200)
     expect(res.body.name).toBe('Senior Developer')
+    expect(prisma.resourceType.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { globalTypeId: 'grt-1' }, data: { name: 'Senior Developer', category: 'ENGINEERING' } })
+    )
   })
 
   it('returns 400 if name is missing', async () => {
@@ -90,11 +99,23 @@ describe('DELETE /api/global-resource-types/:id', () => {
   it('removes a resource type and returns 204', async () => {
     const nonDefault = { ...mockGRT, id: 'grt-2', isDefault: false }
     vi.mocked(prisma.globalResourceType.findFirst).mockResolvedValue(nonDefault)
+    vi.mocked(prisma.task.findFirst).mockResolvedValue(null)
+    vi.mocked(prisma.resourceType.updateMany).mockResolvedValue({ count: 0 })
     vi.mocked(prisma.globalResourceType.delete).mockResolvedValue(nonDefault)
     const res = await request(app)
       .delete('/api/global-resource-types/grt-2')
       .set('Authorization', authHeader)
     expect(res.status).toBe(204)
+  })
+
+  it('returns 409 when resource type is in use by tasks', async () => {
+    const nonDefault = { ...mockGRT, id: 'grt-2', isDefault: false }
+    vi.mocked(prisma.globalResourceType.findFirst).mockResolvedValue(nonDefault)
+    vi.mocked(prisma.task.findFirst).mockResolvedValue({ id: 'task-1' } as any)
+    const res = await request(app)
+      .delete('/api/global-resource-types/grt-2')
+      .set('Authorization', authHeader)
+    expect(res.status).toBe(409)
   })
 
   it('returns 404 for non-existent resource type', async () => {

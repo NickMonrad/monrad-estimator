@@ -11,29 +11,45 @@ router.get('/', async (_req: Request, res: Response) => {
 })
 
 // POST /api/global-resource-types — auth required
+// After creating, seeds a ResourceType instance into every existing project
 router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
   const { name, category, description } = req.body
   if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
   const gt = await prisma.globalResourceType.create({ data: { name, category, description } })
+  const projects = await prisma.project.findMany({ select: { id: true } })
+  if (projects.length > 0) {
+    await prisma.resourceType.createMany({
+      data: projects.map(p => ({ name, category, projectId: p.id, globalTypeId: gt.id }))
+    })
+  }
   res.status(201).json(gt)
 })
 
 // PUT /api/global-resource-types/:id — auth required
+// Syncs name + category changes to all linked project-level ResourceType instances
 router.put('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   const { name, category, description } = req.body
   if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
-  const existing = await prisma.globalResourceType.findFirst({ where: { id: req.params.id } })
+  const existing = await prisma.globalResourceType.findFirst({ where: { id: req.params.id as string } })
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
-  const gt = await prisma.globalResourceType.update({ where: { id: req.params.id }, data: { name, category, description } })
+  const gt = await prisma.globalResourceType.update({ where: { id: req.params.id as string }, data: { name, category, description } })
+  await prisma.resourceType.updateMany({ where: { globalTypeId: req.params.id as string }, data: { name, category } })
   res.json(gt)
 })
 
 // DELETE /api/global-resource-types/:id — auth required
+// Blocks deletion if any linked ResourceType has tasks assigned to it
 router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
-  const existing = await prisma.globalResourceType.findFirst({ where: { id: req.params.id } })
+  const existing = await prisma.globalResourceType.findFirst({ where: { id: req.params.id as string } })
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   if (existing.isDefault) { res.status(403).json({ error: 'Default types cannot be deleted' }); return }
-  await prisma.globalResourceType.delete({ where: { id: req.params.id } })
+  const inUse = await prisma.task.findFirst({
+    where: { resourceType: { globalTypeId: req.params.id as string } }
+  })
+  if (inUse) { res.status(409).json({ error: 'This resource type is in use by one or more tasks and cannot be deleted' }); return }
+  // Nullify globalTypeId on linked ResourceTypes before deleting
+  await prisma.resourceType.updateMany({ where: { globalTypeId: req.params.id as string }, data: { globalTypeId: null } })
+  await prisma.globalResourceType.delete({ where: { id: req.params.id as string } })
   res.status(204).send()
 })
 
