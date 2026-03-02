@@ -57,6 +57,11 @@ jobs:
         working-directory: server
         run: npx tsx prisma/seed.ts
 
+      - name: Verify seed user exists
+        run: |
+          PGPASSWORD=postgres psql -U postgres -h localhost -d monrad_estimator \
+            -c 'SELECT email, length(password) as pwd_len FROM "User" WHERE email = $$test@example.com$$;'
+
       - name: Build server
         working-directory: server
         run: npm run build
@@ -73,6 +78,8 @@ jobs:
       - name: Build client
         working-directory: client
         run: npm run build
+        env:
+          VITE_API_URL: http://localhost:3001
 
       - name: Serve client build
         working-directory: client
@@ -81,6 +88,13 @@ jobs:
       # ── Wait for servers ─────────────────────────────────────────
       - name: Wait for API and client to be ready
         run: npx --yes wait-on http://localhost:3001/health http://localhost:5173 --timeout 30000
+
+      - name: Smoke test API login
+        run: |
+          curl -sf -X POST http://localhost:3001/api/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"test@example.com","password":"password123"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('Login OK, user:', d['user']['email'])"
 
       # ── Playwright ───────────────────────────────────────────────
       - name: Install Playwright dependencies
