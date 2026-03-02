@@ -18,4 +18,23 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
   res.status(201).json(gt)
 })
 
+// PUT /api/global-resource-types/:id — auth required
+router.put('/:id', authenticate, async (req: AuthRequest, res: Response) => {
+  const { name, category, description } = req.body
+  if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
+  const existing = await prisma.globalResourceType.findFirst({ where: { id: req.params.id } })
+  if (!existing) { res.status(404).json({ error: 'Not found' }); return }
+  const gt = await prisma.globalResourceType.update({ where: { id: req.params.id }, data: { name, category, description } })
+  res.json(gt)
+})
+
+// DELETE /api/global-resource-types/:id — auth required
+router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
+  const existing = await prisma.globalResourceType.findFirst({ where: { id: req.params.id } })
+  if (!existing) { res.status(404).json({ error: 'Not found' }); return }
+  if (existing.isDefault) { res.status(403).json({ error: 'Default types cannot be deleted' }); return }
+  await prisma.globalResourceType.delete({ where: { id: req.params.id } })
+  res.status(204).send()
+})
+
 export default router

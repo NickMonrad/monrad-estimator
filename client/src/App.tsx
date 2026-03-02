@@ -9,6 +9,7 @@ import BacklogPage from './pages/BacklogPage'
 import TemplateLibraryPage from './pages/TemplateLibraryPage'
 import ProjectSettingsPage from './pages/ProjectSettingsPage'
 import EffortReviewPage from './pages/EffortReviewPage'
+import GlobalResourceTypesPage from './pages/GlobalResourceTypesPage'
 
 const queryClient = new QueryClient()
 
@@ -33,6 +34,7 @@ function AppRoutes() {
       <Route path="/projects/:id/effort" element={<PrivateRoute><EffortReviewPage /></PrivateRoute>} />
       <Route path="/projects/:id/settings" element={<PrivateRoute><ProjectSettingsPage /></PrivateRoute>} />
       <Route path="/templates" element={<PrivateRoute><TemplateLibraryPage /></PrivateRoute>} />
+      <Route path="/resource-types" element={<PrivateRoute><GlobalResourceTypesPage /></PrivateRoute>} />
     </Routes>
   )
 }
