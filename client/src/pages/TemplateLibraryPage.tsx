@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 
@@ -95,14 +98,16 @@ export default function TemplateLibraryPage() {
     onSuccess: invalidate,
   })
 
-  const moveTask = (tpl: FeatureTemplate, taskId: string, direction: -1 | 1) => {
-    const tasks = [...tpl.tasks]
-    const idx = tasks.findIndex(t => t.id === taskId)
-    const newIdx = idx + direction
-    if (newIdx < 0 || newIdx >= tasks.length) return
-    ;[tasks[idx], tasks[newIdx]] = [tasks[newIdx], tasks[idx]]
-    reorderTasks.mutate({ templateId: tpl.id, items: tasks.map((t, i) => ({ id: t.id, order: i })) })
+  const handleDragEnd = (templateId: string, tasks: TemplateTask[], event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = tasks.findIndex(t => t.id === active.id)
+    const newIndex = tasks.findIndex(t => t.id === over.id)
+    const reordered = arrayMove(tasks, oldIndex, newIndex)
+    reorderTasks.mutate({ templateId, items: reordered.map((t, i) => ({ id: t.id, order: i })) })
   }
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const toggle = (id: string) =>
     setExpandedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -189,53 +194,50 @@ export default function TemplateLibraryPage() {
                 {expandedIds.has(tpl.id) && (
                   <div className="border-t border-gray-100 px-5 py-4">
                     {tpl.tasks.length > 0 && (
-                      <table className="w-full text-sm mb-3">
-                        <thead>
-                          <tr className="text-xs text-gray-400 border-b border-gray-100">
-                            <th className="text-left pb-2 font-medium">Task</th>
-                            <th className="text-left pb-2 font-medium">Resource type</th>
-                            <th className="text-right pb-2 font-medium">S</th>
-                            <th className="text-right pb-2 font-medium">M</th>
-                            <th className="text-right pb-2 font-medium">L</th>
-                            <th className="text-right pb-2 font-medium">XL</th>
-                            <th className="pb-2"></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {tpl.tasks.map(task => (
-                            editingTaskId === task.id ? (
-                              <tr key={task.id}>
-                                <td colSpan={7} className="py-2">
-                                  <TaskForm
-                                    initial={{ name: task.name, hoursSmall: task.hoursSmall, hoursMedium: task.hoursMedium, hoursLarge: task.hoursLarge, hoursExtraLarge: task.hoursExtraLarge, resourceTypeName: task.resourceTypeName }}
-                                    globalResourceTypes={globalResourceTypes}
-                                    onSave={(data) => updateTask.mutate({ templateId: tpl.id, taskId: task.id, data })}
-                                    onCancel={() => setEditingTaskId(null)}
-                                    saving={updateTask.isPending}
+                      <DndContext sensors={sensors} collisionDetection={closestCenter}
+                        onDragEnd={(e) => handleDragEnd(tpl.id, tpl.tasks, e)}>
+                        <SortableContext items={tpl.tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                          <table className="w-full text-sm mb-3">
+                            <thead>
+                              <tr className="text-xs text-gray-400 border-b border-gray-100">
+                                <th className="pb-2 w-5"></th>
+                                <th className="text-left pb-2 font-medium">Task</th>
+                                <th className="text-left pb-2 font-medium">Resource type</th>
+                                <th className="text-right pb-2 font-medium">S</th>
+                                <th className="text-right pb-2 font-medium">M</th>
+                                <th className="text-right pb-2 font-medium">L</th>
+                                <th className="text-right pb-2 font-medium">XL</th>
+                                <th className="pb-2 w-20"></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {tpl.tasks.map(task => (
+                                editingTaskId === task.id ? (
+                                  <tr key={task.id}>
+                                    <td colSpan={8} className="py-2">
+                                      <TaskForm
+                                        initial={{ name: task.name, hoursSmall: task.hoursSmall, hoursMedium: task.hoursMedium, hoursLarge: task.hoursLarge, hoursExtraLarge: task.hoursExtraLarge, resourceTypeName: task.resourceTypeName }}
+                                        globalResourceTypes={globalResourceTypes}
+                                        onSave={(data) => updateTask.mutate({ templateId: tpl.id, taskId: task.id, data })}
+                                        onCancel={() => setEditingTaskId(null)}
+                                        saving={updateTask.isPending}
+                                      />
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  <SortableTaskRow
+                                    key={task.id}
+                                    task={task}
+                                    fmt={fmt}
+                                    onEdit={() => setEditingTaskId(task.id)}
+                                    onDelete={() => deleteTask.mutate({ templateId: tpl.id, taskId: task.id })}
                                   />
-                                </td>
-                              </tr>
-                            ) : (
-                              <tr key={task.id} className="group border-b border-gray-50 last:border-0">
-                                <td className="py-2 pr-4 text-gray-800">{task.name}</td>
-                                <td className="py-2 pr-4 text-gray-500">{task.resourceTypeName}</td>
-                                <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursSmall)}</td>
-                                <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursMedium)}</td>
-                                <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursLarge)}</td>
-                                <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursExtraLarge)}</td>
-                                <td className="py-2">
-                                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button onClick={() => moveTask(tpl, task.id, -1)} title="Move up" className="text-gray-400 hover:text-gray-700 px-1 text-xs">↑</button>
-                                    <button onClick={() => moveTask(tpl, task.id, 1)} title="Move down" className="text-gray-400 hover:text-gray-700 px-1 text-xs">↓</button>
-                                    <button onClick={() => setEditingTaskId(task.id)} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
-                                    <button onClick={() => deleteTask.mutate({ templateId: tpl.id, taskId: task.id })} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
-                                  </div>
-                                </td>
-                              </tr>
-                            )
-                          ))}
-                        </tbody>
-                      </table>
+                                )
+                              ))}
+                            </tbody>
+                          </table>
+                        </SortableContext>
+                      </DndContext>
                     )}
 
                     {addingTaskForId === tpl.id ? (
@@ -347,5 +349,38 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
         <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 hover:bg-gray-100">Cancel</button>
       </div>
     </div>
+  )
+}
+
+function SortableTaskRow({ task, fmt, onEdit, onDelete }: {
+  task: TemplateTask
+  fmt: (h: number) => string
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }
+
+  return (
+    <tr ref={setNodeRef} style={style} className="group border-b border-gray-50 last:border-0 bg-white">
+      <td className="py-2 pr-1">
+        <span {...attributes} {...listeners}
+          className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 select-none px-1 text-base">
+          ⠿
+        </span>
+      </td>
+      <td className="py-2 pr-4 text-gray-800">{task.name}</td>
+      <td className="py-2 pr-4 text-gray-500">{task.resourceTypeName}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursSmall)}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursMedium)}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursLarge)}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursExtraLarge)}</td>
+      <td className="py-2">
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+          <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
+        </div>
+      </td>
+    </tr>
   )
 }
