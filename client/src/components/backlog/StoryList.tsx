@@ -75,11 +75,14 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
               <span className="text-xs text-purple-500 bg-purple-100 px-1.5 py-0.5 rounded">Story</span>
               <span className="text-sm text-gray-800 flex-1 truncate">{story.name}</span>
               <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours(story)}h</span>
+              {story.appliedTemplateId && (
+                <button onClick={e => { e.stopPropagation(); setRefreshingId(story.id) }} title="Refresh tasks from template"
+                  className="text-xs text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors">
+                  ↺ Refresh
+                </button>
+              )}
               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
                 <button onClick={() => setEditingId(story.id)} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
-                {story.appliedTemplateId && (
-                  <button onClick={() => setRefreshingId(story.id)} title="Refresh from template" className="text-xs text-blue-400 hover:text-blue-600 px-1">↺ Refresh</button>
-                )}
                 <button onClick={() => deleteStory.mutate(story.id)} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
               </div>
             </div>
