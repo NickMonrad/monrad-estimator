@@ -35,21 +35,21 @@ export default function RegisterPage() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Full name</label>
             <input
-              type="text" value={name} onChange={e => setName(e.target.value)} required
+              type="text" value={name} onChange={e => setName(e.target.value)} required placeholder="Full name"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
             <input
-              type="email" value={email} onChange={e => setEmail(e.target.value)} required
+              type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="you@example.com"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
             <input
-              type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={8}
+              type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={8} placeholder="Password (min 8 chars)"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
             />
           </div>
