@@ -23,7 +23,7 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
 
   const createStory = useMutation({
     mutationFn: (data: typeof form) => api.post(`/features/${featureId}/stories`, data),
-    onSuccess: () => { invalidate(); setAdding(false); setForm({ name: '', description: '', assumptions: '' }) },
+    onSuccess: (res) => { invalidate(); setAdding(false); setForm({ name: '', description: '', assumptions: '' }); setExpandedIds(s => { const n = new Set(s); n.add(res.data.id); return n }) },
   })
 
   const updateStory = useMutation({
