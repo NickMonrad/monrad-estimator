@@ -40,11 +40,11 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      # ── Server ──────────────────────────────────────────────────
-      - name: Install server dependencies
-        working-directory: server
+      # ── Install all workspace dependencies at once ──────────────
+      - name: Install all dependencies
         run: npm ci
 
+      # ── Server ──────────────────────────────────────────────────
       - name: Run database migrations
         working-directory: server
         run: npx prisma migrate deploy
@@ -71,10 +71,6 @@ jobs:
         run: node dist/index.js &
 
       # ── Client ──────────────────────────────────────────────────
-      - name: Install client dependencies
-        working-directory: client
-        run: npm ci
-
       - name: Build client
         working-directory: client
         run: npm run build
@@ -100,10 +96,6 @@ jobs:
             -d '{"email":"test@example.com","password":"password123"}'
 
       # ── Playwright ───────────────────────────────────────────────
-      - name: Install Playwright dependencies
-        working-directory: e2e
-        run: npm ci
-
       - name: Install Chromium
         working-directory: e2e
         run: npx playwright install --with-deps chromium
