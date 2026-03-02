@@ -125,16 +125,31 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
 
           {/* Step 1: Upload */}
           {step === 'upload' && (
-            <div className="text-center py-12">
-              <p className="text-gray-500 mb-6 text-sm">Upload a CSV file with columns: Epic, Feature, Story, Task, ResourceType, HoursEffort, DurationDays, Description, Assumptions</p>
-              <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+            <div className="text-center py-8">
+              <p className="text-gray-500 mb-2 text-sm">Upload a CSV with your backlog data. Not sure of the format?</p>
               <button
-                onClick={() => fileRef.current?.click()}
-                disabled={loading}
-                className="bg-red-600 text-white px-6 py-3 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                onClick={() => {
+                  const headers = 'Epic,Feature,Story,Task,ResourceType,HoursEffort,DurationDays,Description,Assumptions'
+                  const example = 'My Epic,My Feature,My Story,Development task,Developer,8,1,Optional description,Optional assumptions'
+                  const blob = new Blob([headers + '\n' + example], { type: 'text/csv' })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a'); a.href = url; a.download = 'backlog-template.csv'; a.click()
+                  URL.revokeObjectURL(url)
+                }}
+                className="text-red-600 underline text-sm hover:text-red-700 mb-6 inline-block"
               >
-                {loading ? 'Parsing…' : '📂 Choose CSV file'}
+                ⬇ Download blank CSV template
               </button>
+              <div className="mt-6">
+                <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={loading}
+                  className="bg-red-600 text-white px-6 py-3 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                >
+                  {loading ? 'Parsing…' : '📂 Choose CSV file'}
+                </button>
+              </div>
             </div>
           )}
 
