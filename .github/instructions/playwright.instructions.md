@@ -83,3 +83,21 @@ If a UI change breaks existing tests:
 2. Update the selector to match the new UI — prefer role/text selectors over CSS
 3. Re-run to confirm fix
 4. Update `e2e/TESTS.md` if the test description changed
+
+## Cleaning Up Test Data
+
+Playwright tests run against the live dev database and accumulate junk data (projects, templates) owned by `test@example.com`.
+
+Run the cleanup skill after any E2E test session:
+
+```bash
+cd server && npm run e2e:cleanup
+```
+
+**What it deletes:**
+- All `Project` rows owned by `test@example.com` (cascades to epics, features, stories, tasks, snapshots, timeline)
+- All `FeatureTemplate` rows whose name starts with `"E2E "`
+
+**Script location:** `server/scripts/e2e-cleanup.ts`
+
+Run this before and/or after a local E2E session to keep the dev database clean.
