@@ -162,7 +162,7 @@ router.post('/:snapshotId/rollback', async (req: AuthRequest, res: Response) => 
         for (const task of story.tasks) {
           // Re-match resource type by name in the project
           const rt = await prisma.resourceType.findFirst({
-            where: { projectId, name: task.resourceType.name },
+            where: { projectId, name: task.resourceType?.name },
           })
           if (!rt) continue
           await prisma.task.create({

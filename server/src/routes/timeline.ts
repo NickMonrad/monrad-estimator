@@ -109,7 +109,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       }
 
       // Group by resourceTypeId
-      const byRt = new Map<string, typeof allTasks>()
+      const byRt = new Map<string | null, typeof allTasks>()
       for (const task of allTasks) {
         const group = byRt.get(task.resourceTypeId) ?? []
         group.push(task)
@@ -119,7 +119,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       let maxDays = 0
       for (const [rtId, tasks] of byRt) {
         const personDays = tasks.reduce((sum, t) => sum + (t.durationDays ?? t.hoursEffort / hoursPerDay), 0)
-        const count = rtCountMap.get(rtId) ?? 1
+        const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
         const parallelDays = personDays / count
         if (parallelDays > maxDays) maxDays = parallelDays
       }
