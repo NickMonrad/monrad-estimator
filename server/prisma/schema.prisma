@@ -125,8 +125,8 @@ model Task {
   order          Int          @default(0)
   userStory      UserStory    @relation(fields: [userStoryId], references: [id], onDelete: Cascade)
   userStoryId    String
-  resourceType   ResourceType @relation(fields: [resourceTypeId], references: [id])
-  resourceTypeId String
+  resourceType   ResourceType? @relation(fields: [resourceTypeId], references: [id])
+  resourceTypeId String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 }
