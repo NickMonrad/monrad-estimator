@@ -38,7 +38,7 @@ export default function BacklogPage() {
 
   const createEpic = useMutation({
     mutationFn: (data: typeof epicForm) => api.post(`/projects/${projectId}/epics`, data),
-    onSuccess: () => { invalidate(); setAddingEpic(false); setEpicForm({ name: '', description: '' }) },
+    onSuccess: (res) => { invalidate(); setAddingEpic(false); setEpicForm({ name: '', description: '' }); setExpandedEpics(s => { const n = new Set(s); n.add(res.data.id); return n }) },
   })
 
   const updateEpic = useMutation({
