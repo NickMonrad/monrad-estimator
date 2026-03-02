@@ -11,9 +11,9 @@
 
 1. **Complete the phase** — all code written, tests passing, TypeScript clean.
 2. **Raise a PR** against `master` using the PR template (`.github/pull_request_template.md`).
-3. **Review** — the PR is reviewed before merging. No self-merge without review.
+3. **Wait for human approval** — Copilot raises the PR but must NOT merge it. The repo owner reviews and merges.
 4. **Close the related GitHub issue** in the PR body using `Closes #N`.
-5. **Merge** — squash or merge commit, never rebase onto master.
+5. **Merge** — performed by the repo owner only. Squash or merge commit, never rebase onto master.
 6. **Start the next phase** from the updated `master` after merge.
 
 ## Phase Workflow (Copilot CLI)
