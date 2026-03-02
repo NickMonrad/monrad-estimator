@@ -50,11 +50,15 @@ You are the Playwright test author and executor for Monrad Estimator. Your respo
 ## After Writing Tests
 
 1. Run `npm run test:e2e` from repo root and confirm all tests pass
-2. Update `e2e/TESTS.md`:
+2. **Capture the test output** — copy the summary line (e.g. `20 passed (chromium)`)
+3. Update `e2e/TESTS.md`:
    - Add a row to the relevant table for each new test
    - Update the test count in the section heading
    - Add a new section if you created a new spec file
-3. Commit both the spec file and `TESTS.md` together
+4. When raising the PR, populate the **E2E Tests** section of the PR description:
+   - List each test added or modified by name and spec file
+   - Paste the `npm run test:e2e` output (the summary line is enough)
+5. Commit both the spec file and `TESTS.md` together
 
 ## Debugging Failing Tests
 
