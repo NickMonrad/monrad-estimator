@@ -25,7 +25,10 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
 
   const createFeature = useMutation({
     mutationFn: (data: typeof form) => api.post(`/epics/${epicId}/features`, data),
-    onSuccess: (res) => { invalidate(); setAdding(false); setForm({ name: '', description: '', assumptions: '' }); setExpandedIds(s => { const n = new Set(s); n.add(res.data.id); return n }) }, = useMutation({
+    onSuccess: (res) => { invalidate(); setAdding(false); setForm({ name: '', description: '', assumptions: '' }); setExpandedIds(s => { const n = new Set(s); n.add(res.data.id); return n }) },
+  })
+
+  const updateFeature = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<typeof form> }) =>
       api.put(`/epics/${epicId}/features/${id}`, data),
     onSuccess: () => { invalidate(); setEditingId(null) },
