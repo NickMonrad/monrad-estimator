@@ -99,7 +99,7 @@ export interface OverheadItem {
   name: string
   resourceTypeId: string | null
   resourceType: ResourceType | null
-  type: 'PERCENTAGE' | 'FIXED_DAYS'
+  type: 'PERCENTAGE' | 'FIXED_DAYS' | 'DAYS_PER_WEEK'
   value: number
   order: number
 }
@@ -146,7 +146,7 @@ export interface OverheadProfileRow {
   resourceTypeId: string | null
   resourceTypeName: string | null
   dayRate: number | null
-  type: 'PERCENTAGE' | 'FIXED_DAYS'
+  type: 'PERCENTAGE' | 'FIXED_DAYS' | 'DAYS_PER_WEEK'
   value: number
   computedDays: number
   estimatedCost: number | null
@@ -155,6 +155,7 @@ export interface OverheadProfileRow {
 export interface ResourceProfile {
   projectId: string
   hoursPerDay: number
+  projectDurationWeeks: number
   resourceRows: ResourceProfileRow[]
   overheadRows: OverheadProfileRow[]
   summary: {
