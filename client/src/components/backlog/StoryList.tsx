@@ -104,7 +104,11 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
     onSuccess: (res) => {
       invalidate()
       const added = res.data.added as number
-      setRefreshMsg(added > 0 ? `Added ${added} new task${added !== 1 ? 's' : ''}` : 'Already up to date')
+      const updated = res.data.updated as number
+      const parts = []
+      if (added > 0) parts.push(`Added ${added} new task${added !== 1 ? 's' : ''}`)
+      if (updated > 0) parts.push(`Updated ${updated} task${updated !== 1 ? 's' : ''}`)
+      setRefreshMsg(parts.length > 0 ? parts.join(', ') : 'Already up to date')
       setRefreshingId(null)
     },
   })

@@ -169,6 +169,159 @@ test.describe('Backlog', () => {
     expect(durationValue).toBeGreaterThan(0)
   })
 
+  test('refresh from template updates task duration days (bug #47)', async ({ page }) => {
+    // Unique names so this test is fully isolated from the other template tests
+    const TEMPLATE_NAME = `E2E Refresh Template ${Date.now()}`
+    const TASK_NAME = 'E2E Refresh Task'
+
+    // ── Step 1: Create a template with a task at MEDIUM hours = 8 ──────────
+    await page.goto('/templates')
+    await page.getByRole('button', { name: /new template/i }).click()
+    await page.getByPlaceholder(/template name/i).fill(TEMPLATE_NAME)
+    await page.getByRole('button', { name: /save/i }).click()
+    await page.getByText(TEMPLATE_NAME).first().click()
+    await page.getByRole('button', { name: /add task/i }).click()
+    await page.getByPlaceholder(/task name/i).fill(TASK_NAME)
+
+    // Resource type: prefer a select if one is present, otherwise fall back to text input
+    const rtSelect = page.locator('select').filter({ has: page.locator('option[value=""]') }).first()
+    const rtInput = page.getByPlaceholder(/resource type name/i)
+    if (await rtSelect.isVisible()) {
+      await rtSelect.selectOption({ index: 1 })
+    } else {
+      await rtInput.fill('Developer')
+    }
+
+    // Hours inputs are unlabelled number fields; MEDIUM (M) is index 2 in the XS/S/M/L/XL grid
+    const hoursInputs = page.locator('input[type="number"]')
+    await hoursInputs.nth(2).fill('8')
+    await page.getByRole('button', { name: /save task/i }).click()
+    await expect(page.getByText(TASK_NAME)).toBeVisible({ timeout: 8_000 })
+
+    // ── Step 2: Apply the template to the project backlog ──────────────────
+    // beforeEach has already created PROJECT_NAME and landed us on its hub
+    await page.goto('/')
+    await page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    // Store the backlog URL so we can return without re-finding the project
+    const backlogUrl = page.url()
+
+    // Create epic
+    await page.getByRole('button', { name: /add epic/i }).click()
+    await page.getByPlaceholder(/epic name/i).fill('E2E Refresh Epic')
+    await page.getByRole('button', { name: /save epic/i }).click()
+    await expect(page.getByText('E2E Refresh Epic')).toBeVisible()
+
+    // Epic auto-expands after creation — Add feature button is immediately available
+    await expect(page.getByText('+ Add feature')).toBeVisible({ timeout: 5_000 })
+    await page.getByText('+ Add feature').click()
+    await page.getByPlaceholder('Feature name *').fill('E2E Refresh Feature')
+    await page.getByRole('button', { name: /^save$/i }).click()
+    await expect(page.getByText('E2E Refresh Feature')).toBeVisible({ timeout: 8_000 })
+
+    // Apply the template at M complexity
+    await page.locator('button', { hasText: '+ Template' }).first().click()
+    const templateSelect = page.locator('select').last()
+    await expect(templateSelect).toBeVisible({ timeout: 8_000 })
+    await templateSelect.selectOption({ label: TEMPLATE_NAME })
+    await page.getByRole('button', { name: 'M', exact: true }).click()
+    await page.getByRole('button', { name: 'Apply template', exact: true }).click()
+    await expect(page.getByText(TEMPLATE_NAME)).toBeVisible({ timeout: 10_000 })
+
+    // ── Step 3: Export CSV and record the initial DurationDays ─────────────
+    let downloadPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name: /export csv/i }).click()
+    let download = await downloadPromise
+    let exportPath = await download.path()
+    let content = fs.readFileSync(exportPath!, 'utf-8')
+    let lines = content.trim().split('\n')
+    let headerCols = lines[0].split(',')
+    let durationIdx = headerCols.indexOf('DurationDays')
+    let taskLine = lines.find(l => l.includes(TASK_NAME))!
+    expect(taskLine).toBeTruthy()
+    const originalDuration = parseFloat(taskLine.split(',')[durationIdx])
+    // hoursEffort=8 / hoursPerDay=7.6 → durationDays ≈ 1.05
+    expect(originalDuration).toBeGreaterThan(0)
+
+    // ── Step 4: Update the template task's MEDIUM hours from 8 → 16 ────────
+    await page.goto('/templates')
+    // Templates use accordion — click the template row to expand it and reveal tasks
+    await page.getByText(TEMPLATE_NAME).first().click()
+    // Wait for the task table to appear
+    await expect(page.locator('tr').filter({ hasText: TASK_NAME })).toBeVisible({ timeout: 8_000 })
+
+    // Use XPath to find the Edit button in the SAME <tr> as the task name cell,
+    // avoiding any template-name Edit button (which lives outside a <tr>)
+    await page
+      .getByText(TASK_NAME, { exact: true })
+      .first()
+      .locator('xpath=ancestor::tr//button[normalize-space(text())="Edit"]')
+      .click()
+
+    // Scope number inputs to the editing row (the one containing "Save task")
+    // to avoid any number inputs elsewhere on the page.
+    const editingRow = page.locator('tr').filter({ has: page.getByRole('button', { name: /save task/i }) })
+    await expect(editingRow).toBeVisible({ timeout: 8_000 })
+    // Hours inputs within the editing row: XS(0) / S(1) / M(2) / L(3) / XL(4)
+    await editingRow.locator('input[type="number"]').nth(2).fill('16')
+
+    // Wait for the task update PUT to succeed before navigating away
+    const taskUpdatePromise = page.waitForResponse(
+      resp => resp.url().includes('/tasks/') && resp.request().method() === 'PUT',
+      { timeout: 8_000 }
+    )
+    await page.getByRole('button', { name: /save task/i }).click()
+    const taskUpdateResp = await taskUpdatePromise
+    expect(taskUpdateResp.status()).toBe(200)
+
+    // After save the editing row closes; wait for the task row to reappear
+    // with the new hours visible in the M column to confirm the update committed.
+    await expect(page.locator('tr').filter({ hasText: TASK_NAME })).toBeVisible({ timeout: 8_000 })
+    await expect(
+      page.locator('tr').filter({ hasText: TASK_NAME }).getByText('16')
+    ).toBeVisible({ timeout: 8_000 })
+
+    // ── Step 5: Return to the backlog and expand epic + feature ────────────
+    await page.goto(backlogUrl)
+    await expect(page.getByRole('button', { name: /export csv/i })).toBeVisible({ timeout: 8_000 })
+
+    // Epics start collapsed on fresh load — click to expand
+    await page.getByText('E2E Refresh Epic').first().click()
+    // Features also start collapsed — click to expand
+    await expect(page.getByText('E2E Refresh Feature')).toBeVisible({ timeout: 5_000 })
+    await page.getByText('E2E Refresh Feature').first().click()
+
+    // ── Step 6: Click the ↺ Refresh button on the story ───────────────────
+    const refreshButton = page.getByTitle('Refresh tasks from template')
+    await expect(refreshButton).toBeVisible({ timeout: 8_000 })
+    await refreshButton.click()
+
+    // ── Step 7: Select M (MEDIUM) complexity ──────────────────────────────
+    await expect(page.getByText(/refresh complexity/i)).toBeVisible({ timeout: 5_000 })
+    // The button labels are XS / S / M / L / XL
+    await page.getByRole('button', { name: 'M', exact: true }).click()
+
+    // ── Step 8: Assert success message contains "Updated" ─────────────────
+    await expect(page.getByText(/updated/i)).toBeVisible({ timeout: 8_000 })
+
+    // ── Step 9: Export CSV again and verify DurationDays has increased ─────
+    downloadPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name: /export csv/i }).click()
+    download = await downloadPromise
+    exportPath = await download.path()
+    content = fs.readFileSync(exportPath!, 'utf-8')
+    lines = content.trim().split('\n')
+    headerCols = lines[0].split(',')
+    durationIdx = headerCols.indexOf('DurationDays')
+    taskLine = lines.find(l => l.includes(TASK_NAME))!
+    expect(taskLine).toBeTruthy()
+    const updatedDuration = parseFloat(taskLine.split(',')[durationIdx])
+    // hoursEffort=16 / hoursPerDay=7.6 → durationDays ≈ 2.10 > original ≈ 1.05
+    expect(updatedDuration).toBeGreaterThan(originalDuration)
+  })
+
   test('History button toggles history panel', async ({ page }) => {
     await page.getByRole('button', { name: /backlog/i }).click()
     await page.getByRole('button', { name: /history/i }).click()

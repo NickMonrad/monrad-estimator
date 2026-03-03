@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -50,12 +50,13 @@ export default function TimelinePage() {
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
     queryFn: () => api.get(`/projects/${projectId}`).then(r => r.data),
-    onSuccess: (p: Project) => {
-      if (p.startDate && !startDateInput) {
-        setStartDateInput(p.startDate.slice(0, 10))
-      }
-    },
-  } as any)
+  })
+
+  useEffect(() => {
+    if (project?.startDate && !startDateInput) {
+      setStartDateInput(project.startDate.slice(0, 10))
+    }
+  }, [project?.startDate])
 
   const { data: timeline, isLoading } = useQuery<TimelineSummary>({
     queryKey: ['timeline', projectId],
@@ -77,6 +78,16 @@ export default function TimelinePage() {
       qc.invalidateQueries({ queryKey: ['project', projectId] })
     },
   })
+
+  const saveStartDate = useMutation({
+    mutationFn: (startDate: string) =>
+      api.patch(`/projects/${projectId}/timeline/start-date`, { startDate }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+  })
+
+  const handleStartDateBlur = () => {
+    if (startDateInput) saveStartDate.mutate(startDateInput)
+  }
 
   const updateEntry = useMutation({
     mutationFn: ({ featureId, startWeek, durationWeeks }: { featureId: string; startWeek: number; durationWeeks: number }) =>
@@ -166,6 +177,7 @@ export default function TimelinePage() {
                 type="date"
                 value={startDateInput}
                 onChange={e => setStartDateInput(e.target.value)}
+                onBlur={handleStartDateBlur}
                 className="border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-400"
               />
             </div>

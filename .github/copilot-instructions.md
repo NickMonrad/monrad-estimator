@@ -6,6 +6,31 @@
 
 **Repo:** `NickMonrad/monrad-estimator`
 
+## Agent Working Model
+
+This project uses a **Sonnet-orchestrates, Codex-implements** pattern:
+
+| Role | Agent | Responsibility |
+|------|-------|----------------|
+| **Orchestrator** | Sonnet (this session) | Analysis, planning, coordination, decisions, PR descriptions |
+| **Implementor** | `codex-developer` | All code changes — features, bug fixes, refactors, server tests |
+| **Test writer** | `playwright-test-engineer` | All Playwright E2E test creation and fixes |
+
+### Rules
+- **Sonnet never writes code directly** — all implementation is delegated to `codex-developer`
+- **Playwright tests are always delegated** to `playwright-test-engineer`, never written inline
+- **Both agents can run in parallel** when a task requires both code changes AND new tests
+- Sonnet reviews agent output, spots-checks critical changes, and raises PRs
+- If an agent fails twice, Sonnet may attempt the task directly as a fallback
+
+### Typical workflow for a feature/bug fix
+```
+1. Sonnet: analyse issue, explore codebase, form plan
+2. Sonnet: delegate code changes → codex-developer (background if tests also needed)
+3. Sonnet: delegate Playwright tests → playwright-test-engineer (parallel with step 2)
+4. Sonnet: review both outputs, spot-check, commit & push, raise PR
+```
+
 ## Stack
 
 | Layer | Technology |
@@ -29,9 +54,50 @@ Root `package.json` has workspaces for both. Run server from `/server`, client f
 
 ## Dev Servers
 
-- **API:** `node dist/index.js` on `:3001` — must rebuild (`npm run build`) after any server change
-- **Client:** `npx vite` on `:5173` — serves TypeScript source directly, no rebuild needed
-- **Always start with `detach: true`** to prevent servers dying between tool calls
+### Starting servers (correct procedure)
+
+**Prerequisites — run once after cloning or after `npm ci`:**
+```bash
+cd /path/to/monrad-estimator
+npm install        # installs root devDeps including concurrently
+```
+
+**Start both servers together (recommended):**
+```bash
+cd monrad-estimator
+npm run dev        # uses concurrently → API on :3001, Vite on :5173
+```
+
+This runs:
+- **API:** `tsx watch src/index.ts` on `:3001` (auto-reloads on server changes)
+- **Client:** `vite` on `:5173` (HMR, no rebuild needed)
+
+**When using Copilot CLI bash tool — always use detach mode:**
+```
+mode: "async", detach: true
+cd monrad-estimator && npm run dev > logs/dev-servers.log 2>&1
+```
+
+**Verify servers are up:**
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:5173   # should be 200
+curl -s http://localhost:3001/api/auth/login -X POST -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"password123"}' | head -c 20
+```
+
+**Killing servers:**
+```bash
+# Find PIDs
+ps aux | grep "tsx\|vite" | grep monrad | grep -v grep | awk '{print $2}'
+# Kill each PID individually (pkill is not permitted):
+kill <PID1> <PID2> ...
+```
+
+### Important notes
+- **`npm run dev` requires `concurrently`** — if missing, run `npm install` from the repo root first
+- **`nohup ... &` alone is NOT enough** — the process is killed when the shell session exits unless `disown $!` is also called
+- **After code changes** always restart: kill old PIDs then run `npm run dev` again
+- **Port conflicts:** stale Vite processes pile up on 5173, 5174, etc — always kill by PID before restarting
 - After client dep changes clear Vite cache: `rm -rf client/node_modules/.vite`
 
 ## Prisma 7 Specifics
