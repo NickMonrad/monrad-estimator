@@ -252,26 +252,18 @@ export default function ResourceProfilePage() {
 
   const chartData = useMemo(() => {
     if (!profile) return []
-    const overheadByResource = new Map<string, number>()
-    for (const row of profile.overheadRows) {
-      if (row.resourceTypeId) {
-        overheadByResource.set(
-          row.resourceTypeId,
-          (overheadByResource.get(row.resourceTypeId) ?? 0) + row.computedDays,
-        )
-      }
-    }
-    const data = profile.resourceRows.map(row => ({
-      name: row.name,
-      taskDays: row.totalDays,
-      overheadDays: overheadByResource.get(row.resourceTypeId) ?? 0,
-    }))
-    const generalOverhead = profile.overheadRows
-      .filter(o => !o.resourceTypeId)
-      .reduce((sum, row) => sum + row.computedDays, 0)
-    if (generalOverhead > 0) {
-      data.push({ name: 'General Overhead', taskDays: 0, overheadDays: generalOverhead })
-    }
+    const data: Array<{ name: string; taskDays: number; overheadDays: number }> = [
+      ...profile.resourceRows.map(row => ({
+        name: row.name,
+        taskDays: row.totalDays,
+        overheadDays: 0,
+      })),
+      ...profile.overheadRows.map(row => ({
+        name: row.name,
+        taskDays: 0,
+        overheadDays: row.computedDays,
+      })),
+    ]
     return data
   }, [profile])
 
@@ -432,12 +424,14 @@ export default function ResourceProfilePage() {
                         <div className="font-medium">{row.name}</div>
                         {row.resourceTypeName && <p className="text-xs text-gray-500 normal-case not-italic">Linked to: {row.resourceTypeName}</p>}
                       </td>
-                      <td className="text-center px-4 py-3">—</td>
-                      <td className="px-4 py-3">
-                        {row.type === 'PERCENTAGE'
+                      <td className="text-center px-4 py-3">
+                        {profile.projectDurationWeeks > 0
+                          ? formatNumber(row.computedDays / (profile.projectDurationWeeks * 5), 2)
+                          : '—'}
+                      </td>
                           ? `— ${row.value}% of task days`
                           : row.type === 'DAYS_PER_WEEK'
-                            ? `— ${formatNumber(row.value, 2)} d/wk × ${profileData.projectDurationWeeks} wks`
+                            ? `— ${formatNumber(row.value, 2)} d/wk × ${profile.projectDurationWeeks} wks`
                             : `— ${formatNumber(row.value, 2)} fixed days`}
                       </td>
                       <td className="text-center px-4 py-3">—</td>
@@ -496,7 +490,7 @@ export default function ResourceProfilePage() {
                     {item.type === 'PERCENTAGE'
                       ? `${item.value}% of task days`
                       : item.type === 'DAYS_PER_WEEK'
-                        ? `${formatNumber(item.value, 2)} days/week × ${profileData?.projectDurationWeeks ?? 0} weeks`
+                        ? `${formatNumber(item.value, 2)} days/week × ${profile?.projectDurationWeeks ?? 0} weeks`
                         : `${formatNumber(item.value, 2)} fixed total days`}
                     {item.resourceType?.name && ` · Billed with ${item.resourceType.name}`}
                   </p>
@@ -582,11 +576,11 @@ export default function ResourceProfilePage() {
                 />
               </div>
             </div>
-            {form.type === 'DAYS_PER_WEEK' && (profileData?.projectDurationWeeks ?? 0) === 0 && (
+            {form.type === 'DAYS_PER_WEEK' && (profile?.projectDurationWeeks ?? 0) === 0 && (
               <p className="text-xs text-amber-600 mt-2">⚠ No timeline set for this project — computed days will be 0 until you add features to the timeline.</p>
             )}
-            {form.type === 'DAYS_PER_WEEK' && (profileData?.projectDurationWeeks ?? 0) > 0 && form.value !== '' && (
-              <p className="text-xs text-gray-500 mt-2">= {formatNumber(parseFloat(form.value || '0') * (profileData?.projectDurationWeeks ?? 0), 2)} total days ({profileData?.projectDurationWeeks} week{profileData?.projectDurationWeeks === 1 ? '' : 's'})</p>
+            {form.type === 'DAYS_PER_WEEK' && (profile?.projectDurationWeeks ?? 0) > 0 && form.value !== '' && (
+              <p className="text-xs text-gray-500 mt-2">= {formatNumber(parseFloat(form.value || '0') * (profile?.projectDurationWeeks ?? 0), 2)} total days ({profile?.projectDurationWeeks} week{profile?.projectDurationWeeks === 1 ? '' : 's'})</p>
             )}
             {formError && <p className="text-sm text-red-600 mt-2">{formError}</p>}
             <div className="mt-4 flex gap-2">
