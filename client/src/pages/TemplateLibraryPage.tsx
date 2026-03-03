@@ -7,6 +7,8 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
+import TemplateCsvImportModal from '../components/templates/TemplateCsvImportModal'
+import TemplateHistoryPanel from '../components/templates/TemplateHistoryPanel'
 
 const HOURS_PER_DAY = 7.6
 
@@ -49,9 +51,7 @@ export default function TemplateLibraryPage() {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
   const [taskForm, setTaskForm] = useState({ name: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' })
   const [showTplImport, setShowTplImport] = useState(false)
-  const [tplImportCsv, setTplImportCsv] = useState('')
-  const [tplImportError, setTplImportError] = useState<string | null>(null)
-  const [tplImportLoading, setTplImportLoading] = useState(false)
+  const [showHistoryId, setShowHistoryId] = useState<string | null>(null)
 
   const { data: templates = [], isLoading } = useQuery<FeatureTemplate[]>({
     queryKey: ['templates'],
@@ -207,6 +207,7 @@ export default function TemplateLibraryPage() {
                       {tpl.tasks.length} task{tpl.tasks.length !== 1 ? 's' : ''}
                     </span>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+                      <button onClick={() => setShowHistoryId(showHistoryId === tpl.id ? null : tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">History</button>
                       <button onClick={() => setEditingId(tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
                       <button onClick={() => deleteTemplate.mutate(tpl.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
                     </div>
@@ -277,6 +278,14 @@ export default function TemplateLibraryPage() {
                         + Add task
                       </button>
                     )}
+
+                    {showHistoryId === tpl.id && (
+                      <TemplateHistoryPanel
+                        templateId={tpl.id}
+                        templateName={tpl.name}
+                        onRestored={() => setShowHistoryId(null)}
+                      />
+                    )}
                   </div>
                 )}
               </div>
@@ -292,58 +301,10 @@ export default function TemplateLibraryPage() {
         )}
       </main>
       {showTplImport && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <h2 className="text-lg font-semibold text-gray-900">Import Templates from CSV</h2>
-              <button onClick={() => { setShowTplImport(false); setTplImportCsv(''); setTplImportError(null) }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
-            </div>
-            <div className="p-6">
-              <p className="text-sm text-gray-500 mb-2">Upload a CSV with columns: <code className="bg-gray-100 px-1 rounded text-xs">TemplateName, Category, TaskName, ResourceTypeName, HoursSmall, HoursMedium, HoursLarge, HoursExtraLarge</code></p>
-              <button
-                onClick={() => {
-                  const headers = 'TemplateName,Category,TaskName,ResourceTypeName,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge'
-                  const example = 'My Template,Engineering,My Task,Developer,1,2,4,8,16'
-                  const blob = new Blob([headers + '\n' + example], { type: 'text/csv' })
-                  const url = URL.createObjectURL(blob)
-                  const a = document.createElement('a'); a.href = url; a.download = 'template-format.csv'; a.click()
-                  URL.revokeObjectURL(url)
-                }}
-                className="text-red-600 underline text-sm hover:text-red-700 mb-4 inline-block"
-              >
-                ⬇ Download blank CSV template
-              </button>
-              {tplImportError && <div className="mb-4 bg-red-50 text-red-700 text-sm px-4 py-3 rounded-lg border border-red-200">{tplImportError}</div>}
-              <input
-                type="file" accept=".csv"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0]
-                  if (file) setTplImportCsv(await file.text())
-                }}
-                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-red-50 file:text-red-700 hover:file:bg-red-100 mb-4"
-              />
-            </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-              <button onClick={() => { setShowTplImport(false); setTplImportCsv(''); setTplImportError(null) }} className="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
-              <button
-                disabled={!tplImportCsv || tplImportLoading}
-                onClick={async () => {
-                  setTplImportLoading(true); setTplImportError(null)
-                  try {
-                    await api.post('/templates/import-csv', { csv: tplImportCsv })
-                    invalidate(); setShowTplImport(false); setTplImportCsv('')
-                  } catch (err: unknown) {
-                    const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Import failed'
-                    setTplImportError(msg)
-                  } finally { setTplImportLoading(false) }
-                }}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                {tplImportLoading ? 'Importing…' : '✓ Import Templates'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <TemplateCsvImportModal
+          onClose={() => setShowTplImport(false)}
+          onImported={() => { invalidate(); setShowTplImport(false) }}
+        />
       )}
     </div>
   )

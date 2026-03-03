@@ -133,13 +133,14 @@ model Task {
 
 // Global feature templates (shared across all projects)
 model FeatureTemplate {
-  id          String         @id @default(cuid())
+  id          String            @id @default(cuid())
   name        String
   category    String?
   description String?
   tasks       TemplateTask[]
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  snapshots   TemplateSnapshot[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 }
 
 model TemplateTask {
@@ -181,4 +182,14 @@ model BacklogSnapshot {
   createdAt   DateTime @default(now())
   createdBy   User     @relation(fields: [createdById], references: [id])
   createdById String
+}
+
+model TemplateSnapshot {
+  id          String          @id @default(cuid())
+  template    FeatureTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  templateId  String
+  label       String?
+  trigger     String          // 'manual' | 'csv_import' | 'manual_edit'
+  snapshot    Json
+  createdAt   DateTime        @default(now())
 }
