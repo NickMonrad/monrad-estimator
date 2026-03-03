@@ -102,14 +102,16 @@ test.describe('Backlog', () => {
   })
 
   test('durationDays is populated when applying a template', async ({ page }) => {
+    const DURATION_TEMPLATE_NAME = `E2E Duration Template ${Date.now()}`
+    const DURATION_TASK_NAME = `E2E Duration Task ${Date.now()}`
     // Create a template with a task that has medium hours = 8
     await page.goto('/templates')
     await page.getByRole('button', { name: /new template/i }).click()
-    await page.getByPlaceholder(/template name/i).fill('E2E Duration Template')
+    await page.getByPlaceholder(/template name/i).fill(DURATION_TEMPLATE_NAME)
     await page.getByRole('button', { name: /save/i }).click()
-    await page.getByText('E2E Duration Template').first().click()
+    await page.getByText(DURATION_TEMPLATE_NAME).first().click()
     await page.getByRole('button', { name: /add task/i }).click()
-    await page.getByPlaceholder(/task name/i).fill('E2E Duration Task')
+    await page.getByPlaceholder(/task name/i).fill(DURATION_TASK_NAME)
     // Resource type is a select when global types exist, otherwise a text input
     const rtSelect = page.locator('select').filter({ has: page.locator('option[value=""]') }).first()
     const rtInput = page.getByPlaceholder(/resource type name/i)
@@ -123,7 +125,7 @@ test.describe('Backlog', () => {
     const hoursInputs = page.locator('input[type="number"]')
     await hoursInputs.nth(2).fill('8')
     await page.getByRole('button', { name: /save task/i }).click()
-    await expect(page.getByText('E2E Duration Task')).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText(DURATION_TASK_NAME).first()).toBeVisible({ timeout: 8_000 })
 
     // Navigate to project backlog and apply the template
     await page.goto('/')
@@ -148,10 +150,11 @@ test.describe('Backlog', () => {
     // Modal contains a select for template choice — wait for it
     const templateSelect = page.locator('select').last()
     await expect(templateSelect).toBeVisible({ timeout: 8_000 })
-    await templateSelect.selectOption({ label: 'E2E Duration Template' })
+    await templateSelect.selectOption({ label: DURATION_TEMPLATE_NAME })
     await page.getByRole('button', { name: 'M', exact: true }).click()
+    await page.getByPlaceholder('Enter story name…').fill('E2E Duration Story')
     await page.getByRole('button', { name: 'Apply template', exact: true }).click()
-    await expect(page.getByText(/E2E Duration Template/)).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText('E2E Duration Story')).toBeVisible({ timeout: 10_000 })
 
     // Export and verify DurationDays is populated for the template task
     const downloadPromise = page.waitForEvent('download')
@@ -162,7 +165,7 @@ test.describe('Backlog', () => {
     const lines = content.trim().split('\n')
     const headerCols = lines[0].split(',')
     const durationIdx = headerCols.indexOf('DurationDays')
-    const taskLine = lines.find(l => l.includes('E2E Duration Task'))!
+    const taskLine = lines.find(l => l.includes(DURATION_TASK_NAME))!
     expect(taskLine).toBeTruthy()
     const durationValue = parseFloat(taskLine.split(',')[durationIdx])
     // hoursEffort=8 / hoursPerDay=7.6 → durationDays > 0
@@ -227,8 +230,9 @@ test.describe('Backlog', () => {
     await expect(templateSelect).toBeVisible({ timeout: 8_000 })
     await templateSelect.selectOption({ label: TEMPLATE_NAME })
     await page.getByRole('button', { name: 'M', exact: true }).click()
+    await page.getByPlaceholder('Enter story name…').fill('E2E Refresh Story')
     await page.getByRole('button', { name: 'Apply template', exact: true }).click()
-    await expect(page.getByText(TEMPLATE_NAME)).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText('E2E Refresh Story')).toBeVisible({ timeout: 10_000 })
 
     // ── Step 3: Export CSV and record the initial DurationDays ─────────────
     let downloadPromise = page.waitForEvent('download')
