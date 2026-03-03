@@ -201,34 +201,33 @@ test('resource-profile @screenshots', async ({ page }) => {
   const projectId = projectUrl.split('/projects/')[1]
 
   // Add an epic → feature → story → task via the backlog
-  await page.getByRole('link', { name: /backlog/i }).click()
+  await page.getByRole('button', { name: /backlog/i }).click()
   await page.waitForURL(/\/backlog/)
 
   await page.getByRole('button', { name: /add epic/i }).click()
   await page.getByPlaceholder(/epic name/i).fill('Platform Engineering')
-  await page.keyboard.press('Enter')
+  await page.getByRole('button', { name: /save epic/i }).click()
   await expect(page.getByText('Platform Engineering')).toBeVisible({ timeout: 8_000 })
 
-  await page.getByText('Platform Engineering').first().click()
-  await page.getByRole('button', { name: /add feature/i }).first().click()
+  // Epic auto-expands after creation — Add feature button is immediately available
+  await expect(page.getByText('+ Add feature')).toBeVisible({ timeout: 5_000 })
+  await page.getByText('+ Add feature').click()
   await page.getByPlaceholder('Feature name *').fill('API Gateway')
-  await page.getByRole('button', { name: /add feature/i, exact: true }).last().click()
+  await page.getByRole('button', { name: /^save$/i }).click()
   await expect(page.getByText('API Gateway')).toBeVisible({ timeout: 8_000 })
 
-  await page.getByText('API Gateway').first().click()
-  await page.getByRole('button', { name: /add story/i }).first().click()
-  await page.getByPlaceholder(/story name/i).fill('Design API contract')
-  await page.keyboard.press('Enter')
-  await expect(page.getByText('Design API contract')).toBeVisible({ timeout: 8_000 })
+  // Feature auto-expands — Add user story button is immediately available
+  await expect(page.getByText('+ Add user story')).toBeVisible({ timeout: 5_000 })
+  await page.getByText('+ Add user story').click()
+  await page.getByPlaceholder('Story name *').fill('Design API contract')
+  await page.getByRole('button', { name: /^save$/i }).first().click()
 
-  // Add a task to the story
-  await page.getByText('Design API contract').first().click()
-  await page.getByRole('button', { name: /add task/i }).first().click()
-  await page.getByPlaceholder(/task name/i).fill('API Design')
-  const rtSelect = page.locator('select').filter({ hasText: /resource type/i }).first()
-  if (await rtSelect.isVisible()) await rtSelect.selectOption({ index: 1 })
+  // Story auto-expands on creation — immediately click + Add task before refetch remounts
+  await page.getByText('+ Add task').first().click()
+  await page.getByPlaceholder('Task name *').fill('API Design')
+  await page.locator('select').first().selectOption({ index: 1 })
   await page.getByRole('spinbutton').first().fill('16')
-  await page.getByRole('button', { name: /save/i }).click()
+  await page.getByRole('button', { name: /^save$/i }).first().click()
   await expect(page.getByText('API Design')).toBeVisible({ timeout: 8_000 })
 
   // Navigate to Resource Profile
