@@ -18,7 +18,7 @@ const HOURS_FIELD: Record<Complexity, 'hoursExtraSmall' | 'hoursSmall' | 'hoursM
 // POST /api/features/:featureId/apply-template
 router.post('/:featureId/apply-template', async (req: AuthRequest, res: Response) => {
   const featureId = req.params.featureId as string
-  const { templateId, complexity } = req.body as { templateId: string; complexity: Complexity }
+  const { templateId, complexity, storyName } = req.body as { templateId: string; complexity: Complexity; storyName?: string }
 
   if (!templateId || !complexity || !HOURS_FIELD[complexity]) {
     res.status(400).json({ error: 'templateId and complexity (EXTRA_SMALL|SMALL|MEDIUM|LARGE|EXTRA_LARGE) are required' })
@@ -46,7 +46,7 @@ router.post('/:featureId/apply-template', async (req: AuthRequest, res: Response
   const existingStories = await prisma.userStory.findMany({ where: { featureId } })
   const story = await prisma.userStory.create({
     data: {
-      name: `${template.name} \u2014 ${complexity}`,
+      name: storyName?.trim() || `${template.name} \u2014 ${complexity}`,
       featureId,
       order: existingStories.length,
       appliedTemplateId: templateId,

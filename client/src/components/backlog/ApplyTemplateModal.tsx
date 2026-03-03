@@ -41,6 +41,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
   const qc = useQueryClient()
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('')
   const [complexity, setComplexity] = useState<Complexity>('MEDIUM')
+  const [storyName, setStoryName] = useState<string>('')
 
   const { data: templates = [] } = useQuery<FeatureTemplate[]>({
     queryKey: ['templates'],
@@ -51,6 +52,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
     mutationFn: () => api.post(`/features/${featureId}/apply-template`, {
       templateId: selectedTemplateId,
       complexity,
+      storyName: storyName.trim() || undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['backlog', projectId] })
@@ -106,12 +108,25 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
               ))}
             </div>
           </div>
+
+          {selectedTemplateId && (
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1">Story name</label>
+              <input
+                type="text"
+                value={storyName}
+                onChange={e => setStoryName(e.target.value)}
+                placeholder="Enter story name…"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex gap-2 mt-6">
           <button
             onClick={() => apply.mutate()}
-            disabled={!selectedTemplateId || apply.isPending}
+            disabled={!selectedTemplateId || !storyName.trim() || apply.isPending}
             className="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
           >
             {apply.isPending ? 'Applying…' : 'Apply template'}
