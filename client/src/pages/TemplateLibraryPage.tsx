@@ -209,6 +209,14 @@ export default function TemplateLibraryPage() {
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
                       <button onClick={() => setShowHistoryId(showHistoryId === tpl.id ? null : tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">History</button>
                       <button onClick={() => setEditingId(tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
+                      <button
+                        onClick={async () => {
+                          const res = await api.get(`/templates/${tpl.id}/export-csv`, { responseType: 'blob' })
+                          const url = URL.createObjectURL(res.data)
+                          const a = document.createElement('a'); a.href = url; a.download = `${tpl.name.toLowerCase().replace(/\s+/g, '-')}.csv`; a.click()
+                          URL.revokeObjectURL(url)
+                        }}
+                        className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">⬇</button>
                       <button onClick={() => deleteTemplate.mutate(tpl.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
                     </div>
                   </div>
