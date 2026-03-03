@@ -57,6 +57,6 @@ test.describe('Template Library', () => {
   test('Import CSV button opens modal with template download', async ({ page }) => {
     await page.goto('/templates')
     await page.getByRole('button', { name: /import csv/i }).click()
-    await expect(page.getByText(/download blank csv template/i)).toBeVisible()
+    await expect(page.getByText(/download current templates as csv/i)).toBeVisible()
   })
 })
