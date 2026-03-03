@@ -17,9 +17,11 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@tanstack/react-query": "^5.90.21",
     "axios": "^1.13.5",
+    "jszip": "^3.10.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-router-dom": "^7.13.1"
+    "react-router-dom": "^7.13.1",
+    "recharts": "^3.7.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

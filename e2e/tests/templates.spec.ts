@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers'
+import { login, deleteTemplatesByName } from './helpers'
 
 test.describe('Template Library', () => {
   test.beforeEach(async ({ page }) => {
@@ -58,5 +58,10 @@ test.describe('Template Library', () => {
     await page.goto('/templates')
     await page.getByRole('button', { name: /import csv/i }).click()
     await expect(page.getByText(/download current templates as csv/i)).toBeVisible()
+  })
+
+  test.afterAll(async () => {
+    // Clean up templates created during this test suite
+    await deleteTemplatesByName('E2E Template', 'E2E XS Template')
   })
 })

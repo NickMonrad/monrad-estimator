@@ -93,3 +93,75 @@ export interface TimelineSummary {
   hoursPerDay: number
   entries: TimelineEntry[]
 }
+
+export interface OverheadItem {
+  id: string
+  name: string
+  resourceTypeId: string | null
+  resourceType: ResourceType | null
+  type: 'PERCENTAGE' | 'FIXED_DAYS' | 'DAYS_PER_WEEK'
+  value: number
+  order: number
+}
+
+export interface ResourceProfileStory {
+  storyId: string
+  storyName: string
+  hours: number
+  days: number
+}
+
+export interface ResourceProfileFeature {
+  featureId: string
+  featureName: string
+  hours: number
+  days: number
+  stories: ResourceProfileStory[]
+}
+
+export interface ResourceProfileEpic {
+  epicId: string
+  epicName: string
+  hours: number
+  days: number
+  features: ResourceProfileFeature[]
+}
+
+export interface ResourceProfileRow {
+  resourceTypeId: string
+  name: string
+  category: string
+  count: number
+  hoursPerDay: number
+  dayRate: number | null
+  totalHours: number
+  totalDays: number
+  estimatedCost: number | null
+  epics: ResourceProfileEpic[]
+}
+
+export interface OverheadProfileRow {
+  overheadId: string
+  name: string
+  resourceTypeId: string | null
+  resourceTypeName: string | null
+  dayRate: number | null
+  type: 'PERCENTAGE' | 'FIXED_DAYS' | 'DAYS_PER_WEEK'
+  value: number
+  computedDays: number
+  estimatedCost: number | null
+}
+
+export interface ResourceProfile {
+  projectId: string
+  hoursPerDay: number
+  projectDurationWeeks: number
+  resourceRows: ResourceProfileRow[]
+  overheadRows: OverheadProfileRow[]
+  summary: {
+    totalHours: number
+    totalDays: number
+    totalCost: number | null
+    hasCost: boolean
+  }
+}

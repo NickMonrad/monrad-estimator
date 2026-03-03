@@ -47,6 +47,7 @@ model Project {
   resourceTypes ResourceType[]
   timelineEntries TimelineEntry[]
   snapshots   BacklogSnapshot[]
+  overheads   ProjectOverhead[]
 }
 
 enum ProjectStatus {
@@ -71,6 +72,27 @@ model ResourceType {
   projectId     String
   tasks         Task[]
   templateTasks TemplateTask[]
+  overheads     ProjectOverhead[]
+}
+
+model ProjectOverhead {
+  id             String        @id @default(cuid())
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId      String
+  name           String
+  resourceType   ResourceType? @relation(fields: [resourceTypeId], references: [id])
+  resourceTypeId String?
+  type           OverheadType
+  value          Float
+  order          Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+enum OverheadType {
+  PERCENTAGE
+  FIXED_DAYS
+  DAYS_PER_WEEK
 }
 
 enum ResourceCategory {

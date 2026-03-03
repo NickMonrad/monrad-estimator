@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, createProject } from './helpers'
+import { login, createProject, deleteTemplatesByName } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -348,5 +348,10 @@ test.describe('Backlog', () => {
     const epicRows = page.locator('.group').filter({ hasText: /E2E Epic Alpha/ })
     await epicRows.first().hover()
     await expect(epicRows.first().locator('text=⠿')).toBeVisible()
+  })
+
+  test.afterAll(async () => {
+    // Clean up templates created during this test suite (prefix match)
+    await deleteTemplatesByName('E2E Duration Template', 'E2E Refresh Template')
   })
 })

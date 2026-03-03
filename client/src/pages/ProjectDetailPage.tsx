@@ -28,7 +28,7 @@ export default function ProjectDetailPage() {
     { label: 'Backlog', href: `/projects/${id}/backlog`, icon: '📋', desc: 'Manage epics, features, stories and tasks' },
     { label: 'Effort Review', href: `/projects/${id}/effort`, icon: '📊', desc: 'Review estimates by resource type' },
     { label: 'Timeline', href: `/projects/${id}/timeline`, icon: '📅', desc: 'Plan and schedule work' },
-    { label: 'Resource Profile', href: `/projects/${id}/resources`, icon: '👥', desc: 'Engineering and overlay profile' },
+    { label: 'Resource Profile', href: `/projects/${id}/resource-profile`, icon: '👥', desc: 'Role mix, overhead and cost profile' },
     { label: 'Documents', href: `/projects/${id}/documents`, icon: '📄', desc: 'Generate scope doc and SOW' },
     { label: 'Template Library', href: `/templates`, icon: '🧩', desc: 'Browse and manage feature templates' },
     { label: 'Settings', href: `/projects/${id}/settings`, icon: '⚙️', desc: 'Edit project name, customer, hours per day' },
