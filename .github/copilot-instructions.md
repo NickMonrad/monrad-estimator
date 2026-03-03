@@ -6,6 +6,31 @@
 
 **Repo:** `NickMonrad/monrad-estimator`
 
+## Agent Working Model
+
+This project uses a **Sonnet-orchestrates, Codex-implements** pattern:
+
+| Role | Agent | Responsibility |
+|------|-------|----------------|
+| **Orchestrator** | Sonnet (this session) | Analysis, planning, coordination, decisions, PR descriptions |
+| **Implementor** | `codex-developer` | All code changes — features, bug fixes, refactors, server tests |
+| **Test writer** | `playwright-test-engineer` | All Playwright E2E test creation and fixes |
+
+### Rules
+- **Sonnet never writes code directly** — all implementation is delegated to `codex-developer`
+- **Playwright tests are always delegated** to `playwright-test-engineer`, never written inline
+- **Both agents can run in parallel** when a task requires both code changes AND new tests
+- Sonnet reviews agent output, spots-checks critical changes, and raises PRs
+- If an agent fails twice, Sonnet may attempt the task directly as a fallback
+
+### Typical workflow for a feature/bug fix
+```
+1. Sonnet: analyse issue, explore codebase, form plan
+2. Sonnet: delegate code changes → codex-developer (background if tests also needed)
+3. Sonnet: delegate Playwright tests → playwright-test-engineer (parallel with step 2)
+4. Sonnet: review both outputs, spot-check, commit & push, raise PR
+```
+
 ## Stack
 
 | Layer | Technology |
