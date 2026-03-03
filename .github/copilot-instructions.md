@@ -234,6 +234,24 @@ To regenerate: run `npm run screenshots` from the repo root (requires dev server
 - Close issues in PR body with `Closes #N`
 - When a feature request is raised mid-session, create a GitHub issue for it
 
+## Communication Standards
+
+These rules apply to every session — they exist to avoid repeated back-and-forth.
+
+### PRs and Issues
+- **Always include the full URL** when creating a PR or issue, e.g.:
+  `PR #49 is open: https://github.com/NickMonrad/monrad-estimator/pull/49`
+- **State the branch name** when starting a new feature, before any work begins
+- **After pushing to a PR branch**, proactively check CI status and report pass/fail — don't wait to be asked
+- **After a PR is created**, immediately merge `main` into the feature branch if it's behind — don't wait for GitHub's "out of date" warning to surface to the user
+
+### Session start
+- **Check server health at session start** — verify API (:3001) and Vite (:5173) are up before starting any work, and report status upfront
+
+### Agent failures
+- **Report sub-agent failures immediately** — if a `codex-developer` or `playwright-test-engineer` task fails, do not silently move on; surface the failure and retry or fall back before proceeding
+- **Validate Playwright specs against the live UI** before committing — run once or check selectors against actual component code to catch mismatches (wrong button text, missing elements) before they appear at runtime
+
 ## Known Gotchas
 
 - **Restart local servers after code changes:** After making significant changes (e.g. before/after raising a PR), always restart the local dev servers so the running code reflects the latest changes. Stale server processes will keep serving old code. Check for existing processes with `ps aux | grep tsx` and `ps aux | grep vite`, then restart: `cd server && npx tsx src/index.ts &` and `cd client && npx vite &`.
