@@ -429,6 +429,8 @@ export default function ResourceProfilePage() {
                           ? formatNumber(row.computedDays / (profile.projectDurationWeeks * 5), 2)
                           : '—'}
                       </td>
+                      <td className="px-4 py-3">
+                        {row.type === 'PERCENTAGE'
                           ? `— ${row.value}% of task days`
                           : row.type === 'DAYS_PER_WEEK'
                             ? `— ${formatNumber(row.value, 2)} d/wk × ${profile.projectDurationWeeks} wks`
