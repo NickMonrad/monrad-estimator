@@ -74,7 +74,9 @@ git push
 
 ## Notes
 - Screenshot tests are **excluded from CI** (`--grep-invert @screenshots` in `e2e.yml`) — they must be run manually
-- The spec creates test data (projects, epics, templates) via the UI before capturing — expect ~60s total runtime
+- The spec creates test data (projects, epics, templates) via the UI before capturing — expect ~10s total runtime
 - `logs/` directory is gitignored; create it with `mkdir -p logs` if missing
 - If a server is already running on the port (from a previous session), skip starting it
 - Use `bash mode: async, detach: true` when starting servers so they persist after shell exit
+- The spec uses `fileURLToPath(import.meta.url)` to define `__dirname` (ESM module — `__dirname` is not natively available)
+- UI selectors verified against actual app: `+ Add user story` (not `+ Add story`), `Save` button (not `Save task`)

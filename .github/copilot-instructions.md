@@ -218,6 +218,15 @@ Full Playwright authoring conventions are in `.github/instructions/playwright.in
   - Keep the "Open Issues & Backlog" table current (remove closed, add new)
 - Commit the README update as `docs: update README for <feature>` on the feature branch before raising the PR, or as a follow-up commit to `main` after merge.
 
+## Screenshots
+
+Screenshots live in `docs/screenshots/` and are embedded in the README. **Regenerate them when:**
+- A new page or major UI section is added
+- An existing page's layout or key UI elements are significantly changed
+- A new phase is completed
+
+To regenerate: run `npm run screenshots` from the repo root (requires dev servers running), then commit the updated PNGs. Use the `capture-screenshots` skill for step-by-step guidance.
+
 ## GitHub Issues
 
 - Phases are tracked as issues labelled `phase`
