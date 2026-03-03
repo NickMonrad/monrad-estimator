@@ -157,25 +157,66 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 
 ## Open Issues & Backlog
 
+### 🐛 Bugs
 | # | Title |
 |---|---|
-| [#58](https://github.com/NickMonrad/monrad-estimator/issues/58) | Bug: refresh complexity modal appears under wrong story |
+| [#67](https://github.com/NickMonrad/monrad-estimator/issues/67) | Investigate and fix two flaky Playwright tests (backlog.spec.ts) |
+
+### 🔧 Near-term enhancements
+| # | Title |
+|---|---|
 | [#57](https://github.com/NickMonrad/monrad-estimator/issues/57) | Template tasks: assumptions + description fields |
+| [#59](https://github.com/NickMonrad/monrad-estimator/issues/59) | Timeline: projected end date (read-only) |
+| [#60](https://github.com/NickMonrad/monrad-estimator/issues/60) | Move PM/Gov headcount config to Resource Profile |
+| [#61](https://github.com/NickMonrad/monrad-estimator/issues/61) | Template tasks: percentage-based tasks (% of cumulative totals) |
 | [#56](https://github.com/NickMonrad/monrad-estimator/issues/56) | Clone project |
 | [#64](https://github.com/NickMonrad/monrad-estimator/issues/64) | Global configuration menu (resource types, templates, overhead defaults) |
-| [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
-| [#61](https://github.com/NickMonrad/monrad-estimator/issues/61) | Template tasks: percentage-based tasks (% of cumulative totals) |
-| [#60](https://github.com/NickMonrad/monrad-estimator/issues/60) | Move PM/Gov headcount config to Resource Profile |
-| [#59](https://github.com/NickMonrad/monrad-estimator/issues/59) | Timeline: projected end date (read-only) |
+| [#23](https://github.com/NickMonrad/monrad-estimator/issues/23) | Global default overheads, inheritable per project |
 | [#46](https://github.com/NickMonrad/monrad-estimator/issues/46) | Soft-delete templates with restore |
 | [#38](https://github.com/NickMonrad/monrad-estimator/issues/38) | UI: Format all hours/days totals to 2 decimal places |
+| [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
+
+### 🚀 Feature ideas
+| # | Title |
+|---|---|
+| [#68](https://github.com/NickMonrad/monrad-estimator/issues/68) | Timeline resource levelling + story dependencies |
+| [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST on costs — configurable rate (default 10% AU) |
+| [#70](https://github.com/NickMonrad/monrad-estimator/issues/70) | Locale and currency settings (default AU/AUD) |
+| [#71](https://github.com/NickMonrad/monrad-estimator/issues/71) | Public holiday calendars for resource/cost modelling by locale |
+| [#72](https://github.com/NickMonrad/monrad-estimator/issues/72) | Timezone setting per account (default AEST) |
+| [#73](https://github.com/NickMonrad/monrad-estimator/issues/73) | Project financial tracking — upload actuals CSV, project over/under-spend |
+| [#74](https://github.com/NickMonrad/monrad-estimator/issues/74) | Terms of use page + required acceptance checkbox at signup |
+| [#75](https://github.com/NickMonrad/monrad-estimator/issues/75) | Support contact form + footer links (FAQ, How-to) |
+| [#76](https://github.com/NickMonrad/monrad-estimator/issues/76) | Export backlog to Azure DevOps Boards |
 | [#39](https://github.com/NickMonrad/monrad-estimator/issues/39) | Template CSV: bulk update + review screen + per-template history |
 | [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — snapshots, diff, and rollback |
 | [#26](https://github.com/NickMonrad/monrad-estimator/issues/26) | Rich Gantt chart — drag-and-drop, dependencies, milestones |
 | [#24](https://github.com/NickMonrad/monrad-estimator/issues/24) | Per-resource overhead configuration |
-| [#23](https://github.com/NickMonrad/monrad-estimator/issues/23) | Global default overheads, inheritable per project |
 | [#22](https://github.com/NickMonrad/monrad-estimator/issues/22) | Project sharing / multi-user collaboration |
 | [#10](https://github.com/NickMonrad/monrad-estimator/issues/10) | Password reset flow |
+
+### 🏭 Phase 7 — Productionisation
+| # | Title |
+|---|---|
+| [#77](https://github.com/NickMonrad/monrad-estimator/issues/77) | Phase 7 tracking issue |
+| [#78](https://github.com/NickMonrad/monrad-estimator/issues/78) | Security review — application code |
+| [#79](https://github.com/NickMonrad/monrad-estimator/issues/79) | Azure architecture design (non-prod + prod) |
+| [#80](https://github.com/NickMonrad/monrad-estimator/issues/80) | Infrastructure as code (Bicep or Terraform) |
+| [#81](https://github.com/NickMonrad/monrad-estimator/issues/81) | Security review — infrastructure design |
+| [#82](https://github.com/NickMonrad/monrad-estimator/issues/82) | Deployment pipeline — infrastructure |
+| [#83](https://github.com/NickMonrad/monrad-estimator/issues/83) | CI pipeline on main branch merge |
+| [#84](https://github.com/NickMonrad/monrad-estimator/issues/84) | Branching strategy / GitOps approach |
+| [#85](https://github.com/NickMonrad/monrad-estimator/issues/85) | Deployment pipeline — application code |
+| [#86](https://github.com/NickMonrad/monrad-estimator/issues/86) | Penetration testing |
+| [#87](https://github.com/NickMonrad/monrad-estimator/issues/87) | Resiliency, availability, and scalability |
+| [#88](https://github.com/NickMonrad/monrad-estimator/issues/88) | Alerting and monitoring |
+| [#89](https://github.com/NickMonrad/monrad-estimator/issues/89) | Entra ID / OIDC authentication provider |
+
+### 🎉 Fun
+| # | Title |
+|---|---|
+| [#90](https://github.com/NickMonrad/monrad-estimator/issues/90) | Use issues backlog as screenshot test data |
+| [#91](https://github.com/NickMonrad/monrad-estimator/issues/91) | Custom profile picture upload |
 
 ---
 
