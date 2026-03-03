@@ -32,7 +32,7 @@ function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDel
     return (
       <div ref={setNodeRef} style={style} {...attributes} className="bg-white border border-blue-200 rounded-lg px-3 py-2">
         <TaskForm
-          initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId, durationDays: task.durationDays != null ? String(task.durationDays) : '' }}
+          initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId ?? '', durationDays: task.durationDays != null ? String(task.durationDays) : '' }}
           resourceTypes={resourceTypes}
           hoursPerDay={hoursPerDay}
           onSave={onSave}
