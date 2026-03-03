@@ -92,6 +92,7 @@ model ProjectOverhead {
 enum OverheadType {
   PERCENTAGE
   FIXED_DAYS
+  DAYS_PER_WEEK
 }
 
 enum ResourceCategory {

@@ -38,6 +38,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         include: { resourceType: true },
         orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
       },
+      timelineEntries: true,
     },
   })
 
@@ -48,6 +49,12 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
+
+  // Project duration in weeks from the latest timeline entry end point
+  const projectDurationWeeks =
+    project.timelineEntries.length > 0
+      ? Math.max(...project.timelineEntries.map(te => te.startWeek + te.durationWeeks))
+      : 0
 
   type StoryAgg = { storyId: string; storyName: string; order: number; hours: number; days: number }
   type FeatureAgg = {
@@ -213,7 +220,9 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const computedDays =
       overhead.type === 'PERCENTAGE'
         ? round2((overhead.value / 100) * totalResourceDays)
-        : round2(overhead.value)
+        : overhead.type === 'DAYS_PER_WEEK'
+          ? round2(overhead.value * projectDurationWeeks)
+          : round2(overhead.value)
     const estimatedCost = dayRate != null ? round2(computedDays * dayRate) : null
     return {
       overheadId: overhead.id,
@@ -241,6 +250,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   res.json({
     projectId,
     hoursPerDay: fallbackHoursPerDay,
+    projectDurationWeeks,
     resourceRows,
     overheadRows,
     summary: {

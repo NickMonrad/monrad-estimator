@@ -21,10 +21,11 @@ import type {
   OverheadItem,
 } from '../types/backlog'
 
-type OverheadType = 'PERCENTAGE' | 'FIXED_DAYS'
+type OverheadType = 'PERCENTAGE' | 'FIXED_DAYS' | 'DAYS_PER_WEEK'
 const TYPE_OPTIONS: Array<{ label: string; value: OverheadType }> = [
   { label: '% of task days', value: 'PERCENTAGE' },
-  { label: 'Fixed days', value: 'FIXED_DAYS' },
+  { label: 'Fixed total days', value: 'FIXED_DAYS' },
+  { label: 'Days per week', value: 'DAYS_PER_WEEK' },
 ]
 
 const formatNumber = (value: number, fractionDigits = 1) =>
@@ -188,7 +189,9 @@ export default function ResourceProfilePage() {
     profileData.overheadRows.forEach(row => {
       const description = row.type === 'PERCENTAGE'
         ? `${row.value}% of task days`
-        : `${row.value} fixed days`
+        : row.type === 'DAYS_PER_WEEK'
+          ? `${row.value} days/week × ${profileData.projectDurationWeeks} weeks`
+          : `${row.value} fixed days`
       rows.push([
         row.name,
         'Overhead',
@@ -431,7 +434,11 @@ export default function ResourceProfilePage() {
                       </td>
                       <td className="text-center px-4 py-3">—</td>
                       <td className="px-4 py-3">
-                        {row.type === 'PERCENTAGE' ? `— ${row.value}% of task days` : `— ${formatNumber(row.value, 2)} fixed days`}
+                        {row.type === 'PERCENTAGE'
+                          ? `— ${row.value}% of task days`
+                          : row.type === 'DAYS_PER_WEEK'
+                            ? `— ${formatNumber(row.value, 2)} d/wk × ${profileData.projectDurationWeeks} wks`
+                            : `— ${formatNumber(row.value, 2)} fixed days`}
                       </td>
                       <td className="text-center px-4 py-3">—</td>
                       <td className="text-right px-4 py-3 font-medium text-gray-900">{formatNumber(row.computedDays, 2)} d</td>
@@ -473,7 +480,7 @@ export default function ResourceProfilePage() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
               <h2 className="text-base font-semibold text-gray-900">Overhead configuration</h2>
-              <p className="text-sm text-gray-500">Percentages or fixed days applied on top of task estimates.</p>
+              <p className="text-sm text-gray-500">Percentages or days applied on top of task estimates.</p>
             </div>
           </div>
 
@@ -486,7 +493,11 @@ export default function ResourceProfilePage() {
                 <div>
                   <p className="font-medium text-gray-900">{item.name}</p>
                   <p className="text-xs text-gray-500">
-                    {item.type === 'PERCENTAGE' ? `${item.value}% of task days` : `${formatNumber(item.value, 2)} fixed days`}
+                    {item.type === 'PERCENTAGE'
+                      ? `${item.value}% of task days`
+                      : item.type === 'DAYS_PER_WEEK'
+                        ? `${formatNumber(item.value, 2)} days/week × ${profileData?.projectDurationWeeks ?? 0} weeks`
+                        : `${formatNumber(item.value, 2)} fixed total days`}
                     {item.resourceType?.name && ` · Billed with ${item.resourceType.name}`}
                   </p>
                 </div>
@@ -559,7 +570,7 @@ export default function ResourceProfilePage() {
               </div>
               <div className="flex-1 min-w-[160px]">
                 <label className="block text-xs font-medium text-gray-500 mb-1">
-                  {form.type === 'PERCENTAGE' ? 'Percentage (%)' : 'Fixed days'}
+                  {form.type === 'PERCENTAGE' ? 'Percentage (%)' : form.type === 'DAYS_PER_WEEK' ? 'Days per week' : 'Fixed total days'}
                 </label>
                 <input
                   type="number"
@@ -571,6 +582,12 @@ export default function ResourceProfilePage() {
                 />
               </div>
             </div>
+            {form.type === 'DAYS_PER_WEEK' && (profileData?.projectDurationWeeks ?? 0) === 0 && (
+              <p className="text-xs text-amber-600 mt-2">⚠ No timeline set for this project — computed days will be 0 until you add features to the timeline.</p>
+            )}
+            {form.type === 'DAYS_PER_WEEK' && (profileData?.projectDurationWeeks ?? 0) > 0 && form.value !== '' && (
+              <p className="text-xs text-gray-500 mt-2">= {formatNumber(parseFloat(form.value || '0') * (profileData?.projectDurationWeeks ?? 0), 2)} total days ({profileData?.projectDurationWeeks} week{profileData?.projectDurationWeeks === 1 ? '' : 's'})</p>
+            )}
             {formError && <p className="text-sm text-red-600 mt-2">{formError}</p>}
             <div className="mt-4 flex gap-2">
               <button
