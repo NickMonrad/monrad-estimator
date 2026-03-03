@@ -51,7 +51,7 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
           <span className="text-purple-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-purple-500 bg-purple-100 px-1.5 py-0.5 rounded">Story</span>
           <span className="text-sm text-gray-800 flex-1 truncate">{story.name}</span>
-          <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours}h</span>
+          <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours.toFixed(2)}h</span>
           {story.appliedTemplateId && (
             <button onClick={e => { e.stopPropagation(); onRefresh() }} title="Refresh tasks from template"
               className="text-xs text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors">
