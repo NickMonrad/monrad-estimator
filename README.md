@@ -148,6 +148,10 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | Backlog drag-and-drop reorder (all levels + cross-parent moves) | #40 |
 | XS (extra small) complexity level | #40 |
 | DurationDays auto-calculated from hoursEffort across all creation paths | #40 |
+| Nullable resource type on tasks (CSV import resilience) | #51 |
+| Per-resource hoursPerDay + dayRate; snapshot rollback perf | #54 |
+| Phase 6: Resource Profile — FTE, overhead, cost, chart, CSV exports | #55 |
+| README Phase 6 status + resource-profile screenshot | #63 |
 
 ---
 
@@ -155,13 +159,21 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 
 | # | Title |
 |---|---|
+| [#58](https://github.com/NickMonrad/monrad-estimator/issues/58) | Bug: refresh complexity modal appears under wrong story |
+| [#57](https://github.com/NickMonrad/monrad-estimator/issues/57) | Template tasks: assumptions + description fields |
+| [#56](https://github.com/NickMonrad/monrad-estimator/issues/56) | Clone project |
+| [#64](https://github.com/NickMonrad/monrad-estimator/issues/64) | Global configuration menu (resource types, templates, overhead defaults) |
+| [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
+| [#61](https://github.com/NickMonrad/monrad-estimator/issues/61) | Template tasks: percentage-based tasks (% of cumulative totals) |
+| [#60](https://github.com/NickMonrad/monrad-estimator/issues/60) | Move PM/Gov headcount config to Resource Profile |
+| [#59](https://github.com/NickMonrad/monrad-estimator/issues/59) | Timeline: projected end date (read-only) |
+| [#46](https://github.com/NickMonrad/monrad-estimator/issues/46) | Soft-delete templates with restore |
 | [#38](https://github.com/NickMonrad/monrad-estimator/issues/38) | UI: Format all hours/days totals to 2 decimal places |
 | [#39](https://github.com/NickMonrad/monrad-estimator/issues/39) | Template CSV: bulk update + review screen + per-template history |
 | [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — snapshots, diff, and rollback |
-| [#29](https://github.com/NickMonrad/monrad-estimator/issues/29) | Backlog: Refresh/sync tasks from template |
 | [#26](https://github.com/NickMonrad/monrad-estimator/issues/26) | Rich Gantt chart — drag-and-drop, dependencies, milestones |
 | [#24](https://github.com/NickMonrad/monrad-estimator/issues/24) | Per-resource overhead configuration |
-| [#23](https://github.com/NickMonrad/monrad-estimator/issues/23) | Governance & PM overhead percentages on Effort Review |
+| [#23](https://github.com/NickMonrad/monrad-estimator/issues/23) | Global default overheads, inheritable per project |
 | [#22](https://github.com/NickMonrad/monrad-estimator/issues/22) | Project sharing / multi-user collaboration |
 | [#10](https://github.com/NickMonrad/monrad-estimator/issues/10) | Password reset flow |
 
