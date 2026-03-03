@@ -161,6 +161,7 @@ Full Playwright authoring conventions are in `.github/instructions/playwright.in
 
 ## Known Gotchas
 
+- **Restart local servers after code changes:** After making significant changes (e.g. before/after raising a PR), always restart the local dev servers so the running code reflects the latest changes. Stale server processes will keep serving old code. Check for existing processes with `ps aux | grep tsx` and `ps aux | grep vite`, then restart: `cd server && npx tsx src/index.ts &` and `cd client && npx vite &`.
 - **Port conflicts:** stale Vite processes pile up on 5173, 5174, etc. — kill by PID before restarting
 - **macOS lsof:** port 3001 shows as `redwood-broker` in lsof output — this is normal
 - **Snapshot JSON rollback:** deletes all epics (cascade) then recreates from JSON; re-matches resource types by name; timeline entries are NOT restored
