@@ -7,7 +7,8 @@
     "build": "npm run build --workspace=server && npm run build --workspace=client",
     "test:e2e": "npm run test --workspace=e2e",
     "test:e2e:headed": "npm run test:headed --workspace=e2e",
-    "test:e2e:report": "npm run report --workspace=e2e"
+    "test:e2e:report": "npm run report --workspace=e2e",
+    "screenshots": "npm run screenshots --workspace=e2e"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
