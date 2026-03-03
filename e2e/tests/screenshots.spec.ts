@@ -9,7 +9,11 @@
 import { test, expect } from '@playwright/test'
 import { login, createProject } from './helpers'
 import path from 'path'
+import { fileURLToPath } from 'url'
 import fs from 'fs'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const SCREENSHOTS_DIR = path.join(__dirname, '../../docs/screenshots')
 
@@ -79,9 +83,9 @@ test('backlog @screenshots', async ({ page }) => {
   await expect(page.getByText('Login & Registration')).toBeVisible({ timeout: 8_000 })
 
   // ── Add a story ──────────────────────────────────────────────────────────
-  // Features auto-expand after creation; look for "Add story" link
-  await expect(page.getByText('+ Add story')).toBeVisible({ timeout: 8_000 })
-  await page.getByText('+ Add story').click()
+  // Features auto-expand after creation; look for "Add user story" link
+  await expect(page.getByText('+ Add user story')).toBeVisible({ timeout: 8_000 })
+  await page.getByText('+ Add user story').click()
   await page.getByPlaceholder(/story name/i).fill('As a user I can log in with email and password')
   await page.getByRole('button', { name: /^save$/i }).click()
   await expect(page.getByText(/As a user I can log in/i)).toBeVisible({ timeout: 8_000 })
@@ -103,7 +107,7 @@ test('backlog @screenshots', async ({ page }) => {
     await rtSelect.selectOption({ index: 1 })
   }
 
-  await page.getByRole('button', { name: /save task/i }).click()
+  await page.getByRole('button', { name: /^save$/i }).click()
   await expect(page.getByText('Implement JWT token generation')).toBeVisible({ timeout: 8_000 })
 
   await page.waitForLoadState('networkidle')
