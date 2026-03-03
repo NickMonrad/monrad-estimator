@@ -52,7 +52,7 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
           <span className="text-blue-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded">Feature</span>
           <span className="text-sm text-gray-800 flex-1 truncate">{feature.name}</span>
-          <span className="text-xs text-gray-400">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours}h</span>
+          <span className="text-xs text-gray-400">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours.toFixed(2)}h</span>
           <button onClick={e => { e.stopPropagation(); onApplyTemplate() }}
             className="text-xs text-purple-500 hover:text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2 py-0.5 rounded transition-colors">
             + Template

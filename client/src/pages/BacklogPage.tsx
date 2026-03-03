@@ -205,7 +205,7 @@ export default function BacklogPage() {
             <h1 className="text-xl font-semibold text-gray-900">Backlog</h1>
             {epics.length > 0 && (
               <p className="text-sm text-gray-500 mt-0.5">
-                {epics.length} epic{epics.length !== 1 ? 's' : ''} · {grandTotal}h total ({(grandTotal / hoursPerDay).toFixed(1)} days)
+                {epics.length} epic{epics.length !== 1 ? 's' : ''} · {grandTotal.toFixed(2)}h total ({(grandTotal / hoursPerDay).toFixed(2)} days)
               </p>
             )}
           </div>
@@ -414,7 +414,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
           <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded font-medium">Epic</span>
           <span className="font-medium text-gray-900 flex-1">{epic.name}</span>
           <span className="text-sm text-gray-400">
-            {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours}h
+            {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h
           </span>
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
             <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
