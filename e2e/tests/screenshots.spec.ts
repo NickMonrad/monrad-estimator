@@ -185,3 +185,59 @@ test('templates @screenshots', async ({ page }) => {
     fullPage: true,
   })
 })
+
+// ---------------------------------------------------------------------------
+// 5. Resource Profile page — summary table, overhead section, chart
+// ---------------------------------------------------------------------------
+test('resource-profile @screenshots', async ({ page }) => {
+  await login(page)
+  const PROJECT_NAME = `Screenshot Resource Profile ${Date.now()}`
+
+  // Create a project
+  await createProject(page, PROJECT_NAME)
+  await page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first().click()
+  await page.waitForURL(/\/projects\/[^/]+$/)
+  const projectUrl = page.url()
+  const projectId = projectUrl.split('/projects/')[1]
+
+  // Add an epic → feature → story → task via the backlog
+  await page.getByRole('button', { name: /backlog/i }).click()
+  await page.waitForURL(/\/backlog/)
+
+  await page.getByRole('button', { name: /add epic/i }).click()
+  await page.getByPlaceholder(/epic name/i).fill('Platform Engineering')
+  await page.getByRole('button', { name: /save epic/i }).click()
+  await expect(page.getByText('Platform Engineering')).toBeVisible({ timeout: 8_000 })
+
+  // Epic auto-expands after creation — Add feature button is immediately available
+  await expect(page.getByText('+ Add feature')).toBeVisible({ timeout: 5_000 })
+  await page.getByText('+ Add feature').click()
+  await page.getByPlaceholder('Feature name *').fill('API Gateway')
+  await page.getByRole('button', { name: /^save$/i }).click()
+  await expect(page.getByText('API Gateway')).toBeVisible({ timeout: 8_000 })
+
+  // Feature auto-expands — Add user story button is immediately available
+  await expect(page.getByText('+ Add user story')).toBeVisible({ timeout: 5_000 })
+  await page.getByText('+ Add user story').click()
+  await page.getByPlaceholder('Story name *').fill('Design API contract')
+  await page.getByRole('button', { name: /^save$/i }).first().click()
+
+  // Story auto-expands on creation — immediately click + Add task before refetch remounts
+  await page.getByText('+ Add task').first().click()
+  await page.getByPlaceholder('Task name *').fill('API Design')
+  await page.locator('select').first().selectOption({ index: 1 })
+  await page.getByRole('spinbutton').first().fill('16')
+  await page.getByRole('button', { name: /^save$/i }).first().click()
+  await expect(page.getByText('API Design')).toBeVisible({ timeout: 8_000 })
+
+  // Navigate to Resource Profile
+  await page.goto(`/projects/${projectId}/resource-profile`)
+  await expect(page.getByRole('heading', { name: /resource profile/i })).toBeVisible({ timeout: 10_000 })
+  await page.waitForLoadState('networkidle')
+  await page.mouse.move(0, 0)
+
+  await page.screenshot({
+    path: path.join(SCREENSHOTS_DIR, 'resource-profile.png'),
+    fullPage: true,
+  })
+})
