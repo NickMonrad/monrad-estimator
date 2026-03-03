@@ -179,7 +179,20 @@ router.put('/:featureId', async (req: AuthRequest, res: Response) => {
   })
 })
 
-// PATCH /api/projects/:projectId/timeline/start-date  (handled in project routes, but also support here)
-// Note: start-date patch is mounted separately in index.ts on the projects router
+// PATCH /api/projects/:projectId/timeline/start-date
+router.patch('/start-date', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const { startDate } = req.body
+  if (!startDate) { res.status(400).json({ error: 'startDate is required' }); return }
+
+  const updated = await prisma.project.update({
+    where: { id: project.id },
+    data: { startDate: new Date(startDate) },
+  })
+
+  res.json({ startDate: updated.startDate?.toISOString() ?? null })
+})
 
 export default router

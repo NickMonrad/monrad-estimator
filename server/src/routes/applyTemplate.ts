@@ -116,7 +116,19 @@ router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, re
 
   const existingTaskNames = new Set(story.tasks.map(t => t.name.toLowerCase()))
   const newTasks = template.tasks.filter(t => !existingTaskNames.has(t.name.toLowerCase()))
+  const existingTasks = template.tasks.filter(t => existingTaskNames.has(t.name.toLowerCase()))
   const baseOrder = story.tasks.length
+
+  // Update hours/days on existing matching tasks
+  for (const tmplTask of existingTasks) {
+    const storyTask = story.tasks.find(t => t.name.toLowerCase() === tmplTask.name.toLowerCase())
+    if (!storyTask) continue
+    const hoursEffort = tmplTask[hoursField]
+    await prisma.task.update({
+      where: { id: storyTask.id },
+      data: { hoursEffort, durationDays: hoursEffort / hoursPerDay },
+    })
+  }
 
   for (let i = 0; i < newTasks.length; i++) {
     const tmplTask = newTasks[i]
@@ -141,7 +153,7 @@ router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, re
     where: { id: storyId },
     include: { tasks: { orderBy: { order: 'asc' }, include: { resourceType: true } } },
   })
-  res.json({ added: newTasks.length, story: result })
+  res.json({ added: newTasks.length, updated: existingTasks.length, story: result })
 })
 
 export default router
