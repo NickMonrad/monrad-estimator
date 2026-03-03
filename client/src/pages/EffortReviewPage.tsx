@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -85,13 +85,29 @@ export default function EffortReviewPage() {
     queryFn: () => api.get(`/projects/${projectId}/effort`).then(r => r.data),
   })
 
+  const filteredEffort = useMemo(() => {
+    if (!effort) return null
+    const categories = effort.byCategory
+      .map(cat => {
+        const resourceTypes = cat.resourceTypes.filter(rt => rt.totalHours > 0)
+        const totalHours = resourceTypes.reduce((sum, rt) => sum + rt.totalHours, 0)
+        const totalDays = resourceTypes.reduce((sum, rt) => sum + rt.totalDays, 0)
+        return { ...cat, resourceTypes, totalHours, totalDays }
+      })
+      .filter(cat => cat.resourceTypes.length > 0)
+
+    const totalHours = categories.reduce((sum, cat) => sum + cat.totalHours, 0)
+    const totalDays = categories.reduce((sum, cat) => sum + cat.totalDays, 0)
+    return { ...effort, byCategory: categories, totalHours, totalDays }
+  }, [effort])
+
   const toggleRt = (id: string) =>
     setExpandedRts(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
   const toggleCategory = (cat: string) =>
     setCollapsedCategories(s => { const n = new Set(s); n.has(cat) ? n.delete(cat) : n.add(cat); return n })
 
-  const totalResourceTypes = effort?.byCategory.reduce((s, c) => s + c.resourceTypes.length, 0) ?? 0
+  const totalResourceTypes = filteredEffort?.byCategory.reduce((s, c) => s + c.resourceTypes.length, 0) ?? 0
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -132,14 +148,14 @@ export default function EffortReviewPage() {
         </div>
 
         {/* Summary bar */}
-        {effort && (
+        {filteredEffort && (
           <div className="grid grid-cols-3 gap-4 mb-6">
             <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-              <p className="text-2xl font-bold text-gray-900">{effort.totalHours.toFixed(0)}h</p>
+              <p className="text-2xl font-bold text-gray-900">{filteredEffort.totalHours.toFixed(0)}h</p>
               <p className="text-sm text-gray-500 mt-1">Total hours</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-              <p className="text-2xl font-bold text-gray-900">{effort.totalDays.toFixed(1)}</p>
+              <p className="text-2xl font-bold text-gray-900">{filteredEffort.totalDays.toFixed(1)}</p>
               <p className="text-sm text-gray-500 mt-1">Total days</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
@@ -151,24 +167,24 @@ export default function EffortReviewPage() {
 
         {isLoading && <div className="text-center py-12 text-gray-400">Loading…</div>}
 
-        {effort && effort.byCategory.length === 0 && (
+        {filteredEffort && filteredEffort.byCategory.length === 0 && (
           <div className="text-center py-16 text-gray-400">
-            <p className="text-lg mb-1">No effort data yet</p>
+            <p className="text-lg mb-1">No tasks assigned yet.</p>
             <p className="text-sm">Add tasks with hours to the backlog to see effort here</p>
           </div>
         )}
 
-        {effort && effort.byCategory.length > 0 && view === 'summary' && (
+        {filteredEffort && filteredEffort.byCategory.length > 0 && view === 'summary' && (
           <SummaryView
-            effort={effort}
+            effort={filteredEffort}
             collapsedCategories={collapsedCategories}
             onToggleCategory={toggleCategory}
           />
         )}
 
-        {effort && effort.byCategory.length > 0 && view === 'detail' && (
+        {filteredEffort && filteredEffort.byCategory.length > 0 && view === 'detail' && (
           <DetailView
-            effort={effort}
+            effort={filteredEffort}
             expandedRts={expandedRts}
             onToggleRt={toggleRt}
           />
