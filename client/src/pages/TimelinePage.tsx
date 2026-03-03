@@ -96,8 +96,13 @@ export default function TimelinePage() {
   })
 
   const updateResourceType = useMutation({
-    mutationFn: ({ id, count }: { id: string; count: number }) =>
-      api.put(`/projects/${projectId}/resource-types/${id}`, { count }).then(r => r.data),
+    mutationFn: ({ id, ...data }: { id: string; count?: number; hoursPerDay?: number | null; dayRate?: number | null }) => {
+      const payload: Record<string, number | null> = {}
+      if (data.count !== undefined) payload.count = data.count
+      if (data.hoursPerDay !== undefined) payload.hoursPerDay = data.hoursPerDay
+      if (data.dayRate !== undefined) payload.dayRate = data.dayRate
+      return api.put(`/projects/${projectId}/resource-types/${id}`, payload).then(r => r.data)
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['resource-types', projectId] }),
   })
 
@@ -231,7 +236,9 @@ export default function TimelinePage() {
                     <thead>
                       <tr className="text-xs text-gray-400">
                         <th className="text-left pb-1 font-normal">Resource Type</th>
-                        <th className="text-right pb-1 font-normal w-24">Count</th>
+                        <th className="text-right pb-1 font-normal w-20">Count</th>
+                        <th className="text-right pb-1 font-normal w-24">Hrs/day</th>
+                        <th className="text-right pb-1 font-normal w-28">Day rate</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -240,16 +247,52 @@ export default function TimelinePage() {
                           <td className="py-1.5 text-gray-700">{rt.name}</td>
                           <td className="py-1.5 text-right">
                             <input
+                              key={`count-${rt.id}-${rt.count}`}
                               type="number"
                               min="1"
                               defaultValue={rt.count}
                               onBlur={e => {
-                                const v = parseInt(e.target.value)
-                                if (!isNaN(v) && v > 0 && v !== rt.count) {
-                                  updateResourceType.mutate({ id: rt.id, count: v })
-                                }
+                                const v = parseInt(e.target.value, 10)
+                                if (!Number.isFinite(v) || v <= 0 || v === rt.count) return
+                                updateResourceType.mutate({ id: rt.id, count: v })
                               }}
                               className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            />
+                          </td>
+                          <td className="py-1.5 text-right">
+                            <input
+                              key={`hours-${rt.id}-${rt.hoursPerDay ?? 'null'}`}
+                              type="number"
+                              step="0.1"
+                              defaultValue={rt.hoursPerDay ?? ''}
+                              placeholder={project?.hoursPerDay ? String(project.hoursPerDay) : ''}
+                              onBlur={e => {
+                                const value = e.target.value.trim()
+                                const parsed = value === '' ? null : parseFloat(value)
+                                if (parsed !== null && !Number.isFinite(parsed)) return
+                                const current = rt.hoursPerDay ?? null
+                                if (parsed === current) return
+                                updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
+                              }}
+                              className="w-20 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            />
+                          </td>
+                          <td className="py-1.5 text-right">
+                            <input
+                              key={`rate-${rt.id}-${rt.dayRate ?? 'null'}`}
+                              type="number"
+                              step="50"
+                              defaultValue={rt.dayRate ?? ''}
+                              placeholder={rt.globalType?.defaultDayRate != null ? String(rt.globalType.defaultDayRate) : '—'}
+                              onBlur={e => {
+                                const value = e.target.value.trim()
+                                const parsed = value === '' ? null : parseFloat(value)
+                                if (parsed !== null && !Number.isFinite(parsed)) return
+                                const current = rt.dayRate ?? null
+                                if (parsed === current) return
+                                updateResourceType.mutate({ id: rt.id, dayRate: parsed })
+                              }}
+                              className="w-24 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
                             />
                           </td>
                         </tr>

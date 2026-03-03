@@ -19,14 +19,16 @@ model User {
 }
 
 model GlobalResourceType {
-  id            String           @id @default(cuid())
-  name          String           @unique
-  category      ResourceCategory
-  description   String?
-  isDefault     Boolean          @default(false)
-  resourceTypes ResourceType[]
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  id                 String           @id @default(cuid())
+  name               String           @unique
+  category           ResourceCategory
+  description        String?
+  defaultHoursPerDay Float?
+  defaultDayRate     Float?
+  isDefault          Boolean          @default(false)
+  resourceTypes      ResourceType[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 }
 
 model Project {
@@ -56,16 +58,18 @@ enum ProjectStatus {
 }
 
 model ResourceType {
-  id           String              @id @default(cuid())
-  name         String
-  category     ResourceCategory
-  count        Int                 @default(1)
-  proposedName String?
-  globalType   GlobalResourceType? @relation(fields: [globalTypeId], references: [id])
-  globalTypeId String?
-  project      Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  projectId    String
-  tasks        Task[]
+  id            String              @id @default(cuid())
+  name          String
+  category      ResourceCategory
+  count         Int                 @default(1)
+  hoursPerDay   Float?
+  dayRate       Float?
+  proposedName  String?
+  globalType    GlobalResourceType? @relation(fields: [globalTypeId], references: [id])
+  globalTypeId  String?
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId     String
+  tasks         Task[]
   templateTasks TemplateTask[]
 }
 

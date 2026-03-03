@@ -10,7 +10,17 @@ const userId = 'user-1'
 const token = jwt.sign({ userId }, 'test-secret')
 const authHeader = `Bearer ${token}`
 
-const mockGRT = { id: 'grt-1', name: 'Developer', category: 'ENGINEERING' as const, description: null, isDefault: true, createdAt: new Date(), updatedAt: new Date() }
+const mockGRT = {
+  id: 'grt-1',
+  name: 'Developer',
+  category: 'ENGINEERING' as const,
+  description: null,
+  defaultHoursPerDay: null,
+  defaultDayRate: null,
+  isDefault: true,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+}
 
 beforeEach(() => vi.clearAllMocks())
 

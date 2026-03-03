@@ -3,6 +3,8 @@ export interface GlobalResourceType {
   name: string
   category: string
   description?: string
+  defaultHoursPerDay?: number | null
+  defaultDayRate?: number | null
   isDefault: boolean
 }
 
@@ -11,6 +13,8 @@ export interface ResourceType {
   name: string
   category: 'ENGINEERING' | 'GOVERNANCE' | 'PROJECT_MANAGEMENT'
   count: number
+  hoursPerDay?: number | null
+  dayRate?: number | null
   proposedName?: string
   globalTypeId?: string
   globalType?: GlobalResourceType

@@ -1,4 +1,5 @@
 import { Router, Response } from 'express'
+import { ResourceCategory } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
@@ -32,7 +33,24 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
   // Fetch global types to link by name
   const globalTypes = await prisma.globalResourceType.findMany()
-  const nameToGlobalId = new Map(globalTypes.map(gt => [gt.name, gt.id]))
+  const globalTypeByName = new Map(globalTypes.map(gt => [gt.name, gt]))
+  const baseTypes: Array<{ name: string; category: ResourceCategory }> = [
+    { name: 'Business Analyst', category: 'ENGINEERING' },
+    { name: 'Developer', category: 'ENGINEERING' },
+    { name: 'Tech Lead', category: 'ENGINEERING' },
+    { name: 'QA Engineer', category: 'ENGINEERING' },
+    { name: 'Tech Governance', category: 'GOVERNANCE' },
+    { name: 'Project Manager', category: 'PROJECT_MANAGEMENT' },
+  ]
+  const seedTypes = baseTypes.map(type => {
+    const globalType = globalTypeByName.get(type.name)
+    return {
+      ...type,
+      globalTypeId: globalType?.id,
+      hoursPerDay: globalType?.defaultHoursPerDay ?? null,
+      dayRate: globalType?.defaultDayRate ?? null,
+    }
+  })
 
   const project = await prisma.project.create({
     data: {
@@ -41,16 +59,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       customer,
       ownerId: req.userId!,
       // Seed default resource types
-      resourceTypes: {
-        create: [
-          { name: 'Business Analyst', category: 'ENGINEERING', globalTypeId: nameToGlobalId.get('Business Analyst') },
-          { name: 'Developer', category: 'ENGINEERING', globalTypeId: nameToGlobalId.get('Developer') },
-          { name: 'Tech Lead', category: 'ENGINEERING', globalTypeId: nameToGlobalId.get('Tech Lead') },
-          { name: 'QA Engineer', category: 'ENGINEERING', globalTypeId: nameToGlobalId.get('QA Engineer') },
-          { name: 'Tech Governance', category: 'GOVERNANCE', globalTypeId: nameToGlobalId.get('Tech Governance') },
-          { name: 'Project Manager', category: 'PROJECT_MANAGEMENT', globalTypeId: nameToGlobalId.get('Project Manager') },
-        ],
-      },
+      resourceTypes: { create: seedTypes },
     },
     include: { resourceTypes: true },
   })

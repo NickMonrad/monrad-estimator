@@ -13,13 +13,22 @@ router.get('/', async (_req: Request, res: Response) => {
 // POST /api/global-resource-types — auth required
 // After creating, seeds a ResourceType instance into every existing project
 router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
-  const { name, category, description } = req.body
+  const { name, category, description, defaultHoursPerDay, defaultDayRate } = req.body
   if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
-  const gt = await prisma.globalResourceType.create({ data: { name, category, description } })
+  const gt = await prisma.globalResourceType.create({
+    data: { name, category, description, defaultHoursPerDay, defaultDayRate },
+  })
   const projects = await prisma.project.findMany({ select: { id: true } })
   if (projects.length > 0) {
     await prisma.resourceType.createMany({
-      data: projects.map(p => ({ name, category, projectId: p.id, globalTypeId: gt.id }))
+      data: projects.map(p => ({
+        name,
+        category,
+        projectId: p.id,
+        globalTypeId: gt.id,
+        hoursPerDay: gt.defaultHoursPerDay ?? null,
+        dayRate: gt.defaultDayRate ?? null,
+      }))
     })
   }
   res.status(201).json(gt)
@@ -28,11 +37,14 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
 // PUT /api/global-resource-types/:id — auth required
 // Syncs name + category changes to all linked project-level ResourceType instances
 router.put('/:id', authenticate, async (req: AuthRequest, res: Response) => {
-  const { name, category, description } = req.body
+  const { name, category, description, defaultHoursPerDay, defaultDayRate } = req.body
   if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
   const existing = await prisma.globalResourceType.findFirst({ where: { id: req.params.id as string } })
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
-  const gt = await prisma.globalResourceType.update({ where: { id: req.params.id as string }, data: { name, category, description } })
+  const gt = await prisma.globalResourceType.update({
+    where: { id: req.params.id as string },
+    data: { name, category, description, defaultHoursPerDay, defaultDayRate },
+  })
   await prisma.resourceType.updateMany({ where: { globalTypeId: req.params.id as string }, data: { name, category } })
   res.json(gt)
 })

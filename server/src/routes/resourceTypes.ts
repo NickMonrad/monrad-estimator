@@ -16,7 +16,11 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   const types = await prisma.resourceType.findMany({
     where: { projectId: req.params.projectId as string },
     orderBy: { name: 'asc' },
-    include: { globalType: { select: { id: true, name: true, category: true } } },
+    include: {
+      globalType: {
+        select: { id: true, name: true, category: true, defaultHoursPerDay: true, defaultDayRate: true },
+      },
+    },
   })
   res.json(types)
 })
@@ -25,10 +29,18 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 router.post('/', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  const { name, category } = req.body
+  const { name, category, count, proposedName, hoursPerDay, dayRate } = req.body
   if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
   const rt = await prisma.resourceType.create({
-    data: { name, category, projectId: req.params.projectId as string },
+    data: {
+      name,
+      category,
+      count,
+      proposedName,
+      hoursPerDay,
+      dayRate,
+      projectId: req.params.projectId as string,
+    },
   })
   res.status(201).json(rt)
 })
@@ -37,10 +49,14 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  const { name, category, count, proposedName } = req.body
+  const { name, category, count, proposedName, hoursPerDay, dayRate } = req.body
+  const data: Record<string, unknown> = { name, category, count, proposedName, hoursPerDay, dayRate }
+  Object.keys(data).forEach(key => {
+    if (data[key] === undefined) delete data[key]
+  })
   const rt = await prisma.resourceType.update({
     where: { id: req.params.id as string },
-    data: { name, category, count, proposedName },
+    data,
   })
   res.json(rt)
 })
