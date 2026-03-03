@@ -69,7 +69,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     })
   }
 
-  const hoursPerDay = project.hoursPerDay
+  const fallbackHoursPerDay = project.hoursPerDay
 
   // Load full hierarchy
   const epics = await prisma.epic.findMany({
@@ -118,7 +118,11 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
 
       let maxDays = 0
       for (const [rtId, tasks] of byRt) {
-        const personDays = tasks.reduce((sum, t) => sum + (t.durationDays ?? t.hoursEffort / hoursPerDay), 0)
+        const personDays = tasks.reduce((sum, t) => {
+          const taskHoursPerDay = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+          const taskDays = t.durationDays ?? (t.hoursEffort / taskHoursPerDay)
+          return sum + taskDays
+        }, 0)
         const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
         const parallelDays = personDays / count
         if (parallelDays > maxDays) maxDays = parallelDays

@@ -16,6 +16,8 @@ interface GlobalResourceType {
   id: string
   name: string
   category: string
+  defaultHoursPerDay?: number | null
+  defaultDayRate?: number | null
 }
 
 interface TemplateTask {

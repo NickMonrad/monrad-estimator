@@ -142,36 +142,51 @@ router.post('/:snapshotId/rollback', async (req: AuthRequest, res: Response) => 
     },
   })
 
-  // Delete current backlog (cascades to features/stories/tasks)
-  await prisma.epic.deleteMany({ where: { projectId } })
+  const resourceTypes = await prisma.resourceType.findMany({
+    where: { projectId },
+    select: { id: true, name: true },
+  })
+  const rtMap = new Map(
+    resourceTypes.map(rt => [rt.name.toLowerCase(), rt.id]),
+  )
 
-  // Recreate from snapshot
   const epics = snap.snapshot as unknown as typeof currentData
-  for (const epic of epics) {
-    const newEpic = await prisma.epic.create({
-      data: { name: epic.name, description: epic.description, order: epic.order, projectId },
-    })
-    for (const feature of epic.features) {
-      const newFeature = await prisma.feature.create({
-        data: { name: feature.name, description: feature.description, assumptions: feature.assumptions, order: feature.order, epicId: newEpic.id },
+  await prisma.$transaction(async tx => {
+    await tx.epic.deleteMany({ where: { projectId } })
+
+    for (const epic of epics) {
+      const newEpic = await tx.epic.create({
+        data: { name: epic.name, description: epic.description, order: epic.order, projectId },
       })
-      for (const story of feature.userStories) {
-        const newStory = await prisma.userStory.create({
-          data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId },
+      for (const feature of epic.features) {
+        const newFeature = await tx.feature.create({
+          data: { name: feature.name, description: feature.description, assumptions: feature.assumptions, order: feature.order, epicId: newEpic.id },
         })
-        for (const task of story.tasks) {
-          // Re-match resource type by name in the project
-          const rt = await prisma.resourceType.findFirst({
-            where: { projectId, name: task.resourceType?.name },
+        for (const story of feature.userStories) {
+          const newStory = await tx.userStory.create({
+            data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId },
           })
-          if (!rt) continue
-          await prisma.task.create({
-            data: { name: task.name, description: task.description, assumptions: task.assumptions, hoursEffort: task.hoursEffort, durationDays: task.durationDays, order: task.order, userStoryId: newStory.id, resourceTypeId: rt.id },
-          })
+          for (const task of story.tasks) {
+            const resourceTypeId = task.resourceType?.name
+              ? (rtMap.get(task.resourceType.name.toLowerCase()) ?? null)
+              : null
+            await tx.task.create({
+              data: {
+                name: task.name,
+                description: task.description,
+                assumptions: task.assumptions,
+                hoursEffort: task.hoursEffort,
+                durationDays: task.durationDays,
+                order: task.order,
+                userStoryId: newStory.id,
+                resourceTypeId,
+              },
+            })
+          }
         }
       }
     }
-  }
+  })
 
   res.json({ message: 'Rollback complete' })
 })

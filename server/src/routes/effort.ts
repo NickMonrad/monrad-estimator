@@ -38,7 +38,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     return
   }
 
-  const hoursPerDay = project.hoursPerDay
+  const fallbackHoursPerDay = project.hoursPerDay
 
   // Collect all tasks with context
   type TaskEntry = {
@@ -57,6 +57,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     for (const feature of epic.features) {
       for (const story of feature.userStories) {
         for (const task of story.tasks) {
+          const taskHoursPerDay = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
           allTasks.push({
             taskId: task.id,
             taskName: task.name,
@@ -64,7 +65,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
             featureName: feature.name,
             epicName: epic.name,
             hoursEffort: task.hoursEffort,
-            daysEffort: Math.round((task.hoursEffort / hoursPerDay) * 100) / 100,
+            daysEffort: Math.round((task.hoursEffort / taskHoursPerDay) * 100) / 100,
             resourceTypeId: task.resourceTypeId,
           })
         }
@@ -99,6 +100,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       const resourceTypes = rts.map(rt => {
         const tasks = tasksByRt.get(rt.id) ?? []
         const totalHours = tasks.reduce((s, t) => s + t.hoursEffort, 0)
+        const hoursPerDay = rt.hoursPerDay ?? fallbackHoursPerDay
         const totalDays = Math.round((totalHours / hoursPerDay) * 100) / 100
         return {
           resourceTypeId: rt.id,
@@ -115,15 +117,15 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       })
 
       const totalHours = resourceTypes.reduce((s, rt) => s + rt.totalHours, 0)
-      const totalDays = Math.round((totalHours / hoursPerDay) * 100) / 100
+      const totalDays = Math.round((resourceTypes.reduce((s, rt) => s + rt.totalDays, 0)) * 100) / 100
 
       return { category: cat, totalHours, totalDays, resourceTypes }
     })
 
   const totalHours = byCategory.reduce((s, c) => s + c.totalHours, 0)
-  const totalDays = Math.round((totalHours / hoursPerDay) * 100) / 100
+  const totalDays = Math.round((byCategory.reduce((s, c) => s + c.totalDays, 0)) * 100) / 100
 
-  res.json({ projectId, hoursPerDay, totalHours, totalDays, byCategory })
+  res.json({ projectId, hoursPerDay: fallbackHoursPerDay, totalHours, totalDays, byCategory })
 })
 
 export default router

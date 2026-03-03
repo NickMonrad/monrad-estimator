@@ -9,6 +9,8 @@ interface GlobalResourceType {
   name: string
   category: 'ENGINEERING' | 'GOVERNANCE' | 'PROJECT_MANAGEMENT'
   description?: string | null
+  defaultHoursPerDay?: number | null
+  defaultDayRate?: number | null
   isDefault: boolean
 }
 
@@ -38,6 +40,24 @@ interface RowFormState {
   name: string
   category: GlobalResourceType['category']
   description: string
+  defaultHoursPerDay: string
+  defaultDayRate: string
+}
+
+function parseNullableNumber(value: string) {
+  if (!value || !value.trim()) return null
+  const parsed = parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function toPayload(data: RowFormState) {
+  return {
+    name: data.name,
+    category: data.category,
+    description: data.description || null,
+    defaultHoursPerDay: parseNullableNumber(data.defaultHoursPerDay),
+    defaultDayRate: parseNullableNumber(data.defaultDayRate),
+  }
 }
 
 interface EditRowProps {
@@ -80,6 +100,26 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           placeholder="Description"
         />
       </td>
+      <td className="px-4 py-2">
+        <input
+          type="number"
+          step="0.1"
+          value={form.defaultHoursPerDay}
+          onChange={e => setForm(f => ({ ...f, defaultHoursPerDay: e.target.value }))}
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          placeholder="7.6"
+        />
+      </td>
+      <td className="px-4 py-2">
+        <input
+          type="number"
+          step="50"
+          value={form.defaultDayRate}
+          onChange={e => setForm(f => ({ ...f, defaultDayRate: e.target.value }))}
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          placeholder="1200"
+        />
+      </td>
       <td className="px-4 py-2" />
       <td className="px-4 py-2">
         <div className="flex gap-2">
@@ -109,7 +149,13 @@ export default function GlobalResourceTypesPage() {
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
-  const [addForm, setAddForm] = useState({ name: '', category: 'ENGINEERING' as GlobalResourceType['category'], description: '' })
+  const [addForm, setAddForm] = useState<RowFormState>({
+    name: '',
+    category: 'ENGINEERING' as GlobalResourceType['category'],
+    description: '',
+    defaultHoursPerDay: '',
+    defaultDayRate: '',
+  })
 
   const { data: types = [], isLoading } = useQuery<GlobalResourceType[]>({
     queryKey: ['global-resource-types'],
@@ -120,16 +166,16 @@ export default function GlobalResourceTypesPage() {
 
   const updateType = useMutation({
     mutationFn: ({ id, data }: { id: string; data: RowFormState }) =>
-      api.put(`/global-resource-types/${id}`, data),
+      api.put(`/global-resource-types/${id}`, toPayload(data)),
     onSuccess: () => { invalidate(); setEditingId(null) },
   })
 
   const createType = useMutation({
-    mutationFn: (data: typeof addForm) => api.post('/global-resource-types', data),
+    mutationFn: (data: typeof addForm) => api.post('/global-resource-types', toPayload(data)),
     onSuccess: () => {
       invalidate()
       setShowAddForm(false)
-      setAddForm({ name: '', category: 'ENGINEERING', description: '' })
+      setAddForm({ name: '', category: 'ENGINEERING', description: '', defaultHoursPerDay: '', defaultDayRate: '' })
     },
   })
 
@@ -190,6 +236,8 @@ export default function GlobalResourceTypesPage() {
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Name</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Category</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Description</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600">Default hrs/day</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600">Default day rate</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Default</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Actions</th>
                 </tr>
@@ -199,7 +247,13 @@ export default function GlobalResourceTypesPage() {
                   editingId === t.id ? (
                     <EditRow
                       key={t.id}
-                      initial={{ name: t.name, category: t.category, description: t.description ?? '' }}
+                      initial={{
+                        name: t.name,
+                        category: t.category,
+                        description: t.description ?? '',
+                        defaultHoursPerDay: t.defaultHoursPerDay?.toString() ?? '',
+                        defaultDayRate: t.defaultDayRate?.toString() ?? '',
+                      }}
                       onSave={data => updateType.mutate({ id: t.id, data })}
                       onCancel={() => setEditingId(null)}
                       saving={updateType.isPending}
@@ -213,6 +267,10 @@ export default function GlobalResourceTypesPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-gray-500">{t.description ?? ''}</td>
+                      <td className="px-4 py-3 text-gray-700">{t.defaultHoursPerDay ?? '—'}</td>
+                      <td className="px-4 py-3 text-gray-700">
+                        {t.defaultDayRate != null ? t.defaultDayRate.toLocaleString() : '—'}
+                      </td>
                       <td className="px-4 py-3">
                         {t.isDefault && (
                           <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">Default</span>
@@ -249,7 +307,7 @@ export default function GlobalResourceTypesPage() {
 
                 {sorted.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-12 text-center text-gray-400">No resource types yet</td>
+                    <td colSpan={7} className="px-4 py-12 text-center text-gray-400">No resource types yet</td>
                   </tr>
                 )}
               </tbody>
@@ -290,6 +348,28 @@ export default function GlobalResourceTypesPage() {
                   value={addForm.description}
                   onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Default hrs/day</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={addForm.defaultHoursPerDay}
+                  onChange={e => setAddForm(f => ({ ...f, defaultHoursPerDay: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  placeholder="7.6"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Default day rate</label>
+                <input
+                  type="number"
+                  step="50"
+                  value={addForm.defaultDayRate}
+                  onChange={e => setAddForm(f => ({ ...f, defaultDayRate: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  placeholder="1200"
                 />
               </div>
             </div>

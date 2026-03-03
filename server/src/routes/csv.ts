@@ -218,9 +218,12 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
   }
 
   // Fetch resource types for matching
-  const hoursPerDay = project.hoursPerDay ?? 7.6
-  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId } })
-  const rtByName = new Map(resourceTypes.map(r => [r.name.toLowerCase(), r.id]))
+  const fallbackHoursPerDay = project.hoursPerDay ?? 7.6
+  const resourceTypes = await prisma.resourceType.findMany({
+    where: { projectId },
+    select: { id: true, name: true, hoursPerDay: true },
+  })
+  const rtByName = new Map(resourceTypes.map(r => [r.name.toLowerCase(), r]))
 
   // Auto-snapshot before import
   const existingEpics = await prisma.epic.findMany({
@@ -291,9 +294,11 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
     if (!row.task) continue
 
     // Create Task
-    const resourceTypeId = row.resourceType
-      ? (rtByName.get(row.resourceType.toLowerCase()) ?? null)
-      : null
+    const resourceType = row.resourceType
+      ? rtByName.get(row.resourceType.toLowerCase())
+      : undefined
+    const resourceTypeId = resourceType?.id ?? null
+    const hoursPerDay = resourceType?.hoursPerDay ?? fallbackHoursPerDay
 
     const taskCount = await prisma.task.count({ where: { userStoryId: storyId } })
     await prisma.task.create({
