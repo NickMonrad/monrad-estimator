@@ -15,7 +15,7 @@ interface Props {
   hoursPerDay: number
 }
 
-function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, isSaving, onRefresh, resourceTypes, projectId, hoursPerDay }: {
+function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, isSaving, onRefresh, isRefreshing, onRefreshSelect, onCancelRefresh, refreshPending, resourceTypes, projectId, hoursPerDay }: {
   story: UserStory
   isEditing: boolean
   expanded: boolean
@@ -26,6 +26,10 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
   onDelete: () => void
   isSaving: boolean
   onRefresh: () => void
+  isRefreshing: boolean
+  onRefreshSelect: (complexity: string) => void
+  onCancelRefresh: () => void
+  refreshPending: boolean
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number
@@ -62,6 +66,19 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
             <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
+        </div>
+      )}
+      {isRefreshing && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 flex items-center gap-3">
+          <span>Refresh complexity:</span>
+          {(['EXTRA_SMALL', 'SMALL', 'MEDIUM', 'LARGE', 'EXTRA_LARGE'] as const).map(c => (
+            <button key={c} onClick={() => onRefreshSelect(c)}
+              disabled={refreshPending}
+              className="font-medium hover:text-blue-900 disabled:opacity-50">
+              {c === 'EXTRA_SMALL' ? 'XS' : c === 'EXTRA_LARGE' ? 'XL' : c[0]}
+            </button>
+          ))}
+          <button onClick={onCancelRefresh} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
         </div>
       )}
       {expanded && (
@@ -135,6 +152,10 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
             onDelete={() => deleteStory.mutate(story.id)}
             isSaving={updateStory.isPending}
             onRefresh={() => setRefreshingId(story.id)}
+            isRefreshing={refreshingId === story.id}
+            onRefreshSelect={(complexity) => refreshFromTemplate.mutate({ storyId: story.id, complexity })}
+            onCancelRefresh={() => setRefreshingId(null)}
+            refreshPending={refreshFromTemplate.isPending}
             resourceTypes={resourceTypes}
             projectId={projectId}
             hoursPerDay={hoursPerDay}
@@ -142,19 +163,6 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
         ))}
       </SortableContext>
 
-      {refreshingId && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 flex items-center gap-3">
-          <span>Refresh complexity:</span>
-          {(['EXTRA_SMALL', 'SMALL', 'MEDIUM', 'LARGE', 'EXTRA_LARGE'] as const).map(c => (
-            <button key={c} onClick={() => refreshFromTemplate.mutate({ storyId: refreshingId, complexity: c })}
-              disabled={refreshFromTemplate.isPending}
-              className="font-medium hover:text-blue-900 disabled:opacity-50">
-              {c === 'EXTRA_SMALL' ? 'XS' : c === 'EXTRA_LARGE' ? 'XL' : c[0]}
-            </button>
-          ))}
-          <button onClick={() => setRefreshingId(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
-        </div>
-      )}
       {refreshMsg && (
         <div className="text-xs text-green-600 py-1 pl-2">{refreshMsg}
           <button onClick={() => setRefreshMsg(null)} className="ml-2 text-gray-400">✕</button>
