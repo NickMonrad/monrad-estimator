@@ -6,7 +6,8 @@
     "test": "playwright test",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",
-    "report": "playwright show-report playwright-report"
+    "report": "playwright show-report playwright-report",
+    "screenshots": "playwright test tests/screenshots.spec.ts --reporter=line"
   },
   "keywords": [],
   "author": "",
