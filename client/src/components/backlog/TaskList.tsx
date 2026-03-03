@@ -32,7 +32,7 @@ function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDel
     return (
       <div ref={setNodeRef} style={style} {...attributes} className="bg-white border border-blue-200 rounded-lg px-3 py-2">
         <TaskForm
-          initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId, durationDays: task.durationDays != null ? String(task.durationDays) : '' }}
+          initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursEffort: String(task.hoursEffort), resourceTypeId: task.resourceTypeId ?? '', durationDays: task.durationDays != null ? String(task.durationDays) : '' }}
           resourceTypes={resourceTypes}
           hoursPerDay={hoursPerDay}
           onSave={onSave}
@@ -50,7 +50,10 @@ function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDel
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">Task</span>
           <span className="text-sm text-gray-800">{task.name}</span>
-          <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{task.resourceType.name}</span>
+          {task.resourceType
+            ? <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{task.resourceType.name}</span>
+            : <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded italic">No resource type</span>
+          }
           <span className="text-xs font-medium text-gray-700 ml-auto">
             {task.hoursEffort}h / {(task.hoursEffort / hoursPerDay).toFixed(1)}d
           </span>

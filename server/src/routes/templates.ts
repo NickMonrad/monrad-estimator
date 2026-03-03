@@ -214,6 +214,34 @@ router.post('/import-csv', authenticate, async (req: AuthRequest, res: Response)
   res.status(201).json({ message: 'Import successful', templatesCreated: created, templatesUpdated: updated, tasksCreated })
 })
 
+// GET /api/templates/:id/export-csv — no auth required (before /:id to avoid conflict)
+router.get('/:id/export-csv', async (req, res: Response) => {
+  const template = await prisma.featureTemplate.findUnique({
+    where: { id: req.params.id as string },
+    include: { tasks: { orderBy: { order: 'asc' } } },
+  })
+  if (!template) { res.status(404).json({ error: 'Template not found' }); return }
+
+  const headers = ['TemplateName', 'Category', 'TaskName', 'ResourceTypeName', 'HoursExtraSmall', 'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge']
+  const rows: string[][] = [headers]
+
+  if (template.tasks.length === 0) {
+    rows.push([template.name, template.category ?? '', '', '', '', '', '', '', ''])
+  } else {
+    for (const task of template.tasks) {
+      rows.push([template.name, template.category ?? '', task.name, task.resourceTypeName,
+        String(task.hoursExtraSmall), String(task.hoursSmall), String(task.hoursMedium),
+        String(task.hoursLarge), String(task.hoursExtraLarge)])
+    }
+  }
+
+  const csv = stringify(rows)
+  const slug = template.name.toLowerCase().replace(/\s+/g, '-')
+  res.setHeader('Content-Type', 'text/csv')
+  res.setHeader('Content-Disposition', `attachment; filename="${slug}.csv"`)
+  res.send(csv)
+})
+
 // GET /api/templates/:id
 router.get('/:id', async (req, res: Response) => {
   const template = await prisma.featureTemplate.findUnique({

@@ -56,6 +56,7 @@ export default function ProjectsPage() {
             </div>
             <span className="font-semibold text-gray-900">Monrad Estimator</span>
             <Link to="/resource-types" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Resource Types</Link>
+            <Link to="/templates" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Templates</Link>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-500">{user?.name}</span>

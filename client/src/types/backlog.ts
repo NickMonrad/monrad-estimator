@@ -26,8 +26,8 @@ export interface Task {
   durationDays?: number
   order: number
   userStoryId: string
-  resourceTypeId: string
-  resourceType: ResourceType
+  resourceTypeId: string | null
+  resourceType: ResourceType | null
 }
 
 export interface UserStory {
