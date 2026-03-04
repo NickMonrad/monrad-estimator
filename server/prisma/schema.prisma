@@ -107,6 +107,7 @@ model Epic {
   description       String?
   order             Int      @default(0)
   featureMode       String   @default("sequential")
+  scheduleMode      String   @default("sequential")
   timelineStartWeek Int?
   project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   projectId         String

@@ -81,6 +81,7 @@ export interface TimelineEntry {
   epicId: string
   epicName: string
   epicFeatureMode?: string
+  epicScheduleMode?: string
   epicTimelineStartWeek?: number | null
   startWeek: number
   durationWeeks: number

@@ -24,7 +24,7 @@ function buildResponse(
   project: { id: string; startDate: Date | null; hoursPerDay: number },
   entries: Array<{
     featureId: string
-    feature: { name: string; epic: { id: string; name: string; featureMode: string; timelineStartWeek: number | null } }
+    feature: { name: string; epic: { id: string; name: string; featureMode: string; scheduleMode: string; timelineStartWeek: number | null } }
     startWeek: number
     durationWeeks: number
     isManual: boolean
@@ -50,6 +50,7 @@ function buildResponse(
       epicId: e.feature.epic.id,
       epicName: e.feature.epic.name,
       epicFeatureMode: e.feature.epic.featureMode,
+      epicScheduleMode: e.feature.epic.scheduleMode,
       epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
       startWeek: e.startWeek,
       durationWeeks: e.durationWeeks,
@@ -153,6 +154,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
   const { startDate } = req.body
+  const resourceLevel: boolean = req.body.resourceLevel === true
   if (startDate) {
     project = await prisma.project.update({
       where: { id: project.id },
@@ -266,6 +268,9 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     // Skip if currEpic has a manual anchor — it will start at its fixed week regardless
     if (currEpic.timelineStartWeek != null) continue
 
+    // Skip if currEpic is parallel — it floats free, not chained after prevEpic
+    if ((currEpic.scheduleMode ?? 'sequential') === 'parallel') continue
+
     const currTargets = (currEpic.featureMode ?? 'sequential') === 'sequential'
       ? [currEpic.features[0]] // first feature chains to the rest via sequential edges
       : currEpic.features       // parallel: all features need explicit constraint
@@ -325,6 +330,84 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     }
   }
 
+  if (resourceLevel) {
+    // Helper: compute per-resource-type person-hours for a feature
+    function featureResourceHours(feature: typeof allFeatures[0]): Map<string, number> {
+      const result = new Map<string, number>()
+      for (const story of feature.userStories) {
+        for (const task of story.tasks) {
+          const rtId = task.resourceTypeId ?? '_unassigned'
+          const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+          const hours = (task.durationDays ?? (task.hoursEffort / hpd)) * hpd
+          result.set(rtId, (result.get(rtId) ?? 0) + hours)
+        }
+      }
+      return result
+    }
+
+    // Week capacity per resource type (hours per week)
+    const weekCapacity = new Map<string, number>()
+    for (const rt of resourceTypes) {
+      weekCapacity.set(rt.id, rt.count * (rt.hoursPerDay ?? fallbackHoursPerDay) * 5)
+    }
+    weekCapacity.set('_unassigned', fallbackHoursPerDay * 5) // 1 person fallback
+
+    // Track cumulative weekly usage: rtId → hours used per week
+    const weeklyUsage = new Map<string, number[]>()
+    const MAX_WEEKS = 200
+
+    function getUsage(rtId: string): number[] {
+      if (!weeklyUsage.has(rtId)) weeklyUsage.set(rtId, new Array(MAX_WEEKS).fill(0))
+      return weeklyUsage.get(rtId)!
+    }
+
+    function canSchedule(fId: string, startW: number, durW: number, resourceHours: Map<string, number>): boolean {
+      for (const [rtId, totalHours] of resourceHours) {
+        const hoursPerWeek = totalHours / durW
+        const cap = weekCapacity.get(rtId) ?? (fallbackHoursPerDay * 5)
+        const usage = getUsage(rtId)
+        for (let w = startW; w < startW + durW && w < MAX_WEEKS; w++) {
+          if ((usage[w] ?? 0) + hoursPerWeek > cap + 0.001) return false
+        }
+      }
+      return true
+    }
+
+    function reserveWeeks(startW: number, durW: number, resourceHours: Map<string, number>) {
+      for (const [rtId, totalHours] of resourceHours) {
+        const hoursPerWeek = totalHours / durW
+        const usage = getUsage(rtId)
+        for (let w = startW; w < startW + durW && w < MAX_WEEKS; w++) {
+          usage[w] = (usage[w] ?? 0) + hoursPerWeek
+        }
+      }
+    }
+
+    // Process features in topological order (processed array), respecting manual entries
+    for (const fId of processed) {
+      const f = featureMap.get(fId)!
+      const dur = featureDurationWeeks(f)
+      const resourceHours = featureResourceHours(f)
+
+      if (manualStartWeeks.has(fId)) {
+        // Manual: fixed — just reserve its weeks
+        const sw = startWeeks.get(fId)!
+        reserveWeeks(sw, dur, resourceHours)
+        continue
+      }
+
+      const earliest = startWeeks.get(fId)! // already set by DAG
+      let candidateWeek = earliest
+      while (candidateWeek < MAX_WEEKS) {
+        if (canSchedule(fId, candidateWeek, dur, resourceHours)) break
+        candidateWeek++
+      }
+      startWeeks.set(fId, candidateWeek)
+      finishWeeks.set(fId, candidateWeek + dur)
+      reserveWeeks(candidateWeek, dur, resourceHours)
+    }
+  }
+
   for (const fId of processed) {
     const sw = startWeeks.get(fId)!
     const f = featureMap.get(fId)!
@@ -371,6 +454,7 @@ router.put('/:featureId', async (req: AuthRequest, res: Response) => {
     epicId: entry.feature.epic.id,
     epicName: entry.feature.epic.name,
     epicFeatureMode: entry.feature.epic.featureMode,
+    epicScheduleMode: entry.feature.epic.scheduleMode,
     epicTimelineStartWeek: entry.feature.epic.timelineStartWeek,
     startWeek: entry.startWeek,
     durationWeeks: entry.durationWeeks,

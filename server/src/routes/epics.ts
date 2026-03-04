@@ -49,7 +49,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  const { name, description, order, featureMode, timelineStartWeek } = req.body
+  const { name, description, order, featureMode, scheduleMode, timelineStartWeek } = req.body
   const epic = await prisma.epic.update({
     where: { id: req.params.id as string },
     data: {
@@ -57,6 +57,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       description,
       order,
       ...(featureMode !== undefined && { featureMode }),
+      ...(scheduleMode !== undefined && { scheduleMode }),
       ...(timelineStartWeek !== undefined && { timelineStartWeek }),
     },
   })

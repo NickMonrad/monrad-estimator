@@ -47,6 +47,7 @@ export default function TimelinePage() {
   const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [scheduleStale, setScheduleStale] = useState(false)
+  const [resourceLevel, setResourceLevel] = useState(false)
 
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
@@ -72,7 +73,7 @@ export default function TimelinePage() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ['timeline', projectId] })
 
   const scheduleTimeline = useMutation({
-    mutationFn: (body: { startDate?: string }) =>
+    mutationFn: (body: { startDate?: string; resourceLevel?: boolean }) =>
       api.post(`/projects/${projectId}/timeline/schedule`, body).then(r => r.data),
     onSuccess: (data) => {
       qc.setQueryData(['timeline', projectId], data)
@@ -119,6 +120,15 @@ export default function TimelinePage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['timeline', projectId] }); setScheduleStale(true) },
   })
 
+  const updateEpicScheduleMode = useMutation({
+    mutationFn: ({ epicId, scheduleMode }: { epicId: string; scheduleMode: string }) =>
+      api.put(`/projects/${projectId}/epics/${epicId}`, { scheduleMode }).then(r => r.data),
+    onSuccess: () => {
+      setScheduleStale(true)
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    },
+  })
+
   const updateResourceType = useMutation({
     mutationFn: ({ id, ...data }: { id: string; count?: number; hoursPerDay?: number | null; dayRate?: number | null }) => {
       const payload: Record<string, number | null> = {}
@@ -134,13 +144,13 @@ export default function TimelinePage() {
     mutationFn: (featureId: string) => api.delete(`/projects/${projectId}/timeline/${featureId}`),
     onSuccess: () => {
       setEditingFeatureId(null)
-      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput } : {})
+      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
     },
   })
 
   const handleSchedule = () => {
     setScheduleStale(false)
-    scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput } : {})
+    scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
   }
 
   // Compute Gantt dimensions
@@ -236,6 +246,15 @@ export default function TimelinePage() {
                   Reset to auto
                 </button>
               )}
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={resourceLevel}
+                  onChange={e => setResourceLevel(e.target.checked)}
+                  className="rounded"
+                />
+                Resource leveling
+              </label>
             </div>
             {timeline?.projectedEndDate && (
               <div className="text-sm text-gray-600">
@@ -422,6 +441,27 @@ export default function TimelinePage() {
                               className="ml-2 text-xs px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-white"
                             >
                               {epicFeatureMode === 'sequential' ? '→ Sequential' : '⇉ Parallel'}
+                            </button>
+                          )
+                        })()}
+                        {(() => {
+                          const epicScheduleMode = group.entries[0]?.epicScheduleMode ?? 'sequential'
+                          return (
+                            <button
+                              onClick={() => updateEpicScheduleMode.mutate({
+                                epicId: group.epicId,
+                                scheduleMode: epicScheduleMode === 'sequential' ? 'parallel' : 'sequential',
+                              })}
+                              title={epicScheduleMode === 'sequential'
+                                ? 'Epic runs after previous — click to run in parallel'
+                                : 'Epic runs in parallel — click to run sequentially'}
+                              className={`text-xs px-2 py-0.5 rounded border font-medium ${
+                                epicScheduleMode === 'parallel'
+                                  ? 'bg-purple-100 text-purple-700 border-purple-300'
+                                  : 'bg-gray-100 text-gray-500 border-gray-200'
+                              }`}
+                            >
+                              {epicScheduleMode === 'parallel' ? '⬛ Parallel' : '⏭ Sequential'}
                             </button>
                           )
                         })()}
