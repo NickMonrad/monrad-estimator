@@ -289,7 +289,7 @@ export default function TimelinePage() {
             <p className="text-sm font-medium text-red-800">⚠ Resource over-allocation in parallel epics</p>
             {(timeline!.parallelWarnings!).map((w, i) => (
               <p key={i} className="text-xs text-red-700">
-                <span className="font-medium">{w.epicName}</span> — {w.resourceTypeName}: {w.demandDays.toFixed(1)} person-days needed, only {w.capacityDays.toFixed(1)} days available at current headcount. Increase count or switch to Sequential mode.
+                <span className="font-medium">{w.epicName}</span> — {w.resourceTypeName}: {w.demandDays.toFixed(1)} person-days needed, only {w.capacityDays.toFixed(1)} days available at current headcount. Increase count or switch to "Features: sequential" mode.
               </p>
             ))}
           </div>
@@ -437,10 +437,12 @@ export default function TimelinePage() {
                           return (
                             <button
                               onClick={() => updateEpicMode.mutate({ epicId: group.epicId, featureMode: epicFeatureMode === 'sequential' ? 'parallel' : 'sequential' })}
-                              title={`Features run ${epicFeatureMode} — click to toggle`}
+                              title={epicFeatureMode === 'sequential'
+                                ? 'Features within this epic run one after another — click for parallel'
+                                : 'Features within this epic all start simultaneously — click for sequential'}
                               className="ml-2 text-xs px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-white"
                             >
-                              {epicFeatureMode === 'sequential' ? '→ Sequential' : '⇉ Parallel'}
+                              {epicFeatureMode === 'sequential' ? '↓ Features: sequential' : '⇉ Features: parallel'}
                             </button>
                           )
                         })()}
@@ -453,15 +455,15 @@ export default function TimelinePage() {
                                 scheduleMode: epicScheduleMode === 'sequential' ? 'parallel' : 'sequential',
                               })}
                               title={epicScheduleMode === 'sequential'
-                                ? 'Epic runs after previous — click to run in parallel'
-                                : 'Epic runs in parallel — click to run sequentially'}
+                                ? 'This epic starts after the previous epic completes — click to run concurrently'
+                                : 'This epic runs concurrently with other epics — click to chain after previous'}
                               className={`text-xs px-2 py-0.5 rounded border font-medium ${
                                 epicScheduleMode === 'parallel'
                                   ? 'bg-purple-100 text-purple-700 border-purple-300'
                                   : 'bg-gray-100 text-gray-500 border-gray-200'
                               }`}
                             >
-                              {epicScheduleMode === 'parallel' ? '⬛ Parallel' : '⏭ Sequential'}
+                              {epicScheduleMode === 'parallel' ? '⬛ Epic: concurrent' : '⏭ Epic: after prev'}
                             </button>
                           )
                         })()}
