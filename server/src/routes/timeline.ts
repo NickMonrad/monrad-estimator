@@ -321,9 +321,15 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     }
   }
 
-  // Kahn's algorithm — process features in topological order
+  // Kahn's algorithm — priority queue: always pick lowest (epicOrder, featureOrder)
+  // This guarantees predecessors before successors AND respects user priority within independent features
   const finishWeeks = new Map<string, number>()
   const startWeeks = new Map<string, number>()
+
+  function featurePriority(fId: string) {
+    const f = featureMap.get(fId)!
+    return f.epic.order * 100000 + f.order
+  }
 
   const queue: string[] = []
   for (const [fId, deg] of inDegree) {
@@ -333,6 +339,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
   const processed: string[] = []
 
   while (queue.length > 0) {
+    queue.sort((a, b) => featurePriority(a) - featurePriority(b))
     const fId = queue.shift()!
     processed.push(fId)
 
@@ -403,7 +410,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
           const overlapStart = Math.max(w, startW)
           const overlapEnd = Math.min(w + 1, startW + durW)
           const overlapFraction = overlapEnd - overlapStart  // fraction of this week used (0–1)
-          const hoursThisWeek = (totalHours / durW) * 5 * overlapFraction  // hours in this partial week
+          const hoursThisWeek = (totalHours / durW) * overlapFraction
           if ((usage[w] ?? 0) + hoursThisWeek > cap + 0.001) return false
         }
       }
@@ -419,22 +426,15 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
           const overlapStart = Math.max(w, startW)
           const overlapEnd = Math.min(w + 1, startW + durW)
           const overlapFraction = overlapEnd - overlapStart
-          const hoursThisWeek = (totalHours / durW) * 5 * overlapFraction
+          const hoursThisWeek = (totalHours / durW) * overlapFraction
           usage[w] = (usage[w] ?? 0) + hoursThisWeek
         }
       }
     }
 
-    // Re-sort by (epicOrder, featureOrder) so higher-priority features claim resources first
-    const levellingOrder = [...processed].sort((a, b) => {
-      const fa = featureMap.get(a)!
-      const fb = featureMap.get(b)!
-      if (fa.epic.order !== fb.epic.order) return fa.epic.order - fb.epic.order
-      return fa.order - fb.order
-    })
-
-    // Process features in priority order for resource levelling
-    for (const fId of levellingOrder) {
+    // Process in topological priority order (already sorted by Kahn's priority queue above)
+    // Re-compute earliest from live finishWeeks so pushed predecessors propagate to successors
+    for (const fId of processed) {
       const f = featureMap.get(fId)!
       const dur = featureDurationWeeks(f)
       const resourceHours = featureResourceHours(f)
@@ -446,7 +446,13 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
         continue
       }
 
-      const earliest = startWeeks.get(fId)! // already set by DAG
+      // Re-compute earliest from live (post-levelling) predecessor finish weeks
+      let earliest = f.epic.timelineStartWeek ?? 0
+      for (const predId of predecessors.get(fId) ?? []) {
+        const predFinish = finishWeeks.get(predId) ?? 0
+        if (predFinish > earliest) earliest = predFinish
+      }
+
       let candidateWeek = earliest
       while (candidateWeek < MAX_WEEKS) {
         if (canSchedule(fId, candidateWeek, dur, resourceHours)) break
