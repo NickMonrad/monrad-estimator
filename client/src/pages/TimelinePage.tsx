@@ -130,6 +130,14 @@ export default function TimelinePage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['resource-types', projectId] }),
   })
 
+  const resetManual = useMutation({
+    mutationFn: (featureId: string) => api.delete(`/projects/${projectId}/timeline/${featureId}`),
+    onSuccess: () => {
+      setEditingFeatureId(null)
+      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput } : {})
+    },
+  })
+
   const handleSchedule = () => {
     setScheduleStale(false)
     scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput } : {})
@@ -505,6 +513,16 @@ export default function TimelinePage() {
                               >
                                 Cancel
                               </button>
+                              {entry.isManual && (
+                                <button
+                                  onClick={() => resetManual.mutate(entry.featureId)}
+                                  disabled={resetManual.isPending}
+                                  title="Clear manual override and re-run auto-schedule"
+                                  className="px-3 py-0.5 rounded text-xs text-orange-600 border border-orange-200 hover:bg-orange-50 disabled:opacity-50"
+                                >
+                                  {resetManual.isPending ? 'Resetting…' : '↺ Reset to auto'}
+                                </button>
+                              )}
                               {/* Dependencies section */}
                               <div className="mt-2 w-full" data-testid="dep-section" style={{ gridColumn: `1 / span ${totalWeeks + 1}` }}>
                                 <div className="px-3 py-2 bg-blue-50 border-t border-blue-100">

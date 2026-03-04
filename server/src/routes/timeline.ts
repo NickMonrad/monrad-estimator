@@ -379,6 +379,17 @@ router.put('/:featureId', async (req: AuthRequest, res: Response) => {
   })
 })
 
+// DELETE /api/projects/:projectId/timeline/:featureId — clear manual override
+router.delete('/:featureId', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  await prisma.timelineEntry.deleteMany({
+    where: { featureId: req.params.featureId as string, projectId: project.id },
+  })
+  res.status(204).end()
+})
+
 // PATCH /api/projects/:projectId/timeline/start-date
 router.patch('/start-date', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
