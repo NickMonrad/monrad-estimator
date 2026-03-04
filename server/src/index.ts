@@ -18,6 +18,7 @@ import csvRoutes from './routes/csv.js'
 import reorderRoutes from './routes/reorder.js'
 import overheadRoutes from './routes/overhead.js'
 import resourceProfileRoutes from './routes/resourceProfile.js'
+import featureDependenciesRouter from './routes/featureDependencies.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3001
@@ -43,6 +44,7 @@ app.use('/api/projects/:projectId/backlog', csvRoutes)
 app.use('/api/projects/:projectId/reorder', reorderRoutes)
 app.use('/api/projects/:projectId/overhead', overheadRoutes)
 app.use('/api/projects/:projectId/resource-profile', resourceProfileRoutes)
+app.use('/api/projects/:projectId/feature-dependencies', featureDependenciesRouter)
 
 export { app }
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`))

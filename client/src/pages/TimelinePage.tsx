@@ -95,7 +95,28 @@ export default function TimelinePage() {
     onSuccess: () => { invalidate(); setEditingFeatureId(null) },
   })
 
-  const updateResourceType = useMutation({
+  const { data: featureDeps = [] } = useQuery<Array<{ featureId: string; dependsOnId: string; feature: { name: string }; dependsOn: { name: string } }>>({
+    queryKey: ['feature-deps', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/feature-dependencies`).then(r => r.data),
+  })
+
+  const addFeatureDep = useMutation({
+    mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
+      api.post(`/projects/${projectId}/feature-dependencies`, { featureId, dependsOnId }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }),
+  })
+
+  const removeFeatureDep = useMutation({
+    mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
+      api.delete(`/projects/${projectId}/feature-dependencies/${featureId}/${dependsOnId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }),
+  })
+
+  const updateEpicMode = useMutation({
+    mutationFn: ({ epicId, featureMode }: { epicId: string; featureMode: string }) =>
+      api.put(`/projects/${projectId}/epics/${epicId}`, { featureMode }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['timeline', projectId] }),
+  })
     mutationFn: ({ id, ...data }: { id: string; count?: number; hoursPerDay?: number | null; dayRate?: number | null }) => {
       const payload: Record<string, number | null> = {}
       if (data.count !== undefined) payload.count = data.count
@@ -204,6 +225,12 @@ export default function TimelinePage() {
                 </button>
               )}
             </div>
+            {timeline?.projectedEndDate && (
+              <div className="text-sm text-gray-600">
+                <span className="text-gray-400">Projected end:</span>{' '}
+                <span className="font-medium">{new Date(timeline.projectedEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+              </div>
+            )}
             {timeline?.startDate && (
               <span className="text-xs text-gray-400 ml-auto">
                 Last scheduled: {formatDate(timeline.startDate)}
@@ -352,6 +379,18 @@ export default function TimelinePage() {
                       >
                         <span>{group.epicName}</span>
                         <span className="text-gray-400 font-normal">W{epicMinWeek + 1}–W{epicMaxWeek}</span>
+                        {(() => {
+                          const epicFeatureMode = group.entries[0]?.epicFeatureMode ?? 'sequential'
+                          return (
+                            <button
+                              onClick={() => updateEpicMode.mutate({ epicId: group.epicId, featureMode: epicFeatureMode === 'sequential' ? 'parallel' : 'sequential' })}
+                              title={`Features run ${epicFeatureMode} — click to toggle`}
+                              className="ml-2 text-xs px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-white"
+                            >
+                              {epicFeatureMode === 'sequential' ? '→ Sequential' : '⇉ Parallel'}
+                            </button>
+                          )
+                        })()}
                       </div>
 
                       {/* Feature rows */}
@@ -403,7 +442,7 @@ export default function TimelinePage() {
                           {editingFeatureId === entry.featureId && (
                             <div
                               key={`edit-${entry.featureId}`}
-                              className="bg-blue-50 border-b border-blue-100 px-3 py-2 flex items-center gap-3"
+                              className="bg-blue-50 border-b border-blue-100 px-3 py-2 flex flex-wrap items-center gap-3"
                               style={{ gridColumn: `1 / span ${totalWeeks + 1}` }}
                             >
                               <span className="text-xs text-gray-600 font-medium">{entry.featureName}</span>
@@ -440,6 +479,47 @@ export default function TimelinePage() {
                               >
                                 Cancel
                               </button>
+                              {/* Dependencies section */}
+                              <div className="mt-2 w-full" data-testid="dep-section" style={{ gridColumn: `1 / span ${totalWeeks + 1}` }}>
+                                <div className="px-3 py-2 bg-blue-50 border-t border-blue-100">
+                                  <p className="text-xs font-medium text-gray-600 mb-1">Depends on (must finish before this feature starts):</p>
+                                  <div className="flex flex-wrap gap-1 mb-2">
+                                    {featureDeps
+                                      .filter(d => d.featureId === entry.featureId)
+                                      .map(d => (
+                                        <span key={d.dependsOnId} className="inline-flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700">
+                                          {d.dependsOn.name}
+                                          <button
+                                            onClick={() => removeFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: d.dependsOnId })}
+                                            className="text-gray-400 hover:text-red-500 ml-1"
+                                          >✕</button>
+                                        </span>
+                                      ))}
+                                    {featureDeps.filter(d => d.featureId === entry.featureId).length === 0 && (
+                                      <span className="text-xs text-gray-400">None</span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <select
+                                      className="border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                      value=""
+                                      onChange={e => {
+                                        if (e.target.value) {
+                                          addFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: e.target.value })
+                                          e.target.value = ''
+                                        }
+                                      }}
+                                    >
+                                      <option value="">+ Add dependency…</option>
+                                      {timeline?.entries
+                                        .filter(e2 => e2.featureId !== entry.featureId && !featureDeps.some(d => d.featureId === entry.featureId && d.dependsOnId === e2.featureId))
+                                        .map(e2 => (
+                                          <option key={e2.featureId} value={e2.featureId}>{e2.epicName} / {e2.featureName}</option>
+                                        ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
                           )}
                         </>

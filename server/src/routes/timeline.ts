@@ -20,20 +20,30 @@ function computeDates(projectStartDate: Date | null, startWeek: number, duration
 
 function buildResponse(project: { id: string; startDate: Date | null; hoursPerDay: number }, entries: Array<{
   featureId: string
-  feature: { name: string; epic: { id: string; name: string } }
+  feature: { name: string; epic: { id: string; name: string; featureMode: string; timelineStartWeek: number | null } }
   startWeek: number
   durationWeeks: number
   isManual: boolean
 }>) {
+  const maxWeek = entries.length > 0
+    ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
+    : null
+  const projectedEndDate = (project.startDate && maxWeek != null)
+    ? (() => { const d = new Date(project.startDate); d.setDate(d.getDate() + maxWeek * 7); return d.toISOString() })()
+    : null
+
   return {
     projectId: project.id,
     startDate: project.startDate?.toISOString() ?? null,
     hoursPerDay: project.hoursPerDay,
+    projectedEndDate,
     entries: entries.map(e => ({
       featureId: e.featureId,
       featureName: e.feature.name,
       epicId: e.feature.epic.id,
       epicName: e.feature.epic.name,
+      epicFeatureMode: e.feature.epic.featureMode,
+      epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
       startWeek: e.startWeek,
       durationWeeks: e.durationWeeks,
       isManual: e.isManual,
@@ -81,66 +91,142 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
         include: {
           userStories: {
             include: {
-              tasks: {
-                include: { resourceType: true },
-              },
+              tasks: { include: { resourceType: true } },
             },
           },
+          dependencies: true,   // FeatureDependency rows where this feature depends on others
         },
       },
     },
   })
 
-  // Load resource types for this project (for count info)
+  // Load resource types
   const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id } })
   const rtCountMap = new Map(resourceTypes.map(rt => [rt.id, rt.count]))
 
-  let currentStartWeek = 0
-  const upsertOps: Array<{ featureId: string; startWeek: number; durationWeeks: number }> = []
+  // Helper: compute duration in weeks for a feature
+  function featureDurationWeeks(feature: typeof epics[0]['features'][0]): number {
+    const allTasks = feature.userStories.flatMap(s => s.tasks)
+    if (allTasks.length === 0) return 1
 
+    const byRt = new Map<string | null, typeof allTasks>()
+    for (const task of allTasks) {
+      const group = byRt.get(task.resourceTypeId) ?? []
+      group.push(task)
+      byRt.set(task.resourceTypeId, group)
+    }
+
+    let maxDays = 0
+    for (const [rtId, tasks] of byRt) {
+      const personDays = tasks.reduce((sum, t) => {
+        const hpd = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+        return sum + (t.durationDays ?? (t.hoursEffort / hpd))
+      }, 0)
+      const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
+      const days = personDays / count
+      if (days > maxDays) maxDays = days
+    }
+    return Math.max(1, Math.ceil(Math.ceil(maxDays) / 5))
+  }
+
+  // Build flat list of all features across all epics
+  const allFeatures = epics.flatMap(epic =>
+    epic.features.map(f => ({ ...f, epic }))
+  )
+
+  // Build feature map for quick lookup
+  const featureMap = new Map(allFeatures.map(f => [f.id, f]))
+
+  // Load existing manual timeline entries — their startWeek is fixed
+  const existingEntries = await prisma.timelineEntry.findMany({
+    where: { projectId: project.id, isManual: true },
+  })
+  const manualStartWeeks = new Map(existingEntries.map(e => [e.featureId, e.startWeek]))
+
+  // Kahn's topological sort over features
+  const inDegree = new Map<string, number>()
+  const adjList = new Map<string, string[]>()
+
+  for (const f of allFeatures) {
+    if (!inDegree.has(f.id)) inDegree.set(f.id, 0)
+    if (!adjList.has(f.id)) adjList.set(f.id, [])
+  }
+
+  function addEdge(fromId: string, toId: string) {
+    adjList.get(fromId)!.push(toId)
+    inDegree.set(toId, (inDegree.get(toId) ?? 0) + 1)
+  }
+
+  // Add intra-epic sequential edges
   for (const epic of epics) {
-    for (const feature of epic.features) {
-      const allTasks = feature.userStories.flatMap(s => s.tasks)
-
-      if (allTasks.length === 0) {
-        upsertOps.push({ featureId: feature.id, startWeek: currentStartWeek, durationWeeks: 1 })
-        currentStartWeek += 1
-        continue
+    if ((epic.featureMode ?? 'sequential') === 'sequential') {
+      const sorted = [...epic.features].sort((a, b) => a.order - b.order)
+      for (let i = 1; i < sorted.length; i++) {
+        addEdge(sorted[i - 1].id, sorted[i].id)
       }
-
-      // Group by resourceTypeId
-      const byRt = new Map<string | null, typeof allTasks>()
-      for (const task of allTasks) {
-        const group = byRt.get(task.resourceTypeId) ?? []
-        group.push(task)
-        byRt.set(task.resourceTypeId, group)
-      }
-
-      let maxDays = 0
-      for (const [rtId, tasks] of byRt) {
-        const personDays = tasks.reduce((sum, t) => {
-          const taskHoursPerDay = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-          const taskDays = t.durationDays ?? (t.hoursEffort / taskHoursPerDay)
-          return sum + taskDays
-        }, 0)
-        const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
-        const parallelDays = personDays / count
-        if (parallelDays > maxDays) maxDays = parallelDays
-      }
-
-      const roundedDays = Math.ceil(maxDays)
-      const durationWeeks = Math.max(1, Math.ceil(roundedDays / 5))
-      upsertOps.push({ featureId: feature.id, startWeek: currentStartWeek, durationWeeks })
-      currentStartWeek += durationWeeks
     }
   }
 
-  // Upsert all entries
-  for (const op of upsertOps) {
+  // Add cross-epic explicit dependency edges
+  for (const f of allFeatures) {
+    for (const dep of (f.dependencies ?? [])) {
+      addEdge(dep.dependsOnId, dep.featureId)
+    }
+  }
+
+  // Kahn's algorithm
+  const finishWeeks = new Map<string, number>()
+  const startWeeks = new Map<string, number>()
+
+  const queue: string[] = []
+  for (const [fId, deg] of inDegree) {
+    if (deg === 0) queue.push(fId)
+  }
+
+  const processed: string[] = []
+
+  while (queue.length > 0) {
+    const fId = queue.shift()!
+    processed.push(fId)
+
+    const f = featureMap.get(fId)!
+    const epic = f.epic
+    const dur = featureDurationWeeks(f)
+
+    if (manualStartWeeks.has(fId)) {
+      const sw = manualStartWeeks.get(fId)!
+      startWeeks.set(fId, sw)
+      finishWeeks.set(fId, sw + dur)
+    } else {
+      let earliest = (epic.timelineStartWeek ?? null) ?? 0
+
+      for (const [predId, successors] of adjList) {
+        if (successors.includes(fId) && finishWeeks.has(predId)) {
+          const predFinish = finishWeeks.get(predId)!
+          if (predFinish > earliest) earliest = predFinish
+        }
+      }
+
+      startWeeks.set(fId, earliest)
+      finishWeeks.set(fId, earliest + dur)
+    }
+
+    for (const succId of adjList.get(fId) ?? []) {
+      const newDeg = (inDegree.get(succId) ?? 1) - 1
+      inDegree.set(succId, newDeg)
+      if (newDeg === 0) queue.push(succId)
+    }
+  }
+
+  for (const fId of processed) {
+    const sw = startWeeks.get(fId)!
+    const f = featureMap.get(fId)!
+    const dur = featureDurationWeeks(f)
+    const isManual = manualStartWeeks.has(fId)
     await prisma.timelineEntry.upsert({
-      where: { featureId: op.featureId },
-      create: { projectId: project.id, featureId: op.featureId, startWeek: op.startWeek, durationWeeks: op.durationWeeks, isManual: false },
-      update: { startWeek: op.startWeek, durationWeeks: op.durationWeeks, isManual: false },
+      where: { featureId: fId },
+      create: { projectId: project.id, featureId: fId, startWeek: sw, durationWeeks: dur, isManual },
+      update: isManual ? {} : { startWeek: sw, durationWeeks: dur, isManual: false },
     })
   }
 
@@ -176,6 +262,8 @@ router.put('/:featureId', async (req: AuthRequest, res: Response) => {
     featureName: entry.feature.name,
     epicId: entry.feature.epic.id,
     epicName: entry.feature.epic.name,
+    epicFeatureMode: entry.feature.epic.featureMode,
+    epicTimelineStartWeek: entry.feature.epic.timelineStartWeek,
     startWeek: entry.startWeek,
     durationWeeks: entry.durationWeeks,
     isManual: entry.isManual,
