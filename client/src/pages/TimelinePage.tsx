@@ -117,6 +117,8 @@ export default function TimelinePage() {
       api.put(`/projects/${projectId}/epics/${epicId}`, { featureMode }).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['timeline', projectId] }),
   })
+
+  const updateResourceType = useMutation({
     mutationFn: ({ id, ...data }: { id: string; count?: number; hoursPerDay?: number | null; dayRate?: number | null }) => {
       const payload: Record<string, number | null> = {}
       if (data.count !== undefined) payload.count = data.count
