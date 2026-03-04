@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
-import type { Project, ResourceType, TimelineSummary, TimelineEntry, ParallelWarning } from '../types/backlog'
+import type { Project, ResourceType, TimelineSummary, TimelineEntry } from '../types/backlog'
 
 const EPIC_COLOURS = [
   { bar: 'bg-blue-400', text: 'text-blue-700', light: 'bg-blue-50' },
