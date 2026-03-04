@@ -90,6 +90,7 @@ export interface TimelineEntry {
   isManual: boolean
   startDate: string | null
   endDate: string | null
+  resourceBreakdown?: { name: string; days: number }[]
 }
 
 export interface ParallelWarning {

@@ -20,11 +20,29 @@ function computeDates(projectStartDate: Date | null, startWeek: number, duration
 
 type ParallelWarning = { epicId: string; epicName: string; resourceTypeName: string; demandDays: number; capacityDays: number }
 
+function computeResourceBreakdown(
+  feature: { userStories: { tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] },
+  fallbackHpd: number
+): { name: string; days: number }[] {
+  const byRt = new Map<string, { name: string; days: number }>()
+  for (const story of feature.userStories) {
+    for (const task of story.tasks) {
+      const key = task.resourceTypeId ?? '_unassigned'
+      const name = task.resourceType?.name ?? 'Unassigned'
+      const hpd = task.resourceType?.hoursPerDay ?? fallbackHpd
+      const days = task.durationDays ?? (task.hoursEffort / hpd)
+      const existing = byRt.get(key) ?? { name, days: 0 }
+      byRt.set(key, { name, days: existing.days + days })
+    }
+  }
+  return Array.from(byRt.values()).map(r => ({ name: r.name, days: Math.round(r.days * 10) / 10 }))
+}
+
 function buildResponse(
   project: { id: string; startDate: Date | null; hoursPerDay: number },
   entries: Array<{
     featureId: string
-    feature: { name: string; order: number; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null } }
+    feature: { name: string; order: number; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
     startWeek: number
     durationWeeks: number
     isManual: boolean
@@ -57,6 +75,7 @@ function buildResponse(
       startWeek: e.startWeek,
       durationWeeks: e.durationWeeks,
       isManual: e.isManual,
+      resourceBreakdown: computeResourceBreakdown(e.feature, project.hoursPerDay),
       ...computeDates(project.startDate, e.startWeek, e.durationWeeks),
     })),
   }
@@ -140,7 +159,18 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 
   const entries = await prisma.timelineEntry.findMany({
     where: { projectId: project.id },
-    include: { feature: { include: { epic: true } } },
+    include: {
+      feature: {
+        include: {
+          epic: true,
+          userStories: {
+            include: {
+              tasks: { include: { resourceType: true } }
+            }
+          }
+        }
+      }
+    },
     orderBy: { startWeek: 'asc' },
   })
 
@@ -385,8 +415,16 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // Process features in topological order (processed array), respecting manual entries
-    for (const fId of processed) {
+    // Re-sort by (epicOrder, featureOrder) so higher-priority features claim resources first
+    const levellingOrder = [...processed].sort((a, b) => {
+      const fa = featureMap.get(a)!
+      const fb = featureMap.get(b)!
+      if (fa.epic.order !== fb.epic.order) return fa.epic.order - fb.epic.order
+      return fa.order - fb.order
+    })
+
+    // Process features in priority order for resource levelling
+    for (const fId of levellingOrder) {
       const f = featureMap.get(fId)!
       const dur = featureDurationWeeks(f)
       const resourceHours = featureResourceHours(f)
@@ -424,7 +462,18 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
 
   const entries = await prisma.timelineEntry.findMany({
     where: { projectId: project.id },
-    include: { feature: { include: { epic: true } } },
+    include: {
+      feature: {
+        include: {
+          epic: true,
+          userStories: {
+            include: {
+              tasks: { include: { resourceType: true } }
+            }
+          }
+        }
+      }
+    },
     orderBy: { startWeek: 'asc' },
   })
 
