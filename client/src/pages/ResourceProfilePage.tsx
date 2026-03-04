@@ -92,6 +92,15 @@ export default function ResourceProfilePage() {
     qc.invalidateQueries({ queryKey: ['overheads', projectId] })
   }
 
+  const updateResourceType = useMutation({
+    mutationFn: ({ id, count }: { id: string; count: number }) =>
+      api.put(`/projects/${projectId}/resource-types/${id}`, { count }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+    },
+  })
+
   const createOverhead = useMutation({
     mutationFn: (data: { name: string; resourceTypeId: string | null; type: OverheadType; value: number }) =>
       api.post(`/projects/${projectId}/overhead`, data).then(r => r.data),
@@ -366,7 +375,22 @@ export default function ResourceProfilePage() {
                           </div>
                           <p className="text-xs text-gray-500 mt-0.5">{row.category.replace('_', ' ')}</p>
                         </td>
-                        <td className="text-center px-4 py-3 text-gray-800">{row.count}</td>
+                        <td className="text-center px-4 py-3 text-gray-800">
+                          {(row.category === 'GOVERNANCE' || row.category === 'PROJECT_MANAGEMENT') ? (
+                            <input
+                              type="number"
+                              min="1"
+                              defaultValue={row.count}
+                              onClick={e => e.stopPropagation()}
+                              onBlur={e => {
+                                const val = parseInt(e.target.value)
+                                const rt = resourceTypes.find(r => r.id === row.resourceTypeId)
+                                if (val > 0 && rt && val !== rt.count) updateResourceType.mutate({ id: rt.id, count: val })
+                              }}
+                              className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            />
+                          ) : row.count}
+                        </td>
                         <td className="px-4 py-3 text-gray-800">{formatNumber(row.hoursPerDay, 1)} h</td>
                         <td className="text-right px-4 py-3 text-gray-900">{formatNumber(row.totalHours, 1)} h</td>
                         <td className="text-right px-4 py-3 text-gray-900">{formatNumber(row.totalDays, 2)} d</td>

@@ -78,7 +78,7 @@ const mockEntries = [
     startWeek: 0,
     durationWeeks: 2,
     isManual: false,
-    feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' } },
+    feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' }, userStories: [] },
   },
 ]
 
@@ -183,7 +183,7 @@ describe('POST /api/projects/:projectId/timeline/schedule', () => {
         startWeek: 0,
         durationWeeks: 1,  // ceil(2 days / 5) = 1 week
         isManual: false,
-        feature: { name: 'Login', epic: { id: 'epic-1', name: 'Auth' } },
+        feature: { name: 'Login', epic: { id: 'epic-1', name: 'Auth' }, userStories: [] },
       },
     ] as any)
 
@@ -213,7 +213,7 @@ describe('POST /api/projects/:projectId/timeline/schedule', () => {
         startWeek: 0,
         durationWeeks: 1,
         isManual: false,
-        feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' } },
+        feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' }, userStories: [] },
       },
       {
         id: 'entry-2',
@@ -222,7 +222,7 @@ describe('POST /api/projects/:projectId/timeline/schedule', () => {
         startWeek: 1,
         durationWeeks: 1,
         isManual: false,
-        feature: { name: 'Registration', epic: { id: 'epic-1', name: 'Authentication' } },
+        feature: { name: 'Registration', epic: { id: 'epic-1', name: 'Authentication' }, userStories: [] },
       },
     ] as any)
 
@@ -283,5 +283,187 @@ describe('PUT /api/projects/:projectId/timeline/:featureId', () => {
       .set('Authorization', authHeader)
       .send({ startWeek: 2 })
     expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /schedule — DAG algorithm', () => {
+  const makeEpic = (overrides: Record<string, any> = {}) => ({
+    id: 'epic-1',
+    name: 'Auth',
+    order: 0,
+    featureMode: 'sequential',
+    timelineStartWeek: null,
+    ...overrides,
+  })
+
+  const makeFeature = (id: string, name: string, order: number, tasks: any[] = [], deps: any[] = []) => ({
+    id,
+    name,
+    order,
+    dependencies: deps,
+    userStories: tasks.length > 0 ? [{ id: `story-${id}`, tasks }] : [],
+  })
+
+  const makeTask = (id: string, hours: number) => ({
+    id,
+    hoursEffort: hours,
+    durationDays: null,
+    resourceTypeId: 'rt-1',
+    resourceType: { id: 'rt-1', hoursPerDay: 8, count: 1 },
+  })
+
+  const makeEntries = (entries: Array<{ featureId: string; featureName: string; startWeek: number; durationWeeks: number }>) =>
+    entries.map((e, i) => ({
+      id: `entry-${i}`,
+      projectId: 'proj-1',
+      featureId: e.featureId,
+      startWeek: e.startWeek,
+      durationWeeks: e.durationWeeks,
+      isManual: false,
+      feature: {
+        name: e.featureName,
+        epic: { id: 'epic-1', name: 'Auth', featureMode: 'sequential', timelineStartWeek: null },
+        userStories: [],
+      },
+    }))
+
+  it('sequential mode: feat-B starts after feat-A finishes', async () => {
+    const featA = makeFeature('feat-a', 'Feature A', 0, [makeTask('t1', 40)])  // 40h / 8hpd = 5 days = 1 week
+    const featB = makeFeature('feat-b', 'Feature B', 1, [makeTask('t2', 40)])
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([makeEpic({ features: [featA, featB] })] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
+    vi.mocked(prisma.timelineEntry.findMany)
+      .mockResolvedValueOnce([])  // for manualStartWeeks
+      .mockResolvedValueOnce(makeEntries([
+        { featureId: 'feat-a', featureName: 'Feature A', startWeek: 0, durationWeeks: 1 },
+        { featureId: 'feat-b', featureName: 'Feature B', startWeek: 1, durationWeeks: 1 },
+      ]) as any)
+    vi.mocked(prisma.timelineEntry.upsert).mockResolvedValue({} as any)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/timeline/schedule')
+      .set('Authorization', authHeader)
+      .send({})
+
+    expect(res.status).toBe(200)
+    const entries = res.body.entries
+    const a = entries.find((e: any) => e.featureId === 'feat-a')
+    const b = entries.find((e: any) => e.featureId === 'feat-b')
+    expect(a.startWeek).toBe(0)
+    expect(b.startWeek).toBe(1)  // B starts after A finishes
+  })
+
+  it('parallel mode: two features both start at week 0', async () => {
+    const featA = makeFeature('feat-a', 'Feature A', 0, [makeTask('t1', 40)])
+    const featB = makeFeature('feat-b', 'Feature B', 1, [makeTask('t2', 40)])
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([makeEpic({ featureMode: 'parallel', features: [featA, featB] })] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
+    vi.mocked(prisma.timelineEntry.findMany)
+      .mockResolvedValueOnce([])  // for manualStartWeeks
+      .mockResolvedValueOnce(makeEntries([
+        { featureId: 'feat-a', featureName: 'Feature A', startWeek: 0, durationWeeks: 1 },
+        { featureId: 'feat-b', featureName: 'Feature B', startWeek: 0, durationWeeks: 1 },
+      ]) as any)
+    vi.mocked(prisma.timelineEntry.upsert).mockResolvedValue({} as any)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/timeline/schedule')
+      .set('Authorization', authHeader)
+      .send({})
+
+    expect(res.status).toBe(200)
+    const entries = res.body.entries
+    const a = entries.find((e: any) => e.featureId === 'feat-a')
+    const b = entries.find((e: any) => e.featureId === 'feat-b')
+    expect(a.startWeek).toBe(0)
+    expect(b.startWeek).toBe(0)  // Both start at same week (parallel)
+  })
+
+  it('epic anchor: timelineStartWeek=4 pushes all features to start at week 4+', async () => {
+    const featA = makeFeature('feat-a', 'Feature A', 0, [makeTask('t1', 40)])
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([makeEpic({ timelineStartWeek: 4, features: [featA] })] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
+    vi.mocked(prisma.timelineEntry.findMany)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(makeEntries([
+        { featureId: 'feat-a', featureName: 'Feature A', startWeek: 4, durationWeeks: 1 },
+      ]) as any)
+    vi.mocked(prisma.timelineEntry.upsert).mockResolvedValue({} as any)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/timeline/schedule')
+      .set('Authorization', authHeader)
+      .send({})
+
+    expect(res.status).toBe(200)
+    const a = res.body.entries[0]
+    expect(a.startWeek).toBeGreaterThanOrEqual(4)
+  })
+
+  it('cross-epic dependency: feat-B in epic-2 starts after feat-A in epic-1 finishes', async () => {
+    const featA = makeFeature('feat-a', 'Feature A', 0, [makeTask('t1', 40)])
+    const featB = makeFeature('feat-b', 'Feature B', 0, [makeTask('t2', 40)], [{ featureId: 'feat-b', dependsOnId: 'feat-a' }])
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([
+      makeEpic({ id: 'epic-1', name: 'Epic 1', features: [featA] }),
+      makeEpic({ id: 'epic-2', name: 'Epic 2', order: 1, featureMode: 'parallel', features: [featB] }),
+    ] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
+    vi.mocked(prisma.timelineEntry.findMany)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        ...makeEntries([{ featureId: 'feat-a', featureName: 'Feature A', startWeek: 0, durationWeeks: 1 }]),
+        ...makeEntries([{ featureId: 'feat-b', featureName: 'Feature B', startWeek: 1, durationWeeks: 1 }]),
+      ] as any)
+    vi.mocked(prisma.timelineEntry.upsert).mockResolvedValue({} as any)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/timeline/schedule')
+      .set('Authorization', authHeader)
+      .send({})
+
+    expect(res.status).toBe(200)
+    const entries = res.body.entries
+    const a = entries.find((e: any) => e.featureId === 'feat-a')
+    const b = entries.find((e: any) => e.featureId === 'feat-b')
+    expect(b.startWeek).toBeGreaterThanOrEqual(a.startWeek + a.durationWeeks)
+  })
+
+  it('manual override preserved: isManual=true feature keeps startWeek after re-scheduling', async () => {
+    const featA = makeFeature('feat-a', 'Feature A', 0, [makeTask('t1', 40)])
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([makeEpic({ features: [featA] })] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
+    // Return a manual entry for feat-a
+    vi.mocked(prisma.timelineEntry.findMany)
+      .mockResolvedValueOnce([{ featureId: 'feat-a', startWeek: 5, isManual: true }] as any)
+      .mockResolvedValueOnce([{
+        id: 'entry-1',
+        projectId: 'proj-1',
+        featureId: 'feat-a',
+        startWeek: 5,
+        durationWeeks: 1,
+        isManual: true,
+        feature: { name: 'Feature A', epic: { id: 'epic-1', name: 'Auth', featureMode: 'sequential', timelineStartWeek: null }, userStories: [] },
+      }] as any)
+    vi.mocked(prisma.timelineEntry.upsert).mockResolvedValue({} as any)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/timeline/schedule')
+      .set('Authorization', authHeader)
+      .send({})
+
+    expect(res.status).toBe(200)
+    const a = res.body.entries[0]
+    expect(a.startWeek).toBe(5)
+    expect(a.isManual).toBe(true)
   })
 })

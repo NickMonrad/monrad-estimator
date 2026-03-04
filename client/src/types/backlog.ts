@@ -80,17 +80,33 @@ export interface TimelineEntry {
   featureName: string
   epicId: string
   epicName: string
+  epicOrder?: number
+  epicFeatureMode?: string
+  epicScheduleMode?: string
+  epicTimelineStartWeek?: number | null
+  featureOrder?: number
   startWeek: number
   durationWeeks: number
   isManual: boolean
   startDate: string | null
   endDate: string | null
+  resourceBreakdown?: { name: string; days: number }[]
+}
+
+export interface ParallelWarning {
+  epicId: string
+  epicName: string
+  resourceTypeName: string
+  demandDays: number
+  capacityDays: number
 }
 
 export interface TimelineSummary {
   projectId: string
   startDate: string | null
   hoursPerDay: number
+  projectedEndDate?: string | null
+  parallelWarnings?: ParallelWarning[]
   entries: TimelineEntry[]
 }
 
