@@ -148,6 +148,40 @@ export default function TimelinePage() {
     },
   })
 
+  const reorderEpics = useMutation({
+    mutationFn: (items: { id: string; order: number }[]) =>
+      api.patch(`/projects/${projectId}/reorder/epics`, { items }).then(r => r.data),
+    onSuccess: () => {
+      setScheduleStale(true)
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    },
+  })
+
+  const reorderFeatures = useMutation({
+    mutationFn: (items: { id: string; order: number; epicId: string }[]) =>
+      api.patch(`/projects/${projectId}/reorder/features`, { items }).then(r => r.data),
+    onSuccess: () => {
+      setScheduleStale(true)
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    },
+  })
+
+  function moveEpic(fromIdx: number, toIdx: number) {
+    const reordered = [...epicGroups]
+    const [moved] = reordered.splice(fromIdx, 1)
+    reordered.splice(toIdx, 0, moved)
+    reorderEpics.mutate(reordered.map((g, i) => ({ id: g.epicId, order: i + 1 })))
+  }
+
+  function moveFeature(epicId: string, fromIdx: number, toIdx: number) {
+    const group = epicGroups.find(g => g.epicId === epicId)
+    if (!group) return
+    const reordered = [...group.entries]
+    const [moved] = reordered.splice(fromIdx, 1)
+    reordered.splice(toIdx, 0, moved)
+    reorderFeatures.mutate(reordered.map((e, i) => ({ id: e.featureId, order: i + 1, epicId })))
+  }
+
   const handleSchedule = () => {
     setScheduleStale(false)
     scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
@@ -418,7 +452,7 @@ export default function TimelinePage() {
                 ))}
 
                 {/* Epic groups */}
-                {epicGroups.map((group) => {
+                {epicGroups.map((group, epicIdx) => {
                   const colour = epicColourMap.get(group.epicId)!
                   const epicMinWeek = Math.min(...group.entries.map(e => e.startWeek))
                   const epicMaxWeek = Math.max(...group.entries.map(e => e.startWeek + e.durationWeeks))
@@ -430,6 +464,21 @@ export default function TimelinePage() {
                         className={`col-span-full border-b border-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-600 ${colour.light} flex items-center gap-2`}
                         style={{ gridColumn: `1 / span ${totalWeeks + 1}` }}
                       >
+                        {/* Epic reorder arrows */}
+                        <div className="flex flex-col -my-0.5 mr-1">
+                          <button
+                            onClick={() => moveEpic(epicIdx, epicIdx - 1)}
+                            disabled={epicIdx === 0 || reorderEpics.isPending}
+                            className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
+                            title="Move epic up"
+                          >▲</button>
+                          <button
+                            onClick={() => moveEpic(epicIdx, epicIdx + 1)}
+                            disabled={epicIdx === epicGroups.length - 1 || reorderEpics.isPending}
+                            className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
+                            title="Move epic down"
+                          >▼</button>
+                        </div>
                         <span>{group.epicName}</span>
                         <span className="text-gray-400 font-normal">W{epicMinWeek + 1}–W{epicMaxWeek}</span>
                         {(() => {
@@ -470,11 +519,11 @@ export default function TimelinePage() {
                       </div>
 
                       {/* Feature rows */}
-                      {group.entries.map((entry) => (
+                      {group.entries.map((entry, featureIdx) => (
                         <>
                           <div
                             key={`label-${entry.featureId}`}
-                            className="border-b border-gray-50 px-3 py-2 text-sm text-gray-700 truncate cursor-pointer hover:text-red-600"
+                            className="border-b border-gray-50 px-3 py-2 text-sm text-gray-700 truncate cursor-pointer hover:text-red-600 flex items-center"
                             title={entry.featureName}
                             onClick={() => {
                               if (editingFeatureId === entry.featureId) {
@@ -485,6 +534,21 @@ export default function TimelinePage() {
                               }
                             }}
                           >
+                            {/* Feature reorder arrows */}
+                            <div className="flex flex-col -my-0.5 mr-1 shrink-0" onClick={e => e.stopPropagation()}>
+                              <button
+                                onClick={() => moveFeature(group.epicId, featureIdx, featureIdx - 1)}
+                                disabled={featureIdx === 0 || reorderFeatures.isPending}
+                                className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
+                                title="Move feature up"
+                              >▲</button>
+                              <button
+                                onClick={() => moveFeature(group.epicId, featureIdx, featureIdx + 1)}
+                                disabled={featureIdx === group.entries.length - 1 || reorderFeatures.isPending}
+                                className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
+                                title="Move feature down"
+                              >▼</button>
+                            </div>
                             {entry.featureName}
                           </div>
                           {/* Week cells + Gantt bar */}
