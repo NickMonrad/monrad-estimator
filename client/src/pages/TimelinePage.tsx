@@ -48,6 +48,7 @@ export default function TimelinePage() {
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [scheduleStale, setScheduleStale] = useState(false)
   const [resourceLevel, setResourceLevel] = useState(false)
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; entry: TimelineEntry } | null>(null)
 
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
@@ -571,6 +572,9 @@ export default function TimelinePage() {
                                       setEditingFeatureId(entry.featureId)
                                       setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
                                     }}
+                                    onMouseEnter={(e) => setTooltip({ x: e.clientX, y: e.clientY, entry })}
+                                    onMouseMove={(e) => setTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+                                    onMouseLeave={() => setTooltip(null)}
                                   >
                                     {isFirst && entry.isManual && (
                                       <span className="text-white text-xs">✏</span>
@@ -693,6 +697,25 @@ export default function TimelinePage() {
           )}
         </div>
       </main>
+      {tooltip && tooltip.entry.resourceBreakdown && tooltip.entry.resourceBreakdown.length > 0 && (
+        <div
+          className="fixed z-50 pointer-events-none bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs"
+          style={{ left: tooltip.x + 12, top: tooltip.y - 10 }}
+        >
+          <div className="font-semibold text-gray-800 mb-1">{tooltip.entry.featureName}</div>
+          <div className="font-medium text-gray-500 mb-1.5">Resource Breakdown</div>
+          {tooltip.entry.resourceBreakdown.map(rb => (
+            <div key={rb.name} className="flex justify-between gap-4 text-gray-700">
+              <span>{rb.name}</span>
+              <span className="font-medium">{rb.days}d</span>
+            </div>
+          ))}
+          <div className="border-t border-gray-100 mt-1.5 pt-1.5 flex justify-between gap-4 text-gray-600 font-medium">
+            <span>Total</span>
+            <span>{tooltip.entry.resourceBreakdown.reduce((s, r) => s + r.days, 0).toFixed(1)}d</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

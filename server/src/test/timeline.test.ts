@@ -78,7 +78,7 @@ const mockEntries = [
     startWeek: 0,
     durationWeeks: 2,
     isManual: false,
-    feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' } },
+    feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' }, userStories: [] },
   },
 ]
 
@@ -183,7 +183,7 @@ describe('POST /api/projects/:projectId/timeline/schedule', () => {
         startWeek: 0,
         durationWeeks: 1,  // ceil(2 days / 5) = 1 week
         isManual: false,
-        feature: { name: 'Login', epic: { id: 'epic-1', name: 'Auth' } },
+        feature: { name: 'Login', epic: { id: 'epic-1', name: 'Auth' }, userStories: [] },
       },
     ] as any)
 
@@ -213,7 +213,7 @@ describe('POST /api/projects/:projectId/timeline/schedule', () => {
         startWeek: 0,
         durationWeeks: 1,
         isManual: false,
-        feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' } },
+        feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' }, userStories: [] },
       },
       {
         id: 'entry-2',
@@ -222,7 +222,7 @@ describe('POST /api/projects/:projectId/timeline/schedule', () => {
         startWeek: 1,
         durationWeeks: 1,
         isManual: false,
-        feature: { name: 'Registration', epic: { id: 'epic-1', name: 'Authentication' } },
+        feature: { name: 'Registration', epic: { id: 'epic-1', name: 'Authentication' }, userStories: [] },
       },
     ] as any)
 
@@ -323,6 +323,7 @@ describe('POST /schedule — DAG algorithm', () => {
       feature: {
         name: e.featureName,
         epic: { id: 'epic-1', name: 'Auth', featureMode: 'sequential', timelineStartWeek: null },
+        userStories: [],
       },
     }))
 
@@ -451,7 +452,7 @@ describe('POST /schedule — DAG algorithm', () => {
         startWeek: 5,
         durationWeeks: 1,
         isManual: true,
-        feature: { name: 'Feature A', epic: { id: 'epic-1', name: 'Auth', featureMode: 'sequential', timelineStartWeek: null } },
+        feature: { name: 'Feature A', epic: { id: 'epic-1', name: 'Auth', featureMode: 'sequential', timelineStartWeek: null }, userStories: [] },
       }] as any)
     vi.mocked(prisma.timelineEntry.upsert).mockResolvedValue({} as any)
 
