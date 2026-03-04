@@ -89,11 +89,20 @@ export interface TimelineEntry {
   endDate: string | null
 }
 
+export interface ParallelWarning {
+  epicId: string
+  epicName: string
+  resourceTypeName: string
+  demandDays: number
+  capacityDays: number
+}
+
 export interface TimelineSummary {
   projectId: string
   startDate: string | null
   hoursPerDay: number
   projectedEndDate?: string | null
+  parallelWarnings?: ParallelWarning[]
   entries: TimelineEntry[]
 }
 

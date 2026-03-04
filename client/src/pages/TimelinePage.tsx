@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
-import type { Project, ResourceType, TimelineSummary, TimelineEntry } from '../types/backlog'
+import type { Project, ResourceType, TimelineSummary, TimelineEntry, ParallelWarning } from '../types/backlog'
 
 const EPIC_COLOURS = [
   { bar: 'bg-blue-400', text: 'text-blue-700', light: 'bg-blue-50' },
@@ -46,6 +46,7 @@ export default function TimelinePage() {
   const [resourcesOpen, setResourcesOpen] = useState(true)
   const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
+  const [scheduleStale, setScheduleStale] = useState(false)
 
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
@@ -103,19 +104,19 @@ export default function TimelinePage() {
   const addFeatureDep = useMutation({
     mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
       api.post(`/projects/${projectId}/feature-dependencies`, { featureId, dependsOnId }).then(r => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }); setScheduleStale(true) },
   })
 
   const removeFeatureDep = useMutation({
     mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
       api.delete(`/projects/${projectId}/feature-dependencies/${featureId}/${dependsOnId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }); setScheduleStale(true) },
   })
 
   const updateEpicMode = useMutation({
     mutationFn: ({ epicId, featureMode }: { epicId: string; featureMode: string }) =>
       api.put(`/projects/${projectId}/epics/${epicId}`, { featureMode }).then(r => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['timeline', projectId] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['timeline', projectId] }); setScheduleStale(true) },
   })
 
   const updateResourceType = useMutation({
@@ -130,6 +131,7 @@ export default function TimelinePage() {
   })
 
   const handleSchedule = () => {
+    setScheduleStale(false)
     scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput } : {})
   }
 
@@ -243,6 +245,28 @@ export default function TimelinePage() {
             )}
           </div>
         </div>
+
+        {/* Stale schedule banner */}
+        {scheduleStale && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
+            <span className="text-amber-800">⚠ Dependencies or epic mode changed — re-run <strong>Auto-schedule</strong> to apply.</span>
+            <button onClick={handleSchedule} className="bg-amber-500 text-white px-3 py-1 rounded text-xs font-medium hover:bg-amber-600">
+              Auto-schedule now
+            </button>
+          </div>
+        )}
+
+        {/* Parallel over-allocation warnings */}
+        {(timeline?.parallelWarnings ?? []).length > 0 && (
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 space-y-1">
+            <p className="text-sm font-medium text-red-800">⚠ Resource over-allocation in parallel epics</p>
+            {(timeline!.parallelWarnings!).map((w, i) => (
+              <p key={i} className="text-xs text-red-700">
+                <span className="font-medium">{w.epicName}</span> — {w.resourceTypeName}: {w.demandDays.toFixed(1)} person-days needed, only {w.capacityDays.toFixed(1)} days available at current headcount. Increase count or switch to Sequential mode.
+              </p>
+            ))}
+          </div>
+        )}
 
         {/* Resource counts panel */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

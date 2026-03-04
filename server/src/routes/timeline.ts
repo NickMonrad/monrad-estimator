@@ -18,13 +18,19 @@ function computeDates(projectStartDate: Date | null, startWeek: number, duration
   return { startDate: start.toISOString(), endDate: end.toISOString() }
 }
 
-function buildResponse(project: { id: string; startDate: Date | null; hoursPerDay: number }, entries: Array<{
-  featureId: string
-  feature: { name: string; epic: { id: string; name: string; featureMode: string; timelineStartWeek: number | null } }
-  startWeek: number
-  durationWeeks: number
-  isManual: boolean
-}>) {
+type ParallelWarning = { epicId: string; epicName: string; resourceTypeName: string; demandDays: number; capacityDays: number }
+
+function buildResponse(
+  project: { id: string; startDate: Date | null; hoursPerDay: number },
+  entries: Array<{
+    featureId: string
+    feature: { name: string; epic: { id: string; name: string; featureMode: string; timelineStartWeek: number | null } }
+    startWeek: number
+    durationWeeks: number
+    isManual: boolean
+  }>,
+  parallelWarnings: ParallelWarning[] = [],
+) {
   const maxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
     : null
@@ -37,6 +43,7 @@ function buildResponse(project: { id: string; startDate: Date | null; hoursPerDa
     startDate: project.startDate?.toISOString() ?? null,
     hoursPerDay: project.hoursPerDay,
     projectedEndDate,
+    parallelWarnings,
     entries: entries.map(e => ({
       featureId: e.featureId,
       featureName: e.feature.name,
@@ -52,6 +59,77 @@ function buildResponse(project: { id: string; startDate: Date | null; hoursPerDa
   }
 }
 
+// Compute over-allocation warnings for parallel-mode epics
+async function computeParallelWarnings(
+  projectId: string,
+  fallbackHoursPerDay: number,
+  entries: Array<{ featureId: string; startWeek: number; durationWeeks: number; feature: { epic: { id: string; name: string; featureMode: string } } }>,
+): Promise<ParallelWarning[]> {
+  const warnings: ParallelWarning[] = []
+
+  // Only check parallel epics with 2+ features
+  const parallelEpics = new Map<string, { epicName: string; featureIds: string[]; startWeek: number; endWeek: number }>()
+  for (const e of entries) {
+    if ((e.feature.epic.featureMode ?? 'sequential') !== 'parallel') continue
+    const epicId = e.feature.epic.id
+    if (!parallelEpics.has(epicId)) {
+      parallelEpics.set(epicId, { epicName: e.feature.epic.name, featureIds: [], startWeek: e.startWeek, endWeek: e.startWeek + e.durationWeeks })
+    }
+    const ep = parallelEpics.get(epicId)!
+    ep.featureIds.push(e.featureId)
+    ep.startWeek = Math.min(ep.startWeek, e.startWeek)
+    ep.endWeek = Math.max(ep.endWeek, e.startWeek + e.durationWeeks)
+  }
+
+  for (const [epicId, { epicName, featureIds, startWeek, endWeek }] of parallelEpics) {
+    if (featureIds.length < 2) continue
+    const epicSpanDays = (endWeek - startWeek) * 5
+
+    // Load tasks for all features in this parallel epic
+    const features = await prisma.feature.findMany({
+      where: { id: { in: featureIds } },
+      include: { userStories: { include: { tasks: { include: { resourceType: true } } } } },
+    })
+    const resourceTypes = await prisma.resourceType.findMany({ where: { projectId } })
+    const rtCountMap = new Map(resourceTypes.map(rt => [rt.id, rt.count]))
+
+    // Sum total person-days per resource type across ALL features (they run simultaneously)
+    const demandMap = new Map<string, { name: string; days: number; count: number }>()
+    for (const feature of features) {
+      for (const story of feature.userStories) {
+        for (const task of story.tasks) {
+          const rtId = task.resourceTypeId ?? '_unassigned'
+          const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+          const days = task.durationDays ?? (task.hoursEffort / hpd)
+          if (!demandMap.has(rtId)) {
+            demandMap.set(rtId, {
+              name: task.resourceType?.name ?? 'Unassigned',
+              days: 0,
+              count: task.resourceTypeId ? (rtCountMap.get(task.resourceTypeId) ?? 1) : 1,
+            })
+          }
+          demandMap.get(rtId)!.days += days
+        }
+      }
+    }
+
+    for (const [, { name, days, count }] of demandMap) {
+      const capacityDays = count * epicSpanDays
+      if (days > capacityDays) {
+        warnings.push({
+          epicId,
+          epicName,
+          resourceTypeName: name,
+          demandDays: Math.round(days * 10) / 10,
+          capacityDays: Math.round(capacityDays * 10) / 10,
+        })
+      }
+    }
+  }
+
+  return warnings
+}
+
 // GET /api/projects/:projectId/timeline
 router.get('/', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
@@ -63,7 +141,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     orderBy: { startWeek: 'asc' },
   })
 
-  res.json(buildResponse(project, entries))
+  // Compute parallel over-allocation warnings
+  const parallelWarnings = await computeParallelWarnings(project.id, project.hoursPerDay, entries)
+
+  res.json(buildResponse(project, entries, parallelWarnings))
 })
 
 // POST /api/projects/:projectId/timeline/schedule
@@ -153,7 +234,9 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
   }
 
   function addEdge(fromId: string, toId: string) {
-    adjList.get(fromId)!.push(toId)
+    const list = adjList.get(fromId)
+    if (!list || list.includes(toId)) return // deduplicate — prevents double inDegree on overlapping sequential + explicit edges
+    list.push(toId)
     inDegree.set(toId, (inDegree.get(toId) ?? 0) + 1)
   }
 
@@ -236,7 +319,8 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     orderBy: { startWeek: 'asc' },
   })
 
-  res.json(buildResponse(project, entries))
+  const parallelWarnings = await computeParallelWarnings(project.id, project.hoursPerDay, entries)
+  res.json(buildResponse(project, entries, parallelWarnings))
 })
 
 // PUT /api/projects/:projectId/timeline/:featureId
