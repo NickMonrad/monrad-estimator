@@ -11,7 +11,7 @@ async function ownedProject(projectId: string, userId: string) {
 }
 
 function isValidOverheadType(value: unknown): value is OverheadType {
-  return value === 'PERCENTAGE' || value === 'FIXED_DAYS'
+  return value === 'PERCENTAGE' || value === 'FIXED_DAYS' || value === 'DAYS_PER_WEEK'
 }
 
 async function validateResourceType(resourceTypeId: string | null | undefined, projectId: string) {
