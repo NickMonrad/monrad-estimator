@@ -226,21 +226,26 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
 
   // Kahn's topological sort over features
   const inDegree = new Map<string, number>()
-  const adjList = new Map<string, string[]>()
+  const adjList = new Map<string, string[]>()   // from → [to, ...]
+  const predecessors = new Map<string, string[]>() // to → [from, ...]
 
   for (const f of allFeatures) {
-    if (!inDegree.has(f.id)) inDegree.set(f.id, 0)
-    if (!adjList.has(f.id)) adjList.set(f.id, [])
+    inDegree.set(f.id, 0)
+    adjList.set(f.id, [])
+    predecessors.set(f.id, [])
   }
 
   function addEdge(fromId: string, toId: string) {
-    const list = adjList.get(fromId)
-    if (!list || list.includes(toId)) return // deduplicate — prevents double inDegree on overlapping sequential + explicit edges
-    list.push(toId)
+    const succs = adjList.get(fromId)
+    const preds = predecessors.get(toId)
+    if (!succs || !preds) return // one of the features not in this project
+    if (succs.includes(toId)) return // deduplicate
+    succs.push(toId)
+    preds.push(fromId)
     inDegree.set(toId, (inDegree.get(toId) ?? 0) + 1)
   }
 
-  // Add intra-epic sequential edges
+  // 1. Intra-epic sequential edges: each feature depends on the previous in its epic
   for (const epic of epics) {
     if ((epic.featureMode ?? 'sequential') === 'sequential') {
       const sorted = [...epic.features].sort((a, b) => a.order - b.order)
@@ -250,14 +255,36 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     }
   }
 
-  // Add cross-epic explicit dependency edges
+  // 2. Inter-epic sequential chaining: Epic N completes before Epic N+1 starts
+  //    All features of Epic[i] → first feature of Epic[i+1] (sequential) or all features (parallel)
+  const sortedEpics = [...epics].sort((a, b) => a.order - b.order)
+  for (let i = 1; i < sortedEpics.length; i++) {
+    const prevEpic = sortedEpics[i - 1]
+    const currEpic = sortedEpics[i]
+    if (prevEpic.features.length === 0 || currEpic.features.length === 0) continue
+
+    // Skip if currEpic has a manual anchor — it will start at its fixed week regardless
+    if (currEpic.timelineStartWeek != null) continue
+
+    const currTargets = (currEpic.featureMode ?? 'sequential') === 'sequential'
+      ? [currEpic.features[0]] // first feature chains to the rest via sequential edges
+      : currEpic.features       // parallel: all features need explicit constraint
+
+    for (const prevFeature of prevEpic.features) {
+      for (const currFeature of currTargets) {
+        addEdge(prevFeature.id, currFeature.id)
+      }
+    }
+  }
+
+  // 3. Explicit cross-epic feature dependency edges
   for (const f of allFeatures) {
     for (const dep of (f.dependencies ?? [])) {
       addEdge(dep.dependsOnId, dep.featureId)
     }
   }
 
-  // Kahn's algorithm
+  // Kahn's algorithm — process features in topological order
   const finishWeeks = new Map<string, number>()
   const startWeeks = new Map<string, number>()
 
@@ -281,15 +308,12 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       startWeeks.set(fId, sw)
       finishWeeks.set(fId, sw + dur)
     } else {
-      let earliest = (epic.timelineStartWeek ?? null) ?? 0
-
-      for (const [predId, successors] of adjList) {
-        if (successors.includes(fId) && finishWeeks.has(predId)) {
-          const predFinish = finishWeeks.get(predId)!
-          if (predFinish > earliest) earliest = predFinish
-        }
+      // earliest = max(epic anchor, all predecessor finish weeks)
+      let earliest = epic.timelineStartWeek ?? 0
+      for (const predId of predecessors.get(fId) ?? []) {
+        const predFinish = finishWeeks.get(predId) ?? 0
+        if (predFinish > earliest) earliest = predFinish
       }
-
       startWeeks.set(fId, earliest)
       finishWeeks.set(fId, earliest + dur)
     }
