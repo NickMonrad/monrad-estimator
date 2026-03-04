@@ -206,8 +206,8 @@ model TimelineEntry {
   projectId     String
   feature       Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
   featureId     String   @unique
-  startWeek     Int
-  durationWeeks Int
+  startWeek     Float
+  durationWeeks Float
   isManual      Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

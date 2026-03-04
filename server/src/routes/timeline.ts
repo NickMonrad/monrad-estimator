@@ -241,7 +241,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       const days = personDays / count
       if (days > maxDays) maxDays = days
     }
-    return Math.max(1, Math.ceil(Math.ceil(maxDays) / 5))
+    return Math.max(0.2, maxDays / 5)
   }
 
   // Build flat list of all features across all epics
@@ -394,23 +394,33 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     }
 
     function canSchedule(fId: string, startW: number, durW: number, resourceHours: Map<string, number>): boolean {
+      const weekStart = Math.floor(startW)
+      const weekEnd = Math.ceil(startW + durW)
       for (const [rtId, totalHours] of resourceHours) {
-        const hoursPerWeek = totalHours / durW
         const cap = weekCapacity.get(rtId) ?? (fallbackHoursPerDay * 5)
         const usage = getUsage(rtId)
-        for (let w = startW; w < startW + durW && w < MAX_WEEKS; w++) {
-          if ((usage[w] ?? 0) + hoursPerWeek > cap + 0.001) return false
+        for (let w = weekStart; w < weekEnd && w < MAX_WEEKS; w++) {
+          const overlapStart = Math.max(w, startW)
+          const overlapEnd = Math.min(w + 1, startW + durW)
+          const overlapFraction = overlapEnd - overlapStart  // fraction of this week used (0–1)
+          const hoursThisWeek = (totalHours / durW) * 5 * overlapFraction  // hours in this partial week
+          if ((usage[w] ?? 0) + hoursThisWeek > cap + 0.001) return false
         }
       }
       return true
     }
 
     function reserveWeeks(startW: number, durW: number, resourceHours: Map<string, number>) {
+      const weekStart = Math.floor(startW)
+      const weekEnd = Math.ceil(startW + durW)
       for (const [rtId, totalHours] of resourceHours) {
-        const hoursPerWeek = totalHours / durW
         const usage = getUsage(rtId)
-        for (let w = startW; w < startW + durW && w < MAX_WEEKS; w++) {
-          usage[w] = (usage[w] ?? 0) + hoursPerWeek
+        for (let w = weekStart; w < weekEnd && w < MAX_WEEKS; w++) {
+          const overlapStart = Math.max(w, startW)
+          const overlapEnd = Math.min(w + 1, startW + durW)
+          const overlapFraction = overlapEnd - overlapStart
+          const hoursThisWeek = (totalHours / durW) * 5 * overlapFraction
+          usage[w] = (usage[w] ?? 0) + hoursThisWeek
         }
       }
     }
@@ -440,7 +450,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       let candidateWeek = earliest
       while (candidateWeek < MAX_WEEKS) {
         if (canSchedule(fId, candidateWeek, dur, resourceHours)) break
-        candidateWeek++
+        candidateWeek += 0.2  // try each day
       }
       startWeeks.set(fId, candidateWeek)
       finishWeeks.set(fId, candidateWeek + dur)

@@ -191,7 +191,7 @@ export default function TimelinePage() {
   // Compute Gantt dimensions
   const totalWeeks = useMemo(() => {
     if (!timeline?.entries.length) return 0
-    return Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks)) + 1
+    return Math.ceil(Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks))) + 1
   }, [timeline])
 
   // Group entries by epicId, sorted by epicOrder then featureOrder
@@ -484,7 +484,7 @@ export default function TimelinePage() {
                           >▼</button>
                         </div>
                         <span>{group.epicName}</span>
-                        <span className="text-gray-400 font-normal">W{epicMinWeek + 1}–W{epicMaxWeek}</span>
+                        <span className="text-gray-400 font-normal">W{epicMinWeek % 1 === 0 ? epicMinWeek + 1 : (epicMinWeek + 1).toFixed(1)}–W{epicMaxWeek % 1 === 0 ? epicMaxWeek : epicMaxWeek.toFixed(1)}</span>
                         {(() => {
                           const epicFeatureMode = group.entries[0]?.epicFeatureMode ?? 'sequential'
                           return (
@@ -557,9 +557,15 @@ export default function TimelinePage() {
                           </div>
                           {/* Week cells + Gantt bar */}
                           {Array.from({ length: totalWeeks }, (_, i) => {
-                            const isBar = i >= entry.startWeek && i < entry.startWeek + entry.durationWeeks
-                            const isFirst = i === entry.startWeek
-                            const isLast = i === entry.startWeek + entry.durationWeeks - 1
+                            const floorStart = Math.floor(entry.startWeek)
+                            const ceilEnd = Math.ceil(entry.startWeek + entry.durationWeeks)
+                            const isBar = i >= floorStart && i < ceilEnd
+                            const isFirst = i === floorStart
+                            const isLast = i === ceilEnd - 1
+                            const overlapStart = Math.max(i, entry.startWeek)
+                            const overlapEnd = Math.min(i + 1, entry.startWeek + entry.durationWeeks)
+                            const leftPct = (overlapStart - i) * 100
+                            const widthPct = (overlapEnd - overlapStart) * 100
                             return (
                               <div
                                 key={`cell-${entry.featureId}-${i}`}
@@ -567,7 +573,8 @@ export default function TimelinePage() {
                               >
                                 {isBar && (
                                   <div
-                                    className={`h-6 w-full ${colour.bar} ${isFirst ? 'rounded-l' : ''} ${isLast ? 'rounded-r' : ''} flex items-center px-1 cursor-pointer`}
+                                    className={`h-6 ${colour.bar} ${isFirst ? 'rounded-l' : ''} ${isLast ? 'rounded-r' : ''} flex items-center px-1 cursor-pointer`}
+                                    style={{ marginLeft: `${leftPct}%`, width: `max(4px, ${widthPct}%)` }}
                                     onClick={() => {
                                       setEditingFeatureId(entry.featureId)
                                       setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
@@ -604,7 +611,7 @@ export default function TimelinePage() {
                               <label className="text-xs text-gray-500">Duration weeks:</label>
                               <input
                                 type="number"
-                                min="1"
+                                min="0.2"
                                 value={editForm.durationWeeks}
                                 onChange={e => setEditForm(f => ({ ...f, durationWeeks: e.target.value }))}
                                 className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
@@ -612,8 +619,8 @@ export default function TimelinePage() {
                               <button
                                 onClick={() => updateEntry.mutate({
                                   featureId: entry.featureId,
-                                  startWeek: parseInt(editForm.startWeek),
-                                  durationWeeks: parseInt(editForm.durationWeeks),
+                                  startWeek: parseFloat(editForm.startWeek),
+                                  durationWeeks: parseFloat(editForm.durationWeeks),
                                 })}
                                 disabled={updateEntry.isPending}
                                 className="bg-blue-600 text-white px-3 py-0.5 rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
@@ -688,7 +695,7 @@ export default function TimelinePage() {
 
               {/* Summary footer */}
               <div className="px-4 py-3 border-t border-gray-100 text-xs text-gray-500">
-                {totalWeeks - 1} weeks total · {timeline.entries.length} features scheduled
+                {Math.ceil(totalWeeks - 1)} weeks total · {timeline.entries.length} features scheduled
                 {timeline.entries.some(e => e.isManual) && (
                   <span className="ml-2 text-blue-500">· ✏ = manually overridden</span>
                 )}
