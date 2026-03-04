@@ -80,9 +80,11 @@ export interface TimelineEntry {
   featureName: string
   epicId: string
   epicName: string
+  epicOrder?: number
   epicFeatureMode?: string
   epicScheduleMode?: string
   epicTimelineStartWeek?: number | null
+  featureOrder?: number
   startWeek: number
   durationWeeks: number
   isManual: boolean

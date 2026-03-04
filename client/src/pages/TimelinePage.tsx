@@ -193,15 +193,18 @@ export default function TimelinePage() {
     return Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks)) + 1
   }, [timeline])
 
-  // Group entries by epicId
+  // Group entries by epicId, sorted by epicOrder then featureOrder
   const epicGroups = useMemo(() => {
     if (!timeline?.entries.length) return []
-    const map = new Map<string, { epicId: string; epicName: string; entries: TimelineEntry[] }>()
+    const map = new Map<string, { epicId: string; epicName: string; epicOrder: number; entries: TimelineEntry[] }>()
     for (const e of timeline.entries) {
-      if (!map.has(e.epicId)) map.set(e.epicId, { epicId: e.epicId, epicName: e.epicName, entries: [] })
+      if (!map.has(e.epicId)) map.set(e.epicId, { epicId: e.epicId, epicName: e.epicName, epicOrder: e.epicOrder ?? 0, entries: [] })
       map.get(e.epicId)!.entries.push(e)
     }
-    return Array.from(map.values())
+    const groups = Array.from(map.values())
+    groups.sort((a, b) => a.epicOrder - b.epicOrder)
+    for (const g of groups) g.entries.sort((a, b) => (a.featureOrder ?? 0) - (b.featureOrder ?? 0))
+    return groups
   }, [timeline])
 
   const epicColourMap = useMemo(() => {

@@ -24,7 +24,7 @@ function buildResponse(
   project: { id: string; startDate: Date | null; hoursPerDay: number },
   entries: Array<{
     featureId: string
-    feature: { name: string; epic: { id: string; name: string; featureMode: string; scheduleMode: string; timelineStartWeek: number | null } }
+    feature: { name: string; order: number; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null } }
     startWeek: number
     durationWeeks: number
     isManual: boolean
@@ -49,9 +49,11 @@ function buildResponse(
       featureName: e.feature.name,
       epicId: e.feature.epic.id,
       epicName: e.feature.epic.name,
+      epicOrder: e.feature.epic.order,
       epicFeatureMode: e.feature.epic.featureMode,
       epicScheduleMode: e.feature.epic.scheduleMode,
       epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
+      featureOrder: e.feature.order,
       startWeek: e.startWeek,
       durationWeeks: e.durationWeeks,
       isManual: e.isManual,
