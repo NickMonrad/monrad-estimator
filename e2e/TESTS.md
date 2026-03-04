@@ -65,7 +65,24 @@ npx playwright test --ui                   # interactive UI mode
 
 ---
 
-### `templates.spec.ts` — Template Library (5 tests)
+### `timeline.spec.ts` — Timeline (4 tests)
+
+| Test | Description |
+|------|-------------|
+| start date persists after navigation (bug #44) | Sets a start date, navigates away, returns — date is still present |
+| auto-schedule shows projected end date | Create project with epic+feature, run Auto-schedule, assert "Projected end:" appears |
+| sequential/parallel toggle is visible on epic rows | After scheduling, the mode-toggle button is rendered on every epic header row in the Gantt |
+| feature dependency section visible in inline edit panel | Clicking a feature label opens the inline panel which contains the "Depends on" section and the add-dependency select |
+
+---
+
+### `resource-profile.spec.ts` — Resource Profile (1 test)
+
+| Test | Description |
+|------|-------------|
+| can edit count for non-engineering resource types | Seeds a task with resource type "Project Manager" via CSV import, navigates to Resource Profile, and asserts the Count cell for that row is an editable `<input type="number">` (only rendered for GOVERNANCE/PROJECT_MANAGEMENT categories) |
+
+---
 
 | Test | Description |
 |------|-------------|
