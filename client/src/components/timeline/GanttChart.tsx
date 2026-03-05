@@ -398,6 +398,7 @@ export default function GanttChart({
                         ? 'Features run sequentially — click for parallel'
                         : 'Features run in parallel — click for sequential'
                     }
+                    aria-label={row.epicFeatureMode === 'sequential' ? 'sequential' : 'parallel'}
                     className="ml-1 text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-white flex-shrink-0"
                   >
                     {row.epicFeatureMode === 'sequential' ? '↓ seq' : '⇉ par'}
@@ -455,8 +456,9 @@ export default function GanttChart({
                   {hasStories ? (isOpen ? '▼' : '▶') : ''}
                 </button>
                 <span
-                  className="text-sm truncate flex-1 text-gray-700"
+                  className="text-sm truncate flex-1 text-gray-700 cursor-pointer hover:text-blue-600"
                   title={row.entry.featureName}
+                  onClick={() => setEditingFeatureId(row.entry.featureId)}
                 >
                   {row.entry.featureName}
                 </span>
