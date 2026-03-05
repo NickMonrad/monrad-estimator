@@ -72,9 +72,15 @@ export default function BacklogPage() {
   })
 
   const updateEpic = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<typeof epicForm> }) =>
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.put(`/projects/${projectId}/epics/${id}`, data),
     onSuccess: () => { invalidate(); setEditingEpicId(null) },
+  })
+
+  const toggleEpicActive = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      api.put(`/projects/${projectId}/epics/${id}`, { isActive }),
+    onSuccess: invalidate,
   })
 
   const deleteEpic = useMutation({
@@ -257,6 +263,7 @@ export default function BacklogPage() {
                     onCancelEdit={() => setEditingEpicId(null)}
                     editSaving={updateEpic.isPending}
                     onDelete={() => deleteEpic.mutate(epic.id)}
+                    onToggleActive={() => toggleEpicActive.mutate({ id: epic.id, isActive: epic.isActive !== false ? false : true })}
                     epicTotalHours={epicTotalHours(epic)}
                     resourceTypes={resourceTypes}
                     projectId={projectId!}
@@ -378,7 +385,7 @@ export default function BacklogPage() {
   )
 }
 
-function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, epicTotalHours, resourceTypes, projectId, hoursPerDay }: {
+function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, epicTotalHours, resourceTypes, projectId, hoursPerDay }: {
   epic: Epic
   expanded: boolean
   onToggle: () => void
@@ -388,6 +395,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   onCancelEdit: () => void
   editSaving: boolean
   onDelete: () => void
+  onToggleActive: () => void
   epicTotalHours: number
   resourceTypes: ResourceType[]
   projectId: string
@@ -412,11 +420,12 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0 px-0.5 text-base leading-none mr-1" onClick={e => e.stopPropagation()}>⠿</button>
           <span className="text-gray-400 text-sm select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded font-medium">Epic</span>
-          <span className="font-medium text-gray-900 flex-1">{epic.name}</span>
+          <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900'}`}>{epic.name}</span>
           <span className="text-sm text-gray-400">
             {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h
           </span>
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+            <button onClick={onToggleActive} title={epic.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-2 py-1 ${epic.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{epic.isActive === false ? '○' : '●'}</button>
             <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
           </div>
