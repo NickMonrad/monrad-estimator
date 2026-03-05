@@ -174,10 +174,13 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     orderBy: { startWeek: 'asc' },
   })
 
-  // Compute parallel over-allocation warnings
-  const parallelWarnings = await computeParallelWarnings(project.id, project.hoursPerDay, entries)
+  // Filter out inactive epics/features
+  const activeEntries = entries.filter(e => e.feature.isActive !== false && e.feature.epic.isActive !== false)
 
-  res.json(buildResponse(project, entries, parallelWarnings))
+  // Compute parallel over-allocation warnings
+  const parallelWarnings = await computeParallelWarnings(project.id, project.hoursPerDay, activeEntries)
+
+  res.json(buildResponse(project, activeEntries, parallelWarnings))
 })
 
 // POST /api/projects/:projectId/timeline/schedule
@@ -196,8 +199,8 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
 
   const fallbackHoursPerDay = project.hoursPerDay
 
-  // Load full hierarchy
-  const epics = await prisma.epic.findMany({
+  // Load full hierarchy — filter inactive epics/features
+  const allEpics = await prisma.epic.findMany({
     where: { projectId: project.id },
     orderBy: { order: 'asc' },
     include: {
@@ -214,6 +217,19 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       },
     },
   })
+
+  // Remove inactive epics and features from scheduling
+  const inactiveFeatureIds = allEpics.flatMap(e =>
+    e.isActive === false
+      ? e.features.map(f => f.id)
+      : e.features.filter(f => f.isActive === false).map(f => f.id)
+  )
+  if (inactiveFeatureIds.length > 0) {
+    await prisma.timelineEntry.deleteMany({ where: { featureId: { in: inactiveFeatureIds } } })
+  }
+  const epics = allEpics
+    .filter(e => e.isActive !== false)
+    .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
 
   // Load resource types
   const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id } })

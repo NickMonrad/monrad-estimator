@@ -25,8 +25,7 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
   onCancelEdit: () => void
   onSave: (data: { name: string; description: string; assumptions: string }) => void
   onDelete: () => void
-  isSaving: boolean
-  onApplyTemplate: () => void
+  onToggleActive: () => void
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number
@@ -51,13 +50,14 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-blue-300 hover:text-blue-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
           <span className="text-blue-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded">Feature</span>
-          <span className="text-sm text-gray-800 flex-1 truncate">{feature.name}</span>
+          <span className={`text-sm flex-1 truncate ${feature.isActive === false ? 'line-through text-gray-400' : 'text-gray-800'}`}>{feature.name}</span>
           <span className="text-xs text-gray-400">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours.toFixed(2)}h</span>
           <button onClick={e => { e.stopPropagation(); onApplyTemplate() }}
             className="text-xs text-purple-500 hover:text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2 py-0.5 rounded transition-colors">
             + Template
           </button>
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+            <button onClick={onToggleActive} title={feature.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${feature.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{feature.isActive === false ? '○' : '●'}</button>
             <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
@@ -88,9 +88,15 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
   })
 
   const updateFeature = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<typeof form> }) =>
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.put(`/epics/${epicId}/features/${id}`, data),
     onSuccess: () => { invalidate(); setEditingId(null) },
+  })
+
+  const toggleFeatureActive = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      api.put(`/epics/${epicId}/features/${id}`, { isActive }),
+    onSuccess: invalidate,
   })
 
   const deleteFeature = useMutation({
@@ -122,6 +128,7 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
             onCancelEdit={() => setEditingId(null)}
             onSave={(data) => updateFeature.mutate({ id: feature.id, data })}
             onDelete={() => deleteFeature.mutate(feature.id)}
+            onToggleActive={() => toggleFeatureActive.mutate({ id: feature.id, isActive: feature.isActive !== false ? false : true })}
             isSaving={updateFeature.isPending}
             onApplyTemplate={() => setApplyTemplateFeatureId(feature.id)}
             resourceTypes={resourceTypes}

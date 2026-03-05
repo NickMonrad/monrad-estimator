@@ -40,10 +40,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const feature = await ownedFeature(req.params.featureId as string, req.userId!)
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
-  const { name, description, assumptions, order } = req.body
+  const { name, description, assumptions, order, isActive } = req.body
   const story = await prisma.userStory.update({
     where: { id: req.params.id as string },
-    data: { name, description, assumptions, order },
+    data: { name, description, assumptions, order, ...(isActive !== undefined && { isActive }) },
   })
   res.json(story)
 })

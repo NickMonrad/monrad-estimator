@@ -42,6 +42,7 @@ export interface UserStory {
   order: number
   featureId: string
   appliedTemplateId?: string | null
+  isActive?: boolean
   tasks: Task[]
 }
 
@@ -52,6 +53,7 @@ export interface Feature {
   assumptions?: string
   order: number
   epicId: string
+  isActive?: boolean
   userStories: UserStory[]
 }
 
@@ -61,6 +63,7 @@ export interface Epic {
   description?: string
   order: number
   projectId: string
+  isActive?: boolean
   features: Feature[]
 }
 

@@ -84,8 +84,11 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   const resourceAgg = new Map<string, ResourceAgg>()
 
   for (const epic of project.epics) {
+    if (epic.isActive === false) continue
     for (const feature of epic.features) {
+      if (feature.isActive === false) continue
       for (const story of feature.userStories) {
+        if (story.isActive === false) continue
         for (const task of story.tasks) {
           if (!task.resourceTypeId) continue
           const resourceType = resourceTypeById.get(task.resourceTypeId)
