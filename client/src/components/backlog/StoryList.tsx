@@ -15,7 +15,7 @@ interface Props {
   hoursPerDay: number
 }
 
-function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, isSaving, onRefresh, isRefreshing, onRefreshSelect, onCancelRefresh, refreshPending, resourceTypes, projectId, hoursPerDay }: {
+function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, isSaving, onRefresh, isRefreshing, onRefreshSelect, onCancelRefresh, refreshPending, resourceTypes, projectId, hoursPerDay }: {
   story: UserStory
   isEditing: boolean
   expanded: boolean
@@ -25,6 +25,8 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
   onSave: (data: { name: string; description: string; assumptions: string }) => void
   onDelete: () => void
   onToggleActive: () => void
+  isSaving: boolean
+  onRefresh: () => void
   isRefreshing: boolean
   onRefreshSelect: (complexity: string) => void
   onCancelRefresh: () => void

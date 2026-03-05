@@ -385,7 +385,7 @@ export default function BacklogPage() {
   )
 }
 
-function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, epicTotalHours, resourceTypes, projectId, hoursPerDay }: {
+function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, epicTotalHours, resourceTypes, projectId, hoursPerDay }: {
   epic: Epic
   expanded: boolean
   onToggle: () => void
@@ -396,6 +396,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   editSaving: boolean
   onDelete: () => void
   onToggleActive: () => void
+  epicTotalHours: number
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number

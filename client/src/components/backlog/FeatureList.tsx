@@ -16,7 +16,7 @@ interface Props {
   hoursPerDay: number
 }
 
-function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay }: {
+function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay }: {
   feature: Feature
   isEditing: boolean
   expanded: boolean
@@ -26,6 +26,8 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
   onSave: (data: { name: string; description: string; assumptions: string }) => void
   onDelete: () => void
   onToggleActive: () => void
+  isSaving: boolean
+  onApplyTemplate: () => void
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number
