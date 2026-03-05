@@ -13,6 +13,7 @@ import { useReorderEpics, useReorderFeatures, useReorderStories, useReorderTasks
 import type { Epic, Feature, UserStory, Task, ResourceType, Project } from '../types/backlog'
 import FeatureList from '../components/backlog/FeatureList'
 import CsvImportModal from '../components/backlog/CsvImportModal'
+import { getEpicColour, type EpicColour } from '../lib/epicColours'
 
 export default function BacklogPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -251,7 +252,7 @@ export default function BacklogPage() {
           >
             <SortableContext items={tree.map(e => 'epic-' + e.id)} strategy={verticalListSortingStrategy}>
               <div className="space-y-2">
-                {tree.map(epic => (
+                {tree.map((epic, index) => (
                   <SortableEpicRow
                     key={epic.id}
                     epic={epic}
@@ -268,6 +269,7 @@ export default function BacklogPage() {
                     resourceTypes={resourceTypes}
                     projectId={projectId!}
                     hoursPerDay={hoursPerDay}
+                    epicColour={getEpicColour(index)}
                   />
                 ))}
 
@@ -385,7 +387,7 @@ export default function BacklogPage() {
   )
 }
 
-function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, epicTotalHours, resourceTypes, projectId, hoursPerDay }: {
+function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, epicTotalHours, resourceTypes, projectId, hoursPerDay, epicColour }: {
   epic: Epic
   expanded: boolean
   onToggle: () => void
@@ -400,12 +402,13 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number
+  epicColour: EpicColour
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'epic-' + epic.id })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div ref={setNodeRef} style={style} {...attributes} className={`bg-white rounded-xl border border-gray-200 overflow-hidden border-l-4 ${epicColour.border}`}>
       {isEditing ? (
         <div className="p-3">
           <EpicForm
@@ -416,13 +419,13 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
           />
         </div>
       ) : (
-        <div className="group flex items-center gap-2 px-4 py-3 cursor-pointer hover:bg-gray-50" onClick={onToggle}>
+        <div className={`group flex items-center gap-2 px-4 py-3 cursor-pointer hover:bg-gray-50 ${epicColour.light}`} onClick={onToggle}>
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0 px-0.5 text-base leading-none mr-1" onClick={e => e.stopPropagation()}>⠿</button>
           <span className="text-gray-400 text-sm select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded font-medium">Epic</span>
           <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900'}`}>{epic.name}</span>
           <span className="text-sm text-gray-400">
-            {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h
+            {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h · {(epicTotalHours / hoursPerDay).toFixed(1)}d
           </span>
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
             <button onClick={onToggleActive} title={epic.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-2 py-1 ${epic.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{epic.isActive === false ? '○' : '●'}</button>
@@ -433,7 +436,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
       )}
       {expanded && (
         <div className="border-t border-gray-100 px-3 pb-3 pt-2">
-          <FeatureList epicId={epic.id} features={epic.features} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} />
+          <FeatureList epicId={epic.id} features={epic.features} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} epicColour={epicColour} />
         </div>
       )}
     </div>
