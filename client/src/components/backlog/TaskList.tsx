@@ -55,7 +55,7 @@ function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDel
             : <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded italic">No resource type</span>
           }
           <span className="text-xs font-medium text-gray-700 ml-auto">
-            {task.hoursEffort}h / {(task.hoursEffort / hoursPerDay).toFixed(1)}d
+            {task.hoursEffort}h · {(task.hoursEffort / hoursPerDay).toFixed(1)}d{task.durationDays != null && <span className="text-gray-400 font-normal"> (dur: {task.durationDays}d)</span>}
           </span>
         </div>
         {task.description && <p className="text-xs text-gray-500 mt-0.5 ml-0 truncate">{task.description}</p>}
