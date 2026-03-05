@@ -128,6 +128,8 @@ export default function GanttChart({
   onMoveFeature,
   onUpdateEpicMode,
   onUpdateEpicScheduleMode,
+  editingFeatureId: _editingFeatureId,
+  setEditingFeatureId,
 }: GanttChartProps) {
   // Expanded state
   const [expandedFeatures, setExpandedFeatures] = useState<Set<string>>(new Set())
