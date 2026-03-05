@@ -165,7 +165,9 @@ export default function TimelinePage() {
   const resetStoryTimeline = useMutation({
     mutationFn: (storyId: string) =>
       api.delete(`/projects/${projectId}/timeline/stories/${storyId}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['timeline', projectId] }) },
+    onSuccess: () => {
+      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
+    },
   })
 
   const reorderEpics = useMutation({
