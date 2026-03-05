@@ -42,6 +42,8 @@ interface GanttChartProps {
   onRemoveStoryDep: (storyId: string, dependsOnId: string) => void
   editingFeatureId: string | null
   setEditingFeatureId: (id: string | null) => void
+  editingStoryId: string | null
+  setEditingStoryId: (id: string | null) => void
   // Optional: reorder + mode callbacks wired from TimelinePage
   onMoveEpic?: (epicId: string, direction: 'up' | 'down', epicIdx: number) => void
   onMoveFeature?: (epicId: string, featureIdx: number, direction: 'up' | 'down') => void
@@ -130,6 +132,8 @@ export default function GanttChart({
   onUpdateEpicScheduleMode,
   editingFeatureId: _editingFeatureId,
   setEditingFeatureId,
+  editingStoryId: _editingStoryId,
+  setEditingStoryId,
 }: GanttChartProps) {
   // Expanded state
   const [expandedFeatures, setExpandedFeatures] = useState<Set<string>>(new Set())
@@ -617,6 +621,12 @@ export default function GanttChart({
               const effectiveStart = isDragging ? dragging!.currentStart : entry.startWeek
               return (
                 <g key={row.key}>
+                  <title>{(() => {
+                      const rb = entry.resourceBreakdown ?? []
+                      const totalDays = rb.reduce((s, r) => s + r.days, 0)
+                      const breakdown = rb.length > 0 ? '\n' + rb.map(r => `  ${r.name}: ${r.days.toFixed(1)}d`).join('\n') : ''
+                      return `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}\n\nClick to edit · Drag to move`
+                    })()}</title>
                   <rect
                     x={effectiveStart * COL_W}
                     y={y + 4}
@@ -628,12 +638,6 @@ export default function GanttChart({
                       cursor: isDragging ? 'grabbing' : 'grab',
                       opacity: isDragging ? 0.8 : 1,
                     }}
-                    title={(() => {
-                      const rb = entry.resourceBreakdown ?? []
-                      const totalDays = rb.reduce((s, r) => s + r.days, 0)
-                      const breakdown = rb.length > 0 ? '\n' + rb.map(r => `  ${r.name}: ${r.days.toFixed(1)}d`).join('\n') : ''
-                      return `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}\n\nClick to edit · Drag to move`
-                    })()}
                     onMouseDown={e => startFeatureDrag(e, entry)}
                     onClick={() => setEditingFeatureId(entry.featureId)}
                   />
@@ -668,6 +672,7 @@ export default function GanttChart({
             const effectiveStart = isDragging ? dragging!.currentStart : storyEntry.startWeek
             return (
               <g key={row.key}>
+                <title>{storyEntry.storyName}{'\n'}{storyEntry.durationWeeks.toFixed(1)}w · drag to move</title>
                 <rect
                   x={effectiveStart * COL_W}
                   y={y + 3}
@@ -680,8 +685,8 @@ export default function GanttChart({
                     cursor: isDragging ? 'grabbing' : 'grab',
                     opacity: isDragging ? 0.8 : 1,
                   }}
-                  title={`${storyEntry.storyName}\n${storyEntry.durationWeeks.toFixed(1)}w · drag to move`}
                   onMouseDown={e => startStoryDrag(e, storyEntry)}
+                  onClick={() => setEditingStoryId(storyEntry.storyId)}
                 />
                 {storyEntry.isManual && (
                   <text
