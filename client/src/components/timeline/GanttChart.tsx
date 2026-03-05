@@ -628,7 +628,12 @@ export default function GanttChart({
                       cursor: isDragging ? 'grabbing' : 'grab',
                       opacity: isDragging ? 0.8 : 1,
                     }}
-                    title={`${entry.featureName} — click to edit, drag to move`}
+                    title={(() => {
+                      const rb = entry.resourceBreakdown ?? []
+                      const totalDays = rb.reduce((s, r) => s + r.days, 0)
+                      const breakdown = rb.length > 0 ? '\n' + rb.map(r => `  ${r.name}: ${r.days.toFixed(1)}d`).join('\n') : ''
+                      return `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}\n\nClick to edit · Drag to move`
+                    })()}
                     onMouseDown={e => startFeatureDrag(e, entry)}
                     onClick={() => setEditingFeatureId(entry.featureId)}
                   />
@@ -675,6 +680,7 @@ export default function GanttChart({
                     cursor: isDragging ? 'grabbing' : 'grab',
                     opacity: isDragging ? 0.8 : 1,
                   }}
+                  title={`${storyEntry.storyName}\n${storyEntry.durationWeeks.toFixed(1)}w · drag to move`}
                   onMouseDown={e => startStoryDrag(e, storyEntry)}
                 />
                 {storyEntry.isManual && (

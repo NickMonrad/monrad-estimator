@@ -563,112 +563,75 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     return result
   }
 
-  // Story predecessors (across all stories in the project)
-  const storyPredecessors = new Map<string, string[]>()
+  // ── Per-feature proportional story scheduling ──────────────────────────────
+  // Stories are distributed sequentially and proportionally within their parent
+  // feature's scheduled window [featureStart, featureDone], based on total hours.
+  // This keeps all story bars visually within their feature bar.
+  //
+  // Manual story overrides retain their stored startWeek; their duration is
+  // re-computed from their own hours.
+
+  // Group non-manual stories by feature, sorted by story order
+  const storiesByFeature = new Map<string, typeof allStories>()
   for (const story of allStories) {
-    storyPredecessors.set(story.id, (story.dependencies ?? []).map((d: { dependsOnId: string }) => d.dependsOnId))
+    const fId = story.feature.id
+    if (!storiesByFeature.has(fId)) storiesByFeature.set(fId, [])
+    storiesByFeature.get(fId)!.push(story)
+  }
+  for (const stories of storiesByFeature.values()) {
+    stories.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
   }
 
-  // Build remaining hours per story
-  const storyRemainingHours = new Map<string, Map<string, number>>()
+  // Helper: total hours for a story
+  function storyTotalHours(story: typeof allStories[0]): number {
+    return [...storyResourceHours(story).values()].reduce((a, b) => a + b, 0)
+  }
+
+  // Compute scheduled position for every story
+  const storyScheduled = new Map<string, { startWeek: number; durationWeeks: number; isManual: boolean }>()
+
   for (const story of allStories) {
-    if (manualStoryWeeks.has(story.id)) continue
-    storyRemainingHours.set(story.id, storyResourceHours(story))
-  }
+    const fId = story.feature.id
+    const featureStart = startWeeks.get(fId) ?? 0
+    const featureDone = finishWeeks.get(fId) ?? (featureStart + 1)
+    const featureDuration = Math.max(0.2, featureDone - featureStart)
 
-  // Story simulation state
-  const storySimStart = new Map<string, number>()
-  const storySimDone = new Map<string, number>()
-
-  // Manual story entries: fixed
-  for (const [sId, sw] of manualStoryWeeks) {
-    const story = allStories.find(s => s.id === sId)
-    if (!story) continue
-    const dur = storyResourceHours(story)
-    const totalHours = [...dur.values()].reduce((a, b) => a + b, 0)
-    storySimStart.set(sId, sw)
-    storySimDone.set(sId, sw + Math.max(0.2, totalHours / fallbackHoursPerDay / 5))
-  }
-
-  const STORY_STEP = 0.2
-  const STORY_MAX_WEEKS = 200
-  const storyWeekCapacity = new Map<string, number>()
-  for (const rt of resourceTypes) {
-    storyWeekCapacity.set(rt.id, rt.count * (rt.hoursPerDay ?? fallbackHoursPerDay) * 5)
-  }
-  storyWeekCapacity.set('_unassigned', fallbackHoursPerDay * 5)
-
-  const storyUnfinished = new Set(allStories.filter(s => !manualStoryWeeks.has(s.id)).map(s => s.id))
-  const storyMap = new Map(allStories.map(s => [s.id, s]))
-
-  let st = 0
-  while (storyUnfinished.size > 0 && st < STORY_MAX_WEEKS) {
-    // Stories eligible to start: feature has started AND all story predecessors done
-    for (const sId of storyUnfinished) {
-      if (storySimStart.has(sId)) continue
-      const story = storyMap.get(sId)!
-      const featureStart = startWeeks.get(story.feature.id) ?? 0
-      if (st < featureStart) continue
-      const storyPredsAllDone = (storyPredecessors.get(sId) ?? []).every(predId => {
-        const done = storySimDone.get(predId)
-        return done !== undefined && done <= st
-      })
-      if (storyPredsAllDone) storySimStart.set(sId, st)
+    if (manualStoryWeeks.has(story.id)) {
+      const sw = manualStoryWeeks.get(story.id)!
+      const totalHours = storyTotalHours(story)
+      const dur = Math.max(0.2, totalHours / fallbackHoursPerDay / 5)
+      storyScheduled.set(story.id, { startWeek: sw, durationWeeks: dur, isManual: true })
+      continue
     }
 
-    const storyActive = [...storyUnfinished].filter(sId => storySimStart.has(sId))
-    if (storyActive.length === 0) { st += STORY_STEP; continue }
+    // Proportional sequential scheduling within feature window
+    const siblings = (storiesByFeature.get(fId) ?? []).filter(s => !manualStoryWeeks.has(s.id))
+    const totalFeatureHours = siblings.reduce((sum, s) => sum + storyTotalHours(s), 0)
 
-    // Mark stories with no tasks as immediately done
-    for (const sId of storyActive) {
-      if (!storySimDone.has(sId) && (storyRemainingHours.get(sId)?.size ?? 0) === 0) {
-        storySimDone.set(sId, st + STORY_STEP)
-        storyUnfinished.delete(sId)
+    let cursor = featureStart
+    for (const sibling of siblings) {
+      const hrs = storyTotalHours(sibling)
+      const dur = totalFeatureHours > 0
+        ? (hrs / totalFeatureHours) * featureDuration
+        : featureDuration / Math.max(1, siblings.length)
+      const safeDur = Math.max(0.2, dur)
+      if (sibling.id === story.id) {
+        storyScheduled.set(story.id, { startWeek: cursor, durationWeeks: safeDur, isManual: false })
+        break
       }
+      cursor += safeDur
     }
-
-    // Proportional allocation across story-active competing for each resource type
-    for (const [rtId, capPerWeek] of storyWeekCapacity) {
-      const capPerStep = capPerWeek * STORY_STEP
-
-      const competing = storyActive.filter(sId => (storyRemainingHours.get(sId)?.get(rtId) ?? 0) > 0.001)
-      if (competing.length === 0) continue
-
-      const totalRemaining = competing.reduce((s, sId) => s + (storyRemainingHours.get(sId)!.get(rtId) ?? 0), 0)
-
-      for (const sId of competing) {
-        const rem = storyRemainingHours.get(sId)!.get(rtId)!
-        const allocated = (rem / totalRemaining) * capPerStep
-        storyRemainingHours.get(sId)!.set(rtId, Math.max(0, rem - allocated))
-      }
-    }
-
-    // Mark done
-    for (const sId of storyActive) {
-      if (storySimDone.has(sId)) continue
-      const allDone = [...(storyRemainingHours.get(sId)?.values() ?? [])].every(h => h <= 0.001)
-      if (allDone) {
-        storySimDone.set(sId, st + STORY_STEP)
-        storyUnfinished.delete(sId)
-      }
-    }
-
-    st += STORY_STEP
   }
 
   // Write StoryTimelineEntry records
   const storyUpserts = allStories.map(async story => {
-    const sw = storySimStart.get(story.id) ?? manualStoryWeeks.get(story.id) ?? startWeeks.get(story.feature.id) ?? 0
-    const doneW = storySimDone.get(story.id)
-    const featureStart = startWeeks.get(story.feature.id) ?? 0
-    const featureDone = finishWeeks.get(story.feature.id) ?? (featureStart + 1)
-    const dur = doneW !== undefined ? doneW - sw : (featureDone - featureStart)
-    const isManual = manualStoryWeeks.has(story.id)
-
+    const scheduled = storyScheduled.get(story.id)
+    if (!scheduled) return null
+    const { startWeek: sw, durationWeeks: dur, isManual } = scheduled
     return prisma.storyTimelineEntry.upsert({
       where: { storyId: story.id },
-      create: { storyId: story.id, projectId: project.id, startWeek: sw, durationWeeks: Math.max(0.2, dur), isManual },
-      update: isManual ? {} : { startWeek: sw, durationWeeks: Math.max(0.2, dur), isManual: false },
+      create: { storyId: story.id, projectId: project.id, startWeek: sw, durationWeeks: dur, isManual },
+      update: isManual ? {} : { startWeek: sw, durationWeeks: dur, isManual: false },
     })
   })
   await Promise.all(storyUpserts)
