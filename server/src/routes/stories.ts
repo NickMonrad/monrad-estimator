@@ -11,6 +11,51 @@ async function ownedFeature(featureId: string, userId: string) {
   })
 }
 
+async function ownedProject(projectId: string, userId: string) {
+  return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
+}
+
+// POST /api/projects/:projectId/stories/:storyId/dependencies
+router.post('/:storyId/dependencies', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const { dependsOnId } = req.body
+  if (!dependsOnId) { res.status(400).json({ error: 'dependsOnId is required' }); return }
+
+  const storyId = req.params.storyId as string
+
+  // Verify both stories belong to this project
+  const [story, dependsOnStory] = await Promise.all([
+    prisma.userStory.findFirst({ where: { id: storyId, feature: { epic: { projectId: project.id } } } }),
+    prisma.userStory.findFirst({ where: { id: dependsOnId, feature: { epic: { projectId: project.id } } } }),
+  ])
+  if (!story || !dependsOnStory) { res.status(404).json({ error: 'Story not found in this project' }); return }
+
+  // Prevent self-dependency
+  if (storyId === dependsOnId) { res.status(400).json({ error: 'A story cannot depend on itself' }); return }
+
+  const dep = await prisma.storyDependency.upsert({
+    where: { storyId_dependsOnId: { storyId, dependsOnId } },
+    create: { storyId, dependsOnId },
+    update: {},
+  })
+  res.status(201).json(dep)
+})
+
+// DELETE /api/projects/:projectId/stories/:storyId/dependencies/:dependsOnId
+router.delete('/:storyId/dependencies/:dependsOnId', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const { storyId, dependsOnId } = req.params as { storyId: string; dependsOnId: string }
+
+  await prisma.storyDependency.deleteMany({
+    where: { storyId, dependsOnId },
+  })
+  res.status(204).end()
+})
+
 // GET /features/:featureId/stories
 router.get('/', async (req: AuthRequest, res: Response) => {
   const feature = await ownedFeature(req.params.featureId as string, req.userId!)
