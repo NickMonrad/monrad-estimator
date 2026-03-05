@@ -5,6 +5,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../../lib/api'
 import type { UserStory, ResourceType } from '../../types/backlog'
+import type { EpicColour } from '../../lib/epicColours'
 import TaskList from './TaskList'
 
 interface Props {
@@ -13,9 +14,10 @@ interface Props {
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number
+  epicColour?: EpicColour
 }
 
-function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, isSaving, onRefresh, isRefreshing, onRefreshSelect, onCancelRefresh, refreshPending, resourceTypes, projectId, hoursPerDay }: {
+function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, isSaving, onRefresh, isRefreshing, onRefreshSelect, onCancelRefresh, refreshPending, resourceTypes, projectId, hoursPerDay, epicColour }: {
   story: UserStory
   isEditing: boolean
   expanded: boolean
@@ -34,6 +36,7 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number
+  epicColour?: EpicColour
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'story-' + story.id })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
@@ -50,13 +53,13 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
           saving={isSaving}
         />
       ) : (
-        <div className="group flex items-center gap-2 bg-purple-50 border border-purple-100 rounded-lg px-3 py-2 hover:border-purple-300 cursor-pointer"
+        <div className={`group flex items-center gap-2 bg-purple-50 border border-purple-100 rounded-lg px-3 py-2 hover:border-purple-300 cursor-pointer border-l ${epicColour?.border ?? 'border-l-purple-100'}`}
           onClick={onToggle}>
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-purple-300 hover:text-purple-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
           <span className="text-purple-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-purple-500 bg-purple-100 px-1.5 py-0.5 rounded">Story</span>
           <span className={`text-sm flex-1 truncate ${story.isActive === false ? 'line-through text-gray-400' : 'text-gray-800'}`}>{story.name}</span>
-          <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours.toFixed(2)}h</span>
+          <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
           {story.appliedTemplateId && (
             <button onClick={e => { e.stopPropagation(); onRefresh() }} title="Refresh tasks from template"
               className="text-xs text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors">
@@ -90,7 +93,7 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
   )
 }
 
-export default function StoryList({ featureId, stories, resourceTypes, projectId, hoursPerDay }: Props) {
+export default function StoryList({ featureId, stories, resourceTypes, projectId, hoursPerDay, epicColour }: Props) {
   const qc = useQueryClient()
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
@@ -168,6 +171,7 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
             resourceTypes={resourceTypes}
             projectId={projectId}
             hoursPerDay={hoursPerDay}
+            epicColour={epicColour}
           />
         ))}
       </SortableContext>
