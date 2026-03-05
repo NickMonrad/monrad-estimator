@@ -628,7 +628,9 @@ export default function GanttChart({
                       cursor: isDragging ? 'grabbing' : 'grab',
                       opacity: isDragging ? 0.8 : 1,
                     }}
+                    title={`${entry.featureName} — click to edit, drag to move`}
                     onMouseDown={e => startFeatureDrag(e, entry)}
+                    onClick={() => setEditingFeatureId(entry.featureId)}
                   />
                   {entry.isManual && (
                     <text
