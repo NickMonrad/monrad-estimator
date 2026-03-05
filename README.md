@@ -152,6 +152,8 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | Per-resource hoursPerDay + dayRate; snapshot rollback perf | #54 |
 | Phase 6: Resource Profile — FTE, overhead, cost, chart, CSV exports | #55 |
 | README Phase 6 status + resource-profile screenshot | #63 |
+| Phase 7 CI pipeline, timeline dependency scheduler, resource levelling, fractional weeks | #95 |
+| Deactivate epics/features/stories to mark as out of scope | #100 |
 
 ---
 
@@ -175,11 +177,16 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | [#46](https://github.com/NickMonrad/monrad-estimator/issues/46) | Soft-delete templates with restore |
 | [#38](https://github.com/NickMonrad/monrad-estimator/issues/38) | UI: Format all hours/days totals to 2 decimal places |
 | [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
+| [#99](https://github.com/NickMonrad/monrad-estimator/issues/99) | Timeline: drag-and-drop bars for manual scheduling |
+| [#102](https://github.com/NickMonrad/monrad-estimator/issues/102) | Backlog: show total days (and duration if set) alongside hours |
+| [#103](https://github.com/NickMonrad/monrad-estimator/issues/103) | Backlog CSV export: remove HoursSmall/Medium/Large/XL columns |
+| [#104](https://github.com/NickMonrad/monrad-estimator/issues/104) | Tests: add coverage for inactive filtering in timeline routes |
 
 ### 🚀 Feature ideas
 | # | Title |
 |---|---|
 | [#68](https://github.com/NickMonrad/monrad-estimator/issues/68) | Timeline resource levelling + story dependencies |
+| [#101](https://github.com/NickMonrad/monrad-estimator/issues/101) | Timeline: resource levelling cannot parallelise features sharing the same resource type |
 | [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST on costs — configurable rate (default 10% AU) |
 | [#70](https://github.com/NickMonrad/monrad-estimator/issues/70) | Locale and currency settings (default AU/AUD) |
 | [#71](https://github.com/NickMonrad/monrad-estimator/issues/71) | Public holiday calendars for resource/cost modelling by locale |
