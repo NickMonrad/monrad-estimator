@@ -104,6 +104,25 @@ export interface ParallelWarning {
   capacityDays: number
 }
 
+export interface StoryTimelineEntry {
+  storyId: string
+  storyName: string
+  featureId: string
+  startWeek: number
+  durationWeeks: number
+  isManual: boolean
+}
+
+export interface FeatureDependency {
+  featureId: string
+  dependsOnId: string
+}
+
+export interface StoryDependency {
+  storyId: string
+  dependsOnId: string
+}
+
 export interface TimelineSummary {
   projectId: string
   startDate: string | null
@@ -111,6 +130,9 @@ export interface TimelineSummary {
   projectedEndDate?: string | null
   parallelWarnings?: ParallelWarning[]
   entries: TimelineEntry[]
+  storyEntries?: StoryTimelineEntry[]
+  featureDependencies?: FeatureDependency[]
+  storyDependencies?: StoryDependency[]
 }
 
 export interface OverheadItem {
