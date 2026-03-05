@@ -246,6 +246,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
         orderBy: { order: 'asc' },
         include: {
           userStories: {
+            orderBy: { order: 'asc' },
             include: {
               tasks: { include: { resourceType: true } },
               dependencies: true,   // StoryDependency rows where this story depends on others

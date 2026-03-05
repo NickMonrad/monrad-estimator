@@ -32,6 +32,7 @@ export default function TimelinePage() {
   const [startDateInput, setStartDateInput] = useState('')
   const [resourcesOpen, setResourcesOpen] = useState(true)
   const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null)
+  const [editingStoryId, setEditingStoryId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [scheduleStale, setScheduleStale] = useState(false)
   const [resourceLevel, setResourceLevel] = useState(false)
@@ -159,6 +160,12 @@ export default function TimelinePage() {
       setEditingFeatureId(null)
       scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
     },
+  })
+
+  const resetStoryTimeline = useMutation({
+    mutationFn: (storyId: string) =>
+      api.delete(`/projects/${projectId}/timeline/stories/${storyId}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['timeline', projectId] }) },
   })
 
   const reorderEpics = useMutation({
@@ -472,6 +479,8 @@ export default function TimelinePage() {
                 onRemoveStoryDep={(storyId, dependsOnId) => removeStoryDep.mutate({ storyId, dependsOnId })}
                 editingFeatureId={editingFeatureId}
                 setEditingFeatureId={setEditingFeatureId}
+                editingStoryId={editingStoryId}
+                setEditingStoryId={setEditingStoryId}
                 onMoveEpic={(_epicId, direction, epicIdx) => {
                   const toIdx = direction === 'up' ? epicIdx - 1 : epicIdx + 1
                   moveEpic(epicIdx, toIdx)
@@ -578,6 +587,35 @@ export default function TimelinePage() {
                           </select>
                         </div>
                       </div>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {editingStoryId && (() => {
+                const storyEntry = timeline.storyEntries?.find(e => e.storyId === editingStoryId)
+                if (!storyEntry) return null
+                return (
+                  <div className="sticky bottom-0 z-20 border-t border-blue-200 bg-blue-50 shadow-md px-4 py-3 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-medium text-blue-800 truncate">{storyEntry.storyName}</span>
+                      {storyEntry.isManual && <span className="text-xs bg-blue-200 text-blue-700 px-1.5 py-0.5 rounded">✏ manual</span>}
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      {storyEntry.isManual && (
+                        <button
+                          onClick={() => { resetStoryTimeline.mutate(editingStoryId); setEditingStoryId(null) }}
+                          className="text-xs text-blue-600 hover:text-blue-800 underline"
+                        >
+                          Reset to auto
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setEditingStoryId(null)}
+                        className="text-xs text-gray-500 hover:text-gray-700"
+                      >
+                        Close ✕
+                      </button>
                     </div>
                   </div>
                 )
