@@ -325,7 +325,7 @@ export default function GanttChart({
       {/* Left label panel — sticky, no horizontal scroll */}
       <div
         style={{ width: LABEL_W, flexShrink: 0 }}
-        className="bg-white border-r border-gray-100 z-10"
+        className="relative bg-white border-r border-gray-100 z-10"
       >
         {/* Label header */}
         <div
@@ -520,7 +520,7 @@ export default function GanttChart({
           </defs>
 
           {/* Background fill */}
-          <rect x={0} y={0} width={totalWeeks * COL_W} height={totalHeight} fill="#fafafa" />
+          <rect x={0} y={0} width={totalWeeks * COL_W} height={totalHeight} fill="#fafafa" style={{ pointerEvents: 'none' }} />
 
           {/* Week header + vertical grid lines */}
           {Array.from({ length: totalWeeks }, (_, i) => (
