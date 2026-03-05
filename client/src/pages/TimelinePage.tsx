@@ -493,7 +493,7 @@ export default function TimelinePage() {
                 const entry = timeline.entries.find(e => e.featureId === editingFeatureId)
                 if (!entry) return null
                 return (
-                  <div className="border-t border-blue-100 bg-blue-50 px-4 py-3 flex flex-wrap items-center gap-3">
+                  <div className="sticky bottom-0 z-20 border-t border-blue-200 bg-blue-50 shadow-md px-4 py-3 flex flex-wrap items-center gap-3">
                     <span className="text-xs text-gray-600 font-medium">{entry.featureName}</span>
                     <label className="text-xs text-gray-500">Start week:</label>
                     <input
