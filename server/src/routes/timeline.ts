@@ -21,11 +21,12 @@ function computeDates(projectStartDate: Date | null, startWeek: number, duration
 type ParallelWarning = { epicId: string; epicName: string; resourceTypeName: string; demandDays: number; capacityDays: number }
 
 function computeResourceBreakdown(
-  feature: { userStories: { tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] },
+  feature: { userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] },
   fallbackHpd: number
 ): { name: string; days: number }[] {
   const byRt = new Map<string, { name: string; days: number }>()
   for (const story of feature.userStories) {
+    if (story.isActive === false) continue
     for (const task of story.tasks) {
       const key = task.resourceTypeId ?? '_unassigned'
       const name = task.resourceType?.name ?? 'Unassigned'
@@ -42,7 +43,7 @@ function buildResponse(
   project: { id: string; startDate: Date | null; hoursPerDay: number },
   entries: Array<{
     featureId: string
-    feature: { name: string; order: number; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
+    feature: { name: string; order: number; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
     startWeek: number
     durationWeeks: number
     isManual: boolean
@@ -119,6 +120,7 @@ async function computeParallelWarnings(
     const demandMap = new Map<string, { name: string; days: number; count: number }>()
     for (const feature of features) {
       for (const story of feature.userStories) {
+        if (story.isActive === false) continue
         for (const task of story.tasks) {
           const rtId = task.resourceTypeId ?? '_unassigned'
           const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
@@ -237,7 +239,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
 
   // Helper: compute duration in weeks for a feature
   function featureDurationWeeks(feature: typeof epics[0]['features'][0]): number {
-    const allTasks = feature.userStories.flatMap(s => s.tasks)
+    const allTasks = feature.userStories.filter(s => s.isActive !== false).flatMap(s => s.tasks)
     if (allTasks.length === 0) return 1
 
     const byRt = new Map<string | null, typeof allTasks>()
@@ -390,6 +392,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     function featureResourceHours(feature: typeof allFeatures[0]): Map<string, number> {
       const result = new Map<string, number>()
       for (const story of feature.userStories) {
+        if (story.isActive === false) continue
         for (const task of story.tasks) {
           const rtId = task.resourceTypeId ?? '_unassigned'
           const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
