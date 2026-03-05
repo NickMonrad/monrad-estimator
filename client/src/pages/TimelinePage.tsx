@@ -47,6 +47,14 @@ export default function TimelinePage() {
     }
   }, [project?.startDate])
 
+  // Populate edit form with current entry values when a feature is selected
+  useEffect(() => {
+    if (editingFeatureId && timeline?.entries) {
+      const entry = timeline.entries.find(e => e.featureId === editingFeatureId)
+      if (entry) setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
+    }
+  }, [editingFeatureId])
+
   const { data: timeline, isLoading } = useQuery<TimelineSummary>({
     queryKey: ['timeline', projectId],
     queryFn: () => api.get(`/projects/${projectId}/timeline`).then(r => r.data),
@@ -195,7 +203,11 @@ export default function TimelinePage() {
   // Compute Gantt dimensions
   const totalWeeks = useMemo(() => {
     if (!timeline?.entries.length) return 0
-    return Math.ceil(Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks))) + 1
+    const featureMax = Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks))
+    const storyMax = timeline.storyEntries?.length
+      ? Math.max(...timeline.storyEntries.map(e => e.startWeek + e.durationWeeks))
+      : 0
+    return Math.ceil(Math.max(featureMax, storyMax)) + 1
   }, [timeline])
 
   // Group entries by epicId, sorted by epicOrder then featureOrder
@@ -422,7 +434,7 @@ export default function TimelinePage() {
         </div>
 
         {/* Gantt chart */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-xl border border-gray-200">
           <div className="px-4 py-3 border-b border-gray-100">
             <h2 className="text-sm font-medium text-gray-700">Gantt Chart</h2>
           </div>

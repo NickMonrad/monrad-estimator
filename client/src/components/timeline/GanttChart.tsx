@@ -57,7 +57,7 @@ const EPIC_ROW_H = 36
 const FEAT_ROW_H = 36
 const STORY_ROW_H = 28
 const HEADER_H = 44
-const LABEL_W = 240
+const LABEL_W = 300
 const DEP_ARROW_COLOR = '#9ca3af'
 
 // ---------------------------------------------------------------------------
