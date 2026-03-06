@@ -154,6 +154,7 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | README Phase 6 status + resource-profile screenshot | #63 |
 | Phase 7 CI pipeline, timeline dependency scheduler, resource levelling, fractional weeks | #95 |
 | Deactivate epics/features/stories to mark as out of scope | #100 |
+| SVG Gantt overhaul: story bars, drag-and-drop, dependency arrows, proportional pool scheduler, resource histogram, clear-all-overrides, tooltip enhancements | #106 |
 
 ---
 
@@ -177,8 +178,8 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | [#46](https://github.com/NickMonrad/monrad-estimator/issues/46) | Soft-delete templates with restore |
 | [#38](https://github.com/NickMonrad/monrad-estimator/issues/38) | UI: Format all hours/days totals to 2 decimal places |
 | [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
-| [#99](https://github.com/NickMonrad/monrad-estimator/issues/99) | Timeline: drag-and-drop bars for manual scheduling |
-| [#102](https://github.com/NickMonrad/monrad-estimator/issues/102) | Backlog: show total days (and duration if set) alongside hours |
+| [#99](https://github.com/NickMonrad/monrad-estimator/issues/99) | ~~Timeline: drag-and-drop bars for manual scheduling~~ *(closed in #106)* |
+| [#102](https://github.com/NickMonrad/monrad-estimator/issues/102) | ~~Backlog: show total days (and duration if set) alongside hours~~ *(closed in #106)* |
 | [#103](https://github.com/NickMonrad/monrad-estimator/issues/103) | Backlog CSV export: remove HoursSmall/Medium/Large/XL columns |
 | [#104](https://github.com/NickMonrad/monrad-estimator/issues/104) | Tests: add coverage for inactive filtering in timeline routes |
 
@@ -186,7 +187,7 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | # | Title |
 |---|---|
 | [#68](https://github.com/NickMonrad/monrad-estimator/issues/68) | Timeline resource levelling + story dependencies |
-| [#101](https://github.com/NickMonrad/monrad-estimator/issues/101) | Timeline: resource levelling cannot parallelise features sharing the same resource type |
+| [#101](https://github.com/NickMonrad/monrad-estimator/issues/101) | ~~Timeline: resource levelling cannot parallelise features sharing the same resource type~~ *(closed in #106)* |
 | [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST on costs — configurable rate (default 10% AU) |
 | [#70](https://github.com/NickMonrad/monrad-estimator/issues/70) | Locale and currency settings (default AU/AUD) |
 | [#71](https://github.com/NickMonrad/monrad-estimator/issues/71) | Public holiday calendars for resource/cost modelling by locale |
@@ -197,7 +198,7 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | [#76](https://github.com/NickMonrad/monrad-estimator/issues/76) | Export backlog to Azure DevOps Boards |
 | [#39](https://github.com/NickMonrad/monrad-estimator/issues/39) | Template CSV: bulk update + review screen + per-template history |
 | [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — snapshots, diff, and rollback |
-| [#26](https://github.com/NickMonrad/monrad-estimator/issues/26) | Rich Gantt chart — drag-and-drop, dependencies, milestones |
+| [#26](https://github.com/NickMonrad/monrad-estimator/issues/26) | ~~Rich Gantt chart — drag-and-drop, dependencies, milestones~~ *(closed in #106)* |
 | [#24](https://github.com/NickMonrad/monrad-estimator/issues/24) | Per-resource overhead configuration |
 | [#22](https://github.com/NickMonrad/monrad-estimator/issues/22) | Project sharing / multi-user collaboration |
 | [#10](https://github.com/NickMonrad/monrad-estimator/issues/10) | Password reset flow |
