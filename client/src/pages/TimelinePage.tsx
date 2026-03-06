@@ -114,7 +114,7 @@ export default function TimelinePage() {
   const updateEntry = useMutation({
     mutationFn: ({ featureId, startWeek, durationWeeks }: { featureId: string; startWeek: number; durationWeeks: number }) =>
       api.put(`/projects/${projectId}/timeline/${featureId}`, { startWeek, durationWeeks }).then(r => r.data),
-    onSuccess: () => { invalidate(); setEditingFeatureId(null) },
+    onSuccess: () => { invalidate() },
   })
 
   const { data: featureDeps = [] } = useQuery<Array<{ featureId: string; dependsOnId: string; feature: { name: string }; dependsOn: { name: string } }>>({
