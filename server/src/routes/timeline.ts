@@ -75,17 +75,21 @@ function buildResponse(
   const weeklyDemandMap = new Map<string, { demandDays: number; capacityDays: number }>()
   for (const e of entries) {
     if (e.durationWeeks <= 0) continue
+    const featureStart = e.startWeek
+    const featureEnd = e.startWeek + e.durationWeeks
     const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
     for (const { name, days } of breakdown) {
-      const startW = Math.floor(e.startWeek)
-      const endW = Math.ceil(e.startWeek + e.durationWeeks)
-      const durationWeeksActual = Math.max(e.durationWeeks, 0.01)
+      const startW = Math.floor(featureStart)
+      const endW = Math.ceil(featureEnd)
+      const count = rtCountByName.get(name) ?? 1
+      const capacityDays = count * 5
       for (let w = startW; w < endW; w++) {
+        // Only count the fraction of this integer week the feature actually occupies
+        const overlap = Math.min(w + 1, featureEnd) - Math.max(w, featureStart)
+        if (overlap <= 0) continue
         const key = `${w}|${name}`
-        const count = rtCountByName.get(name) ?? 1
-        const capacityDays = count * 5
         const existing = weeklyDemandMap.get(key) ?? { demandDays: 0, capacityDays }
-        existing.demandDays += days / durationWeeksActual
+        existing.demandDays += days * (overlap / e.durationWeeks)
         weeklyDemandMap.set(key, existing)
       }
     }
