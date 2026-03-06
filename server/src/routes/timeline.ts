@@ -783,6 +783,18 @@ router.put('/stories/:storyId', async (req: AuthRequest, res: Response) => {
   })
 })
 
+// DELETE /api/projects/:projectId/timeline — clear ALL manual overrides (features + stories)
+router.delete('/', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  await Promise.all([
+    prisma.timelineEntry.deleteMany({ where: { projectId: project.id, isManual: true } }),
+    prisma.storyTimelineEntry.deleteMany({ where: { projectId: project.id, isManual: true } }),
+  ])
+  res.status(204).end()
+})
+
 // DELETE /api/projects/:projectId/timeline/stories/:storyId — clear manual story override
 router.delete('/stories/:storyId', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
