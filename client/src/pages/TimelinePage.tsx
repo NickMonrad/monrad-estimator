@@ -186,6 +186,14 @@ export default function TimelinePage() {
     },
   })
 
+  const resetAllManual = useMutation({
+    mutationFn: () => api.delete(`/projects/${projectId}/timeline`),
+    onSuccess: () => {
+      setEditingFeatureId(null)
+      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
+    },
+  })
+
   const resetStoryTimeline = useMutation({
     mutationFn: (storyId: string) =>
       api.delete(`/projects/${projectId}/timeline/stories/${storyId}`),
@@ -326,6 +334,16 @@ export default function TimelinePage() {
                   title="Re-runs the scheduler — use this after updating tasks or resources in the backlog"
                 >
                   ↺ Re-run scheduler
+                </button>
+              )}
+              {timeline?.entries?.some(e => e.isManual) && (
+                <button
+                  onClick={() => resetAllManual.mutate()}
+                  disabled={resetAllManual.isPending}
+                  className="border border-blue-200 text-blue-600 px-4 py-1.5 rounded text-sm hover:bg-blue-50 disabled:opacity-50"
+                  title="Remove all manual position overrides and let the scheduler place everything automatically"
+                >
+                  {resetAllManual.isPending ? 'Clearing…' : '✕ Clear all overrides'}
                 </button>
               )}
               <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
