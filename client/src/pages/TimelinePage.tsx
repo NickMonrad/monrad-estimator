@@ -307,9 +307,9 @@ export default function TimelinePage() {
 
         {/* Setup bar */}
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex flex-wrap items-center gap-4">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Project start date</label>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-gray-500">Project start date</label>
               <input
                 type="date"
                 value={startDateInput}
@@ -318,46 +318,46 @@ export default function TimelinePage() {
                 className="border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-400"
               />
             </div>
-            <div className="flex items-end gap-2">
+            <div className="w-px h-7 bg-gray-200" />
+            <button
+              onClick={handleSchedule}
+              disabled={scheduleTimeline.isPending}
+              className="bg-red-600 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+            >
+              {scheduleTimeline.isPending ? 'Scheduling…' : 'Auto-schedule'}
+            </button>
+            {timeline?.entries && timeline.entries.length > 0 && (
               <button
                 onClick={handleSchedule}
                 disabled={scheduleTimeline.isPending}
-                className="bg-red-600 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                className="border border-gray-200 px-4 py-1.5 rounded text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                title="Re-runs the scheduler — use this after updating tasks or resources in the backlog"
               >
-                {scheduleTimeline.isPending ? 'Scheduling…' : 'Auto-schedule'}
+                ↺ Re-run scheduler
               </button>
-              {timeline?.entries && timeline.entries.length > 0 && (
-                <button
-                  onClick={handleSchedule}
-                  disabled={scheduleTimeline.isPending}
-                  className="border border-gray-200 px-4 py-1.5 rounded text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-                  title="Re-runs the scheduler — use this after updating tasks or resources in the backlog"
-                >
-                  ↺ Re-run scheduler
-                </button>
-              )}
-              {timeline?.entries?.some(e => e.isManual) && (
-                <button
-                  onClick={() => resetAllManual.mutate()}
-                  disabled={resetAllManual.isPending}
-                  className="border border-blue-200 text-blue-600 px-4 py-1.5 rounded text-sm hover:bg-blue-50 disabled:opacity-50"
-                  title="Remove all manual position overrides and let the scheduler place everything automatically"
-                >
-                  {resetAllManual.isPending ? 'Clearing…' : '✕ Clear all overrides'}
-                </button>
-              )}
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={resourceLevel}
-                  onChange={e => setResourceLevel(e.target.checked)}
-                  className="rounded"
-                />
-                Resource leveling
-              </label>
-            </div>
+            )}
+            {timeline?.entries?.some(e => e.isManual) && (
+              <button
+                onClick={() => resetAllManual.mutate()}
+                disabled={resetAllManual.isPending}
+                className="border border-blue-200 text-blue-600 px-4 py-1.5 rounded text-sm hover:bg-blue-50 disabled:opacity-50"
+                title="Remove all manual position overrides and let the scheduler place everything automatically"
+              >
+                {resetAllManual.isPending ? 'Clearing…' : '✕ Clear all overrides'}
+              </button>
+            )}
+            <div className="w-px h-7 bg-gray-200" />
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer pb-0.5">
+              <input
+                type="checkbox"
+                checked={resourceLevel}
+                onChange={e => setResourceLevel(e.target.checked)}
+                className="rounded"
+              />
+              Resource leveling
+            </label>
             {timeline?.projectedEndDate && (
-              <div className="text-sm text-gray-600">
+              <div className="text-sm text-gray-600 pb-0.5">
                 <span className="text-gray-400">Projected end:</span>{' '}
                 <span className="font-medium">{new Date(timeline.projectedEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
               </div>
