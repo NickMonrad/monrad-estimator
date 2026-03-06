@@ -689,7 +689,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
   for (const fId of processed) {
     const sw = startWeeks.get(fId)!
     const f = featureMap.get(fId)!
-    const dur = featureDurationWeeks(f)
+    const dur = (finishWeeks.get(fId) ?? (sw + featureDurationWeeks(f))) - sw
     const isManual = manualStartWeeks.has(fId)
     await prisma.timelineEntry.upsert({
       where: { featureId: fId },
