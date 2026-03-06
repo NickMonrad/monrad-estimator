@@ -94,6 +94,7 @@ export interface TimelineEntry {
   startDate: string | null
   endDate: string | null
   resourceBreakdown?: { name: string; days: number }[]
+  effectiveEngineers?: { name: string; engineerEquivalent: number; totalEngineers: number }[]
 }
 
 export interface ParallelWarning {
@@ -133,6 +134,7 @@ export interface TimelineSummary {
   storyEntries?: StoryTimelineEntry[]
   featureDependencies?: FeatureDependency[]
   storyDependencies?: StoryDependency[]
+  weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
 }
 
 export interface OverheadItem {

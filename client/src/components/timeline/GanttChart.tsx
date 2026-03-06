@@ -49,6 +49,8 @@ interface GanttChartProps {
   onMoveFeature?: (epicId: string, featureIdx: number, direction: 'up' | 'down') => void
   onUpdateEpicMode?: (epicId: string, featureMode: 'sequential' | 'parallel') => void
   onUpdateEpicScheduleMode?: (epicId: string, scheduleMode: 'sequential' | 'parallel') => void
+  rightPanelRef?: React.RefObject<HTMLDivElement | null>
+  onRightPanelScroll?: React.UIEventHandler<HTMLDivElement>
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +136,8 @@ export default function GanttChart({
   setEditingFeatureId,
   editingStoryId: _editingStoryId,
   setEditingStoryId,
+  rightPanelRef,
+  onRightPanelScroll,
 }: GanttChartProps) {
   // Expanded state
   const [expandedFeatures, setExpandedFeatures] = useState<Set<string>>(new Set())
@@ -512,7 +516,7 @@ export default function GanttChart({
       </div>
 
       {/* Right SVG area — horizontally scrollable */}
-      <div className="overflow-x-auto flex-1">
+      <div className="overflow-x-auto flex-1" ref={rightPanelRef} onScroll={onRightPanelScroll}>
         <svg
           width={totalWeeks * COL_W}
           height={totalHeight}
@@ -627,7 +631,11 @@ export default function GanttChart({
                       const rb = entry.resourceBreakdown ?? []
                       const totalDays = rb.reduce((s, r) => s + r.days, 0)
                       const breakdown = rb.length > 0 ? '\n' + rb.map(r => `  ${r.name}: ${r.days.toFixed(1)}d`).join('\n') : ''
-                      return `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}\n\nClick to edit · Drag to move`
+                      const ee = entry.effectiveEngineers ?? []
+                      const engineersSection = ee.length > 0
+                        ? '\n\nEngineers allocated:\n' + ee.map(e => `  ${e.name}: ${e.engineerEquivalent.toFixed(1)} of ${e.totalEngineers} engineer${e.totalEngineers !== 1 ? 's' : ''} avg`).join('\n')
+                        : ''
+                      return `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}${engineersSection}\n\nClick to edit · Drag to move`
                     })()}</title>
                   <rect
                     x={effectiveStart * COL_W}

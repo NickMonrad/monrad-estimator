@@ -59,6 +59,7 @@ function buildResponse(
   }> = [],
   featureDeps: Array<{ featureId: string; dependsOnId: string }> = [],
   storyDeps: Array<{ storyId: string; dependsOnId: string }> = [],
+  resourceTypes: Array<{ name: string; count: number }> = [],
 ) {
   const maxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
@@ -66,6 +67,38 @@ function buildResponse(
   const projectedEndDate = (project.startDate && maxWeek != null)
     ? (() => { const d = new Date(project.startDate); d.setDate(d.getDate() + maxWeek * 7); return d.toISOString() })()
     : null
+
+  // Build resource type count map (name → count) for quick lookup
+  const rtCountByName = new Map(resourceTypes.map(rt => [rt.name, rt.count]))
+
+  // Compute weekly demand across all features
+  const weeklyDemandMap = new Map<string, { demandDays: number; capacityDays: number }>()
+  for (const e of entries) {
+    if (e.durationWeeks <= 0) continue
+    const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
+    for (const { name, days } of breakdown) {
+      const startW = Math.floor(e.startWeek)
+      const endW = Math.ceil(e.startWeek + e.durationWeeks)
+      const durationWeeksActual = Math.max(e.durationWeeks, 0.01)
+      for (let w = startW; w < endW; w++) {
+        const key = `${w}|${name}`
+        const count = rtCountByName.get(name) ?? 1
+        const capacityDays = count * 5
+        const existing = weeklyDemandMap.get(key) ?? { demandDays: 0, capacityDays }
+        existing.demandDays += days / durationWeeksActual
+        weeklyDemandMap.set(key, existing)
+      }
+    }
+  }
+  const weeklyDemand = Array.from(weeklyDemandMap.entries()).map(([key, { demandDays, capacityDays }]) => {
+    const [weekStr, ...nameParts] = key.split('|')
+    return {
+      week: parseInt(weekStr, 10),
+      resourceTypeName: nameParts.join('|'),
+      demandDays: Math.round(demandDays * 10) / 10,
+      capacityDays,
+    }
+  }).sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
 
   return {
     projectId: project.id,
@@ -76,22 +109,36 @@ function buildResponse(
     storyEntries,
     featureDependencies: featureDeps,
     storyDependencies: storyDeps,
-    entries: entries.map(e => ({
-      featureId: e.featureId,
-      featureName: e.feature.name,
-      epicId: e.feature.epic.id,
-      epicName: e.feature.epic.name,
-      epicOrder: e.feature.epic.order,
-      epicFeatureMode: e.feature.epic.featureMode,
-      epicScheduleMode: e.feature.epic.scheduleMode,
-      epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
-      featureOrder: e.feature.order,
-      startWeek: e.startWeek,
-      durationWeeks: e.durationWeeks,
-      isManual: e.isManual,
-      resourceBreakdown: computeResourceBreakdown(e.feature, project.hoursPerDay),
-      ...computeDates(project.startDate, e.startWeek, e.durationWeeks),
-    })),
+    weeklyDemand,
+    entries: entries.map(e => {
+      const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
+      const durationWeeksActual = Math.max(e.durationWeeks, 0.01)
+      const effectiveEngineers = breakdown.map(({ name, days }) => {
+        const totalEngineers = rtCountByName.get(name) ?? 1
+        return {
+          name,
+          engineerEquivalent: Math.round((days / (durationWeeksActual * 5)) * 100) / 100,
+          totalEngineers,
+        }
+      })
+      return {
+        featureId: e.featureId,
+        featureName: e.feature.name,
+        epicId: e.feature.epic.id,
+        epicName: e.feature.epic.name,
+        epicOrder: e.feature.epic.order,
+        epicFeatureMode: e.feature.epic.featureMode,
+        epicScheduleMode: e.feature.epic.scheduleMode,
+        epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
+        featureOrder: e.feature.order,
+        startWeek: e.startWeek,
+        durationWeeks: e.durationWeeks,
+        isManual: e.isManual,
+        resourceBreakdown: breakdown,
+        effectiveEngineers,
+        ...computeDates(project.startDate, e.startWeek, e.durationWeeks),
+      }
+    }),
   }
 }
 
@@ -218,7 +265,8 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     isManual: e.isManual,
   }))
 
-  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies))
+  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id } })
+  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes))
 })
 
 // POST /api/projects/:projectId/timeline/schedule
@@ -692,7 +740,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     isManual: e.isManual,
   }))
 
-  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies))
+  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes))
 })
 
 // PUT /api/projects/:projectId/timeline/stories/:storyId — manual story timeline override

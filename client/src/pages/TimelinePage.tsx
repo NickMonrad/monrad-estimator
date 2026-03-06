@@ -1,10 +1,11 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import type { Project, ResourceType, TimelineSummary, TimelineEntry } from '../types/backlog'
 import GanttChart from '../components/timeline/GanttChart'
+import ResourceHistogram from '../components/timeline/ResourceHistogram'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -36,6 +37,29 @@ export default function TimelinePage() {
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [scheduleStale, setScheduleStale] = useState(false)
   const [resourceLevel, setResourceLevel] = useState(false)
+
+  // Scroll sync refs for Gantt + Histogram right panels
+  const ganttScrollRef = useRef<HTMLDivElement>(null)
+  const histScrollRef = useRef<HTMLDivElement>(null)
+  const isSyncingScroll = useRef(false)
+
+  const handleGanttScroll = useCallback(() => {
+    if (isSyncingScroll.current) return
+    isSyncingScroll.current = true
+    if (histScrollRef.current && ganttScrollRef.current) {
+      histScrollRef.current.scrollLeft = ganttScrollRef.current.scrollLeft
+    }
+    isSyncingScroll.current = false
+  }, [])
+
+  const handleHistScroll = useCallback(() => {
+    if (isSyncingScroll.current) return
+    isSyncingScroll.current = true
+    if (ganttScrollRef.current && histScrollRef.current) {
+      ganttScrollRef.current.scrollLeft = histScrollRef.current.scrollLeft
+    }
+    isSyncingScroll.current = false
+  }, [])
 
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
@@ -497,7 +521,21 @@ export default function TimelinePage() {
                 onUpdateEpicScheduleMode={(epicId, scheduleMode) =>
                   updateEpicScheduleMode.mutate({ epicId, scheduleMode })
                 }
+                rightPanelRef={ganttScrollRef}
+                onRightPanelScroll={handleGanttScroll}
               />
+
+              {/* Resource allocation histogram */}
+              {timeline.weeklyDemand && timeline.weeklyDemand.length > 0 && (
+                <ResourceHistogram
+                  weeklyDemand={timeline.weeklyDemand}
+                  totalWeeks={totalWeeks}
+                  colW={64}
+                  labelW={300}
+                  scrollContainerRef={histScrollRef}
+                  onScroll={handleHistScroll}
+                />
+              )}
 
               {/* Inline edit panel — shown below chart when a feature is selected */}
               {editingFeatureId && (() => {
