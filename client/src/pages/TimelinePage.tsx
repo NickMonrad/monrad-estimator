@@ -307,7 +307,7 @@ export default function TimelinePage() {
 
         {/* Setup bar */}
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs text-gray-500">Project start date</label>
               <input
@@ -347,7 +347,7 @@ export default function TimelinePage() {
               </button>
             )}
             <div className="w-px h-7 bg-gray-200" />
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer pb-0.5">
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
               <input
                 type="checkbox"
                 checked={resourceLevel}
@@ -357,7 +357,7 @@ export default function TimelinePage() {
               Resource leveling
             </label>
             {timeline?.projectedEndDate && (
-              <div className="text-sm text-gray-600 pb-0.5">
+              <div className="text-sm text-gray-600">
                 <span className="text-gray-400">Projected end:</span>{' '}
                 <span className="font-medium">{new Date(timeline.projectedEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
               </div>
