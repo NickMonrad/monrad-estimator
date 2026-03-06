@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { parse } from 'csv-parse/sync'
 import { stringify } from 'csv-stringify/sync'
+import { calcDurationDays } from '../utils/round.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -140,7 +141,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
               '',
               task.resourceType?.name ?? '',
               String(task.hoursEffort),
-              String(task.durationDays ?? ''),
+              String(task.durationDays != null ? Math.round(task.durationDays * 100) / 100 : ''),
               task.description ?? '',
               task.assumptions ?? '',
               '', '', '',
@@ -436,7 +437,7 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
           order: taskCount,
           resourceTypeId,
           hoursEffort: row.hoursEffort,
-          durationDays: row.durationDays || (row.hoursEffort / hoursPerDay),
+          durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
           description: row.description || null,
           assumptions: row.assumptions || null,
         },
@@ -448,7 +449,7 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
         data: {
           resourceTypeId,
           hoursEffort: row.hoursEffort,
-          durationDays: row.durationDays || (row.hoursEffort / hoursPerDay),
+          durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
           description: row.description || null,
           assumptions: row.assumptions || null,
         },

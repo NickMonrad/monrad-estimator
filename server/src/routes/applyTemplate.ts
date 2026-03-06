@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { calcDurationDays } from '../utils/round.js'
 
 const router = Router()
 router.use(authenticate)
@@ -66,7 +67,7 @@ router.post('/:featureId/apply-template', async (req: AuthRequest, res: Response
       data: {
         name: tmplTask.name,
         hoursEffort,
-        durationDays: hoursEffort / hoursPerDay,
+        durationDays: calcDurationDays(hoursEffort, hoursPerDay),
         resourceTypeId: matchedRt.id,
         userStoryId: story.id,
         order: i,
@@ -131,7 +132,7 @@ router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, re
       where: { id: storyTask.id },
       data: {
         hoursEffort,
-        durationDays: hoursEffort / hoursPerDay,
+        durationDays: calcDurationDays(hoursEffort, hoursPerDay),
         ...(matchedRt ? { resourceTypeId: matchedRt.id } : {}),
       },
     })
@@ -148,7 +149,7 @@ router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, re
       data: {
         name: tmplTask.name,
         hoursEffort,
-        durationDays: hoursEffort / hoursPerDay,
+        durationDays: calcDurationDays(hoursEffort, hoursPerDay),
         resourceTypeId: matchedRt.id,
         userStoryId: storyId,
         order: baseOrder + i,
