@@ -10,7 +10,6 @@ router.use(authenticate)
 const CSV_HEADERS = [
   'Epic', 'Feature', 'Story', 'Task',
   'ResourceType',
-  'HoursExtraSmall', 'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge',
   'HoursEffort', 'DurationDays',
   'Description', 'Assumptions',
 ]
@@ -87,7 +86,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
 
   if (epics.length === 0) {
     // blank template with one example row
-    rows.push(['My Epic', 'My Feature', 'My Story', 'My Task', 'Developer', '1', '2', '4', '8', '16', '', '', '', ''])
+    rows.push(['My Epic', 'My Feature', 'My Story', 'My Task', 'Developer', '', '', '', ''])
   } else {
     for (const epic of epics) {
       for (const feature of epic.features) {
@@ -99,11 +98,6 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
               story.name,
               task.name,
               task.resourceType?.name ?? '',
-              '', // HoursExtraSmall (template field, not applicable to exported tasks)
-              '', // HoursSmall
-              '', // HoursMedium
-              '', // HoursLarge
-              '', // HoursExtraLarge
               String(task.hoursEffort),
               String(task.durationDays ?? ''),
               task.description ?? '',
@@ -111,7 +105,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
             ])
           }
           if (story.tasks.length === 0) {
-            rows.push([epic.name, feature.name, story.name, '', '', '', '', '', '', '', '', '', story.description ?? '', story.assumptions ?? ''])
+            rows.push([epic.name, feature.name, story.name, '', '', '', '', story.description ?? '', story.assumptions ?? ''])
           }
         }
       }
