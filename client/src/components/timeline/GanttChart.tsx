@@ -226,7 +226,9 @@ export default function GanttChart({
 
         if (!expandedFeatures.has(entry.featureId)) return
 
-        const featureStories = storyEntries.filter(s => s.featureId === entry.featureId)
+        const featureStories = storyEntries
+          .filter(s => s.featureId === entry.featureId)
+          .sort((a, b) => a.startWeek - b.startWeek)
         featureStories.forEach(storyEntry => {
           result.push({
             type: 'story',
