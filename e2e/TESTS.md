@@ -76,6 +76,19 @@ npx playwright test --ui                   # interactive UI mode
 
 ---
 
+### `gantt.spec.ts` — Gantt Chart (4 tests)
+
+Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each test calls `setupTimeline()` which logs in, creates a project with 1 epic + 1 feature, navigates to the Timeline page, fills the start date, runs Auto-schedule, and waits for the "X features scheduled" footer.
+
+| Test | Description |
+|------|-------------|
+| auto-schedule renders feature bars in the Gantt grid | After auto-schedule the SVG contains at least one `<rect>` element (feature bar) |
+| epic feature-mode button toggles between sequential and parallel | Clicks the button with `aria-label="sequential"`, asserts it switches to `aria-label="parallel"` |
+| clicking a feature bar opens the inline edit panel | Clicks `[title="{featureName}"]` (a `<span>`), asserts Start week + duration inputs appear |
+| saving a manual start week shows the ✏ override indicator | Sets start week to 2, saves, asserts the "↺ Reset to auto" button appears (only rendered when `isManual=true`) |
+
+---
+
 ### `resource-profile.spec.ts` — Resource Profile (1 test)
 
 | Test | Description |

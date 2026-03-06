@@ -1,17 +1,11 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import type { Project, ResourceType, TimelineSummary, TimelineEntry } from '../types/backlog'
-
-const EPIC_COLOURS = [
-  { bar: 'bg-blue-400', text: 'text-blue-700', light: 'bg-blue-50' },
-  { bar: 'bg-purple-400', text: 'text-purple-700', light: 'bg-purple-50' },
-  { bar: 'bg-green-400', text: 'text-green-700', light: 'bg-green-50' },
-  { bar: 'bg-orange-400', text: 'text-orange-700', light: 'bg-orange-50' },
-  { bar: 'bg-pink-400', text: 'text-pink-700', light: 'bg-pink-50' },
-]
+import GanttChart from '../components/timeline/GanttChart'
+import ResourceHistogram from '../components/timeline/ResourceHistogram'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -30,12 +24,6 @@ function formatDate(iso: string) {
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 }
 
-function addDays(base: Date, days: number) {
-  const d = new Date(base)
-  d.setDate(d.getDate() + days)
-  return d
-}
-
 export default function TimelinePage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -45,10 +33,33 @@ export default function TimelinePage() {
   const [startDateInput, setStartDateInput] = useState('')
   const [resourcesOpen, setResourcesOpen] = useState(true)
   const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null)
+  const [editingStoryId, setEditingStoryId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [scheduleStale, setScheduleStale] = useState(false)
   const [resourceLevel, setResourceLevel] = useState(false)
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; entry: TimelineEntry } | null>(null)
+
+  // Scroll sync refs for Gantt + Histogram right panels
+  const ganttScrollRef = useRef<HTMLDivElement>(null)
+  const histScrollRef = useRef<HTMLDivElement>(null)
+  const isSyncingScroll = useRef(false)
+
+  const handleGanttScroll = useCallback(() => {
+    if (isSyncingScroll.current) return
+    isSyncingScroll.current = true
+    if (histScrollRef.current && ganttScrollRef.current) {
+      histScrollRef.current.scrollLeft = ganttScrollRef.current.scrollLeft
+    }
+    isSyncingScroll.current = false
+  }, [])
+
+  const handleHistScroll = useCallback(() => {
+    if (isSyncingScroll.current) return
+    isSyncingScroll.current = true
+    if (ganttScrollRef.current && histScrollRef.current) {
+      ganttScrollRef.current.scrollLeft = histScrollRef.current.scrollLeft
+    }
+    isSyncingScroll.current = false
+  }, [])
 
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
@@ -60,6 +71,14 @@ export default function TimelinePage() {
       setStartDateInput(project.startDate.slice(0, 10))
     }
   }, [project?.startDate])
+
+  // Populate edit form with current entry values when a feature is selected
+  useEffect(() => {
+    if (editingFeatureId && timeline?.entries) {
+      const entry = timeline.entries.find(e => e.featureId === editingFeatureId)
+      if (entry) setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
+    }
+  }, [editingFeatureId])
 
   const { data: timeline, isLoading } = useQuery<TimelineSummary>({
     queryKey: ['timeline', projectId],
@@ -95,7 +114,7 @@ export default function TimelinePage() {
   const updateEntry = useMutation({
     mutationFn: ({ featureId, startWeek, durationWeeks }: { featureId: string; startWeek: number; durationWeeks: number }) =>
       api.put(`/projects/${projectId}/timeline/${featureId}`, { startWeek, durationWeeks }).then(r => r.data),
-    onSuccess: () => { invalidate(); setEditingFeatureId(null) },
+    onSuccess: () => { invalidate() },
   })
 
   const { data: featureDeps = [] } = useQuery<Array<{ featureId: string; dependsOnId: string; feature: { name: string }; dependsOn: { name: string } }>>({
@@ -113,6 +132,24 @@ export default function TimelinePage() {
     mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
       api.delete(`/projects/${projectId}/feature-dependencies/${featureId}/${dependsOnId}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }); setScheduleStale(true) },
+  })
+
+  const updateStoryTimeline = useMutation({
+    mutationFn: ({ storyId, startWeek, durationWeeks }: { storyId: string; startWeek: number; durationWeeks: number }) =>
+      api.put(`/projects/${projectId}/timeline/stories/${storyId}`, { startWeek, durationWeeks }).then(r => r.data),
+    onSuccess: invalidate,
+  })
+
+  const addStoryDep = useMutation({
+    mutationFn: ({ storyId, dependsOnId }: { storyId: string; dependsOnId: string }) =>
+      api.post(`/projects/${projectId}/stories/${storyId}/dependencies`, { dependsOnId }).then(r => r.data),
+    onSuccess: invalidate,
+  })
+
+  const removeStoryDep = useMutation({
+    mutationFn: ({ storyId, dependsOnId }: { storyId: string; dependsOnId: string }) =>
+      api.delete(`/projects/${projectId}/stories/${storyId}/dependencies/${dependsOnId}`).then(r => r.data),
+    onSuccess: invalidate,
   })
 
   const updateEpicMode = useMutation({
@@ -145,6 +182,22 @@ export default function TimelinePage() {
     mutationFn: (featureId: string) => api.delete(`/projects/${projectId}/timeline/${featureId}`),
     onSuccess: () => {
       setEditingFeatureId(null)
+      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
+    },
+  })
+
+  const resetAllManual = useMutation({
+    mutationFn: () => api.delete(`/projects/${projectId}/timeline`),
+    onSuccess: () => {
+      setEditingFeatureId(null)
+      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
+    },
+  })
+
+  const resetStoryTimeline = useMutation({
+    mutationFn: (storyId: string) =>
+      api.delete(`/projects/${projectId}/timeline/stories/${storyId}`),
+    onSuccess: () => {
       scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
     },
   })
@@ -191,7 +244,11 @@ export default function TimelinePage() {
   // Compute Gantt dimensions
   const totalWeeks = useMemo(() => {
     if (!timeline?.entries.length) return 0
-    return Math.ceil(Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks))) + 1
+    const featureMax = Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks))
+    const storyMax = timeline.storyEntries?.length
+      ? Math.max(...timeline.storyEntries.map(e => e.startWeek + e.durationWeeks))
+      : 0
+    return Math.ceil(Math.max(featureMax, storyMax)) + 1
   }, [timeline])
 
   // Group entries by epicId, sorted by epicOrder then featureOrder
@@ -207,12 +264,6 @@ export default function TimelinePage() {
     for (const g of groups) g.entries.sort((a, b) => (a.featureOrder ?? 0) - (b.featureOrder ?? 0))
     return groups
   }, [timeline])
-
-  const epicColourMap = useMemo(() => {
-    const m = new Map<string, typeof EPIC_COLOURS[0]>()
-    epicGroups.forEach((g, i) => m.set(g.epicId, EPIC_COLOURS[i % EPIC_COLOURS.length]))
-    return m
-  }, [epicGroups])
 
   // Group resource types by category
   const rtByCategory = useMemo(() => {
@@ -256,9 +307,9 @@ export default function TimelinePage() {
 
         {/* Setup bar */}
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex flex-wrap items-center gap-4">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Project start date</label>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-gray-500">Project start date</label>
               <input
                 type="date"
                 value={startDateInput}
@@ -267,33 +318,44 @@ export default function TimelinePage() {
                 className="border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-400"
               />
             </div>
-            <div className="flex items-end gap-2">
+            <div className="w-px h-7 bg-gray-200" />
+            <button
+              onClick={handleSchedule}
+              disabled={scheduleTimeline.isPending}
+              className="bg-red-600 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+            >
+              {scheduleTimeline.isPending ? 'Scheduling…' : 'Auto-schedule'}
+            </button>
+            {timeline?.entries && timeline.entries.length > 0 && (
               <button
                 onClick={handleSchedule}
                 disabled={scheduleTimeline.isPending}
-                className="bg-red-600 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                className="border border-gray-200 px-4 py-1.5 rounded text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                title="Re-runs the scheduler — use this after updating tasks or resources in the backlog"
               >
-                {scheduleTimeline.isPending ? 'Scheduling…' : 'Auto-schedule'}
+                ↺ Re-run scheduler
               </button>
-              {timeline?.entries && timeline.entries.length > 0 && (
-                <button
-                  onClick={handleSchedule}
-                  disabled={scheduleTimeline.isPending}
-                  className="border border-gray-200 px-4 py-1.5 rounded text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-                >
-                  Reset to auto
-                </button>
-              )}
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={resourceLevel}
-                  onChange={e => setResourceLevel(e.target.checked)}
-                  className="rounded"
-                />
-                Resource leveling
-              </label>
-            </div>
+            )}
+            {timeline?.entries?.some(e => e.isManual) && (
+              <button
+                onClick={() => resetAllManual.mutate()}
+                disabled={resetAllManual.isPending}
+                className="border border-blue-200 text-blue-600 px-4 py-1.5 rounded text-sm hover:bg-blue-50 disabled:opacity-50"
+                title="Remove all manual position overrides and let the scheduler place everything automatically"
+              >
+                {resetAllManual.isPending ? 'Clearing…' : '✕ Clear all overrides'}
+              </button>
+            )}
+            <div className="w-px h-7 bg-gray-200" />
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={resourceLevel}
+                onChange={e => setResourceLevel(e.target.checked)}
+                className="rounded"
+              />
+              Resource leveling
+            </label>
             {timeline?.projectedEndDate && (
               <div className="text-sm text-gray-600">
                 <span className="text-gray-400">Projected end:</span>{' '}
@@ -424,7 +486,7 @@ export default function TimelinePage() {
         </div>
 
         {/* Gantt chart */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-xl border border-gray-200">
           <div className="px-4 py-3 border-b border-gray-100">
             <h2 className="text-sm font-medium text-gray-700">Gantt Chart</h2>
           </div>
@@ -438,260 +500,185 @@ export default function TimelinePage() {
           )}
 
           {!isLoading && timeline?.entries && timeline.entries.length > 0 && (
-            <div className="overflow-x-auto">
-              {/* Grid with label col + week cols */}
-              <div
-                className="min-w-max"
-                style={{ display: 'grid', gridTemplateColumns: `200px repeat(${totalWeeks}, minmax(60px, 1fr))` }}
-              >
-                {/* Header row: week labels */}
-                <div className="bg-gray-50 border-b border-gray-100 px-3 py-2 text-xs font-medium text-gray-500">Feature</div>
-                {Array.from({ length: totalWeeks }, (_, i) => (
-                  <div key={i} className="bg-gray-50 border-b border-l border-gray-100 px-1 py-2 text-center">
-                    <div className="text-xs font-medium text-gray-600">W{i + 1}</div>
-                    {projectStartDate && (
-                      <div className="text-xs text-gray-400">{formatDate(addDays(projectStartDate, i * 7).toISOString())}</div>
-                    )}
-                  </div>
-                ))}
+            <>
+              <GanttChart
+                entries={timeline.entries}
+                storyEntries={timeline.storyEntries}
+                featureDependencies={timeline.featureDependencies}
+                storyDependencies={timeline.storyDependencies}
+                totalWeeks={totalWeeks}
+                projectStartDate={projectStartDate}
+                onDragFeature={(featureId, newStartWeek) => {
+                  const entry = timeline.entries.find(e => e.featureId === featureId)
+                  if (!entry) return
+                  updateEntry.mutate({ featureId, startWeek: newStartWeek, durationWeeks: entry.durationWeeks })
+                }}
+                onDragStory={(storyId, newStartWeek) => {
+                  const entry = timeline.storyEntries?.find(e => e.storyId === storyId)
+                  if (!entry) return
+                  updateStoryTimeline.mutate({ storyId, startWeek: newStartWeek, durationWeeks: entry.durationWeeks })
+                }}
+                onAddFeatureDep={(featureId, dependsOnId) => addFeatureDep.mutate({ featureId, dependsOnId })}
+                onRemoveFeatureDep={(featureId, dependsOnId) => removeFeatureDep.mutate({ featureId, dependsOnId })}
+                onAddStoryDep={(storyId, dependsOnId) => addStoryDep.mutate({ storyId, dependsOnId })}
+                onRemoveStoryDep={(storyId, dependsOnId) => removeStoryDep.mutate({ storyId, dependsOnId })}
+                editingFeatureId={editingFeatureId}
+                setEditingFeatureId={setEditingFeatureId}
+                editingStoryId={editingStoryId}
+                setEditingStoryId={setEditingStoryId}
+                onMoveEpic={(_epicId, direction, epicIdx) => {
+                  const toIdx = direction === 'up' ? epicIdx - 1 : epicIdx + 1
+                  moveEpic(epicIdx, toIdx)
+                }}
+                onMoveFeature={(epicId, featureIdx, direction) => {
+                  const toIdx = direction === 'up' ? featureIdx - 1 : featureIdx + 1
+                  moveFeature(epicId, featureIdx, toIdx)
+                }}
+                onUpdateEpicMode={(epicId, featureMode) =>
+                  updateEpicMode.mutate({ epicId, featureMode })
+                }
+                onUpdateEpicScheduleMode={(epicId, scheduleMode) =>
+                  updateEpicScheduleMode.mutate({ epicId, scheduleMode })
+                }
+                rightPanelRef={ganttScrollRef}
+                onRightPanelScroll={handleGanttScroll}
+              />
 
-                {/* Epic groups */}
-                {epicGroups.map((group, epicIdx) => {
-                  const colour = epicColourMap.get(group.epicId)!
-                  const epicMinWeek = Math.min(...group.entries.map(e => e.startWeek))
-                  const epicMaxWeek = Math.max(...group.entries.map(e => e.startWeek + e.durationWeeks))
-                  return (
-                    <>
-                      {/* Epic header row */}
-                      <div
-                        key={`epic-${group.epicId}`}
-                        className={`col-span-full border-b border-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-600 ${colour.light} flex items-center gap-2`}
-                        style={{ gridColumn: `1 / span ${totalWeeks + 1}` }}
+              {/* Resource allocation histogram */}
+              {timeline.weeklyDemand && timeline.weeklyDemand.length > 0 && (
+                <ResourceHistogram
+                  weeklyDemand={timeline.weeklyDemand}
+                  totalWeeks={totalWeeks}
+                  colW={64}
+                  labelW={300}
+                  scrollContainerRef={histScrollRef}
+                  onScroll={handleHistScroll}
+                />
+              )}
+
+              {/* Inline edit panel — shown below chart when a feature is selected */}
+              {editingFeatureId && (() => {
+                const entry = timeline.entries.find(e => e.featureId === editingFeatureId)
+                if (!entry) return null
+                return (
+                  <div className="sticky bottom-0 z-20 border-t border-blue-200 bg-blue-50 shadow-md px-4 py-3 flex flex-wrap items-center gap-3">
+                    <span className="text-xs text-gray-600 font-medium">{entry.featureName}</span>
+                    <label className="text-xs text-gray-500">Start week:</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={editForm.startWeek}
+                      onChange={e => setEditForm(f => ({ ...f, startWeek: e.target.value }))}
+                      className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    />
+                    <label className="text-xs text-gray-500">Duration weeks:</label>
+                    <input
+                      type="number"
+                      min="0.2"
+                      value={editForm.durationWeeks}
+                      onChange={e => setEditForm(f => ({ ...f, durationWeeks: e.target.value }))}
+                      className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    />
+                    <button
+                      onClick={() => updateEntry.mutate({
+                        featureId: entry.featureId,
+                        startWeek: parseFloat(editForm.startWeek),
+                        durationWeeks: parseFloat(editForm.durationWeeks),
+                      })}
+                      disabled={updateEntry.isPending}
+                      className="bg-blue-600 text-white px-3 py-0.5 rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {updateEntry.isPending ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      onClick={() => setEditingFeatureId(null)}
+                      className="px-3 py-0.5 rounded text-xs text-gray-500 hover:bg-gray-100"
+                    >
+                      Cancel
+                    </button>
+                    {entry.isManual && (
+                      <button
+                        onClick={() => resetManual.mutate(entry.featureId)}
+                        disabled={resetManual.isPending}
+                        title="Clear manual override and re-run auto-schedule"
+                        className="px-3 py-0.5 rounded text-xs text-orange-600 border border-orange-200 hover:bg-orange-50 disabled:opacity-50"
                       >
-                        {/* Epic reorder arrows */}
-                        <div className="flex flex-col -my-0.5 mr-1">
-                          <button
-                            onClick={() => moveEpic(epicIdx, epicIdx - 1)}
-                            disabled={epicIdx === 0 || reorderEpics.isPending}
-                            className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
-                            title="Move epic up"
-                          >▲</button>
-                          <button
-                            onClick={() => moveEpic(epicIdx, epicIdx + 1)}
-                            disabled={epicIdx === epicGroups.length - 1 || reorderEpics.isPending}
-                            className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
-                            title="Move epic down"
-                          >▼</button>
+                        {resetManual.isPending ? 'Resetting…' : '↺ Reset to auto'}
+                      </button>
+                    )}
+                    {/* Dependencies section */}
+                    <div className="mt-2 w-full" data-testid="dep-section">
+                      <div className="px-3 py-2 bg-blue-50 border-t border-blue-100">
+                        <p className="text-xs font-medium text-gray-600 mb-1">Depends on (must finish before this feature starts):</p>
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {featureDeps
+                            .filter(d => d.featureId === entry.featureId)
+                            .map(d => (
+                              <span key={d.dependsOnId} className="inline-flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700">
+                                {d.dependsOn.name}
+                                <button
+                                  onClick={() => removeFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: d.dependsOnId })}
+                                  className="text-gray-400 hover:text-red-500 ml-1"
+                                >✕</button>
+                              </span>
+                            ))}
+                          {featureDeps.filter(d => d.featureId === entry.featureId).length === 0 && (
+                            <span className="text-xs text-gray-400">None</span>
+                          )}
                         </div>
-                        <span>{group.epicName}</span>
-                        <span className="text-gray-400 font-normal">W{epicMinWeek % 1 === 0 ? epicMinWeek + 1 : (epicMinWeek + 1).toFixed(1)}–W{epicMaxWeek % 1 === 0 ? epicMaxWeek : epicMaxWeek.toFixed(1)}</span>
-                        {(() => {
-                          const epicFeatureMode = group.entries[0]?.epicFeatureMode ?? 'sequential'
-                          return (
-                            <button
-                              onClick={() => updateEpicMode.mutate({ epicId: group.epicId, featureMode: epicFeatureMode === 'sequential' ? 'parallel' : 'sequential' })}
-                              title={epicFeatureMode === 'sequential'
-                                ? 'Features within this epic run one after another — click for parallel'
-                                : 'Features within this epic all start simultaneously — click for sequential'}
-                              className="ml-2 text-xs px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-white"
-                            >
-                              {epicFeatureMode === 'sequential' ? '↓ Features: sequential' : '⇉ Features: parallel'}
-                            </button>
-                          )
-                        })()}
-                        {(() => {
-                          const epicScheduleMode = group.entries[0]?.epicScheduleMode ?? 'sequential'
-                          return (
-                            <button
-                              onClick={() => updateEpicScheduleMode.mutate({
-                                epicId: group.epicId,
-                                scheduleMode: epicScheduleMode === 'sequential' ? 'parallel' : 'sequential',
-                              })}
-                              title={epicScheduleMode === 'sequential'
-                                ? 'This epic starts after the previous epic completes — click to run concurrently'
-                                : 'This epic runs concurrently with other epics — click to chain after previous'}
-                              className={`text-xs px-2 py-0.5 rounded border font-medium ${
-                                epicScheduleMode === 'parallel'
-                                  ? 'bg-purple-100 text-purple-700 border-purple-300'
-                                  : 'bg-gray-100 text-gray-500 border-gray-200'
-                              }`}
-                            >
-                              {epicScheduleMode === 'parallel' ? '⬛ Epic: concurrent' : '⏭ Epic: after prev'}
-                            </button>
-                          )
-                        })()}
-                      </div>
-
-                      {/* Feature rows */}
-                      {group.entries.map((entry, featureIdx) => (
-                        <>
-                          <div
-                            key={`label-${entry.featureId}`}
-                            className="border-b border-gray-50 px-3 py-2 text-sm text-gray-700 truncate cursor-pointer hover:text-red-600 flex items-center"
-                            title={entry.featureName}
-                            onClick={() => {
-                              if (editingFeatureId === entry.featureId) {
-                                setEditingFeatureId(null)
-                              } else {
-                                setEditingFeatureId(entry.featureId)
-                                setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
+                        <div className="flex items-center gap-2">
+                          <select
+                            className="border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            value=""
+                            onChange={e => {
+                              if (e.target.value) {
+                                addFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: e.target.value })
+                                e.target.value = ''
                               }
                             }}
                           >
-                            {/* Feature reorder arrows */}
-                            <div className="flex flex-col -my-0.5 mr-1 shrink-0" onClick={e => e.stopPropagation()}>
-                              <button
-                                onClick={() => moveFeature(group.epicId, featureIdx, featureIdx - 1)}
-                                disabled={featureIdx === 0 || reorderFeatures.isPending}
-                                className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
-                                title="Move feature up"
-                              >▲</button>
-                              <button
-                                onClick={() => moveFeature(group.epicId, featureIdx, featureIdx + 1)}
-                                disabled={featureIdx === group.entries.length - 1 || reorderFeatures.isPending}
-                                className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
-                                title="Move feature down"
-                              >▼</button>
-                            </div>
-                            {entry.featureName}
-                          </div>
-                          {/* Week cells + Gantt bar */}
-                          {Array.from({ length: totalWeeks }, (_, i) => {
-                            const floorStart = Math.floor(entry.startWeek)
-                            const ceilEnd = Math.ceil(entry.startWeek + entry.durationWeeks)
-                            const isBar = i >= floorStart && i < ceilEnd
-                            const isFirst = i === floorStart
-                            const isLast = i === ceilEnd - 1
-                            const overlapStart = Math.max(i, entry.startWeek)
-                            const overlapEnd = Math.min(i + 1, entry.startWeek + entry.durationWeeks)
-                            const leftPct = (overlapStart - i) * 100
-                            const widthPct = (overlapEnd - overlapStart) * 100
-                            return (
-                              <div
-                                key={`cell-${entry.featureId}-${i}`}
-                                className="border-b border-l border-gray-50 py-2 px-0.5 flex items-center"
-                              >
-                                {isBar && (
-                                  <div
-                                    className={`h-6 ${colour.bar} ${isFirst ? 'rounded-l' : ''} ${isLast ? 'rounded-r' : ''} flex items-center px-1 cursor-pointer`}
-                                    style={{ marginLeft: `${leftPct}%`, width: `max(4px, ${widthPct}%)` }}
-                                    onClick={() => {
-                                      setEditingFeatureId(entry.featureId)
-                                      setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
-                                    }}
-                                    onMouseEnter={(e) => setTooltip({ x: e.clientX, y: e.clientY, entry })}
-                                    onMouseMove={(e) => setTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
-                                    onMouseLeave={() => setTooltip(null)}
-                                  >
-                                    {isFirst && entry.isManual && (
-                                      <span className="text-white text-xs">✏</span>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          })}
+                            <option value="">+ Add dependency…</option>
+                            {timeline?.entries
+                              .filter(e2 => e2.featureId !== entry.featureId && !featureDeps.some(d => d.featureId === entry.featureId && d.dependsOnId === e2.featureId))
+                              .map(e2 => (
+                                <option key={e2.featureId} value={e2.featureId}>{e2.epicName} / {e2.featureName}</option>
+                              ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
 
-                          {/* Inline edit row */}
-                          {editingFeatureId === entry.featureId && (
-                            <div
-                              key={`edit-${entry.featureId}`}
-                              className="bg-blue-50 border-b border-blue-100 px-3 py-2 flex flex-wrap items-center gap-3"
-                              style={{ gridColumn: `1 / span ${totalWeeks + 1}` }}
-                            >
-                              <span className="text-xs text-gray-600 font-medium">{entry.featureName}</span>
-                              <label className="text-xs text-gray-500">Start week:</label>
-                              <input
-                                type="number"
-                                min="0"
-                                value={editForm.startWeek}
-                                onChange={e => setEditForm(f => ({ ...f, startWeek: e.target.value }))}
-                                className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-                              />
-                              <label className="text-xs text-gray-500">Duration weeks:</label>
-                              <input
-                                type="number"
-                                min="0.2"
-                                value={editForm.durationWeeks}
-                                onChange={e => setEditForm(f => ({ ...f, durationWeeks: e.target.value }))}
-                                className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-                              />
-                              <button
-                                onClick={() => updateEntry.mutate({
-                                  featureId: entry.featureId,
-                                  startWeek: parseFloat(editForm.startWeek),
-                                  durationWeeks: parseFloat(editForm.durationWeeks),
-                                })}
-                                disabled={updateEntry.isPending}
-                                className="bg-blue-600 text-white px-3 py-0.5 rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
-                              >
-                                {updateEntry.isPending ? 'Saving…' : 'Save'}
-                              </button>
-                              <button
-                                onClick={() => setEditingFeatureId(null)}
-                                className="px-3 py-0.5 rounded text-xs text-gray-500 hover:bg-gray-100"
-                              >
-                                Cancel
-                              </button>
-                              {entry.isManual && (
-                                <button
-                                  onClick={() => resetManual.mutate(entry.featureId)}
-                                  disabled={resetManual.isPending}
-                                  title="Clear manual override and re-run auto-schedule"
-                                  className="px-3 py-0.5 rounded text-xs text-orange-600 border border-orange-200 hover:bg-orange-50 disabled:opacity-50"
-                                >
-                                  {resetManual.isPending ? 'Resetting…' : '↺ Reset to auto'}
-                                </button>
-                              )}
-                              {/* Dependencies section */}
-                              <div className="mt-2 w-full" data-testid="dep-section" style={{ gridColumn: `1 / span ${totalWeeks + 1}` }}>
-                                <div className="px-3 py-2 bg-blue-50 border-t border-blue-100">
-                                  <p className="text-xs font-medium text-gray-600 mb-1">Depends on (must finish before this feature starts):</p>
-                                  <div className="flex flex-wrap gap-1 mb-2">
-                                    {featureDeps
-                                      .filter(d => d.featureId === entry.featureId)
-                                      .map(d => (
-                                        <span key={d.dependsOnId} className="inline-flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700">
-                                          {d.dependsOn.name}
-                                          <button
-                                            onClick={() => removeFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: d.dependsOnId })}
-                                            className="text-gray-400 hover:text-red-500 ml-1"
-                                          >✕</button>
-                                        </span>
-                                      ))}
-                                    {featureDeps.filter(d => d.featureId === entry.featureId).length === 0 && (
-                                      <span className="text-xs text-gray-400">None</span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <select
-                                      className="border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                                      value=""
-                                      onChange={e => {
-                                        if (e.target.value) {
-                                          addFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: e.target.value })
-                                          e.target.value = ''
-                                        }
-                                      }}
-                                    >
-                                      <option value="">+ Add dependency…</option>
-                                      {timeline?.entries
-                                        .filter(e2 => e2.featureId !== entry.featureId && !featureDeps.some(d => d.featureId === entry.featureId && d.dependsOnId === e2.featureId))
-                                        .map(e2 => (
-                                          <option key={e2.featureId} value={e2.featureId}>{e2.epicName} / {e2.featureName}</option>
-                                        ))}
-                                    </select>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      ))}
-                    </>
-                  )
-                })}
-              </div>
+              {editingStoryId && (() => {
+                const storyEntry = timeline.storyEntries?.find(e => e.storyId === editingStoryId)
+                if (!storyEntry) return null
+                return (
+                  <div className="sticky bottom-0 z-20 border-t border-blue-200 bg-blue-50 shadow-md px-4 py-3 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-medium text-blue-800 truncate">{storyEntry.storyName}</span>
+                      {storyEntry.isManual && <span className="text-xs bg-blue-200 text-blue-700 px-1.5 py-0.5 rounded">✏ manual</span>}
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      {storyEntry.isManual && (
+                        <button
+                          onClick={() => { resetStoryTimeline.mutate(editingStoryId); setEditingStoryId(null) }}
+                          className="text-xs text-blue-600 hover:text-blue-800 underline"
+                        >
+                          Reset to auto
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setEditingStoryId(null)}
+                        className="text-xs text-gray-500 hover:text-gray-700"
+                      >
+                        Close ✕
+                      </button>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* Summary footer */}
               <div className="px-4 py-3 border-t border-gray-100 text-xs text-gray-500">
@@ -700,29 +687,10 @@ export default function TimelinePage() {
                   <span className="ml-2 text-blue-500">· ✏ = manually overridden</span>
                 )}
               </div>
-            </div>
+            </>
           )}
         </div>
       </main>
-      {tooltip && tooltip.entry.resourceBreakdown && tooltip.entry.resourceBreakdown.length > 0 && (
-        <div
-          className="fixed z-50 pointer-events-none bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs"
-          style={{ left: tooltip.x + 12, top: tooltip.y - 10 }}
-        >
-          <div className="font-semibold text-gray-800 mb-1">{tooltip.entry.featureName}</div>
-          <div className="font-medium text-gray-500 mb-1.5">Resource Breakdown</div>
-          {tooltip.entry.resourceBreakdown.map(rb => (
-            <div key={rb.name} className="flex justify-between gap-4 text-gray-700">
-              <span>{rb.name}</span>
-              <span className="font-medium">{rb.days}d</span>
-            </div>
-          ))}
-          <div className="border-t border-gray-100 mt-1.5 pt-1.5 flex justify-between gap-4 text-gray-600 font-medium">
-            <span>Total</span>
-            <span>{tooltip.entry.resourceBreakdown.reduce((s, r) => s + r.days, 0).toFixed(1)}d</span>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

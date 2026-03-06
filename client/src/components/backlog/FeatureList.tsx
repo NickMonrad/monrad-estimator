@@ -5,6 +5,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../../lib/api'
 import type { Feature, ResourceType } from '../../types/backlog'
+import type { EpicColour } from '../../lib/epicColours'
 import StoryList from './StoryList'
 import ApplyTemplateModal from './ApplyTemplateModal'
 
@@ -14,9 +15,10 @@ interface Props {
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number
+  epicColour?: EpicColour
 }
 
-function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay }: {
+function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay, epicColour }: {
   feature: Feature
   isEditing: boolean
   expanded: boolean
@@ -31,6 +33,7 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
   resourceTypes: ResourceType[]
   projectId: string
   hoursPerDay: number
+  epicColour?: EpicColour
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'feature-' + feature.id })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
@@ -47,13 +50,13 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
           saving={isSaving}
         />
       ) : (
-        <div className="group flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 hover:border-blue-300 cursor-pointer"
+        <div className={`group flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 hover:border-blue-300 cursor-pointer border-l-2 ${epicColour?.border ?? 'border-l-blue-200'}`}
           onClick={onToggle}>
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-blue-300 hover:text-blue-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
           <span className="text-blue-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded">Feature</span>
           <span className={`text-sm flex-1 truncate ${feature.isActive === false ? 'line-through text-gray-400' : 'text-gray-800'}`}>{feature.name}</span>
-          <span className="text-xs text-gray-400">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours.toFixed(2)}h</span>
+          <span className="text-xs text-gray-400">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
           <button onClick={e => { e.stopPropagation(); onApplyTemplate() }}
             className="text-xs text-purple-500 hover:text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2 py-0.5 rounded transition-colors">
             + Template
@@ -66,13 +69,13 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
         </div>
       )}
       {expanded && (
-        <StoryList featureId={feature.id} stories={feature.userStories} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} />
+        <StoryList featureId={feature.id} stories={feature.userStories} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} epicColour={epicColour} />
       )}
     </div>
   )
 }
 
-export default function FeatureList({ epicId, features, resourceTypes, projectId, hoursPerDay }: Props) {
+export default function FeatureList({ epicId, features, resourceTypes, projectId, hoursPerDay, epicColour }: Props) {
   const qc = useQueryClient()
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
@@ -136,6 +139,7 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
             resourceTypes={resourceTypes}
             projectId={projectId}
             hoursPerDay={hoursPerDay}
+            epicColour={epicColour}
           />
         ))}
       </SortableContext>

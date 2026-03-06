@@ -49,6 +49,17 @@ function buildResponse(
     isManual: boolean
   }>,
   parallelWarnings: ParallelWarning[] = [],
+  storyEntries: Array<{
+    storyId: string
+    storyName: string
+    featureId: string
+    startWeek: number
+    durationWeeks: number
+    isManual: boolean
+  }> = [],
+  featureDeps: Array<{ featureId: string; dependsOnId: string }> = [],
+  storyDeps: Array<{ storyId: string; dependsOnId: string }> = [],
+  resourceTypes: Array<{ name: string; count: number }> = [],
 ) {
   const maxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
@@ -57,28 +68,81 @@ function buildResponse(
     ? (() => { const d = new Date(project.startDate); d.setDate(d.getDate() + maxWeek * 7); return d.toISOString() })()
     : null
 
+  // Build resource type count map (name → count) for quick lookup
+  const rtCountByName = new Map(resourceTypes.map(rt => [rt.name, rt.count]))
+
+  // Compute weekly demand across all features
+  const weeklyDemandMap = new Map<string, { demandDays: number; capacityDays: number }>()
+  for (const e of entries) {
+    if (e.durationWeeks <= 0) continue
+    const featureStart = e.startWeek
+    const featureEnd = e.startWeek + e.durationWeeks
+    const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
+    for (const { name, days } of breakdown) {
+      const startW = Math.floor(featureStart)
+      const endW = Math.ceil(featureEnd)
+      const count = rtCountByName.get(name) ?? 1
+      const capacityDays = count * 5
+      for (let w = startW; w < endW; w++) {
+        // Only count the fraction of this integer week the feature actually occupies
+        const overlap = Math.min(w + 1, featureEnd) - Math.max(w, featureStart)
+        if (overlap <= 0) continue
+        const key = `${w}|${name}`
+        const existing = weeklyDemandMap.get(key) ?? { demandDays: 0, capacityDays }
+        existing.demandDays += days * (overlap / e.durationWeeks)
+        weeklyDemandMap.set(key, existing)
+      }
+    }
+  }
+  const weeklyDemand = Array.from(weeklyDemandMap.entries()).map(([key, { demandDays, capacityDays }]) => {
+    const [weekStr, ...nameParts] = key.split('|')
+    return {
+      week: parseInt(weekStr, 10),
+      resourceTypeName: nameParts.join('|'),
+      demandDays: Math.round(demandDays * 10) / 10,
+      capacityDays,
+    }
+  }).sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
+
   return {
     projectId: project.id,
     startDate: project.startDate?.toISOString() ?? null,
     hoursPerDay: project.hoursPerDay,
     projectedEndDate,
     parallelWarnings,
-    entries: entries.map(e => ({
-      featureId: e.featureId,
-      featureName: e.feature.name,
-      epicId: e.feature.epic.id,
-      epicName: e.feature.epic.name,
-      epicOrder: e.feature.epic.order,
-      epicFeatureMode: e.feature.epic.featureMode,
-      epicScheduleMode: e.feature.epic.scheduleMode,
-      epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
-      featureOrder: e.feature.order,
-      startWeek: e.startWeek,
-      durationWeeks: e.durationWeeks,
-      isManual: e.isManual,
-      resourceBreakdown: computeResourceBreakdown(e.feature, project.hoursPerDay),
-      ...computeDates(project.startDate, e.startWeek, e.durationWeeks),
-    })),
+    storyEntries,
+    featureDependencies: featureDeps,
+    storyDependencies: storyDeps,
+    weeklyDemand,
+    entries: entries.map(e => {
+      const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
+      const durationWeeksActual = Math.max(e.durationWeeks, 0.01)
+      const effectiveEngineers = breakdown.map(({ name, days }) => {
+        const totalEngineers = rtCountByName.get(name) ?? 1
+        return {
+          name,
+          engineerEquivalent: Math.round((days / (durationWeeksActual * 5)) * 100) / 100,
+          totalEngineers,
+        }
+      })
+      return {
+        featureId: e.featureId,
+        featureName: e.feature.name,
+        epicId: e.feature.epic.id,
+        epicName: e.feature.epic.name,
+        epicOrder: e.feature.epic.order,
+        epicFeatureMode: e.feature.epic.featureMode,
+        epicScheduleMode: e.feature.epic.scheduleMode,
+        epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
+        featureOrder: e.feature.order,
+        startWeek: e.startWeek,
+        durationWeeks: e.durationWeeks,
+        isManual: e.isManual,
+        resourceBreakdown: breakdown,
+        effectiveEngineers,
+        ...computeDates(project.startDate, e.startWeek, e.durationWeeks),
+      }
+    }),
   }
 }
 
@@ -182,7 +246,31 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   // Compute parallel over-allocation warnings
   const parallelWarnings = await computeParallelWarnings(project.id, project.hoursPerDay, activeEntries)
 
-  res.json(buildResponse(project, activeEntries, parallelWarnings))
+  const storyTimelineEntries = await prisma.storyTimelineEntry.findMany({
+    where: { projectId: project.id },
+    include: { story: { select: { name: true, featureId: true } } },
+  })
+  const allFeatureIds = activeEntries.map(e => e.featureId)
+  const featureDependencies = await prisma.featureDependency.findMany({
+    where: { featureId: { in: allFeatureIds } },
+    select: { featureId: true, dependsOnId: true },
+  })
+  const allStoryIds = storyTimelineEntries.map(e => e.storyId)
+  const storyDependencies = await prisma.storyDependency.findMany({
+    where: { storyId: { in: allStoryIds } },
+    select: { storyId: true, dependsOnId: true },
+  })
+  const mappedStoryEntries = storyTimelineEntries.map(e => ({
+    storyId: e.storyId,
+    storyName: e.story.name,
+    featureId: e.story.featureId,
+    startWeek: e.startWeek,
+    durationWeeks: e.durationWeeks,
+    isManual: e.isManual,
+  }))
+
+  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id } })
+  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes))
 })
 
 // POST /api/projects/:projectId/timeline/schedule
@@ -210,8 +298,10 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
         orderBy: { order: 'asc' },
         include: {
           userStories: {
+            orderBy: { order: 'asc' },
             include: {
               tasks: { include: { resourceType: true } },
+              dependencies: true,   // StoryDependency rows where this story depends on others
             },
           },
           dependencies: true,   // FeatureDependency rows where this feature depends on others
@@ -275,6 +365,11 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     where: { projectId: project.id, isManual: true },
   })
   const manualStartWeeks = new Map(existingEntries.map(e => [e.featureId, e.startWeek]))
+
+  const existingStoryEntries = await prisma.storyTimelineEntry.findMany({
+    where: { projectId: project.id, isManual: true },
+  })
+  const manualStoryWeeks = new Map(existingStoryEntries.map(e => [e.storyId, e.startWeek]))
 
   // Kahn's topological sort over features
   const inDegree = new Map<string, number>()
@@ -388,7 +483,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
   }
 
   if (resourceLevel) {
-    // Helper: compute per-resource-type person-hours for a feature
+    // featureResourceHours: total resource-hours needed per feature (unchanged helper)
     function featureResourceHours(feature: typeof allFeatures[0]): Map<string, number> {
       const result = new Map<string, number>()
       for (const story of feature.userStories) {
@@ -403,90 +498,202 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       return result
     }
 
-    // Week capacity per resource type (hours per week)
+    // Weekly capacity per resource type (hours per week)
     const weekCapacity = new Map<string, number>()
     for (const rt of resourceTypes) {
       weekCapacity.set(rt.id, rt.count * (rt.hoursPerDay ?? fallbackHoursPerDay) * 5)
     }
-    weekCapacity.set('_unassigned', fallbackHoursPerDay * 5) // 1 person fallback
+    weekCapacity.set('_unassigned', fallbackHoursPerDay * 5)
 
-    // Track cumulative weekly usage: rtId → hours used per week
-    const weeklyUsage = new Map<string, number[]>()
-    const MAX_WEEKS = 200
-
-    function getUsage(rtId: string): number[] {
-      if (!weeklyUsage.has(rtId)) weeklyUsage.set(rtId, new Array(MAX_WEEKS).fill(0))
-      return weeklyUsage.get(rtId)!
-    }
-
-    function canSchedule(fId: string, startW: number, durW: number, resourceHours: Map<string, number>): boolean {
-      const weekStart = Math.floor(startW)
-      const weekEnd = Math.ceil(startW + durW)
-      for (const [rtId, totalHours] of resourceHours) {
-        const cap = weekCapacity.get(rtId) ?? (fallbackHoursPerDay * 5)
-        const usage = getUsage(rtId)
-        for (let w = weekStart; w < weekEnd && w < MAX_WEEKS; w++) {
-          const overlapStart = Math.max(w, startW)
-          const overlapEnd = Math.min(w + 1, startW + durW)
-          const overlapFraction = overlapEnd - overlapStart  // fraction of this week used (0–1)
-          const hoursThisWeek = (totalHours / durW) * overlapFraction
-          if ((usage[w] ?? 0) + hoursThisWeek > cap + 0.001) return false
-        }
-      }
-      return true
-    }
-
-    function reserveWeeks(startW: number, durW: number, resourceHours: Map<string, number>) {
-      const weekStart = Math.floor(startW)
-      const weekEnd = Math.ceil(startW + durW)
-      for (const [rtId, totalHours] of resourceHours) {
-        const usage = getUsage(rtId)
-        for (let w = weekStart; w < weekEnd && w < MAX_WEEKS; w++) {
-          const overlapStart = Math.max(w, startW)
-          const overlapEnd = Math.min(w + 1, startW + durW)
-          const overlapFraction = overlapEnd - overlapStart
-          const hoursThisWeek = (totalHours / durW) * overlapFraction
-          usage[w] = (usage[w] ?? 0) + hoursThisWeek
-        }
-      }
-    }
-
-    // Process in topological priority order (already sorted by Kahn's priority queue above)
-    // Re-compute earliest from live finishWeeks so pushed predecessors propagate to successors
+    // Build remaining hours per feature (Map<fId, Map<rtId, hoursRemaining>>)
+    const remainingHours = new Map<string, Map<string, number>>()
     for (const fId of processed) {
-      const f = featureMap.get(fId)!
-      const dur = featureDurationWeeks(f)
-      const resourceHours = featureResourceHours(f)
+      if (manualStartWeeks.has(fId)) continue
+      remainingHours.set(fId, featureResourceHours(featureMap.get(fId)!))
+    }
 
-      if (manualStartWeeks.has(fId)) {
-        // Manual: fixed — just reserve its weeks
-        const sw = startWeeks.get(fId)!
-        reserveWeeks(sw, dur, resourceHours)
-        continue
+    // Simulation state
+    const simStart = new Map<string, number>()  // fId -> week started
+    const simDone = new Map<string, number>()   // fId -> week completed
+
+    // Manual features: fix their start/done from pre-computed values
+    for (const [fId, sw] of manualStartWeeks) {
+      simStart.set(fId, sw)
+      simDone.set(fId, sw + featureDurationWeeks(featureMap.get(fId)!))
+    }
+
+    const STEP = 0.2  // 1 day per step
+    const MAX_WEEKS = 200
+    const autoFeatures = processed.filter(fId => !manualStartWeeks.has(fId))
+    const unfinished = new Set(autoFeatures)
+
+    let t = 0
+    while (unfinished.size > 0 && t < MAX_WEEKS) {
+      // Mark newly eligible features as started
+      for (const fId of unfinished) {
+        if (simStart.has(fId)) continue
+        const f = featureMap.get(fId)!
+        const epicStart = f.epic.timelineStartWeek ?? 0
+        if (t < epicStart) continue
+        const predsAllDone = (predecessors.get(fId) ?? []).every(predId => {
+          const done = simDone.get(predId)
+          return done !== undefined && done <= t
+        })
+        if (predsAllDone) simStart.set(fId, t)
       }
 
-      // Re-compute earliest from live (post-levelling) predecessor finish weeks
-      let earliest = f.epic.timelineStartWeek ?? 0
-      for (const predId of predecessors.get(fId) ?? []) {
-        const predFinish = finishWeeks.get(predId) ?? 0
-        if (predFinish > earliest) earliest = predFinish
+      // Active = started but not done
+      const active = [...unfinished].filter(fId => simStart.has(fId))
+
+      if (active.length === 0) { t += STEP; continue }
+
+      // Features with no resource hours start and immediately complete
+      for (const fId of active) {
+        if (remainingHours.get(fId)?.size === 0) {
+          if (!simDone.has(fId)) {
+            simDone.set(fId, t + STEP)
+            unfinished.delete(fId)
+          }
+        }
       }
 
-      let candidateWeek = earliest
-      while (candidateWeek < MAX_WEEKS) {
-        if (canSchedule(fId, candidateWeek, dur, resourceHours)) break
-        candidateWeek += 0.2  // try each day
+      // Proportional allocation: for each resource type, divide capacity across active features needing it
+      for (const [rtId, capPerWeek] of weekCapacity) {
+        const capPerStep = capPerWeek * STEP  // hours available this step (STEP fraction of a week)
+        const competing = active.filter(fId => (remainingHours.get(fId)?.get(rtId) ?? 0) > 0.001)
+        if (competing.length === 0) continue
+
+        const totalRemaining = competing.reduce((s, fId) => s + (remainingHours.get(fId)!.get(rtId) ?? 0), 0)
+
+        for (const fId of competing) {
+          const rem = remainingHours.get(fId)!.get(rtId)!
+          const allocated = (rem / totalRemaining) * capPerStep
+          remainingHours.get(fId)!.set(rtId, Math.max(0, rem - allocated))
+        }
       }
-      startWeeks.set(fId, candidateWeek)
-      finishWeeks.set(fId, candidateWeek + dur)
-      reserveWeeks(candidateWeek, dur, resourceHours)
+
+      // Mark done: all resource types exhausted
+      for (const fId of active) {
+        const allDone = [...(remainingHours.get(fId)?.values() ?? [])].every(h => h <= 0.001)
+        if (allDone) {
+          simDone.set(fId, t + STEP)
+          unfinished.delete(fId)
+        }
+      }
+
+      t += STEP
+    }
+
+    // Apply simulation results back to startWeeks/finishWeeks
+    for (const fId of processed) {
+      const sw = simStart.get(fId) ?? startWeeks.get(fId) ?? 0
+      const doneW = simDone.get(fId)
+      const dur = doneW !== undefined ? doneW - sw : featureDurationWeeks(featureMap.get(fId)!)
+      startWeeks.set(fId, sw)
+      finishWeeks.set(fId, sw + dur)
     }
   }
+
+  // ── Story-level scheduling ─────────────────────────────────────────────────
+  // Build flat list of all stories with their feature context
+  const allStories = epics.flatMap(epic =>
+    epic.features.flatMap(feature =>
+      feature.userStories
+        .filter(s => s.isActive !== false)
+        .map(s => ({ ...s, feature: { ...feature, epic } }))
+    )
+  )
+
+  // Story resource hours
+  function storyResourceHours(story: typeof allStories[0]): Map<string, number> {
+    const result = new Map<string, number>()
+    for (const task of story.tasks) {
+      const rtId = task.resourceTypeId ?? '_unassigned'
+      const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+      const hours = (task.durationDays ?? (task.hoursEffort / hpd)) * hpd
+      result.set(rtId, (result.get(rtId) ?? 0) + hours)
+    }
+    return result
+  }
+
+  // ── Per-feature proportional story scheduling ──────────────────────────────
+  // Stories are distributed sequentially and proportionally within their parent
+  // feature's scheduled window [featureStart, featureDone], based on total hours.
+  // This keeps all story bars visually within their feature bar.
+  //
+  // Manual story overrides retain their stored startWeek; their duration is
+  // re-computed from their own hours.
+
+  // Group non-manual stories by feature, sorted by story order
+  const storiesByFeature = new Map<string, typeof allStories>()
+  for (const story of allStories) {
+    const fId = story.feature.id
+    if (!storiesByFeature.has(fId)) storiesByFeature.set(fId, [])
+    storiesByFeature.get(fId)!.push(story)
+  }
+  for (const stories of storiesByFeature.values()) {
+    stories.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  }
+
+  // Helper: total hours for a story
+  function storyTotalHours(story: typeof allStories[0]): number {
+    return [...storyResourceHours(story).values()].reduce((a, b) => a + b, 0)
+  }
+
+  // Compute scheduled position for every story
+  const storyScheduled = new Map<string, { startWeek: number; durationWeeks: number; isManual: boolean }>()
+
+  for (const story of allStories) {
+    const fId = story.feature.id
+    const featureStart = startWeeks.get(fId) ?? 0
+    const featureDone = finishWeeks.get(fId) ?? (featureStart + 1)
+    const featureDuration = Math.max(0.2, featureDone - featureStart)
+
+    if (manualStoryWeeks.has(story.id)) {
+      const sw = manualStoryWeeks.get(story.id)!
+      const totalHours = storyTotalHours(story)
+      const dur = Math.max(0.2, totalHours / fallbackHoursPerDay / 5)
+      storyScheduled.set(story.id, { startWeek: sw, durationWeeks: dur, isManual: true })
+      continue
+    }
+
+    // Proportional sequential scheduling within feature window
+    const siblings = (storiesByFeature.get(fId) ?? []).filter(s => !manualStoryWeeks.has(s.id))
+    const totalFeatureHours = siblings.reduce((sum, s) => sum + storyTotalHours(s), 0)
+
+    let cursor = featureStart
+    for (const sibling of siblings) {
+      const hrs = storyTotalHours(sibling)
+      const dur = totalFeatureHours > 0
+        ? (hrs / totalFeatureHours) * featureDuration
+        : featureDuration / Math.max(1, siblings.length)
+      const safeDur = Math.max(0.2, dur)
+      if (sibling.id === story.id) {
+        storyScheduled.set(story.id, { startWeek: cursor, durationWeeks: safeDur, isManual: false })
+        break
+      }
+      cursor += safeDur
+    }
+  }
+
+  // Write StoryTimelineEntry records
+  const storyUpserts = allStories.map(async story => {
+    const scheduled = storyScheduled.get(story.id)
+    if (!scheduled) return null
+    const { startWeek: sw, durationWeeks: dur, isManual } = scheduled
+    return prisma.storyTimelineEntry.upsert({
+      where: { storyId: story.id },
+      create: { storyId: story.id, projectId: project.id, startWeek: sw, durationWeeks: dur, isManual },
+      update: isManual ? {} : { startWeek: sw, durationWeeks: dur, isManual: false },
+    })
+  })
+  await Promise.all(storyUpserts)
+  // ── End story-level scheduling ─────────────────────────────────────────────
 
   for (const fId of processed) {
     const sw = startWeeks.get(fId)!
     const f = featureMap.get(fId)!
-    const dur = featureDurationWeeks(f)
+    const dur = (finishWeeks.get(fId) ?? (sw + featureDurationWeeks(f))) - sw
     const isManual = manualStartWeeks.has(fId)
     await prisma.timelineEntry.upsert({
       where: { featureId: fId },
@@ -513,7 +720,90 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
   })
 
   const parallelWarnings = await computeParallelWarnings(project.id, project.hoursPerDay, entries)
-  res.json(buildResponse(project, entries, parallelWarnings))
+
+  const storyTimelineEntries = await prisma.storyTimelineEntry.findMany({
+    where: { projectId: project.id },
+    include: { story: { select: { name: true, featureId: true } } },
+  })
+  const allFeatureIds = entries.map(e => e.featureId)
+  const featureDependencies = await prisma.featureDependency.findMany({
+    where: { featureId: { in: allFeatureIds } },
+    select: { featureId: true, dependsOnId: true },
+  })
+  const allStoryIds = storyTimelineEntries.map(e => e.storyId)
+  const storyDependencies = await prisma.storyDependency.findMany({
+    where: { storyId: { in: allStoryIds } },
+    select: { storyId: true, dependsOnId: true },
+  })
+  const mappedStoryEntries = storyTimelineEntries.map(e => ({
+    storyId: e.storyId,
+    storyName: e.story.name,
+    featureId: e.story.featureId,
+    startWeek: e.startWeek,
+    durationWeeks: e.durationWeeks,
+    isManual: e.isManual,
+  }))
+
+  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes))
+})
+
+// PUT /api/projects/:projectId/timeline/stories/:storyId — manual story timeline override
+router.put('/stories/:storyId', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const { startWeek, durationWeeks } = req.body
+  if (startWeek == null || durationWeeks == null) {
+    res.status(400).json({ error: 'startWeek and durationWeeks are required' }); return
+  }
+
+  const storyId = req.params.storyId as string
+
+  // Verify story belongs to this project
+  const story = await prisma.userStory.findFirst({
+    where: { id: storyId, feature: { epic: { projectId: project.id } } },
+    include: { feature: { include: { epic: true } } },
+  })
+  if (!story) { res.status(404).json({ error: 'Story not found' }); return }
+
+  const entry = await prisma.storyTimelineEntry.upsert({
+    where: { storyId },
+    create: { storyId, projectId: project.id, startWeek, durationWeeks, isManual: true },
+    update: { startWeek, durationWeeks, isManual: true },
+  })
+
+  res.json({
+    storyId: entry.storyId,
+    storyName: story.name,
+    featureId: story.featureId,
+    projectId: entry.projectId,
+    startWeek: entry.startWeek,
+    durationWeeks: entry.durationWeeks,
+    isManual: entry.isManual,
+  })
+})
+
+// DELETE /api/projects/:projectId/timeline — clear ALL manual overrides (features + stories)
+router.delete('/', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  await Promise.all([
+    prisma.timelineEntry.deleteMany({ where: { projectId: project.id, isManual: true } }),
+    prisma.storyTimelineEntry.deleteMany({ where: { projectId: project.id, isManual: true } }),
+  ])
+  res.status(204).end()
+})
+
+// DELETE /api/projects/:projectId/timeline/stories/:storyId — clear manual story override
+router.delete('/stories/:storyId', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  await prisma.storyTimelineEntry.deleteMany({
+    where: { storyId: req.params.storyId as string, projectId: project.id },
+  })
+  res.status(204).end()
 })
 
 // PUT /api/projects/:projectId/timeline/:featureId
