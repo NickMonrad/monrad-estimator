@@ -93,9 +93,9 @@ test.describe('Gantt Chart', () => {
     // setupTimeline, so this assert is nearly instant.
     await expect(page.getByText(/1 features scheduled/)).toBeVisible({ timeout: 8_000 })
 
-    // Feature bars are h-6 cursor-pointer divs inside the scrollable grid.
+    // Feature bars are SVG <rect> elements inside the Gantt SVG.
     // At least one must exist once entries are present.
-    await expect(page.locator('.h-6.cursor-pointer').first()).toBeVisible({ timeout: 8_000 })
+    await expect(page.locator('svg rect').first()).toBeVisible({ timeout: 8_000 })
   })
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -104,15 +104,16 @@ test.describe('Gantt Chart', () => {
   test('epic feature-mode button toggles between sequential and parallel', async ({ page }) => {
     await setupTimeline(page)
 
-    // The epic header row always shows the mode button (default: sequential)
-    const seqButton = page.getByRole('button', { name: '↓ Features: sequential' })
+    // The epic header row always shows the mode button (default: sequential).
+    // The button's aria-label is 'sequential' in default state and 'parallel' after toggle.
+    const seqButton = page.getByRole('button', { name: 'sequential' })
     await expect(seqButton).toBeVisible({ timeout: 8_000 })
 
     // Clicking switches to parallel mode
     await seqButton.click()
 
     await expect(
-      page.getByRole('button', { name: '⇉ Features: parallel' }),
+      page.getByRole('button', { name: 'parallel' }),
     ).toBeVisible({ timeout: 10_000 })
   })
 
@@ -122,9 +123,9 @@ test.describe('Gantt Chart', () => {
   test('clicking a feature bar opens the inline edit panel', async ({ page }) => {
     const { featureName } = await setupTimeline(page)
 
-    // The feature label column div carries title={featureName} and has
-    // cursor-pointer + hover:text-red-600.  Clicking it opens the inline edit.
-    await page.locator(`div[title="${featureName}"]`).click()
+    // The feature label element carries title={featureName}.
+    // Clicking it opens the inline edit.
+    await page.locator(`[title="${featureName}"]`).click()
 
     // Inline edit panel appears with labelled number inputs
     await expect(page.getByText('Start week:').first()).toBeVisible({ timeout: 8_000 })
@@ -140,7 +141,7 @@ test.describe('Gantt Chart', () => {
     const { featureName } = await setupTimeline(page)
 
     // Open the inline edit by clicking the feature label
-    await page.locator(`div[title="${featureName}"]`).click()
+    await page.locator(`[title="${featureName}"]`).click()
     await expect(page.getByText('Start week:').first()).toBeVisible({ timeout: 8_000 })
 
     // Move the feature to week 2 (any value ≠ current auto-scheduled week)
@@ -151,9 +152,7 @@ test.describe('Gantt Chart', () => {
     await page.getByRole('button', { name: /^save$/i }).click()
 
     // After the server persists isManual=true the Gantt re-renders and the
-    // feature bar shows the ✏ pencil span (text-white text-xs inside .h-6)
-    await expect(
-      page.locator('.h-6 span').filter({ hasText: '✏' }),
-    ).toBeVisible({ timeout: 10_000 })
+    // edit panel shows the "↺ Reset to auto" button (only visible when isManual=true)
+    await expect(page.getByRole('button', { name: /reset to auto/i })).toBeVisible({ timeout: 10_000 })
   })
 })
