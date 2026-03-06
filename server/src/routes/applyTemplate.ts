@@ -119,14 +119,21 @@ router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, re
   const existingTasks = template.tasks.filter(t => existingTaskNames.has(t.name.toLowerCase()))
   const baseOrder = story.tasks.length
 
-  // Update hours/days on existing matching tasks
+  // Update hours/days and resource type on existing matching tasks
   for (const tmplTask of existingTasks) {
     const storyTask = story.tasks.find(t => t.name.toLowerCase() === tmplTask.name.toLowerCase())
     if (!storyTask) continue
     const hoursEffort = tmplTask[hoursField]
+    const matchedRt = resourceTypes.find(
+      rt => rt.name.toLowerCase() === tmplTask.resourceTypeName.toLowerCase()
+    ) ?? resourceTypes[0]
     await prisma.task.update({
       where: { id: storyTask.id },
-      data: { hoursEffort, durationDays: hoursEffort / hoursPerDay },
+      data: {
+        hoursEffort,
+        durationDays: hoursEffort / hoursPerDay,
+        ...(matchedRt ? { resourceTypeId: matchedRt.id } : {}),
+      },
     })
   }
 

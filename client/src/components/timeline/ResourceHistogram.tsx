@@ -50,20 +50,21 @@ export default function ResourceHistogram({
 }: Props) {
   // Derive unique resource types and their max demand/capacity
   const resourceTypes = useMemo(() => {
-    const map = new Map<string, { maxDemand: number; capacityDays: number }>()
+    const map = new Map<string, { maxDemand: number; totalDays: number; capacityDays: number }>()
     for (const item of weeklyDemand) {
       const existing = map.get(item.resourceTypeName)
       if (!existing) {
-        map.set(item.resourceTypeName, { maxDemand: item.demandDays, capacityDays: item.capacityDays })
+        map.set(item.resourceTypeName, { maxDemand: item.demandDays, totalDays: item.demandDays, capacityDays: item.capacityDays })
       } else {
         if (item.demandDays > existing.maxDemand) existing.maxDemand = item.demandDays
-        // capacityDays is constant per resource type — take max for safety
+        existing.totalDays += item.demandDays
         if (item.capacityDays > existing.capacityDays) existing.capacityDays = item.capacityDays
       }
     }
-    return Array.from(map.entries()).map(([name, { maxDemand, capacityDays }]) => ({
+    return Array.from(map.entries()).map(([name, { maxDemand, totalDays, capacityDays }]) => ({
       name,
       maxDemand,
+      totalDays,
       capacityDays,
     })).sort((a, b) => a.name.localeCompare(b.name))
   }, [weeklyDemand])
@@ -99,7 +100,7 @@ export default function ResourceHistogram({
 
         {/* Resource type rows */}
         {resourceTypes.map(rt => {
-          const engLabel = `${rt.maxDemand.toFixed(1)}d max / ${rt.capacityDays}d cap`
+          const engLabel = `${rt.totalDays.toFixed(1)}d total · ${rt.capacityDays}d/w cap`
           return (
             <div
               key={rt.name}

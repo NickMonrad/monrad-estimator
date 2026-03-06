@@ -323,8 +323,9 @@ export default function TimelinePage() {
                   onClick={handleSchedule}
                   disabled={scheduleTimeline.isPending}
                   className="border border-gray-200 px-4 py-1.5 rounded text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                  title="Re-runs the scheduler — use this after updating tasks or resources in the backlog"
                 >
-                  Reset to auto
+                  ↺ Re-run scheduler
                 </button>
               )}
               <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
