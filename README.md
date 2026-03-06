@@ -171,6 +171,7 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | # | Title |
 |---|---|
 | [#108](https://github.com/NickMonrad/monrad-estimator/issues/108) | docs: comprehensive functional specification (`docs/FUNCTIONAL_SPEC.md`) |
+| [#109](https://github.com/NickMonrad/monrad-estimator/issues/109) | Global Customer entity (name, description, account code, CRM link) + link to projects; no duplicates; D365 CRM integration prep |
 | [#57](https://github.com/NickMonrad/monrad-estimator/issues/57) | Template tasks: assumptions + description fields |
 | [#59](https://github.com/NickMonrad/monrad-estimator/issues/59) | Timeline: projected end date (read-only) |
 | [#60](https://github.com/NickMonrad/monrad-estimator/issues/60) | Move PM/Gov headcount config to Resource Profile |
