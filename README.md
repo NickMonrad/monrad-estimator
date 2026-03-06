@@ -92,10 +92,10 @@ cd e2e && ./node_modules/.bin/playwright test --workers=1
 Repo setup, Vite + React + TypeScript + Tailwind, Express + Prisma, DB schema, JWT auth, project CRUD.
 
 ### ✅ Phase 2 — Backlog Builder
-Backlog hierarchy (Epic → Feature → Story → Task), tree view UI, manual entry, resource type management, bidirectional hours/days input.
+Backlog hierarchy (Epic → Feature → Story → Task), tree view UI, manual entry, resource type management, bidirectional hours/days input. CSV export/import with 3-step staging workflow, upsert-by-hierarchy re-import, status columns (EpicStatus/FeatureStatus/StoryStatus), and Template link on stories.
 
 ### ✅ Phase 3 — Template Library
-Feature Template data model + API, Template Library UI, template-based backlog generation (select template + complexity → creates tasks).
+Feature Template data model + API, Template Library UI, template-based backlog generation (select template + complexity → creates tasks). Globally unique template names enforced. Templates linkable to stories via CSV import/export.
 
 ### ✅ Phase 4 — Effort Review
 Effort summary API grouped by resource type, Effort Review UI with table and charts, hours override support.
@@ -155,6 +155,8 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | Phase 7 CI pipeline, timeline dependency scheduler, resource levelling, fractional weeks | #95 |
 | Deactivate epics/features/stories to mark as out of scope | #100 |
 | SVG Gantt overhaul: story bars, drag-and-drop, dependency arrows, proportional pool scheduler, resource histogram, clear-all-overrides, tooltip enhancements | #106 |
+| Backlog CSV export removes complexity-tier columns (HoursXS–XL); import retains backwards compat | #107 |
+| Backlog CSV redesign: Type column, per-level status (EpicStatus/FeatureStatus/StoryStatus), Template link on stories, upsert-by-hierarchy import, unique template names | *(in progress)* |
 
 ---
 
@@ -168,6 +170,7 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 ### 🔧 Near-term enhancements
 | # | Title |
 |---|---|
+| [#108](https://github.com/NickMonrad/monrad-estimator/issues/108) | docs: comprehensive functional specification (`docs/FUNCTIONAL_SPEC.md`) |
 | [#57](https://github.com/NickMonrad/monrad-estimator/issues/57) | Template tasks: assumptions + description fields |
 | [#59](https://github.com/NickMonrad/monrad-estimator/issues/59) | Timeline: projected end date (read-only) |
 | [#60](https://github.com/NickMonrad/monrad-estimator/issues/60) | Move PM/Gov headcount config to Resource Profile |
@@ -180,7 +183,7 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
 | [#99](https://github.com/NickMonrad/monrad-estimator/issues/99) | ~~Timeline: drag-and-drop bars for manual scheduling~~ *(closed in #106)* |
 | [#102](https://github.com/NickMonrad/monrad-estimator/issues/102) | ~~Backlog: show total days (and duration if set) alongside hours~~ *(closed in #106)* |
-| [#103](https://github.com/NickMonrad/monrad-estimator/issues/103) | Backlog CSV export: remove HoursSmall/Medium/Large/XL columns |
+| [#103](https://github.com/NickMonrad/monrad-estimator/issues/103) | ~~Backlog CSV export: remove HoursSmall/Medium/Large/XL columns~~ *(closed in #107)* |
 | [#104](https://github.com/NickMonrad/monrad-estimator/issues/104) | Tests: add coverage for inactive filtering in timeline routes |
 
 ### 🚀 Feature ideas
