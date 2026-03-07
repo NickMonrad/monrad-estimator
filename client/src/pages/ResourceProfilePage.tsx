@@ -1077,7 +1077,7 @@ export default function ResourceProfilePage() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis type="number" />
                   <YAxis type="category" dataKey="name" width={150} />
-                  <Tooltip formatter={(value: number) => formatNumber(value)} />
+                  <Tooltip formatter={(value) => formatNumber(Number(value))} />
                   <Legend />
                   <Bar dataKey="taskDays" name="Task days" stackId="a" fill="#2563eb" />
                   <Bar dataKey="overheadDays" name="Overhead days" stackId="a" fill="#f97316" />
