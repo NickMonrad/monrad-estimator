@@ -154,7 +154,11 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
 
   const csv = stringify(rows)
   res.setHeader('Content-Type', 'text/csv')
-  res.setHeader('Content-Disposition', `attachment; filename="backlog-${req.params.projectId}.csv"`)
+  const datestamp = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  const safeName = (s: string) => s.replace(/[^a-zA-Z0-9 \-_]/g, '').trim()
+  const clientPart = project.customer ? `${safeName(project.customer)} - ` : ''
+  const filename = `${clientPart}${safeName(project.name)} - ${datestamp}.csv`
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
   res.send(csv)
 })
 
