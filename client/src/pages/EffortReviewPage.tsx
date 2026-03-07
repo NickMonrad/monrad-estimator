@@ -353,8 +353,8 @@ function SummaryView({
                         <td className="px-4 py-2 text-gray-700 pl-12 italic">{epic.epicName}</td>
                         <td />
                         <td />
-                        <td className="px-4 py-2 text-right text-gray-700">{epic.totalHours}</td>
-                        <td className="px-4 py-2 text-right text-gray-700">{epic.totalDays}</td>
+                        <td className="px-4 py-2 text-right text-gray-700">{Number(epic.totalHours).toFixed(2)}</td>
+                        <td className="px-4 py-2 text-right text-gray-700">{Number(epic.totalDays).toFixed(2)}</td>
                         {hasCost && <td />}
                         {hasCost && (
                           <td className="px-4 py-2 text-right text-gray-700">
