@@ -3,6 +3,7 @@ import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
+import { getWeeklyCapacity } from '../routes/timeline.js'
 
 process.env.JWT_SECRET = 'test-secret'
 
@@ -465,5 +466,83 @@ describe('POST /schedule — DAG algorithm', () => {
     const a = res.body.entries[0]
     expect(a.startWeek).toBe(5)
     expect(a.isManual).toBe(true)
+  })
+})
+
+describe('getWeeklyCapacity', () => {
+  const makeRT = (overrides: Record<string, any> = {}) => ({
+    id: 'rt-1',
+    name: 'Developer',
+    count: 1,
+    hoursPerDay: null as number | null,
+    namedResources: [] as Array<{ startWeek: number | null; endWeek: number | null; allocationPct: number }>,
+    ...overrides,
+  })
+
+  it('no named resources — uses aggregate count', () => {
+    const rt = makeRT({ count: 3, namedResources: [] })
+    // 3 people * 8 h/day * 5 days = 120
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(120)
+    expect(getWeeklyCapacity(rt, 10, 8)).toBe(120)
+  })
+
+  it('named resources — all active (null start/end)', () => {
+    const rt = makeRT({
+      namedResources: [
+        { startWeek: null, endWeek: null, allocationPct: 100 },
+        { startWeek: null, endWeek: null, allocationPct: 100 },
+      ],
+    })
+    // 2 people * 8 h/day * 5 days = 80
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(80)
+    expect(getWeeklyCapacity(rt, 99, 8)).toBe(80)
+  })
+
+  it('named resources — staggered start', () => {
+    const rt = makeRT({
+      namedResources: [
+        { startWeek: 0, endWeek: null, allocationPct: 100 },
+        { startWeek: 4, endWeek: null, allocationPct: 100 },
+      ],
+    })
+    // Week 0: only NR1 → 1 * 7.6 * 5 = 38
+    expect(getWeeklyCapacity(rt, 0, 7.6)).toBe(38)
+    // Week 4: both active → 2 * 7.6 * 5 = 76
+    expect(getWeeklyCapacity(rt, 4, 7.6)).toBe(76)
+  })
+
+  it('named resources — partial allocation', () => {
+    const rt = makeRT({
+      namedResources: [
+        { startWeek: null, endWeek: null, allocationPct: 50 },
+      ],
+    })
+    // 0.5 * 8 * 5 = 20
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(20)
+  })
+
+  it('named resources — person leaves early', () => {
+    const rt = makeRT({
+      namedResources: [
+        { startWeek: 0, endWeek: 3, allocationPct: 100 },
+        { startWeek: 0, endWeek: null, allocationPct: 100 },
+      ],
+    })
+    // Week 2: both active → 2 * 8 * 5 = 80
+    expect(getWeeklyCapacity(rt, 2, 8)).toBe(80)
+    // Week 4: only NR2 → 1 * 8 * 5 = 40
+    expect(getWeeklyCapacity(rt, 4, 8)).toBe(40)
+  })
+
+  it('named resources override count', () => {
+    const rt = makeRT({
+      count: 5,
+      namedResources: [
+        { startWeek: null, endWeek: null, allocationPct: 100 },
+        { startWeek: null, endWeek: null, allocationPct: 100 },
+      ],
+    })
+    // Should use 2 named resources, not count=5 → 2 * 8 * 5 = 80
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(80)
   })
 })

@@ -780,13 +780,18 @@ export default function ResourceProfilePage() {
                               onClick={() => toggleNamedResources(row.resourceTypeId)}
                               title="Show named resources"
                             >
-                              {row.name}
+                              {row.count > 1 ? `${row.count} × ${row.name}` : row.name}
                             </span>
                             {expandedNamedResources.has(row.resourceTypeId) && (
                               <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-medium uppercase tracking-wide">People</span>
                             )}
                           </div>
                           <p className="text-xs text-gray-500 mt-0.5">{row.category.replace('_', ' ')}</p>
+                          {row.count > 1 && (
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              ({formatNumber(row.totalHours / row.count)}h / {formatNumber(row.totalDays / row.count)}d per person)
+                            </p>
+                          )}
                         </td>
                         <td className="text-center px-4 py-3 text-gray-800">
                           {(row.category === 'GOVERNANCE' || row.category === 'PROJECT_MANAGEMENT') ? (

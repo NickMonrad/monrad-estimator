@@ -33,7 +33,7 @@ type ResourceTypeWithNamed = {
 }
 
 /** Compute weekly capacity (hours) for a resource type, accounting for named resource availability. */
-function getWeeklyCapacity(
+export function getWeeklyCapacity(
   rt: ResourceTypeWithNamed,
   week: number,
   defaultHoursPerDay: number,
