@@ -157,6 +157,8 @@ Hourly rates per resource type, per-project overrides, discount tiers, cost sect
 | SVG Gantt overhaul: story bars, drag-and-drop, dependency arrows, proportional pool scheduler, resource histogram, clear-all-overrides, tooltip enhancements | #106 |
 | Backlog CSV export removes complexity-tier columns (HoursXS–XL); import retains backwards compat | #107 |
 | Backlog CSV redesign: Type column, per-level status (EpicStatus/FeatureStatus/StoryStatus), Template link on stories, upsert-by-hierarchy import, unique template names, export filename includes client/project/date, DurationDays precision fix | #110 |
+| Resource Profile: fix inherited global day rates not applied to cost calculation | #111 |
+| Effort Review: active-scope filter toggle, cost columns (day rate + total), expandable epic sub-rows in summary, Excel-like column filters in detail view, cost + totals in detail | #112 |
 
 ---
 
