@@ -256,8 +256,6 @@ function SummaryView({
   const toggleRtEpic = (id: string) =>
     setExpandedRtEpics(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
-  // colSpan helpers — base columns: RT, Count, Proposed, Hours, Days, [DayRate, Cost], %, Bar
-  const totalCols = hasCost ? 9 : 7
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -547,7 +545,7 @@ function DetailView({
         // Filter resource types to only those with matching tasks
         const filteredRts = cat.resourceTypes.map(rt => ({
           ...rt,
-          visibleTasks: rt.tasks.filter(t => taskMatches({ ...t, rtName: rt.name, rtId: rt.resourceTypeId })),
+          visibleTasks: rt.tasks.filter(t => taskMatches({ ...t, rtName: rt.name })),
         })).filter(rt => rt.visibleTasks.length > 0 || !hasAnyFilter)
 
         if (filteredRts.length === 0) return null
