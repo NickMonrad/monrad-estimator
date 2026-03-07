@@ -50,7 +50,9 @@ npx playwright test --ui                   # interactive UI mode
 
 ---
 
-### `backlog.spec.ts` — Backlog (8 tests)
+### `backlog.spec.ts` — Backlog (11 tests)
+
+#### `Backlog` describe block (8 tests)
 
 | Test | Description |
 |------|-------------|
@@ -62,6 +64,14 @@ npx playwright test --ui                   # interactive UI mode
 | CSV import shows parse errors on bad file | Uploading malformed CSV shows error/validation message |
 | History button toggles history panel | "🕐 History" button reveals Backlog History panel |
 | drag handle is visible on epics for reordering | Hovering an epic row reveals the ⠿ drag handle for DnD reorder |
+
+#### `CSV redesign — Type column and status fields` describe block (3 tests)
+
+| Test | Description |
+|------|-------------|
+| export includes Type column and status columns at end | Seeds data via old-format CSV import, then exports and verifies: `Type` is column 0; `EpicStatus`, `FeatureStatus`, `StoryStatus` are the last 3 columns; all 4 row types (Epic/Feature/Story/Task) are present; the Epic row has `active` in `EpicStatus` and empty `FeatureStatus`/`StoryStatus` |
+| import with status columns — inactive epic/feature visible after import | Imports a new-format CSV with `EpicStatus=inactive`, `FeatureStatus=inactive`, `StoryStatus=active`, and a plain Task row; asserts the backlog renders the imported epic (inactive items shown with strikethrough but still visible) |
+| staging warns when EpicStatus is set on a Task row (wrong type) | Uploads a CSV with a Task row that has `EpicStatus=inactive`; after automatic staging, verifies the yellow warning panel appears with text "Warnings (import will still proceed):" and the message "EpicStatus is only applied on Epic rows" |
 
 ---
 

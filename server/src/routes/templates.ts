@@ -49,6 +49,8 @@ router.get('/', async (_req, res: Response) => {
 router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
   const { name, category, description } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
+  const existing = await prisma.featureTemplate.findUnique({ where: { name } })
+  if (existing) { res.status(409).json({ error: `A template named "${name}" already exists` }); return }
   const template = await prisma.featureTemplate.create({
     data: { name, category, description },
     include: templateInclude,
