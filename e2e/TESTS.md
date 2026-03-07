@@ -117,6 +117,20 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
+### `effort-review.spec.ts` — Effort Review (7 tests)
+
+| Test | Description |
+|------|-------------|
+| effort review page loads with summary and detail tabs | Navigates to `/projects/:id/effort`; asserts "Effort Review" heading, Summary/Detail tab buttons, and Active scope toggle are all visible |
+| active-scope toggle switches label | Default shows "Active scope"; clicking once switches to "All tasks"; clicking again reverts to "Active scope" |
+| summary view shows resource type rows | After seeding data via CSV import, confirms the "Developer" resource type row appears in the summary table |
+| clicking a resource type row in summary expands epic sub-rows | Clicks the Developer row; asserts at least one italic epic sub-row (Alpha Epic or Beta Epic) becomes visible |
+| detail view filter bar renders correctly | Switches to Detail view; confirms the epic select dropdown and "Showing X of Y tasks" text are visible |
+| detail view epic filter cascades to feature dropdown | Selects "Alpha Epic" in the epic filter; asserts Feature dropdown contains "Alpha Feature" but not "Beta Feature" |
+| detail view task name filter works | Types "Alpha" in the task name input; asserts "Beta Task" is hidden and the showing count reads "Showing 1 of 2 tasks" |
+
+---
+
 ## Adding New Tests
 
 1. Add tests to the relevant spec file (or create a new `*.spec.ts` if the feature area is new)
