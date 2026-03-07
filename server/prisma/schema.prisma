@@ -176,6 +176,7 @@ model UserStory {
   order             Int      @default(0)
   isActive          Boolean  @default(true)
   appliedTemplateId String?
+  appliedTemplate   FeatureTemplate? @relation(fields: [appliedTemplateId], references: [id])
   feature           Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
   featureId         String
   tasks             Task[]
@@ -205,11 +206,12 @@ model Task {
 // Global feature templates (shared across all projects)
 model FeatureTemplate {
   id          String            @id @default(cuid())
-  name        String
+  name        String            @unique
   category    String?
   description String?
   tasks       TemplateTask[]
   snapshots   TemplateSnapshot[]
+  userStories UserStory[]
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 }

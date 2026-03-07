@@ -355,3 +355,147 @@ test.describe('Backlog', () => {
     await deleteTemplatesByName('E2E Duration Template', 'E2E Refresh Template')
   })
 })
+
+// ─── CSV redesign: Type column and status fields ──────────────────────────────
+test.describe('CSV redesign — Type column and status fields', () => {
+  test('export includes Type column and status columns at end', async ({ page }) => {
+    const PROJ = `E2E CSV Type Export ${Date.now()}`
+    await login(page)
+    await createProject(page, PROJ)
+    await page.getByRole('heading', { name: PROJ, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor()
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    // Seed via old-format CSV to create the full Epic > Feature > Story > Task hierarchy.
+    // (Backwards compat of the old format is verified by the existing
+    // "durationDays is auto-calculated…" test; here we only care about export format.)
+    const oldHeaders = 'Epic,Feature,Story,Task,ResourceType,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge,HoursEffort,DurationDays,Description,Assumptions'
+    const oldData = 'E2E TypeExportEpic,E2E TypeExportFeature,E2E TypeExportStory,E2E TypeExportTask,Developer,0,0,0,0,0,8,,,'
+    const csv = [oldHeaders, oldData].join('\n')
+    const tmpFile = path.join(os.tmpdir(), `csv-type-export-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, csv)
+
+    await page.getByRole('button', { name: /import csv/i }).click()
+    const fileInput = page.locator('input[type="file"]')
+    await fileInput.setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('E2E TypeExportEpic')).toBeVisible({ timeout: 10_000 })
+
+    // Export and verify the redesigned headers
+    const downloadPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name: /export csv/i }).click()
+    const download = await downloadPromise
+    const exportPath = await download.path()
+    const content = fs.readFileSync(exportPath!, 'utf-8')
+    const lines = content.trim().split(/\r?\n/)
+    const headerCols = lines[0].split(',').map(c => c.trim())
+
+    // Type must be the first column
+    expect(headerCols[0]).toBe('Type')
+
+    // EpicStatus, FeatureStatus, StoryStatus must be the last 3 columns
+    expect(headerCols[headerCols.length - 3]).toBe('EpicStatus')
+    expect(headerCols[headerCols.length - 2]).toBe('FeatureStatus')
+    expect(headerCols[headerCols.length - 1]).toBe('StoryStatus')
+
+    // All 4 row types must be present
+    const typeIdx = headerCols.indexOf('Type')
+    expect(lines.some(l => l.split(',')[typeIdx]?.trim() === 'Epic')).toBe(true)
+    expect(lines.some(l => l.split(',')[typeIdx]?.trim() === 'Feature')).toBe(true)
+    expect(lines.some(l => l.split(',')[typeIdx]?.trim() === 'Story')).toBe(true)
+    expect(lines.some(l => l.split(',')[typeIdx]?.trim() === 'Task')).toBe(true)
+
+    // Epic row: EpicStatus=active, FeatureStatus and StoryStatus empty
+    const epicStatusIdx = headerCols.indexOf('EpicStatus')
+    const featureStatusIdx = headerCols.indexOf('FeatureStatus')
+    const storyStatusIdx = headerCols.indexOf('StoryStatus')
+    const epicLine = lines.find(l => l.split(',')[typeIdx]?.trim() === 'Epic')!
+    expect(epicLine).toBeTruthy()
+    const epicCols = epicLine.split(',').map(c => c.trim())
+    expect(epicCols[epicStatusIdx]).toBe('active')
+    expect(epicCols[featureStatusIdx]).toBe('')
+    expect(epicCols[storyStatusIdx]).toBe('')
+  })
+
+  test('import with status columns — inactive epic/feature visible after import', async ({ page }) => {
+    const PROJ = `E2E CSV Status Import ${Date.now()}`
+    await login(page)
+    await createProject(page, PROJ)
+    await page.getByRole('heading', { name: PROJ, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor()
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    // New-format CSV: inactive Epic row, inactive Feature row, active Story row, Task row.
+    // Header has 14 columns (Type … StoryStatus).
+    // Row layout: Type(0),Epic(1),Feature(2),Story(3),Task(4),Template(5),
+    //             ResourceType(6),HoursEffort(7),DurationDays(8),Description(9),
+    //             Assumptions(10),EpicStatus(11),FeatureStatus(12),StoryStatus(13)
+    const csv = [
+      'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+      // EpicStatus=inactive at index 11 — 9 empty fields between epicName(1) and inactive(11)
+      'Epic,E2E StatusImportEpic,,,,,,,,,,inactive,,',
+      // FeatureStatus=inactive at index 12 — 9 empty fields between featureName(2) and inactive(12)
+      'Feature,E2E StatusImportEpic,E2E StatusImportFeature,,,,,,,,,,inactive,',
+      // StoryStatus=active at index 13 — 9 empty fields between storyName(3) and active(13)
+      'Story,E2E StatusImportEpic,E2E StatusImportFeature,E2E StatusImportStory,,,,,,,,,,active',
+      // Task row — no status columns
+      'Task,E2E StatusImportEpic,E2E StatusImportFeature,E2E StatusImportStory,E2E StatusImportTask,,Developer,4,,,,,,',
+    ].join('\n')
+
+    const tmpFile = path.join(os.tmpdir(), `csv-status-import-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, csv)
+
+    await page.getByRole('button', { name: /import csv/i }).click()
+    const fileInput = page.locator('input[type="file"]')
+    await fileInput.setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+
+    // Inactive epics are still rendered in the backlog (with strikethrough styling),
+    // so the element is present and visible in the DOM.
+    await expect(page.getByText('E2E StatusImportEpic')).toBeVisible({ timeout: 10_000 })
+  })
+
+  test('staging warns when EpicStatus is set on a Task row (wrong type)', async ({ page }) => {
+    const PROJ = `E2E CSV Warn WrongType ${Date.now()}`
+    await login(page)
+    await createProject(page, PROJ)
+    await page.getByRole('heading', { name: PROJ, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor()
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    // Task row with EpicStatus=inactive — the server emits a warning because
+    // EpicStatus is only meaningful on Epic rows.
+    // EpicStatus sits at index 11; indices 8-10 are DurationDays/Description/Assumptions (empty).
+    const csv = [
+      'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+      'Task,E2E WarnEpic,E2E WarnFeature,E2E WarnStory,E2E WarnTask,,Developer,4,,,,inactive,,',
+    ].join('\n')
+
+    const tmpFile = path.join(os.tmpdir(), `csv-warn-wrongtype-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, csv)
+
+    await page.getByRole('button', { name: /import csv/i }).click()
+    const fileInput = page.locator('input[type="file"]')
+    await fileInput.setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+
+    // After file upload the modal automatically moves to the staging step.
+    // The yellow warning panel should appear with the EpicStatus message.
+    await expect(
+      page.getByText(/Warnings \(import will still proceed\)/i)
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      page.getByText(/EpicStatus is only applied on Epic rows/)
+    ).toBeVisible({ timeout: 5_000 })
+  })
+
+  // Note: backwards compatibility with old CSV format (no Type column, defaults to Task)
+  // is already covered by the existing test in the 'Backlog' describe block above:
+  //   "durationDays is auto-calculated from hoursEffort on CSV import"
+})

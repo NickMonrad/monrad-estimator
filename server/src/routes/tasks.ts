@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { calcDurationDays } from '../utils/round.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -36,7 +37,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     data: {
       name, description, assumptions,
       hoursEffort: hoursEffort ?? 0,
-      durationDays: (hoursEffort ?? 0) / hoursPerDay,
+      durationDays: calcDurationDays(hoursEffort ?? 0, hoursPerDay),
       resourceTypeId,
       userStoryId: req.params.storyId as string,
       order: count.length,
@@ -53,7 +54,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   const { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays } = req.body
   const hoursPerDay = story.feature.epic.project.hoursPerDay ?? 7.6
   const resolvedDuration = durationDays !== undefined ? durationDays
-    : hoursEffort !== undefined ? hoursEffort / hoursPerDay
+    : hoursEffort !== undefined ? calcDurationDays(hoursEffort, hoursPerDay)
     : undefined
   const task = await prisma.task.update({
     where: { id: req.params.id as string },

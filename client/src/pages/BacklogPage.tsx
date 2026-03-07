@@ -228,7 +228,10 @@ export default function BacklogPage() {
             onClick={async () => {
               const res = await api.get(`/projects/${projectId}/backlog/export-csv`, { responseType: 'blob' })
               const url = URL.createObjectURL(res.data)
-              const a = document.createElement('a'); a.href = url; a.download = `backlog-${projectId}.csv`; a.click()
+              const disposition: string = res.headers['content-disposition'] ?? ''
+              const match = disposition.match(/filename="([^"]+)"/)
+              const filename = match ? match[1] : `backlog-${projectId}.csv`
+              const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
               URL.revokeObjectURL(url)
             }}
             className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
