@@ -28,7 +28,7 @@ const TYPE_OPTIONS: Array<{ label: string; value: OverheadType }> = [
   { label: 'Days per week', value: 'DAYS_PER_WEEK' },
 ]
 
-const formatNumber = (value: number, fractionDigits = 1) =>
+const formatNumber = (value: number, fractionDigits = 2) =>
   value.toLocaleString(undefined, { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })
 
 export default function ResourceProfilePage() {
@@ -304,7 +304,7 @@ export default function ResourceProfilePage() {
             <h1 className="text-xl font-semibold text-gray-900">Resource Profile</h1>
             {profile && (
               <p className="text-sm text-gray-500 mt-1">
-                Total {formatNumber(profile.summary.totalHours, 1)}h · {formatNumber(profile.summary.totalDays, 2)} days
+                Total {formatNumber(profile.summary.totalHours)}h · {formatNumber(profile.summary.totalDays)} days
                 {profile.summary.totalCost != null && ` · $${formatNumber(profile.summary.totalCost, 0)}`}
               </p>
             )}
@@ -391,9 +391,9 @@ export default function ResourceProfilePage() {
                             />
                           ) : row.count}
                         </td>
-                        <td className="px-4 py-3 text-gray-800">{formatNumber(row.hoursPerDay, 1)} h</td>
-                        <td className="text-right px-4 py-3 text-gray-900">{formatNumber(row.totalHours, 1)} h</td>
-                        <td className="text-right px-4 py-3 text-gray-900">{formatNumber(row.totalDays, 2)} d</td>
+                        <td className="px-4 py-3 text-gray-800">{formatNumber(row.hoursPerDay)} h</td>
+                        <td className="text-right px-4 py-3 text-gray-900">{formatNumber(row.totalHours)} h</td>
+                        <td className="text-right px-4 py-3 text-gray-900">{formatNumber(row.totalDays)} d</td>
                         {hasCost && (
                           <>
                             <td className="text-right px-4 py-3 text-gray-900">
@@ -413,20 +413,20 @@ export default function ResourceProfilePage() {
                                 <div key={epic.epicId} className="border-l-2 border-red-200 pl-3">
                                   <div className="flex items-center justify-between text-sm font-semibold text-gray-800">
                                     <span>{epic.epicName}</span>
-                                    <span>{formatNumber(epic.days, 2)} d · {formatNumber(epic.hours, 1)} h</span>
+                                    <span>{formatNumber(epic.days)} d · {formatNumber(epic.hours)} h</span>
                                   </div>
                                   <div className="mt-2 space-y-2">
                                     {epic.features.map(feature => (
                                       <div key={feature.featureId} className="ml-4">
                                         <div className="flex items-center justify-between text-sm text-gray-600">
                                           <span>{feature.featureName}</span>
-                                          <span>{formatNumber(feature.days, 2)} d · {formatNumber(feature.hours, 1)} h</span>
+                                          <span>{formatNumber(feature.days)} d · {formatNumber(feature.hours)} h</span>
                                         </div>
                                         <ul className="mt-1 ml-4 text-xs text-gray-500 space-y-0.5">
                                           {feature.stories.map(story => (
                                             <li key={story.storyId} className="flex items-center justify-between">
                                               <span>{story.storyName}</span>
-                                              <span>{formatNumber(story.days, 2)} d · {formatNumber(story.hours, 1)} h</span>
+                                              <span>{formatNumber(story.days)} d · {formatNumber(story.hours)} h</span>
                                             </li>
                                           ))}
                                         </ul>
@@ -478,8 +478,8 @@ export default function ResourceProfilePage() {
                       <td className="px-6 py-3 uppercase tracking-wide">Grand total</td>
                       <td className="px-4 py-3 text-center">{profile.resourceRows.reduce((sum, row) => sum + row.count, 0)}</td>
                       <td className="px-4 py-3">—</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(profile.summary.totalHours, 1)} h</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(profile.summary.totalDays, 2)} d</td>
+                      <td className="px-4 py-3 text-right">{formatNumber(profile.summary.totalHours)} h</td>
+                      <td className="px-4 py-3 text-right">{formatNumber(profile.summary.totalDays)} d</td>
                       {hasCost && (
                         <>
                           <td className="px-4 py-3 text-right">—</td>
@@ -651,7 +651,7 @@ export default function ResourceProfilePage() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis type="number" />
                   <YAxis type="category" dataKey="name" width={150} />
-                  <Tooltip />
+                  <Tooltip formatter={(value: number) => formatNumber(value)} />
                   <Legend />
                   <Bar dataKey="taskDays" name="Task days" stackId="a" fill="#2563eb" />
                   <Bar dataKey="overheadDays" name="Overhead days" stackId="a" fill="#f97316" />
