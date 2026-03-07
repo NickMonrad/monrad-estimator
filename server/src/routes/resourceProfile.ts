@@ -14,7 +14,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   const project = await prisma.project.findFirst({
     where: { id: projectId, ownerId: req.userId },
     include: {
-      resourceTypes: true,
+      resourceTypes: { include: { globalType: true } },
       epics: {
         orderBy: { order: 'asc' },
         include: {
@@ -35,7 +35,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         },
       },
       overheads: {
-        include: { resourceType: true },
+        include: { resourceType: { include: { globalType: true } } },
         orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
       },
       timelineEntries: true,
@@ -190,7 +190,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
             })),
         }))
 
-      const dayRate = resourceType.dayRate ?? null
+      const dayRate = resourceType.dayRate ?? resourceType.globalType?.defaultDayRate ?? null
       const totalDays = round2(agg.totalDays)
       const totalHours = round2(agg.totalHours)
       const estimatedCost = dayRate != null ? round2(totalDays * dayRate) : null
@@ -218,7 +218,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   const totalResourceHours = round2(resourceRows.reduce((sum, row) => sum + row.totalHours, 0))
 
   const overheadRows = project.overheads.map(overhead => {
-    const dayRate = overhead.resourceType?.dayRate ?? null
+    const dayRate = overhead.resourceType?.dayRate ?? overhead.resourceType?.globalType?.defaultDayRate ?? null
     const resourceTypeName = overhead.resourceType?.name ?? null
     const computedDays =
       overhead.type === 'PERCENTAGE'
