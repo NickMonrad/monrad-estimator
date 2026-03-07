@@ -241,3 +241,59 @@ test('resource-profile @screenshots', async ({ page }) => {
     fullPage: true,
   })
 })
+
+// ---------------------------------------------------------------------------
+// 6. Effort Review page — summary table with cost columns and epic sub-rows
+// ---------------------------------------------------------------------------
+test('effort-review @screenshots', async ({ page }) => {
+  await login(page)
+  const PROJECT_NAME = `Screenshot Effort Review ${Date.now()}`
+
+  await createProject(page, PROJECT_NAME)
+  await page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first().click()
+  await page.waitForURL(/\/projects\/[^/]+$/)
+  const projectUrl = page.url()
+  const projectId = projectUrl.split('/projects/')[1]
+
+  // Seed data via CSV import (2 epics, each with a feature/story/task)
+  await page.getByRole('button', { name: /backlog/i }).click()
+  await page.waitForURL(/\/backlog/)
+
+  const csvContent = [
+    'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+    'Epic,Platform Build,,,,,,,,,,,,',
+    'Feature,Platform Build,Core API,,,,,,,,,,,',
+    'Story,Platform Build,Core API,API Design,,,,,,,,,,',
+    'Task,Platform Build,Core API,API Design,Design endpoints,,Developer,24,3,,,,,',
+    'Task,Platform Build,Core API,API Design,Review API spec,,Tech Lead,8,1,,,,,',
+    'Epic,Mobile App,,,,,,,,,,,,',
+    'Feature,Mobile App,iOS Build,,,,,,,,,,,',
+    'Story,Mobile App,iOS Build,Screen Development,,,,,,,,,,',
+    'Task,Mobile App,iOS Build,Screen Development,Build login screen,,Developer,16,2,,,,,',
+    'Task,Mobile App,iOS Build,Screen Development,Build home screen,,Developer,12,1.5,,,,,',
+  ].join('\n')
+
+  const os = await import('os')
+  const tmpPath = path.join(os.tmpdir(), `screenshot-effort-${Date.now()}.csv`)
+  fs.writeFileSync(tmpPath, csvContent)
+
+  await page.getByRole('button', { name: /import csv/i }).click()
+  const fileInput = page.locator('input[type="file"]')
+  await fileInput.setInputFiles(tmpPath)
+  await page.getByRole('button', { name: /review.*confirm/i }).click()
+  await page.getByRole('button', { name: /import backlog/i }).click()
+  // Wait for backlog to show imported data
+  await expect(page.getByText(/platform build/i)).toBeVisible({ timeout: 10_000 })
+  fs.unlinkSync(tmpPath)
+
+  // Navigate to Effort Review
+  await page.goto(`/projects/${projectId}/effort`)
+  await expect(page.getByRole('heading', { name: /effort review/i })).toBeVisible({ timeout: 10_000 })
+  await page.waitForLoadState('networkidle')
+  await page.mouse.move(0, 0)
+
+  await page.screenshot({
+    path: path.join(SCREENSHOTS_DIR, 'effort-review.png'),
+    fullPage: true,
+  })
+})
