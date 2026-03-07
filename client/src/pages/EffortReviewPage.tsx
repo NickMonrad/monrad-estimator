@@ -440,8 +440,16 @@ function DetailView({
   }, [effort])
 
   const uniqueEpics = useMemo(() => [...new Set(allTasks.map(t => t.epicName))].sort(), [allTasks])
-  const uniqueFeatures = useMemo(() => [...new Set(allTasks.map(t => t.featureName))].sort(), [allTasks])
-  const uniqueStories = useMemo(() => [...new Set(allTasks.map(t => t.storyName))].sort(), [allTasks])
+  const uniqueFeatures = useMemo(() => {
+    const tasks = epicFilter ? allTasks.filter(t => t.epicName === epicFilter) : allTasks
+    return [...new Set(tasks.map(t => t.featureName))].sort()
+  }, [allTasks, epicFilter])
+  const uniqueStories = useMemo(() => {
+    let tasks = allTasks
+    if (epicFilter) tasks = tasks.filter(t => t.epicName === epicFilter)
+    if (featureFilter) tasks = tasks.filter(t => t.featureName === featureFilter)
+    return [...new Set(tasks.map(t => t.storyName))].sort()
+  }, [allTasks, epicFilter, featureFilter])
   const uniqueRts = useMemo(() => [...new Set(allTasks.map(t => t.rtName))].sort(), [allTasks])
 
   const taskMatches = (task: TaskSummary & { rtName: string }) => {
@@ -476,7 +484,7 @@ function DetailView({
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={epicFilter}
-            onChange={e => setEpicFilter(e.target.value)}
+            onChange={e => { setEpicFilter(e.target.value); setFeatureFilter(''); setStoryFilter('') }}
             className="text-sm border border-gray-200 rounded px-2 py-1.5 text-gray-700 bg-white"
           >
             <option value="">All Epics</option>
@@ -485,7 +493,7 @@ function DetailView({
 
           <select
             value={featureFilter}
-            onChange={e => setFeatureFilter(e.target.value)}
+            onChange={e => { setFeatureFilter(e.target.value); setStoryFilter('') }}
             className="text-sm border border-gray-200 rounded px-2 py-1.5 text-gray-700 bg-white"
           >
             <option value="">All Features</option>
