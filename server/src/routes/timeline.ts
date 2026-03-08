@@ -20,6 +20,42 @@ function computeDates(projectStartDate: Date | null, startWeek: number, duration
 
 type ParallelWarning = { epicId: string; epicName: string; resourceTypeName: string; demandDays: number; capacityDays: number }
 
+type ResourceTypeWithNamed = {
+  id: string
+  name: string
+  count: number
+  hoursPerDay: number | null
+  namedResources: Array<{
+    name: string
+    startWeek: number | null
+    endWeek: number | null
+    allocationPct: number
+  }>
+}
+
+/** Compute weekly capacity (hours) for a resource type, accounting for named resource availability. */
+export function getWeeklyCapacity(
+  rt: ResourceTypeWithNamed,
+  week: number,
+  defaultHoursPerDay: number,
+): number {
+  const hoursPerDay = rt.hoursPerDay ?? defaultHoursPerDay
+  if (rt.namedResources.length === 0) {
+    // No named resources — use aggregate count (existing behaviour)
+    return rt.count * hoursPerDay * 5
+  }
+  // Sum capacity from named resources active this week
+  let totalHours = 0
+  for (const nr of rt.namedResources) {
+    const start = nr.startWeek ?? 0       // null = project start (week 0)
+    const end = nr.endWeek ?? Infinity     // null = project end
+    if (week >= start && week <= end) {
+      totalHours += (nr.allocationPct / 100) * hoursPerDay * 5
+    }
+  }
+  return totalHours
+}
+
 function computeResourceBreakdown(
   feature: { userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] },
   fallbackHpd: number
@@ -59,7 +95,7 @@ function buildResponse(
   }> = [],
   featureDeps: Array<{ featureId: string; dependsOnId: string }> = [],
   storyDeps: Array<{ storyId: string; dependsOnId: string }> = [],
-  resourceTypes: Array<{ name: string; count: number }> = [],
+  resourceTypes: ResourceTypeWithNamed[] = [],
 ) {
   const maxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
@@ -70,6 +106,7 @@ function buildResponse(
 
   // Build resource type count map (name → count) for quick lookup
   const rtCountByName = new Map(resourceTypes.map(rt => [rt.name, rt.count]))
+  const rtByName = new Map(resourceTypes.map(rt => [rt.name, rt]))
 
   // Compute weekly demand across all features
   const weeklyDemandMap = new Map<string, { demandDays: number; capacityDays: number }>()
@@ -81,13 +118,16 @@ function buildResponse(
     for (const { name, days } of breakdown) {
       const startW = Math.floor(featureStart)
       const endW = Math.ceil(featureEnd)
-      const count = rtCountByName.get(name) ?? 1
-      const capacityDays = count * 5
+      const rt = rtByName.get(name)
       for (let w = startW; w < endW; w++) {
         // Only count the fraction of this integer week the feature actually occupies
         const overlap = Math.min(w + 1, featureEnd) - Math.max(w, featureStart)
         if (overlap <= 0) continue
         const key = `${w}|${name}`
+        // Variable capacity: use named resource availability for this week
+        const capacityDays = rt
+          ? getWeeklyCapacity(rt, w, project.hoursPerDay) / (rt.hoursPerDay ?? project.hoursPerDay)
+          : 5
         const existing = weeklyDemandMap.get(key) ?? { demandDays: 0, capacityDays }
         existing.demandDays += days * (overlap / e.durationWeeks)
         weeklyDemandMap.set(key, existing)
@@ -104,6 +144,17 @@ function buildResponse(
     }
   }).sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
 
+  // Build named resources list from resource types
+  const namedResourcesList = resourceTypes.flatMap(rt =>
+    rt.namedResources.map(nr => ({
+      resourceTypeName: rt.name,
+      name: nr.name,
+      startWeek: nr.startWeek,
+      endWeek: nr.endWeek,
+      allocationPct: nr.allocationPct,
+    }))
+  )
+
   return {
     projectId: project.id,
     startDate: project.startDate?.toISOString() ?? null,
@@ -114,6 +165,7 @@ function buildResponse(
     featureDependencies: featureDeps,
     storyDependencies: storyDeps,
     weeklyDemand,
+    namedResources: namedResourcesList,
     entries: entries.map(e => {
       const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
       const durationWeeksActual = Math.max(e.durationWeeks, 0.01)
@@ -177,8 +229,9 @@ async function computeParallelWarnings(
       where: { id: { in: featureIds } },
       include: { userStories: { include: { tasks: { include: { resourceType: true } } } } },
     })
-    const resourceTypes = await prisma.resourceType.findMany({ where: { projectId } })
+    const resourceTypes = await prisma.resourceType.findMany({ where: { projectId }, include: { namedResources: true } })
     const rtCountMap = new Map(resourceTypes.map(rt => [rt.id, rt.count]))
+    const rtMap = new Map(resourceTypes.map(rt => [rt.id, rt as ResourceTypeWithNamed]))
 
     // Sum total person-days per resource type across ALL features (they run simultaneously)
     const demandMap = new Map<string, { name: string; days: number; count: number }>()
@@ -201,8 +254,21 @@ async function computeParallelWarnings(
       }
     }
 
-    for (const [, { name, days, count }] of demandMap) {
-      const capacityDays = count * epicSpanDays
+    for (const [rtId, { name, days, count }] of demandMap) {
+      // Variable capacity: sum capacity across the epic's span, accounting for named resource availability
+      const rt = rtMap.get(rtId)
+      let capacityDays: number
+      if (rt && rt.namedResources.length > 0) {
+        capacityDays = 0
+        const hpd = rt.hoursPerDay ?? fallbackHoursPerDay
+        for (let w = Math.floor(startWeek); w < Math.ceil(endWeek); w++) {
+          const overlap = Math.min(w + 1, endWeek) - Math.max(w, startWeek)
+          if (overlap <= 0) continue
+          capacityDays += (getWeeklyCapacity(rt, w, fallbackHoursPerDay) / hpd) * overlap
+        }
+      } else {
+        capacityDays = count * epicSpanDays
+      }
       if (days > capacityDays) {
         warnings.push({
           epicId,
@@ -269,7 +335,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     isManual: e.isManual,
   }))
 
-  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id } })
+  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
   res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes))
 })
 
@@ -324,7 +390,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
 
   // Load resource types
-  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id } })
+  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
   const rtCountMap = new Map(resourceTypes.map(rt => [rt.id, rt.count]))
 
   // Helper: compute duration in weeks for a feature
@@ -498,12 +564,9 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       return result
     }
 
-    // Weekly capacity per resource type (hours per week)
-    const weekCapacity = new Map<string, number>()
-    for (const rt of resourceTypes) {
-      weekCapacity.set(rt.id, rt.count * (rt.hoursPerDay ?? fallbackHoursPerDay) * 5)
-    }
-    weekCapacity.set('_unassigned', fallbackHoursPerDay * 5)
+    // Variable weekly capacity: build lookup by resource type ID
+    const rtById = new Map(resourceTypes.map(rt => [rt.id, rt as ResourceTypeWithNamed]))
+    const allRtIds = [...resourceTypes.map(rt => rt.id), '_unassigned']
 
     // Build remaining hours per feature (Map<fId, Map<rtId, hoursRemaining>>)
     const remainingHours = new Map<string, Map<string, number>>()
@@ -558,7 +621,12 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       }
 
       // Proportional allocation: for each resource type, divide capacity across active features needing it
-      for (const [rtId, capPerWeek] of weekCapacity) {
+      const currentWeek = Math.floor(t)
+      for (const rtId of allRtIds) {
+        const rt = rtById.get(rtId)
+        const capPerWeek = rt
+          ? getWeeklyCapacity(rt, currentWeek, fallbackHoursPerDay)
+          : fallbackHoursPerDay * 5  // _unassigned fallback
         const capPerStep = capPerWeek * STEP  // hours available this step (STEP fraction of a week)
         const competing = active.filter(fId => (remainingHours.get(fId)?.get(rtId) ?? 0) > 0.001)
         if (competing.length === 0) continue

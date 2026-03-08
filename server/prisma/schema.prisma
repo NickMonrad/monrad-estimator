@@ -27,6 +27,7 @@ model GlobalResourceType {
   defaultDayRate     Float?
   isDefault          Boolean          @default(false)
   resourceTypes      ResourceType[]
+  rateCardEntries    RateCardEntry[]
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 }
@@ -39,6 +40,8 @@ model Project {
   status      ProjectStatus @default(DRAFT)
   hoursPerDay Float         @default(7.6)
   startDate   DateTime?
+  taxRate      Float?    @default(10)
+  taxLabel     String    @default("GST")
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   owner       User          @relation(fields: [ownerId], references: [id])
@@ -49,6 +52,7 @@ model Project {
   storyTimelineEntries StoryTimelineEntry[]
   snapshots   BacklogSnapshot[]
   overheads   ProjectOverhead[]
+  discounts   ProjectDiscount[]
 }
 
 enum ProjectStatus {
@@ -74,6 +78,8 @@ model ResourceType {
   tasks         Task[]
   templateTasks TemplateTask[]
   overheads     ProjectOverhead[]
+  namedResources NamedResource[]
+  discounts      ProjectDiscount[]
 }
 
 model ProjectOverhead {
@@ -265,4 +271,49 @@ model TemplateSnapshot {
   trigger     String          // 'manual' | 'csv_import' | 'manual_edit'
   snapshot    Json
   createdAt   DateTime        @default(now())
+}
+
+model NamedResource {
+  id             String       @id @default(cuid())
+  resourceTypeId String
+  resourceType   ResourceType @relation(fields: [resourceTypeId], references: [id], onDelete: Cascade)
+  name           String
+  startWeek      Int?
+  endWeek        Int?
+  allocationPct  Int          @default(100)
+  pricingModel   String       @default("ACTUAL_DAYS")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model RateCard {
+  id        String         @id @default(cuid())
+  name      String
+  version   Int            @default(1)
+  isDefault Boolean        @default(false)
+  entries   RateCardEntry[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model RateCardEntry {
+  id                   String             @id @default(cuid())
+  rateCardId           String
+  rateCard             RateCard           @relation(fields: [rateCardId], references: [id], onDelete: Cascade)
+  globalResourceTypeId String
+  globalResourceType   GlobalResourceType @relation(fields: [globalResourceTypeId], references: [id])
+  dayRate              Float
+}
+
+model ProjectDiscount {
+  id             String        @id @default(cuid())
+  projectId      String
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  resourceTypeId String?
+  resourceType   ResourceType? @relation(fields: [resourceTypeId], references: [id])
+  type           String
+  value          Float
+  label          String
+  order          Int           @default(0)
+  createdAt      DateTime      @default(now())
 }

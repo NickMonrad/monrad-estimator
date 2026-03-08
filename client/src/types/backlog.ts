@@ -76,6 +76,38 @@ export interface Project {
   hoursPerDay: number
   startDate?: string
   updatedAt: string
+  taxRate?: number | null
+  taxLabel?: string
+}
+
+export interface ProjectDiscount {
+  id: string
+  projectId: string
+  resourceTypeId: string | null
+  type: 'PERCENTAGE' | 'FIXED_AMOUNT'
+  value: number
+  label: string
+  order: number
+  resourceType?: ResourceType | null
+  createdAt: string
+}
+
+export interface RateCardEntry {
+  id: string
+  rateCardId: string
+  globalResourceTypeId: string
+  globalResourceType: { id: string; name: string; category: string }
+  dayRate: number
+}
+
+export interface RateCard {
+  id: string
+  name: string
+  version: number
+  isDefault: boolean
+  entries: RateCardEntry[]
+  createdAt: string
+  updatedAt: string
 }
 
 export interface TimelineEntry {
@@ -124,6 +156,14 @@ export interface StoryDependency {
   dependsOnId: string
 }
 
+export interface NamedResourceEntry {
+  resourceTypeName: string
+  name: string
+  startWeek: number | null
+  endWeek: number | null
+  allocationPct: number
+}
+
 export interface TimelineSummary {
   projectId: string
   startDate: string | null
@@ -135,6 +175,7 @@ export interface TimelineSummary {
   featureDependencies?: FeatureDependency[]
   storyDependencies?: StoryDependency[]
   weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
+  namedResources?: NamedResourceEntry[]
 }
 
 export interface OverheadItem {

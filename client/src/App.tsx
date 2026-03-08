@@ -10,6 +10,7 @@ import TemplateLibraryPage from './pages/TemplateLibraryPage'
 import ProjectSettingsPage from './pages/ProjectSettingsPage'
 import EffortReviewPage from './pages/EffortReviewPage'
 import GlobalResourceTypesPage from './pages/GlobalResourceTypesPage'
+import RateCardsPage from './pages/RateCardsPage'
 import TimelinePage from './pages/TimelinePage'
 import ResourceProfilePage from './pages/ResourceProfilePage'
 
@@ -39,6 +40,7 @@ function AppRoutes() {
       <Route path="/projects/:id/settings" element={<PrivateRoute><ProjectSettingsPage /></PrivateRoute>} />
       <Route path="/templates" element={<PrivateRoute><TemplateLibraryPage /></PrivateRoute>} />
       <Route path="/resource-types" element={<PrivateRoute><GlobalResourceTypesPage /></PrivateRoute>} />
+      <Route path="/rate-cards" element={<PrivateRoute><RateCardsPage /></PrivateRoute>} />
     </Routes>
   )
 }

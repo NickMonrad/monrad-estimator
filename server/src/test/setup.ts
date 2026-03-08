@@ -18,5 +18,13 @@ vi.mock('../lib/prisma.js', () => ({
     storyDependency: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), upsert: vi.fn().mockResolvedValue({}), delete: vi.fn(), deleteMany: vi.fn() },
     storyTimelineEntry: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn(), upsert: vi.fn().mockResolvedValue({}), deleteMany: vi.fn() },
     backlogSnapshot: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+    namedResource: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+    rateCard: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+    rateCardEntry: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+    projectDiscount: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+    $transaction: vi.fn((fn: unknown) => typeof fn === 'function' ? (fn as Function)({
+      rateCard: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), updateMany: vi.fn() },
+      rateCardEntry: { deleteMany: vi.fn() },
+    }) : Promise.resolve(fn)),
   },
 }))
