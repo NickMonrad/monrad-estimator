@@ -42,8 +42,14 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   const rt = await verifyResourceType(rtId, projectId)
   if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
 
-  const { name, startWeek, endWeek, allocationPct, pricingModel } = req.body
-  if (!name) { res.status(400).json({ error: 'name is required' }); return }
+  const { name: rawName, startWeek, endWeek, allocationPct, pricingModel } = req.body
+
+  // Auto-generate a numbered name if none provided or generic
+  let name = rawName as string | undefined
+  if (!name || name === 'New person') {
+    const existing = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
+    name = `${rt.name} ${existing + 1}`
+  }
 
   if (allocationPct !== undefined && (allocationPct < 0 || allocationPct > 100)) {
     res.status(400).json({ error: 'allocationPct must be between 0 and 100' }); return
