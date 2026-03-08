@@ -396,16 +396,24 @@ export default function TimelinePage() {
     return groups
   }, [timeline])
 
-  // Group resource types by category
+  // Group resource types by category — only include RTs with demand in timeline
   const rtByCategory = useMemo(() => {
     if (!resourceTypes) return []
+    // Build set of RT names that appear in weeklyDemand
+    const rtNamesWithDemand = new Set<string>()
+    if (timeline?.weeklyDemand) {
+      for (const d of timeline.weeklyDemand) {
+        if (d.demandDays > 0) rtNamesWithDemand.add(d.resourceTypeName)
+      }
+    }
+    const filtered = resourceTypes.filter(rt => rtNamesWithDemand.has(rt.name))
     const map = new Map<string, ResourceType[]>()
-    for (const rt of resourceTypes) {
+    for (const rt of filtered) {
       if (!map.has(rt.category)) map.set(rt.category, [])
       map.get(rt.category)!.push(rt)
     }
     return Array.from(map.entries())
-  }, [resourceTypes])
+  }, [resourceTypes, timeline])
 
   const projectStartDate = timeline?.startDate ? new Date(timeline.startDate) : null
 
@@ -549,7 +557,6 @@ export default function TimelinePage() {
                         <th className="text-left pb-1 font-normal">Resource Type</th>
                         <th className="text-right pb-1 font-normal w-20">Count</th>
                         <th className="text-right pb-1 font-normal w-24">Hrs/day</th>
-                        <th className="text-right pb-1 font-normal w-28">Day rate</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -586,24 +593,6 @@ export default function TimelinePage() {
                                 updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
                               }}
                               className="w-20 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
-                            />
-                          </td>
-                          <td className="py-1.5 text-right">
-                            <input
-                              key={`rate-${rt.id}-${rt.dayRate ?? 'null'}`}
-                              type="number"
-                              step="50"
-                              defaultValue={rt.dayRate ?? ''}
-                              placeholder={rt.globalType?.defaultDayRate != null ? String(rt.globalType.defaultDayRate) : '—'}
-                              onBlur={e => {
-                                const value = e.target.value.trim()
-                                const parsed = value === '' ? null : parseFloat(value)
-                                if (parsed !== null && !Number.isFinite(parsed)) return
-                                const current = rt.dayRate ?? null
-                                if (parsed === current) return
-                                updateResourceType.mutate({ id: rt.id, dayRate: parsed })
-                              }}
-                              className="w-24 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
                             />
                           </td>
                         </tr>
@@ -679,6 +668,7 @@ export default function TimelinePage() {
               {timeline.weeklyDemand && timeline.weeklyDemand.length > 0 && (
                 <ResourceHistogram
                   weeklyDemand={timeline.weeklyDemand}
+                  weeklyCapacity={timeline.weeklyCapacity}
                   totalWeeks={totalWeeks}
                   colW={64}
                   labelW={300}

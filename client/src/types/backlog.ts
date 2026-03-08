@@ -175,6 +175,7 @@ export interface TimelineSummary {
   featureDependencies?: FeatureDependency[]
   storyDependencies?: StoryDependency[]
   weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
+  weeklyCapacity?: { week: number; resourceTypeName: string; capacityDays: number }[]
   namedResources?: NamedResourceEntry[]
 }
 

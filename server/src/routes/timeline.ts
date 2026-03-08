@@ -144,16 +144,44 @@ function buildResponse(
     }
   }).sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
 
-  // Build named resources list from resource types
-  const namedResourcesList = resourceTypes.flatMap(rt =>
-    rt.namedResources.map(nr => ({
-      resourceTypeName: rt.name,
-      name: nr.name,
-      startWeek: nr.startWeek,
-      endWeek: nr.endWeek,
-      allocationPct: nr.allocationPct,
-    }))
-  )
+  // Build weekly capacity array for EVERY week (0..maxWeek-1) for RTs that have hours
+  const rtNamesWithHours = new Set(weeklyDemand.map(d => d.resourceTypeName))
+  const weeklyCapacity: { week: number; resourceTypeName: string; capacityDays: number }[] = []
+  if (maxWeek != null) {
+    for (const rt of resourceTypes) {
+      if (!rtNamesWithHours.has(rt.name)) continue
+      const hpd = rt.hoursPerDay ?? project.hoursPerDay
+      for (let w = 0; w < maxWeek; w++) {
+        const capDays = getWeeklyCapacity(rt, w, project.hoursPerDay) / hpd
+        weeklyCapacity.push({ week: w, resourceTypeName: rt.name, capacityDays: Math.round(capDays * 10) / 10 })
+      }
+    }
+  }
+
+  // Build named resources list from resource types, auto-generating numbered
+  // entries for RTs with count > 0 but no named resources that have demand.
+  const namedResourcesList = resourceTypes.flatMap(rt => {
+    if (rt.namedResources.length > 0) {
+      return rt.namedResources.map(nr => ({
+        resourceTypeName: rt.name,
+        name: nr.name,
+        startWeek: nr.startWeek,
+        endWeek: nr.endWeek,
+        allocationPct: nr.allocationPct,
+      }))
+    }
+    // Auto-generate synthetic named resources when RT has count > 0 and demand
+    if (rt.count > 0 && rtNamesWithHours.has(rt.name)) {
+      return Array.from({ length: rt.count }, (_, i) => ({
+        resourceTypeName: rt.name,
+        name: `${rt.name} ${i + 1}`,
+        startWeek: null as number | null,
+        endWeek: null as number | null,
+        allocationPct: 100,
+      }))
+    }
+    return []
+  })
 
   return {
     projectId: project.id,
@@ -165,6 +193,7 @@ function buildResponse(
     featureDependencies: featureDeps,
     storyDependencies: storyDeps,
     weeklyDemand,
+    weeklyCapacity,
     namedResources: namedResourcesList,
     entries: entries.map(e => {
       const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
