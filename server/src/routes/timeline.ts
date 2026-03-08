@@ -26,6 +26,7 @@ type ResourceTypeWithNamed = {
   count: number
   hoursPerDay: number | null
   namedResources: Array<{
+    name: string
     startWeek: number | null
     endWeek: number | null
     allocationPct: number
@@ -143,6 +144,17 @@ function buildResponse(
     }
   }).sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
 
+  // Build named resources list from resource types
+  const namedResourcesList = resourceTypes.flatMap(rt =>
+    rt.namedResources.map(nr => ({
+      resourceTypeName: rt.name,
+      name: nr.name,
+      startWeek: nr.startWeek,
+      endWeek: nr.endWeek,
+      allocationPct: nr.allocationPct,
+    }))
+  )
+
   return {
     projectId: project.id,
     startDate: project.startDate?.toISOString() ?? null,
@@ -153,6 +165,7 @@ function buildResponse(
     featureDependencies: featureDeps,
     storyDependencies: storyDeps,
     weeklyDemand,
+    namedResources: namedResourcesList,
     entries: entries.map(e => {
       const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
       const durationWeeksActual = Math.max(e.durationWeeks, 0.01)

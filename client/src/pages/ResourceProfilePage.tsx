@@ -337,7 +337,7 @@ export default function ResourceProfilePage() {
   })
 
   const hasCost = profile?.summary.hasCost ?? false
-  const columnCount = hasCost ? 7 : 5
+  const columnCount = hasCost ? 7 : 6
 
   const toggleRow = (rtId: string) => {
     setExpandedRows(prev => {
@@ -367,8 +367,8 @@ export default function ResourceProfilePage() {
   }
 
   const updateResourceType = useMutation({
-    mutationFn: ({ id, count }: { id: string; count: number }) =>
-      api.put(`/projects/${projectId}/resource-types/${id}`, { count }).then(r => r.data),
+    mutationFn: ({ id, ...data }: { id: string; count?: number; dayRate?: number | null }) =>
+      api.put(`/projects/${projectId}/resource-types/${id}`, data).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
@@ -548,6 +548,19 @@ export default function ResourceProfilePage() {
       })),
     ]
     return data
+  }, [profile])
+
+  // ── Filter resource rows: only show allocated ones ──
+  const filteredResourceRows = useMemo(() => {
+    if (!profile) return []
+    const overheadLinkedRtIds = new Set(
+      profile.overheadRows
+        .filter(r => r.resourceTypeId)
+        .map(r => r.resourceTypeId!)
+    )
+    return profile.resourceRows.filter(
+      row => row.totalHours > 0 || row.totalDays > 0 || overheadLinkedRtIds.has(row.resourceTypeId)
+    )
   }, [profile])
 
   // ── Commercial cost computation ──
@@ -751,18 +764,16 @@ export default function ResourceProfilePage() {
                     <th className="text-left px-6 py-3 font-medium">Role</th>
                     <th className="text-center px-4 py-3 font-medium">Count</th>
                     <th className="text-left px-4 py-3 font-medium">Hrs/Day</th>
-                    <th className="text-right px-4 py-3 font-medium">Hours</th>
-                    <th className="text-right px-4 py-3 font-medium">Days</th>
+                    <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Hours</th>
+                    <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Days</th>
+                    <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                     {hasCost && (
-                      <>
-                        <th className="text-right px-4 py-3 font-medium">Day Rate</th>
-                        <th className="text-right px-6 py-3 font-medium">Cost</th>
-                      </>
+                      <th className="text-right px-6 py-3 font-medium">Cost</th>
                     )}
                   </tr>
                 </thead>
                 <tbody>
-                  {profile.resourceRows.map(row => (
+                  {filteredResourceRows.map(row => (
                     <Fragment key={row.resourceTypeId}>
                       <tr
                         className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
@@ -810,17 +821,31 @@ export default function ResourceProfilePage() {
                           ) : row.count}
                         </td>
                         <td className="px-4 py-3 text-gray-800">{formatNumber(row.hoursPerDay)} h</td>
-                        <td className="text-right px-4 py-3 text-gray-900">{formatNumber(row.totalHours)} h</td>
-                        <td className="text-right px-4 py-3 text-gray-900">{formatNumber(row.totalDays)} d</td>
+                        <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">{formatNumber(row.totalHours)} h</td>
+                        <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">{formatNumber(row.totalDays)} d</td>
+                        <td className="text-right px-4 py-3 text-gray-900">
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            defaultValue={row.dayRate ?? ''}
+                            key={`dr-${row.resourceTypeId}-${row.dayRate}`}
+                            onClick={e => e.stopPropagation()}
+                            onBlur={e => {
+                              const raw = e.target.value.trim()
+                              const val = raw === '' ? null : parseFloat(raw)
+                              if (val !== null && (Number.isNaN(val) || val < 0)) return
+                              const rt = resourceTypes.find(r => r.id === row.resourceTypeId)
+                              if (rt && val !== (rt.dayRate ?? null)) updateResourceType.mutate({ id: rt.id, dayRate: val })
+                            }}
+                            className="w-20 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            placeholder="—"
+                          />
+                        </td>
                         {hasCost && (
-                          <>
-                            <td className="text-right px-4 py-3 text-gray-900">
-                              {row.dayRate != null ? `$${formatNumber(row.dayRate, 0)}` : '—'}
-                            </td>
-                            <td className="text-right px-6 py-3 text-gray-900">
-                              {row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}
-                            </td>
-                          </>
+                          <td className="text-right px-6 py-3 text-gray-900">
+                            {row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}
+                          </td>
                         )}
                       </tr>
                       {expandedNamedResources.has(row.resourceTypeId) && (
@@ -883,18 +908,16 @@ export default function ResourceProfilePage() {
                         {row.type === 'PERCENTAGE'
                           ? `— ${row.value}% of task days`
                           : row.type === 'DAYS_PER_WEEK'
-                            ? `— ${formatNumber(row.value, 2)} d/wk × ${profile.projectDurationWeeks} wks`
+                            ? `— ${formatNumber(row.value, 2)} d/wk × ${formatNumber(profile.projectDurationWeeks)} wks`
                             : `— ${formatNumber(row.value, 2)} fixed days`}
                       </td>
                       <td className="text-center px-4 py-3">—</td>
                       <td className="text-right px-4 py-3 font-medium text-gray-900">{formatNumber(row.computedDays, 2)} d</td>
+                      <td className="text-right px-4 py-3">{row.dayRate != null ? `$${formatNumber(row.dayRate, 0)}` : '—'}</td>
                       {hasCost && (
-                        <>
-                          <td className="text-right px-4 py-3">{row.dayRate != null ? `$${formatNumber(row.dayRate, 0)}` : '—'}</td>
-                          <td className="text-right px-6 py-3 font-medium text-gray-900">
-                            {row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}
-                          </td>
-                        </>
+                        <td className="text-right px-6 py-3 font-medium text-gray-900">
+                          {row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}
+                        </td>
                       )}
                     </tr>
                   ))}
@@ -902,17 +925,15 @@ export default function ResourceProfilePage() {
                   {profile && (
                     <tr className="bg-gray-900 text-white font-semibold">
                       <td className="px-6 py-3 uppercase tracking-wide">Grand total</td>
-                      <td className="px-4 py-3 text-center">{profile.resourceRows.reduce((sum, row) => sum + row.count, 0)}</td>
+                      <td className="px-4 py-3 text-center">{filteredResourceRows.reduce((sum, row) => sum + row.count, 0)}</td>
                       <td className="px-4 py-3">—</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(profile.summary.totalHours)} h</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(profile.summary.totalDays)} d</td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">{formatNumber(profile.summary.totalHours)} h</td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">{formatNumber(profile.summary.totalDays)} d</td>
+                      <td className="px-4 py-3 text-right">—</td>
                       {hasCost && (
-                        <>
-                          <td className="px-4 py-3 text-right">—</td>
-                          <td className="px-6 py-3 text-right">
-                            {profile.summary.totalCost != null ? `$${formatNumber(profile.summary.totalCost, 0)}` : '—'}
-                          </td>
-                        </>
+                        <td className="px-6 py-3 text-right">
+                          {profile.summary.totalCost != null ? `$${formatNumber(profile.summary.totalCost, 0)}` : '—'}
+                        </td>
                       )}
                     </tr>
                   )}
@@ -942,7 +963,7 @@ export default function ResourceProfilePage() {
                     {item.type === 'PERCENTAGE'
                       ? `${item.value}% of task days`
                       : item.type === 'DAYS_PER_WEEK'
-                        ? `${formatNumber(item.value, 2)} days/week × ${profile?.projectDurationWeeks ?? 0} weeks`
+                        ? `${formatNumber(item.value, 2)} days/week × ${formatNumber(profile?.projectDurationWeeks ?? 0)} weeks`
                         : `${formatNumber(item.value, 2)} fixed total days`}
                     {item.resourceType?.name && ` · Billed with ${item.resourceType.name}`}
                   </p>
@@ -1032,7 +1053,7 @@ export default function ResourceProfilePage() {
               <p className="text-xs text-amber-600 mt-2">⚠ No timeline set for this project — computed days will be 0 until you add features to the timeline.</p>
             )}
             {form.type === 'DAYS_PER_WEEK' && (profile?.projectDurationWeeks ?? 0) > 0 && form.value !== '' && (
-              <p className="text-xs text-gray-500 mt-2">= {formatNumber(parseFloat(form.value || '0') * (profile?.projectDurationWeeks ?? 0), 2)} total days ({profile?.projectDurationWeeks} week{profile?.projectDurationWeeks === 1 ? '' : 's'})</p>
+              <p className="text-xs text-gray-500 mt-2">= {formatNumber(parseFloat(form.value || '0') * (profile?.projectDurationWeeks ?? 0), 2)} total days ({formatNumber(profile?.projectDurationWeeks ?? 0)} weeks)</p>
             )}
             {formError && <p className="text-sm text-red-600 mt-2">{formError}</p>}
             <div className="mt-4 flex gap-2">

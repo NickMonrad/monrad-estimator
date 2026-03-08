@@ -156,6 +156,14 @@ export interface StoryDependency {
   dependsOnId: string
 }
 
+export interface NamedResourceEntry {
+  resourceTypeName: string
+  name: string
+  startWeek: number | null
+  endWeek: number | null
+  allocationPct: number
+}
+
 export interface TimelineSummary {
   projectId: string
   startDate: string | null
@@ -167,6 +175,7 @@ export interface TimelineSummary {
   featureDependencies?: FeatureDependency[]
   storyDependencies?: StoryDependency[]
   weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
+  namedResources?: NamedResourceEntry[]
 }
 
 export interface OverheadItem {

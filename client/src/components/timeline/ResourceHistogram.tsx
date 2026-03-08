@@ -66,7 +66,9 @@ export default function ResourceHistogram({
       maxDemand,
       totalDays,
       capacityDays,
-    })).sort((a, b) => a.name.localeCompare(b.name))
+    }))
+    .filter(rt => rt.totalDays > 0 || rt.capacityDays > 0)
+    .sort((a, b) => a.name.localeCompare(b.name))
   }, [weeklyDemand])
 
   // Build lookup: week+name → demandDays
