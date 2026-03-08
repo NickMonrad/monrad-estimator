@@ -367,7 +367,7 @@ export default function ResourceProfilePage() {
   }
 
   const updateResourceType = useMutation({
-    mutationFn: ({ id, ...data }: { id: string; count?: number; dayRate?: number | null }) =>
+    mutationFn: ({ id, ...data }: { id: string; count?: number; hoursPerDay?: number | null; dayRate?: number | null }) =>
       api.put(`/projects/${projectId}/resource-types/${id}`, data).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
@@ -805,7 +805,6 @@ export default function ResourceProfilePage() {
                           )}
                         </td>
                         <td className="text-center px-4 py-3 text-gray-800">
-                          {(row.category === 'GOVERNANCE' || row.category === 'PROJECT_MANAGEMENT') ? (
                             <input
                               type="number"
                               min="1"
@@ -818,9 +817,28 @@ export default function ResourceProfilePage() {
                               }}
                               className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
                             />
-                          ) : row.count}
                         </td>
-                        <td className="px-4 py-3 text-gray-800">{formatNumber(row.hoursPerDay)} h</td>
+                        <td className="px-4 py-3 text-gray-800">
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="0.5"
+                            defaultValue={row.hoursPerDay ?? ''}
+                            key={`hpd-${row.resourceTypeId}-${row.hoursPerDay}`}
+                            onClick={e => e.stopPropagation()}
+                            onBlur={e => {
+                              const raw = e.target.value.trim()
+                              const parsed = raw === '' ? null : parseFloat(raw)
+                              if (parsed !== null && (!Number.isFinite(parsed) || parsed <= 0)) return
+                              const rt = resourceTypes.find(r => r.id === row.resourceTypeId)
+                              const current = rt?.hoursPerDay ?? null
+                              if (parsed === current) return
+                              if (rt) updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
+                            }}
+                            className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            placeholder="—"
+                          /> h
+                        </td>
                         <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">{formatNumber(row.totalHours)} h</td>
                         <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">{formatNumber(row.totalDays)} d</td>
                         <td className="text-right px-4 py-3 text-gray-900">
