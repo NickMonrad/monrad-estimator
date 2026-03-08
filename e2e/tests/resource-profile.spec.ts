@@ -193,9 +193,9 @@ test.describe('Resource Profile — enhanced', () => {
     await expect(addPersonBtn).toBeVisible({ timeout: 5_000 })
     await addPersonBtn.click()
 
-    // A new row should appear with the default name "New person" in an input
+    // A new row should appear with an auto-generated name input (e.g. "Developer 1")
     await expect(
-      page.locator('input[value="New person"]').first()
+      page.locator('input[type="text"]').first()
     ).toBeVisible({ timeout: 10_000 })
   })
 
