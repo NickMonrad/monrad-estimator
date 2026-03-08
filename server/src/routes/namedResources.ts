@@ -63,6 +63,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       ...(pricingModel !== undefined && { pricingModel }),
     },
   })
+
+  // Sync resource type count to match total named resources
+  const total = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
+  await prisma.resourceType.update({ where: { id: rtId }, data: { count: total } })
+
   res.status(201).json(resource)
 })
 
@@ -115,6 +120,11 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
 
   await prisma.namedResource.delete({ where: { id } })
+
+  // Sync resource type count (minimum 1 — always need at least one resource)
+  const total = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
+  await prisma.resourceType.update({ where: { id: rtId }, data: { count: Math.max(1, total) } })
+
   res.status(204).send()
 })
 

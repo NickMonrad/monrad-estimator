@@ -563,20 +563,7 @@ export default function TimelinePage() {
                       {rts.map(rt => (
                         <tr key={rt.id} className="border-t border-gray-50">
                           <td className="py-1.5 text-gray-700">{rt.name}</td>
-                          <td className="py-1.5 text-right">
-                            <input
-                              key={`count-${rt.id}-${rt.count}`}
-                              type="number"
-                              min="1"
-                              defaultValue={rt.count}
-                              onBlur={e => {
-                                const v = parseInt(e.target.value, 10)
-                                if (!Number.isFinite(v) || v <= 0 || v === rt.count) return
-                                updateResourceType.mutate({ id: rt.id, count: v })
-                              }}
-                              className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
-                            />
-                          </td>
+                          <td className="py-1.5 text-right text-sm text-gray-700">{rt.count}</td>
                           <td className="py-1.5 text-right">
                             <input
                               key={`hours-${rt.id}-${rt.hoursPerDay ?? 'null'}`}

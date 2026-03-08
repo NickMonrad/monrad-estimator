@@ -101,10 +101,13 @@ test.describe('Resource Profile', () => {
     const pmRow = page.locator('tr').filter({ hasText: /project manager/i }).first()
     await expect(pmRow).toBeVisible({ timeout: 15_000 })
 
-    const countInput = pmRow.locator('input[type="number"]').first()
-    await expect(countInput).toBeVisible({ timeout: 8_000 })
-    await expect(countInput).toBeEditable()
-    await expect(countInput).toHaveValue('1')
+    // Count is shown with +/- buttons instead of an input
+    const addBtn = pmRow.locator('button', { hasText: '+' })
+    const removeBtn = pmRow.locator('button', { hasText: '−' })
+    await expect(addBtn).toBeVisible({ timeout: 8_000 })
+    await expect(removeBtn).toBeVisible()
+    // Count should display "1"
+    await expect(pmRow.locator('text="1"').first()).toBeVisible()
   })
 })
 

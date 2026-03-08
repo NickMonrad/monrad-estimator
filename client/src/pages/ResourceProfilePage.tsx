@@ -375,6 +375,35 @@ export default function ResourceProfilePage() {
     },
   })
 
+  const addPerson = useMutation({
+    mutationFn: (rtId: string) =>
+      api.post(`/projects/${projectId}/resource-types/${rtId}/named-resources`, {
+        name: 'New person',
+      }).then(r => r.data),
+    onSuccess: (_data, rtId) => {
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      qc.invalidateQueries({ queryKey: ['named-resources'] })
+      // Auto-expand named resources panel so the user sees the people
+      setExpandedNamedResources(prev => new Set([...prev, rtId]))
+    },
+  })
+
+  const removeLastPerson = useMutation({
+    mutationFn: async (rtId: string) => {
+      const res = await api.get(`/projects/${projectId}/resource-types/${rtId}/named-resources`)
+      const resources = res.data as NamedResource[]
+      if (resources.length > 1) {
+        await api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${resources[resources.length - 1].id}`)
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      qc.invalidateQueries({ queryKey: ['named-resources'] })
+    },
+  })
+
   const createOverhead = useMutation({
     mutationFn: (data: { name: string; resourceTypeId: string | null; type: OverheadType; value: number }) =>
       api.post(`/projects/${projectId}/overhead`, data).then(r => r.data),
@@ -805,18 +834,30 @@ export default function ResourceProfilePage() {
                           )}
                         </td>
                         <td className="text-center px-4 py-3 text-gray-800">
-                            <input
-                              type="number"
-                              min="1"
-                              defaultValue={row.count}
-                              onClick={e => e.stopPropagation()}
-                              onBlur={e => {
-                                const val = parseInt(e.target.value)
-                                const rt = resourceTypes.find(r => r.id === row.resourceTypeId)
-                                if (val > 0 && rt && val !== rt.count) updateResourceType.mutate({ id: rt.id, count: val })
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                removeLastPerson.mutate(row.resourceTypeId)
                               }}
-                              className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
-                            />
+                              disabled={row.count <= 1}
+                              className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium"
+                              title="Remove person"
+                            >
+                              −
+                            </button>
+                            <span className="w-8 text-center text-sm font-medium">{row.count}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                addPerson.mutate(row.resourceTypeId)
+                              }}
+                              className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-green-600 text-sm font-medium"
+                              title="Add person"
+                            >
+                              +
+                            </button>
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-gray-800">
                           <input
