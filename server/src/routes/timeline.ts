@@ -96,6 +96,7 @@ function buildResponse(
   featureDeps: Array<{ featureId: string; dependsOnId: string }> = [],
   storyDeps: Array<{ storyId: string; dependsOnId: string }> = [],
   resourceTypes: ResourceTypeWithNamed[] = [],
+  simulatedDemand?: Map<string, number>,  // key: `${rtName}|${week}` → days consumed
 ) {
   const maxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
@@ -109,40 +110,65 @@ function buildResponse(
   const rtByName = new Map(resourceTypes.map(rt => [rt.name, rt]))
 
   // Compute weekly demand across all features
-  const weeklyDemandMap = new Map<string, { demandDays: number; capacityDays: number }>()
-  for (const e of entries) {
-    if (e.durationWeeks <= 0) continue
-    const featureStart = e.startWeek
-    const featureEnd = e.startWeek + e.durationWeeks
-    const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
-    for (const { name, days } of breakdown) {
-      const startW = Math.floor(featureStart)
-      const endW = Math.ceil(featureEnd)
-      const rt = rtByName.get(name)
-      for (let w = startW; w < endW; w++) {
-        // Only count the fraction of this integer week the feature actually occupies
-        const overlap = Math.min(w + 1, featureEnd) - Math.max(w, featureStart)
-        if (overlap <= 0) continue
-        const key = `${w}|${name}`
-        // Variable capacity: use named resource availability for this week
+  let weeklyDemand: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
+
+  if (simulatedDemand && simulatedDemand.size > 0) {
+    // Use actual consumption from simulation — accurate, never exceeds capacity
+    weeklyDemand = Array.from(simulatedDemand.entries())
+      .map(([key, days]) => {
+        const separatorIdx = key.lastIndexOf('|')
+        const rtName = key.substring(0, separatorIdx)
+        const week = parseInt(key.substring(separatorIdx + 1), 10)
+        const rt = rtByName.get(rtName)
         const capacityDays = rt
-          ? getWeeklyCapacity(rt, w, project.hoursPerDay) / (rt.hoursPerDay ?? project.hoursPerDay)
+          ? getWeeklyCapacity(rt, week, project.hoursPerDay) / (rt.hoursPerDay ?? project.hoursPerDay)
           : 5
-        const existing = weeklyDemandMap.get(key) ?? { demandDays: 0, capacityDays }
-        existing.demandDays += days * (overlap / e.durationWeeks)
-        weeklyDemandMap.set(key, existing)
+        return {
+          week,
+          resourceTypeName: rtName,
+          demandDays: Math.round(days * 100) / 100,
+          capacityDays,
+        }
+      })
+      .filter(d => d.demandDays > 0)
+      .sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
+  } else {
+    // Fallback: uniform spread (used by GET route with saved entries)
+    const weeklyDemandMap = new Map<string, { demandDays: number; capacityDays: number }>()
+    for (const e of entries) {
+      if (e.durationWeeks <= 0) continue
+      const featureStart = e.startWeek
+      const featureEnd = e.startWeek + e.durationWeeks
+      const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
+      for (const { name, days } of breakdown) {
+        const startW = Math.floor(featureStart)
+        const endW = Math.ceil(featureEnd)
+        const rt = rtByName.get(name)
+        for (let w = startW; w < endW; w++) {
+          // Only count the fraction of this integer week the feature actually occupies
+          const overlap = Math.min(w + 1, featureEnd) - Math.max(w, featureStart)
+          if (overlap <= 0) continue
+          const key = `${w}|${name}`
+          // Variable capacity: use named resource availability for this week
+          const capacityDays = rt
+            ? getWeeklyCapacity(rt, w, project.hoursPerDay) / (rt.hoursPerDay ?? project.hoursPerDay)
+            : 5
+          const existing = weeklyDemandMap.get(key) ?? { demandDays: 0, capacityDays }
+          existing.demandDays += days * (overlap / e.durationWeeks)
+          weeklyDemandMap.set(key, existing)
+        }
       }
     }
+    weeklyDemand = Array.from(weeklyDemandMap.entries()).map(([key, { demandDays, capacityDays }]) => {
+      const [weekStr, ...nameParts] = key.split('|')
+      return {
+        week: parseInt(weekStr, 10),
+        resourceTypeName: nameParts.join('|'),
+        demandDays: Math.round(demandDays * 10) / 10,
+        capacityDays,
+      }
+    }).sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
   }
-  const weeklyDemand = Array.from(weeklyDemandMap.entries()).map(([key, { demandDays, capacityDays }]) => {
-    const [weekStr, ...nameParts] = key.split('|')
-    return {
-      week: parseInt(weekStr, 10),
-      resourceTypeName: nameParts.join('|'),
-      demandDays: Math.round(demandDays * 10) / 10,
-      capacityDays,
-    }
-  }).sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
 
   // Build weekly capacity array for EVERY week (0..maxWeek-1) for RTs that have hours
   const rtNamesWithHours = new Set(weeklyDemand.map(d => d.resourceTypeName))
@@ -161,7 +187,7 @@ function buildResponse(
   // Build named resources list from resource types, auto-generating numbered
   // entries for RTs with count > 0 but no named resources that have demand.
   const namedResourcesList = resourceTypes.flatMap(rt => {
-    if (rt.namedResources.length > 0) {
+    if (rt.namedResources && rt.namedResources.length > 0) {
       return rt.namedResources.map(nr => ({
         resourceTypeName: rt.name,
         name: nr.name,
@@ -287,7 +313,7 @@ async function computeParallelWarnings(
       // Variable capacity: sum capacity across the epic's span, accounting for named resource availability
       const rt = rtMap.get(rtId)
       let capacityDays: number
-      if (rt && rt.namedResources.length > 0) {
+      if (rt && rt.namedResources && rt.namedResources.length > 0) {
         capacityDays = 0
         const hpd = rt.hoursPerDay ?? fallbackHoursPerDay
         for (let w = Math.floor(startWeek); w < Math.ceil(endWeek); w++) {
@@ -577,6 +603,10 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     }
   }
 
+  // Tracks actual per-week resource consumption from the levelling simulation
+  // key: `${rtName}|${week}` → days consumed; populated only when resourceLevel=true
+  const weeklyConsumptionMap = new Map<string, number>()
+
   if (resourceLevel) {
     // featureResourceHours: total resource-hours needed per feature (unchanged helper)
     function featureResourceHours(feature: typeof allFeatures[0]): Map<string, number> {
@@ -631,7 +661,22 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
           const done = simDone.get(predId)
           return done !== undefined && done <= t
         })
-        if (predsAllDone) simStart.set(fId, t)
+        if (predsAllDone) {
+          const currentWeekForStart = Math.floor(t)
+          const fHours = remainingHours.get(fId)
+          // Only start the feature when at least one of its resource types has capacity > 0.
+          // This prevents features from sitting idle during week 0 when named resources
+          // don't start until week 1.
+          if (fHours && fHours.size > 0) {
+            const hasCapacity = [...fHours.keys()].some(rtId => {
+              if (rtId === '_unassigned') return true  // unassigned fallback always works
+              const rt = rtById.get(rtId)
+              return !rt || getWeeklyCapacity(rt, currentWeekForStart, fallbackHoursPerDay) > 0
+            })
+            if (!hasCapacity) continue  // wait until capacity is available
+          }
+          simStart.set(fId, t)
+        }
       }
 
       // Active = started but not done
@@ -664,8 +709,13 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
 
         for (const fId of competing) {
           const rem = remainingHours.get(fId)!.get(rtId)!
-          const allocated = (rem / totalRemaining) * capPerStep
-          remainingHours.get(fId)!.set(rtId, Math.max(0, rem - allocated))
+          const actualAllocated = Math.min((rem / totalRemaining) * capPerStep, rem)
+          // Track actual consumption per RT name per week
+          const rtName = rt?.name ?? 'Unassigned'
+          const consumptionKey = `${rtName}|${currentWeek}`
+          const hpd = rt?.hoursPerDay ?? fallbackHoursPerDay
+          weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + actualAllocated / hpd)
+          remainingHours.get(fId)!.set(rtId, Math.max(0, rem - actualAllocated))
         }
       }
 
@@ -841,7 +891,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     isManual: e.isManual,
   }))
 
-  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes))
+  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes, weeklyConsumptionMap))
 })
 
 // PUT /api/projects/:projectId/timeline/stories/:storyId — manual story timeline override
