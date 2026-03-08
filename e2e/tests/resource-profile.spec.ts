@@ -101,7 +101,7 @@ test.describe('Resource Profile', () => {
     const pmRow = page.locator('tr').filter({ hasText: /project manager/i }).first()
     await expect(pmRow).toBeVisible({ timeout: 15_000 })
 
-    const countInput = pmRow.locator('input[type="number"]')
+    const countInput = pmRow.locator('input[type="number"]').first()
     await expect(countInput).toBeVisible({ timeout: 8_000 })
     await expect(countInput).toBeEditable()
     await expect(countInput).toHaveValue('1')
