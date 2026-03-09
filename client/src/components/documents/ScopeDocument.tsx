@@ -296,75 +296,144 @@ export default function ScopeDocument({
       )}
 
       {/* ── Effort Breakdown ── */}
-      {sections.effort && effortData && (
-        <Page size="A4" style={styles.page}>
-          <Text style={styles.sectionHeading}>Effort Breakdown</Text>
+      {sections.effort && effortData && (() => {
+        // Build epic-first map from resourceProfileData.resourceRows
+        const epicMap = new Map<string, {
+          epicName: string
+          totalHours: number
+          totalDays: number
+          features: Map<string, {
+            featureName: string
+            totalHours: number
+            totalDays: number
+            resources: { name: string; hours: number; days: number }[]
+          }>
+        }>()
 
-          <View style={styles.table}>
-            <View style={styles.tableHeader}>
-              <Text style={[styles.th, styles.col1]}>Resource Type</Text>
-              <Text style={[styles.th, styles.col2]}>Category</Text>
-              <Text style={[styles.th, styles.col3]}>Hours</Text>
-              <Text style={[styles.th, styles.col4]}>Days</Text>
-              {effortData.hasCost && <Text style={[styles.th, styles.col5]}>Cost</Text>}
+        for (const row of (resourceProfileData?.resourceRows ?? [])) {
+          for (const epic of (row.epics ?? [])) {
+            if (!epicMap.has(epic.epicId)) {
+              epicMap.set(epic.epicId, { epicName: epic.epicName, totalHours: 0, totalDays: 0, features: new Map() })
+            }
+            const epicEntry = epicMap.get(epic.epicId)!
+            for (const feat of (epic.features ?? [])) {
+              if (feat.hours <= 0) continue
+              if (!epicEntry.features.has(feat.featureId)) {
+                epicEntry.features.set(feat.featureId, { featureName: feat.featureName, totalHours: 0, totalDays: 0, resources: [] })
+              }
+              const featEntry = epicEntry.features.get(feat.featureId)!
+              featEntry.resources.push({ name: row.name, hours: feat.hours, days: feat.days })
+              featEntry.totalHours += feat.hours
+              featEntry.totalDays += feat.days
+            }
+          }
+        }
+        // Recalculate epic totals from features
+        for (const [, epicEntry] of epicMap) {
+          let h = 0, d = 0
+          for (const [, feat] of epicEntry.features) { h += feat.totalHours; d += feat.totalDays }
+          epicEntry.totalHours = h
+          epicEntry.totalDays = d
+        }
+        const epicRows = [...epicMap.values()].filter(e => e.totalHours > 0)
+
+        const hasOverhead = (resourceProfileData?.overheadRows ?? []).length > 0
+
+        return (
+          <Page size="A4" style={styles.page}>
+            <Text style={styles.sectionHeading}>Effort Breakdown</Text>
+
+            {/* Part 1 — Effort by Epic / Feature */}
+            <View style={styles.table}>
+              <View style={styles.tableHeader}>
+                <Text style={[styles.th, styles.col1]}>Name</Text>
+                <Text style={[styles.th, styles.col3]}>Hours</Text>
+                <Text style={[styles.th, styles.col4]}>Days</Text>
+              </View>
+
+              {epicRows.length === 0 ? (
+                <View style={styles.tableRow}>
+                  <Text style={[styles.td, styles.col1]}>No effort data available.</Text>
+                </View>
+              ) : (
+                epicRows.map((epic, ei) => (
+                  <View key={ei}>
+                    {/* Epic row */}
+                    <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f3f4f6' }}>
+                      <Text style={[styles.tdBold, styles.col1]}>{epic.epicName}</Text>
+                      <Text style={[styles.tdBold, styles.col3]}>{formatNum(epic.totalHours)}</Text>
+                      <Text style={[styles.tdBold, styles.col4]}>{formatNum(epic.totalDays)}</Text>
+                    </View>
+                    {/* Feature rows */}
+                    {[...epic.features.values()].map((feat, fi) => (
+                      <View key={fi}>
+                        <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingVertical: 5, paddingLeft: 20, paddingRight: 8, backgroundColor: '#f9fafb' }}>
+                          <Text style={[{ fontSize: 9, color: '#374151', fontFamily: 'Helvetica-Bold' }, styles.col1]}>{feat.featureName}</Text>
+                          <Text style={[{ fontSize: 9, color: '#374151', fontFamily: 'Helvetica-Bold' }, styles.col3]}>{formatNum(feat.totalHours)}</Text>
+                          <Text style={[{ fontSize: 9, color: '#374151', fontFamily: 'Helvetica-Bold' }, styles.col4]}>{formatNum(feat.totalDays)}</Text>
+                        </View>
+                        {/* Resource rows */}
+                        {feat.resources.map((res, ri) => (
+                          <View key={ri} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingVertical: 4, paddingLeft: 36, paddingRight: 8 }}>
+                            <Text style={[styles.td, styles.col1]}>{res.name}</Text>
+                            <Text style={[styles.td, styles.col3]}>{formatNum(res.hours)}</Text>
+                            <Text style={[styles.td, styles.col4]}>{formatNum(res.days)}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    ))}
+                  </View>
+                ))
+              )}
+
+              {/* Grand total */}
+              <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#e5e7eb' }}>
+                <Text style={[styles.tdBold, styles.col1]}>Total</Text>
+                <Text style={[styles.tdBold, styles.col3]}>{formatNum(effortData.totalHours)}</Text>
+                <Text style={[styles.tdBold, styles.col4]}>{formatNum(effortData.totalDays)}</Text>
+              </View>
             </View>
 
-            {(effortData?.byCategory ?? []).map((cat: any, ci: number) => (
-              <View key={ci}>
-                {(cat.resourceTypes ?? []).map((row: any, ri: number) => (
-                  <View key={ri} style={ri % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                    <Text style={[styles.td, styles.col1]}>{row.name ?? '—'}</Text>
-                    <Text style={[styles.td, styles.col2]}>{row.category ?? cat.category ?? '—'}</Text>
-                    <Text style={[styles.td, styles.col3]}>{formatNum(row.totalHours)}</Text>
-                    <Text style={[styles.td, styles.col4]}>{formatNum(row.totalDays)}</Text>
-                    {effortData.hasCost && (
-                      <Text style={[styles.td, styles.col5]}>
-                        {row.estimatedCost != null ? `$${formatNum(row.estimatedCost, 0)}` : '—'}
-                      </Text>
-                    )}
+            {/* Part 2 — Governance & Overhead */}
+            {hasOverhead && (
+              <View style={{ marginTop: 16 }}>
+                <Text style={styles.sectionLabel}>Governance &amp; Overhead</Text>
+                <View style={styles.table}>
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.th, styles.col1]}>Item</Text>
+                    <Text style={[styles.th, styles.col2]}>Type</Text>
+                    <Text style={[styles.th, styles.col3]}>Value</Text>
+                    <Text style={[styles.th, styles.col4]}>Days</Text>
                   </View>
-                ))}
-                {/* Category subtotal */}
-                <View style={styles.tableRowSubtotal}>
-                  <Text style={[styles.tdBold, styles.col1]}>{cat.category} Total</Text>
-                  <Text style={[styles.td, styles.col2]}></Text>
-                  <Text style={[styles.tdBold, styles.col3]}>{formatNum(cat.totalHours)}</Text>
-                  <Text style={[styles.tdBold, styles.col4]}>{formatNum(cat.totalDays)}</Text>
-                  {effortData.hasCost && <Text style={[styles.td, styles.col5]}></Text>}
+                  {(resourceProfileData.overheadRows as Array<{ name: string; type: string; value: number; computedDays: number; estimatedCost: number | null }>).map((oh, i) => (
+                    <View key={i} style={i % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                      <Text style={[styles.td, styles.col1]}>{oh.name}</Text>
+                      <Text style={[styles.td, styles.col2]}>{oh.type === 'PERCENTAGE' ? '% of effort' : oh.type}</Text>
+                      <Text style={[styles.td, styles.col3]}>{oh.type === 'PERCENTAGE' ? `${oh.value}%` : formatNum(oh.value)}</Text>
+                      <Text style={[styles.td, styles.col4]}>{formatNum(oh.computedDays)}</Text>
+                    </View>
+                  ))}
                 </View>
               </View>
-            ))}
+            )}
 
-            {/* Grand total */}
-            <View style={styles.tableRowTotal}>
-              <Text style={[styles.tdBold, styles.col1]}>Total</Text>
-              <Text style={[styles.td, styles.col2]}></Text>
-              <Text style={[styles.tdBold, styles.col3]}>{formatNum(effortData.totalHours)}</Text>
-              <Text style={[styles.tdBold, styles.col4]}>{formatNum(effortData.totalDays)}</Text>
-              {effortData.hasCost && (
-                <Text style={[styles.tdBold, styles.col5]}>
-                  {effortData.totalCost != null ? `$${formatNum(effortData.totalCost, 0)}` : '—'}
-                </Text>
-              )}
-            </View>
-          </View>
-
-          <Text
-            style={styles.footer}
-            fixed
-            render={({ pageNumber, totalPages }: { pageNumber: number; totalPages: number }) =>
-              footerText(pageNumber, totalPages)
-            }
-          />
-          <Text
-            style={styles.pageNumber}
-            fixed
-            render={({ pageNumber, totalPages }: { pageNumber: number; totalPages: number }) =>
-              `${pageNumber} / ${totalPages}`
-            }
-          />
-        </Page>
-      )}
+            <Text
+              style={styles.footer}
+              fixed
+              render={({ pageNumber, totalPages }: { pageNumber: number; totalPages: number }) =>
+                footerText(pageNumber, totalPages)
+              }
+            />
+            <Text
+              style={styles.pageNumber}
+              fixed
+              render={({ pageNumber, totalPages }: { pageNumber: number; totalPages: number }) =>
+                `${pageNumber} / ${totalPages}`
+              }
+            />
+          </Page>
+        )
+      })()}
 
       {/* ── Timeline Summary ── */}
       {sections.timeline && timelineData && (
