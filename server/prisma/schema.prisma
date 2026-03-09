@@ -53,6 +53,7 @@ model Project {
   snapshots   BacklogSnapshot[]
   overheads   ProjectOverhead[]
   discounts   ProjectDiscount[]
+  weeklyDemandCache Json?
 }
 
 enum ProjectStatus {

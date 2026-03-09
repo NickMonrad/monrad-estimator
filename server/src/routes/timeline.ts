@@ -391,7 +391,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   }))
 
   const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
-  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes))
+  const simulatedDemand = project.weeklyDemandCache
+    ? new Map<string, number>(Object.entries(project.weeklyDemandCache as Record<string, number>))
+    : undefined
+  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes, simulatedDemand))
 })
 
 // POST /api/projects/:projectId/timeline/schedule
@@ -701,7 +704,27 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
         const capPerWeek = rt
           ? getWeeklyCapacity(rt, currentWeek, fallbackHoursPerDay)
           : fallbackHoursPerDay * 5  // _unassigned fallback
-        const capPerStep = capPerWeek * STEP  // hours available this step (STEP fraction of a week)
+        let capPerStep = capPerWeek * STEP  // hours available this step (STEP fraction of a week)
+        const rtName = rt?.name ?? 'Unassigned'
+        const hpd = rt?.hoursPerDay ?? fallbackHoursPerDay
+
+        // Subtract capacity consumed by active manual features this step so that
+        // auto-scheduled features don't over-allocate during manual windows.
+        for (const [fId] of manualStartWeeks) {
+          const fStart = simStart.get(fId)
+          const fDone = simDone.get(fId)
+          if (fStart === undefined || fDone === undefined || fDone <= fStart) continue
+          if (t >= fStart && t < fDone) {
+            const rtHours = featureResourceHours(featureMap.get(fId)!).get(rtId) ?? 0
+            if (rtHours > 0) {
+              const perStep = (rtHours / (fDone - fStart)) * STEP
+              capPerStep = Math.max(0, capPerStep - perStep)
+              const consumptionKey = `${rtName}|${currentWeek}`
+              weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + perStep / hpd)
+            }
+          }
+        }
+
         const competing = active.filter(fId => (remainingHours.get(fId)?.get(rtId) ?? 0) > 0.001)
         if (competing.length === 0) continue
 
@@ -711,9 +734,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
           const rem = remainingHours.get(fId)!.get(rtId)!
           const actualAllocated = Math.min((rem / totalRemaining) * capPerStep, rem)
           // Track actual consumption per RT name per week
-          const rtName = rt?.name ?? 'Unassigned'
           const consumptionKey = `${rtName}|${currentWeek}`
-          const hpd = rt?.hoursPerDay ?? fallbackHoursPerDay
           weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + actualAllocated / hpd)
           remainingHours.get(fId)!.set(rtId, Math.max(0, rem - actualAllocated))
         }
@@ -890,6 +911,13 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     durationWeeks: e.durationWeeks,
     isManual: e.isManual,
   }))
+
+  // Persist the weekly demand cache so GET /timeline can reuse actual consumption
+  // data rather than falling back to uniform spread.
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { weeklyDemandCache: Object.fromEntries(weeklyConsumptionMap) },
+  })
 
   res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes, weeklyConsumptionMap))
 })
