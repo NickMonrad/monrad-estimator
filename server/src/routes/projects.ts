@@ -1,5 +1,4 @@
 import { Router, Response } from 'express'
-import { ResourceCategory } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
@@ -51,26 +50,15 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   const { name, description, customer } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
 
-  // Fetch global types to link by name
+  // Fetch global types to seed into the new project
   const globalTypes = await prisma.globalResourceType.findMany()
-  const globalTypeByName = new Map(globalTypes.map(gt => [gt.name, gt]))
-  const baseTypes: Array<{ name: string; category: ResourceCategory }> = [
-    { name: 'Business Analyst', category: 'ENGINEERING' },
-    { name: 'Developer', category: 'ENGINEERING' },
-    { name: 'Tech Lead', category: 'ENGINEERING' },
-    { name: 'QA Engineer', category: 'ENGINEERING' },
-    { name: 'Tech Governance', category: 'GOVERNANCE' },
-    { name: 'Project Manager', category: 'PROJECT_MANAGEMENT' },
-  ]
-  const seedTypes = baseTypes.map(type => {
-    const globalType = globalTypeByName.get(type.name)
-    return {
-      ...type,
-      globalTypeId: globalType?.id,
-      hoursPerDay: globalType?.defaultHoursPerDay ?? null,
-      dayRate: globalType?.defaultDayRate ?? null,
-    }
-  })
+  const seedTypes = globalTypes.map(gt => ({
+    name: gt.name,
+    category: gt.category,
+    globalTypeId: gt.id,
+    hoursPerDay: gt.defaultHoursPerDay ?? null,
+    dayRate: gt.defaultDayRate ?? null,
+  }))
 
   const project = await prisma.project.create({
     data: {

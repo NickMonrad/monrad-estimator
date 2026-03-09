@@ -15,11 +15,12 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const types = await prisma.resourceType.findMany({
     where: { projectId: req.params.projectId as string },
-    orderBy: { name: 'asc' },
+    orderBy: [{ category: 'asc' }, { name: 'asc' }],
     include: {
       globalType: {
         select: { id: true, name: true, category: true, defaultHoursPerDay: true, defaultDayRate: true },
       },
+      _count: { select: { tasks: true } },
     },
   })
   res.json(types)
