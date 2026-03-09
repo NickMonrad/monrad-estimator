@@ -690,6 +690,29 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       // Active = started but not done
       const active = [...unfinished].filter(fId => simStart.has(fId))
 
+      // Always track manual feature consumption, even when no auto features are active.
+      // This ensures manually-pinned features contribute to the histogram regardless of
+      // whether any auto-scheduled features are running in the same window.
+      const currentWeek = Math.floor(t)
+      for (const rtId of allRtIds) {
+        const rt = rtById.get(rtId)
+        const rtName = rt?.name ?? 'Unassigned'
+        const hpd = rt?.hoursPerDay ?? fallbackHoursPerDay
+        for (const [fId] of manualStartWeeks) {
+          const fStart = simStart.get(fId)
+          const fDone = simDone.get(fId)
+          if (fStart === undefined || fDone === undefined || fDone <= fStart) continue
+          if (t >= fStart && t < fDone) {
+            const rtHours = featureResourceHours(featureMap.get(fId)!).get(rtId) ?? 0
+            if (rtHours > 0) {
+              const perStep = (rtHours / (fDone - fStart)) * STEP
+              const consumptionKey = `${rtName}|${currentWeek}`
+              weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + perStep / hpd)
+            }
+          }
+        }
+      }
+
       if (active.length === 0) { t += STEP; continue }
 
       // Features with no resource hours start and immediately complete
@@ -703,7 +726,6 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       }
 
       // Proportional allocation: for each resource type, divide capacity across active features needing it
-      const currentWeek = Math.floor(t)
       for (const rtId of allRtIds) {
         const rt = rtById.get(rtId)
         const capPerWeek = rt
@@ -715,6 +737,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
 
         // Subtract capacity consumed by active manual features this step so that
         // auto-scheduled features don't over-allocate during manual windows.
+        // NOTE: weeklyConsumptionMap is already updated in the block above — do not write it again here.
         for (const [fId] of manualStartWeeks) {
           const fStart = simStart.get(fId)
           const fDone = simDone.get(fId)
@@ -724,8 +747,6 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
             if (rtHours > 0) {
               const perStep = (rtHours / (fDone - fStart)) * STEP
               capPerStep = Math.max(0, capPerStep - perStep)
-              const consumptionKey = `${rtName}|${currentWeek}`
-              weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + perStep / hpd)
             }
           }
         }
