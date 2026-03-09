@@ -489,6 +489,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     where: { projectId: project.id, isManual: true },
   })
   const manualStartWeeks = new Map(existingEntries.map(e => [e.featureId, e.startWeek]))
+  const manualDurationWeeks = new Map(existingEntries.map(e => [e.featureId, e.durationWeeks]))
 
   const existingStoryEntries = await prisma.storyTimelineEntry.findMany({
     where: { projectId: project.id, isManual: true },
@@ -644,7 +645,8 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     // Manual features: fix their start/done from pre-computed values
     for (const [fId, sw] of manualStartWeeks) {
       simStart.set(fId, sw)
-      simDone.set(fId, sw + featureDurationWeeks(featureMap.get(fId)!))
+      const storedDur = manualDurationWeeks.get(fId)
+      simDone.set(fId, sw + (storedDur !== undefined ? storedDur : featureDurationWeeks(featureMap.get(fId)!)))
     }
 
     const STEP = 0.2  // 1 day per step
