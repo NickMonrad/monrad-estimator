@@ -187,13 +187,13 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
 | [#19](https://github.com/NickMonrad/monrad-estimator/issues/19) | Apply template button — improve discoverability |
 | [#97](https://github.com/NickMonrad/monrad-estimator/issues/97) | Timeline: show resource utilisation tooltip on feature bars |
+| [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST configurable rate per project via Project Settings (ex-GST/inc-GST totals already ship in Resource Profile; rate UI missing) |
 
 ### 🚀 Feature ideas
 | # | Title |
 |---|---|
 | [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — diff UI and compare view (snapshots + rollback already shipped) |
 | [#68](https://github.com/NickMonrad/monrad-estimator/issues/68) | Timeline resource levelling + story dependencies |
-| [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST on costs — configurable rate (default 10% AU) |
 | [#70](https://github.com/NickMonrad/monrad-estimator/issues/70) | Locale and currency settings (default AU/AUD) |
 | [#71](https://github.com/NickMonrad/monrad-estimator/issues/71) | Public holiday calendars for resource/cost modelling by locale |
 | [#72](https://github.com/NickMonrad/monrad-estimator/issues/72) | Timezone setting per account (default AEST) |

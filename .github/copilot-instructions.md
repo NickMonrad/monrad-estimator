@@ -151,6 +151,11 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
 2. `npx tsc --noEmit` passes in `/server`
 3. `npx tsc --noEmit` passes in `/client`
 4. `npm run test:e2e` passes from the repo root — requires both dev servers running (API on :3001, Vite on :5173)
+5. **README is up to date** — review and update `README.md` on the feature branch before raising the PR:
+   - Add the enhancement to the "Shipped Enhancements" table with its PR number
+   - Update phase status (`🚧` → `✅`) if a phase is completed
+   - Remove any closed issues from the "Open Issues & Backlog" tables
+   - Add any new issues raised during the work
 
 ## E2E Tests (Playwright)
 
@@ -210,13 +215,13 @@ Full Playwright authoring conventions are in `.github/instructions/playwright.in
 
 ## README
 
-`README.md` is the human-facing project overview. **Keep it current:**
+`README.md` is the human-facing project overview. **Keep it current — always update on the feature branch before raising a PR:**
 
-- After any PR is merged to `main`, update `README.md`:
-  - Add the enhancement to the "Shipped Enhancements" table with its PR number
-  - Update phase status (`🚧` → `✅`) if a phase is completed
-  - Keep the "Open Issues & Backlog" table current (remove closed, add new)
-- Commit the README update as `docs: update README for <feature>` on the feature branch before raising the PR, or as a follow-up commit to `main` after merge.
+- Add the enhancement to the "Shipped Enhancements" table with its PR number
+- Update phase status (`🚧` → `✅`) if a phase is completed
+- Remove closed issues from the "Open Issues & Backlog" tables
+- Add any new issues raised during the work
+- Commit the README update as `docs: update README for <feature>` on the feature branch
 
 ## Screenshots
 
