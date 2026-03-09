@@ -149,6 +149,9 @@ export default function GanttChart({
     setExpandedEpics(ids)
   }, [entries])
 
+  // Tooltip state
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null)
+
   // Drag state
   const [dragging, setDragging] = useState<{
     id: string
@@ -265,6 +268,7 @@ export default function GanttChart({
   // -----------------------------------------------------------------------
   function startFeatureDrag(e: React.MouseEvent, entry: TimelineEntry) {
     e.preventDefault()
+    setTooltip(null)
     setDragging({
       id: entry.featureId,
       type: 'feature',
@@ -276,6 +280,7 @@ export default function GanttChart({
 
   function startStoryDrag(e: React.MouseEvent, storyEntry: StoryTimelineEntry) {
     e.preventDefault()
+    setTooltip(null)
     setDragging({
       id: storyEntry.storyId,
       type: 'story',
@@ -627,16 +632,6 @@ export default function GanttChart({
               const effectiveStart = isDragging ? dragging!.currentStart : entry.startWeek
               return (
                 <g key={row.key}>
-                  <title>{(() => {
-                      const rb = entry.resourceBreakdown ?? []
-                      const totalDays = rb.reduce((s, r) => s + r.days, 0)
-                      const breakdown = rb.length > 0 ? '\n' + rb.map(r => `  ${r.name}: ${r.days.toFixed(1)}d`).join('\n') : ''
-                      const ee = entry.effectiveEngineers ?? []
-                      const engineersSection = ee.length > 0
-                        ? '\n\nEngineers allocated:\n' + ee.map(e => `  ${e.name}: ${e.engineerEquivalent.toFixed(1)} of ${e.totalEngineers} engineer${e.totalEngineers !== 1 ? 's' : ''} avg`).join('\n')
-                        : ''
-                      return `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}${engineersSection}\n\nClick to edit · Drag to move`
-                    })()}</title>
                   <rect
                     x={effectiveStart * COL_W}
                     y={y + 4}
@@ -650,6 +645,27 @@ export default function GanttChart({
                     }}
                     onMouseDown={e => startFeatureDrag(e, entry)}
                     onClick={() => setEditingFeatureId(entry.featureId)}
+                    onMouseEnter={e => {
+                      const rb = entry.resourceBreakdown ?? []
+                      const totalDays = rb.reduce((s, r) => s + r.days, 0)
+                      const breakdown = rb.length > 0 ? '\n' + rb.map(r => `  ${r.name}: ${r.days.toFixed(1)}d`).join('\n') : ''
+                      const ee = entry.effectiveEngineers ?? []
+                      const engineersSection = ee.length > 0
+                        ? '\n\nEngineers allocated:\n' + ee.map(e => `  ${e.name}: ${e.engineerEquivalent.toFixed(1)} of ${e.totalEngineers} engineer${e.totalEngineers !== 1 ? 's' : ''} avg`).join('\n')
+                        : ''
+                      setTooltip({ x: e.clientX, y: e.clientY, content: `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}${engineersSection}\n\nClick to edit · Drag to move` })
+                    }}
+                    onMouseLeave={() => setTooltip(null)}
+                    onMouseMove={e => {
+                      const rb = entry.resourceBreakdown ?? []
+                      const totalDays = rb.reduce((s, r) => s + r.days, 0)
+                      const breakdown = rb.length > 0 ? '\n' + rb.map(r => `  ${r.name}: ${r.days.toFixed(1)}d`).join('\n') : ''
+                      const ee = entry.effectiveEngineers ?? []
+                      const engineersSection = ee.length > 0
+                        ? '\n\nEngineers allocated:\n' + ee.map(e => `  ${e.name}: ${e.engineerEquivalent.toFixed(1)} of ${e.totalEngineers} engineer${e.totalEngineers !== 1 ? 's' : ''} avg`).join('\n')
+                        : ''
+                      setTooltip({ x: e.clientX, y: e.clientY, content: `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}${engineersSection}\n\nClick to edit · Drag to move` })
+                    }}
                   />
                   {entry.isManual && (
                     <text
@@ -682,7 +698,6 @@ export default function GanttChart({
             const effectiveStart = isDragging ? dragging!.currentStart : storyEntry.startWeek
             return (
               <g key={row.key}>
-                <title>{storyEntry.storyName}{'\n'}{storyEntry.durationWeeks.toFixed(1)}w · drag to move</title>
                 <rect
                   x={effectiveStart * COL_W}
                   y={y + 3}
@@ -697,6 +712,9 @@ export default function GanttChart({
                   }}
                   onMouseDown={e => startStoryDrag(e, storyEntry)}
                   onClick={() => setEditingStoryId(storyEntry.storyId)}
+                  onMouseEnter={e => setTooltip({ x: e.clientX, y: e.clientY, content: `${storyEntry.storyName}\n${storyEntry.durationWeeks.toFixed(1)}w · drag to move` })}
+                  onMouseLeave={() => setTooltip(null)}
+                  onMouseMove={e => setTooltip({ x: e.clientX, y: e.clientY, content: `${storyEntry.storyName}\n${storyEntry.durationWeeks.toFixed(1)}w · drag to move` })}
                 />
                 {storyEntry.isManual && (
                   <text
@@ -798,6 +816,14 @@ export default function GanttChart({
           })}
         </svg>
       </div>
+      {tooltip && (
+        <div
+          className="fixed z-50 pointer-events-none bg-gray-900 text-white rounded-lg shadow-xl px-3 py-2 text-sm whitespace-pre max-w-xs"
+          style={{ left: tooltip.x + 12, top: tooltip.y + 12 }}
+        >
+          {tooltip.content}
+        </div>
+      )}
     </div>
   )
 }
