@@ -61,6 +61,185 @@ function formatCost(amount: number): string {
   return '$' + Math.round(amount).toLocaleString('en-AU')
 }
 
+// ── CSV export helpers ────────────────────────────────────────────────────────
+
+function csvEscape(value: string | number | null | undefined): string {
+  const str = value == null ? '' : String(value)
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return '"' + str.replace(/"/g, '""') + '"'
+  }
+  return str
+}
+
+function buildSummaryCSV(effort: EffortSummary, hasCost: boolean): string {
+  const grandTotal = effort.totalCost ?? 0
+  const headers = hasCost
+    ? ['Category', 'Resource Type', 'Count', 'Proposed Name', 'Total Hours', 'Total Days', 'Day Rate', 'Estimated Cost', '% of Total']
+    : ['Category', 'Resource Type', 'Count', 'Proposed Name', 'Total Hours', 'Total Days', '% of Total']
+
+  const rows: string[][] = [headers]
+
+  for (const cat of effort.byCategory) {
+    const catLabel = CATEGORY_LABELS[cat.category]
+    for (const rt of cat.resourceTypes) {
+      const pct = grandTotal > 0 && rt.estimatedCost != null
+        ? ((rt.estimatedCost / grandTotal) * 100).toFixed(1) + '%'
+        : ''
+      const row = hasCost
+        ? [
+            catLabel,
+            rt.name,
+            String(rt.count),
+            rt.proposedName ?? '',
+            rt.totalHours.toFixed(1) + 'h',
+            rt.totalDays.toFixed(1) + 'd',
+            rt.dayRate != null ? '$' + rt.dayRate : '',
+            rt.estimatedCost != null ? '$' + Math.round(rt.estimatedCost) : '',
+            pct,
+          ]
+        : [
+            catLabel,
+            rt.name,
+            String(rt.count),
+            rt.proposedName ?? '',
+            rt.totalHours.toFixed(1) + 'h',
+            rt.totalDays.toFixed(1) + 'd',
+            pct,
+          ]
+      rows.push(row)
+    }
+
+    // Category subtotal row
+    const catPct = grandTotal > 0 && cat.totalCost != null
+      ? ((cat.totalCost / grandTotal) * 100).toFixed(1) + '%'
+      : ''
+    const subtotal = hasCost
+      ? [
+          catLabel + ' Total',
+          '', '',
+          '',
+          cat.totalHours.toFixed(1) + 'h',
+          cat.totalDays.toFixed(1) + 'd',
+          '',
+          cat.totalCost != null ? '$' + Math.round(cat.totalCost) : '',
+          catPct,
+        ]
+      : [
+          catLabel + ' Total',
+          '', '', '',
+          cat.totalHours.toFixed(1) + 'h',
+          cat.totalDays.toFixed(1) + 'd',
+          catPct,
+        ]
+    rows.push(subtotal)
+  }
+
+  // Grand total
+  const grandRow = hasCost
+    ? [
+        'Grand Total',
+        '', '', '',
+        effort.totalHours.toFixed(1) + 'h',
+        effort.totalDays.toFixed(1) + 'd',
+        '',
+        grandTotal > 0 ? '$' + Math.round(grandTotal) : '',
+        '100%',
+      ]
+    : [
+        'Grand Total',
+        '', '', '',
+        effort.totalHours.toFixed(1) + 'h',
+        effort.totalDays.toFixed(1) + 'd',
+        '100%',
+      ]
+  rows.push(grandRow)
+
+  return rows.map(r => r.map(csvEscape).join(',')).join('\n')
+}
+
+function buildDetailCSV(effort: EffortSummary, hasCost: boolean): string {
+  const headers = hasCost
+    ? ['Category', 'Resource Type', 'Epic', 'Feature', 'Story', 'Task', 'Hours', 'Days', 'Day Rate', 'Estimated Cost']
+    : ['Category', 'Resource Type', 'Epic', 'Feature', 'Story', 'Task', 'Hours', 'Days']
+
+  const rows: string[][] = [headers]
+
+  for (const cat of effort.byCategory) {
+    const catLabel = CATEGORY_LABELS[cat.category]
+    for (const rt of cat.resourceTypes) {
+      for (const task of rt.tasks) {
+        const row = hasCost
+          ? [
+              catLabel,
+              rt.name,
+              task.epicName,
+              task.featureName,
+              task.storyName,
+              task.taskName,
+              task.hoursEffort.toFixed(2) + 'h',
+              task.daysEffort.toFixed(2) + 'd',
+              rt.dayRate != null ? '$' + rt.dayRate : '',
+              task.estimatedCost != null ? '$' + Math.round(task.estimatedCost) : '',
+            ]
+          : [
+              catLabel,
+              rt.name,
+              task.epicName,
+              task.featureName,
+              task.storyName,
+              task.taskName,
+              task.hoursEffort.toFixed(2) + 'h',
+              task.daysEffort.toFixed(2) + 'd',
+            ]
+        rows.push(row)
+      }
+    }
+  }
+
+  // Totals row
+  const totalCost = effort.totalCost
+  const totalRow = hasCost
+    ? [
+        'Total',
+        '', '', '', '', '',
+        effort.totalHours.toFixed(1) + 'h',
+        effort.totalDays.toFixed(1) + 'd',
+        '',
+        totalCost != null ? '$' + Math.round(totalCost) : '',
+      ]
+    : [
+        'Total',
+        '', '', '', '', '',
+        effort.totalHours.toFixed(1) + 'h',
+        effort.totalDays.toFixed(1) + 'd',
+      ]
+  rows.push(totalRow)
+
+  return rows.map(r => r.map(csvEscape).join(',')).join('\n')
+}
+
+function exportCSV(
+  view: 'summary' | 'detail',
+  effort: EffortSummary,
+  hasCost: boolean,
+  projectName: string
+): void {
+  const date = new Date().toISOString().slice(0, 10)
+  const type = view === 'summary' ? 'Effort Summary' : 'Effort Detail'
+  const filename = `${projectName} - ${type} - ${date}.csv`
+  const csv = view === 'summary'
+    ? buildSummaryCSV(effort, hasCost)
+    : buildDetailCSV(effort, hasCost)
+
+  const uri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv)
+  const link = document.createElement('a')
+  link.setAttribute('href', uri)
+  link.setAttribute('download', filename)
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
 const CATEGORY_LABELS: Record<ResourceCategory, string> = {
   ENGINEERING: 'Engineering',
   GOVERNANCE: 'Governance',
@@ -155,6 +334,14 @@ export default function EffortReviewPage() {
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold text-gray-900">Effort Review</h1>
           <div className="flex items-center gap-3">
+            {/* Export CSV */}
+            <button
+              onClick={() => filteredEffort && exportCSV(view, filteredEffort, hasCost, project?.name ?? 'Export')}
+              disabled={!filteredEffort}
+              className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 bg-white hover:bg-gray-50 font-medium disabled:opacity-40"
+            >
+              Export CSV
+            </button>
             {/* Active-only toggle */}
             <button
               onClick={() => setActiveOnly(v => !v)}
