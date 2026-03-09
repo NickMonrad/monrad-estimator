@@ -522,6 +522,9 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     if ((epic.featureMode ?? 'sequential') === 'sequential') {
       const sorted = [...epic.features].sort((a, b) => a.order - b.order)
       for (let i = 1; i < sorted.length; i++) {
+        // Don't chain successor onto a manually-pinned feature — let it float freely
+        // based only on explicit FeatureDependency rows
+        if (manualStartWeeks.has(sorted[i - 1].id)) continue
         addEdge(sorted[i - 1].id, sorted[i].id)
       }
     }
