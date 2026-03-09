@@ -750,6 +750,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       }
 
       t += STEP
+      t = Math.round(t * 5) / 5  // snap to nearest 0.2 to eliminate float drift
     }
 
     // Apply simulation results back to startWeeks/finishWeeks
