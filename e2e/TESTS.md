@@ -99,11 +99,29 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
-### `resource-profile.spec.ts` — Resource Profile (1 test)
+### `resource-profile.spec.ts` — Resource Profile & Commercial (7 tests)
+
+#### `Resource Profile` describe block (1 test — original)
 
 | Test | Description |
 |------|-------------|
 | can edit count for non-engineering resource types | Seeds a task with resource type "Project Manager" via CSV import, navigates to Resource Profile, and asserts the Count cell for that row is an editable `<input type="number">` (only rendered for GOVERNANCE/PROJECT_MANAGEMENT categories) |
+
+#### `Resource Profile — enhanced` describe block (5 tests)
+
+| Test | Description |
+|------|-------------|
+| resource profile page loads with resource types | Seeds backlog with Developer + Tech Lead tasks via CSV, navigates to `/projects/:id/resource-profile`, verifies "Resource Profile" heading and Developer resource type row appear |
+| tab bar shows Resource Profile and Commercial tabs | Verifies both "Resource Profile" and "Commercial" tab buttons are visible; clicks Commercial → asserts "Cost Summary" heading; clicks back → asserts "Summary" heading |
+| resource count display shows formatted values | Checks that the Developer resource type row text contains values formatted with 2 decimal places (e.g. `24.00`) |
+| named resources — add person | Clicks the Developer resource name to expand the named resources panel; verifies "Named Resources" heading appears; clicks "+ Add person" button; asserts a new input with value "New person" appears |
+| commercial tab — discount management | Switches to Commercial tab; verifies "Cost Summary" and "Project Discounts" headings; clicks "+ Add Discount"; asserts the discount form appears with label input and type dropdown |
+
+#### `Rate Cards` describe block (1 test)
+
+| Test | Description |
+|------|-------------|
+| rate cards page loads with create button | Navigates to `/rate-cards`; verifies "Rate Cards" heading and "+ Create Rate Card" button are visible |
 
 ---
 

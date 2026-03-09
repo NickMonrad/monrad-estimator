@@ -16,6 +16,26 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   res.json(projects)
 })
 
+// Update project tax settings
+router.patch('/:id/tax', async (req: AuthRequest, res: Response) => {
+  const existing = await prisma.project.findFirst({ where: { id: req.params.id as string, ownerId: req.userId } })
+  if (!existing) { res.status(404).json({ error: 'Not found' }); return }
+
+  const { taxRate, taxLabel } = req.body
+  if (taxRate !== undefined && taxRate !== null && (typeof taxRate !== 'number' || taxRate < 0)) {
+    res.status(400).json({ error: 'taxRate must be a non-negative number or null' }); return
+  }
+
+  const project = await prisma.project.update({
+    where: { id: req.params.id as string },
+    data: {
+      ...(taxRate !== undefined && { taxRate }),
+      ...(taxLabel !== undefined && { taxLabel }),
+    },
+  })
+  res.json(project)
+})
+
 // Get single project
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   const project = await prisma.project.findFirst({
@@ -68,12 +88,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
 // Update project
 router.put('/:id', async (req: AuthRequest, res: Response) => {
-  const { name, description, customer, status, hoursPerDay } = req.body
+  const { name, description, customer, status, hoursPerDay, taxRate, taxLabel } = req.body
   const existing = await prisma.project.findFirst({ where: { id: req.params.id as string, ownerId: req.userId } })
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   const project = await prisma.project.update({
     where: { id: req.params.id as string },
-    data: { name, description, customer, status, hoursPerDay },
+    data: { name, description, customer, status, hoursPerDay, taxRate, taxLabel },
   })
   res.json(project)
 })

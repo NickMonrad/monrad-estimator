@@ -10,8 +10,15 @@ interface WeeklyDemandItem {
   capacityDays: number
 }
 
+interface WeeklyCapacityItem {
+  week: number
+  resourceTypeName: string
+  capacityDays: number
+}
+
 interface Props {
   weeklyDemand: WeeklyDemandItem[]
+  weeklyCapacity?: WeeklyCapacityItem[]
   totalWeeks: number
   colW: number
   labelW: number
@@ -42,32 +49,59 @@ function barColour(demand: number, capacity: number): string {
 // ---------------------------------------------------------------------------
 export default function ResourceHistogram({
   weeklyDemand,
+  weeklyCapacity,
   totalWeeks,
   colW,
   labelW,
   scrollContainerRef,
   onScroll,
 }: Props) {
-  // Derive unique resource types and their max demand/capacity
+
+  // Build capacity lookup: week|rtName → capacityDays
+  const capacityLookup = useMemo(() => {
+    const m = new Map<string, number>()
+    if (weeklyCapacity) {
+      for (const item of weeklyCapacity) {
+        m.set(`${item.week}|${item.resourceTypeName}`, item.capacityDays)
+      }
+    }
+    return m
+  }, [weeklyCapacity])
+
+  // Derive unique resource types and their max demand + max capacity across weeks
   const resourceTypes = useMemo(() => {
-    const map = new Map<string, { maxDemand: number; totalDays: number; capacityDays: number }>()
+    const map = new Map<string, { maxDemand: number; maxCapacity: number; totalDays: number }>()
     for (const item of weeklyDemand) {
       const existing = map.get(item.resourceTypeName)
       if (!existing) {
-        map.set(item.resourceTypeName, { maxDemand: item.demandDays, totalDays: item.demandDays, capacityDays: item.capacityDays })
+        map.set(item.resourceTypeName, { maxDemand: item.demandDays, maxCapacity: 0, totalDays: item.demandDays })
       } else {
         if (item.demandDays > existing.maxDemand) existing.maxDemand = item.demandDays
         existing.totalDays += item.demandDays
-        if (item.capacityDays > existing.capacityDays) existing.capacityDays = item.capacityDays
       }
     }
-    return Array.from(map.entries()).map(([name, { maxDemand, totalDays, capacityDays }]) => ({
+    // Incorporate weeklyCapacity maximums
+    if (weeklyCapacity) {
+      for (const item of weeklyCapacity) {
+        const existing = map.get(item.resourceTypeName)
+        if (existing) {
+          if (item.capacityDays > existing.maxCapacity) existing.maxCapacity = item.capacityDays
+        } else {
+          map.set(item.resourceTypeName, { maxDemand: 0, maxCapacity: item.capacityDays, totalDays: 0 })
+        }
+      }
+    }
+    return Array.from(map.entries()).map(([name, { maxDemand, maxCapacity, totalDays }]) => ({
       name,
       maxDemand,
+      maxCapacity,
       totalDays,
-      capacityDays,
-    })).sort((a, b) => a.name.localeCompare(b.name))
-  }, [weeklyDemand])
+      // Scale reference is the greater of maxDemand and maxCapacity
+      scaleRef: Math.max(maxDemand, maxCapacity, 0.1),
+    }))
+    .filter(rt => rt.totalDays > 0 || rt.maxCapacity > 0)
+    .sort((a, b) => a.name.localeCompare(b.name))
+  }, [weeklyDemand, weeklyCapacity])
 
   // Build lookup: week+name → demandDays
   const demandLookup = useMemo(() => {
@@ -100,7 +134,8 @@ export default function ResourceHistogram({
 
         {/* Resource type rows */}
         {resourceTypes.map(rt => {
-          const engLabel = `${rt.totalDays.toFixed(1)}d total · ${rt.capacityDays}d/w cap`
+          const avgCap = rt.maxCapacity > 0 ? `≤${rt.maxCapacity.toFixed(1)}d/w cap` : 'no cap'
+          const engLabel = `${rt.totalDays.toFixed(1)}d total · ${avgCap}`
           return (
             <div
               key={rt.name}
@@ -161,12 +196,7 @@ export default function ResourceHistogram({
           {/* Resource type rows */}
           {resourceTypes.map((rt, rowIdx) => {
             const rowY = HEADER_H + rowIdx * ROW_H
-            const capacityDays = rt.capacityDays
-            // Scale: capacity maps to BAR_MAX_H pixels, but cap bar height at BAR_MAX_H
-            // Even if demand > capacity, bar height capped at BAR_MAX_H + overflow indicator
-            const scale = capacityDays > 0 ? BAR_MAX_H / capacityDays : 1
-            // Capacity line Y (relative to row bottom)
-            const capacityLineY = rowY + ROW_H - 6 - BAR_MAX_H
+            const scale = BAR_MAX_H / rt.scaleRef
 
             return (
               <g key={rt.name}>
@@ -180,32 +210,43 @@ export default function ResourceHistogram({
                   strokeWidth={1}
                 />
 
-                {/* Capacity dotted line */}
-                <line
-                  x1={0}
-                  y1={capacityLineY}
-                  x2={svgW}
-                  y2={capacityLineY}
-                  stroke="#9ca3af"
-                  strokeWidth={1}
-                  strokeDasharray="4 3"
-                  opacity={0.6}
-                />
+                {/* Per-week capacity dotted line (variable) */}
+                {Array.from({ length: totalWeeks }).map((_, w) => {
+                  const capKey = `${w}|${rt.name}`
+                  const cap = capacityLookup.get(capKey)
+                  if (cap == null || cap <= 0) return null
+                  const capY = rowY + ROW_H - 6 - Math.min(cap * scale, BAR_MAX_H)
+                  // Draw a horizontal dotted segment for this week
+                  return (
+                    <line
+                      key={`cap-${w}`}
+                      x1={w * colW}
+                      y1={capY}
+                      x2={(w + 1) * colW}
+                      y2={capY}
+                      stroke="#9ca3af"
+                      strokeWidth={1}
+                      strokeDasharray="4 3"
+                      opacity={0.6}
+                    />
+                  )
+                })}
 
                 {/* Weekly bars */}
                 {Array.from({ length: totalWeeks }).map((_, w) => {
                   const demand = demandLookup.get(`${w}|${rt.name}`) ?? 0
                   if (demand <= 0) return null
 
-                  const barH = Math.min(demand * scale, BAR_MAX_H + 6) // allow slight overflow for over-cap
+                  const cap = capacityLookup.get(`${w}|${rt.name}`) ?? 0
+                  const barH = Math.min(demand * scale, BAR_MAX_H + 6)
                   const barX = w * colW + 4
                   const barW = colW - 8
                   const barY = rowY + ROW_H - 6 - barH
-                  const fill = barColour(demand, capacityDays)
+                  const fill = barColour(demand, cap)
 
                   return (
                     <g key={w}>
-                      <title>{`W${w}: ${demand.toFixed(1)}d demand / ${capacityDays}d capacity`}</title>
+                      <title>{`W${w}: ${demand.toFixed(1)}d demand / ${cap.toFixed(1)}d capacity`}</title>
                       <rect
                         x={barX}
                         y={barY}

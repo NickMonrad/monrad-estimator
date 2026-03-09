@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
-import type { Project, ResourceType, TimelineSummary, TimelineEntry } from '../types/backlog'
+import type { Project, ResourceType, TimelineSummary, TimelineEntry, NamedResourceEntry } from '../types/backlog'
 import GanttChart from '../components/timeline/GanttChart'
 import ResourceHistogram from '../components/timeline/ResourceHistogram'
 
@@ -24,6 +24,137 @@ function formatDate(iso: string) {
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 }
 
+// ---------------------------------------------------------------------------
+// Named Resources Panel — shows individual people with their availability bars
+// ---------------------------------------------------------------------------
+const RESOURCE_COLOURS = [
+  'bg-indigo-200', 'bg-emerald-200', 'bg-amber-200', 'bg-sky-200',
+  'bg-rose-200', 'bg-violet-200', 'bg-teal-200', 'bg-orange-200',
+]
+
+function NamedResourcesPanel({
+  namedResources,
+  totalWeeks,
+  colW,
+  labelW,
+}: {
+  namedResources: NamedResourceEntry[]
+  totalWeeks: number
+  colW: number
+  labelW: number
+}) {
+  // Group by resource type name
+  const grouped = useMemo(() => {
+    const map = new Map<string, NamedResourceEntry[]>()
+    for (const nr of namedResources) {
+      if (!map.has(nr.resourceTypeName)) map.set(nr.resourceTypeName, [])
+      map.get(nr.resourceTypeName)!.push(nr)
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b))
+  }, [namedResources])
+
+  const projectEndWeek = totalWeeks - 1
+
+  return (
+    <div className="border-t border-gray-200">
+      {/* Section header */}
+      <div className="flex items-center px-4 py-2 bg-gray-50 border-b border-gray-100">
+        <span className="text-xs font-medium text-gray-500">Named Resources</span>
+      </div>
+
+      <div className="flex overflow-hidden">
+        {/* Left label panel */}
+        <div style={{ width: labelW, flexShrink: 0 }} className="bg-white border-r border-gray-100">
+          {grouped.map(([rtName, people]) => (
+            <div key={rtName}>
+              {/* Resource type header */}
+              <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100">
+                <span className="text-xs font-semibold text-gray-600">{rtName}</span>
+              </div>
+              {/* People rows */}
+              {people.map((nr, i) => {
+                const start = nr.startWeek ?? 0
+                const end = nr.endWeek ?? projectEndWeek
+                return (
+                  <div
+                    key={`${rtName}-${nr.name}-${i}`}
+                    className="flex flex-col justify-center px-3 border-b border-gray-50"
+                    style={{ height: 36 }}
+                  >
+                    <span className="text-xs text-gray-700 truncate">{nr.name}</span>
+                    <span className="text-[10px] text-gray-400">
+                      W{start}–W{end} · {nr.allocationPct}%
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+
+        {/* Right bar area */}
+        <div className="overflow-x-auto flex-1">
+          <div style={{ width: totalWeeks * colW, minHeight: '100%' }} className="relative bg-gray-50/50">
+            {/* Vertical grid lines */}
+            <svg
+              width={totalWeeks * colW}
+              height="100%"
+              className="absolute inset-0 pointer-events-none"
+              preserveAspectRatio="none"
+            >
+              {Array.from({ length: totalWeeks + 1 }).map((_, i) => (
+                <line
+                  key={i}
+                  x1={i * colW}
+                  y1={0}
+                  x2={i * colW}
+                  y2="100%"
+                  stroke="#f3f4f6"
+                  strokeWidth={1}
+                />
+              ))}
+            </svg>
+
+            {/* Bars for each group */}
+            {(() => {
+              let colourIdx = 0
+              return grouped.map(([rtName, people]) => (
+                <div key={rtName}>
+                  {/* Spacer for the resource type header row */}
+                  <div className="border-b border-gray-100" style={{ height: 30 }} />
+                  {/* Person bars */}
+                  {people.map((nr, i) => {
+                    const start = nr.startWeek ?? 0
+                    const end = nr.endWeek ?? projectEndWeek
+                    const barLeft = start * colW
+                    const barWidth = Math.max((end - start + 1) * colW - 4, 8)
+                    const colour = RESOURCE_COLOURS[(colourIdx++) % RESOURCE_COLOURS.length]
+                    return (
+                      <div
+                        key={`${rtName}-${nr.name}-${i}`}
+                        className="relative border-b border-gray-50"
+                        style={{ height: 36 }}
+                      >
+                        <div
+                          className={`absolute top-1 ${colour} rounded h-[28px] flex items-center px-2 text-[10px] font-medium text-gray-700 truncate`}
+                          style={{ left: barLeft + 2, width: barWidth }}
+                          title={`${nr.name}: W${start}–W${end}, ${nr.allocationPct}% allocation`}
+                        >
+                          {nr.name} — {nr.allocationPct}%
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))
+            })()}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function TimelinePage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -36,7 +167,8 @@ export default function TimelinePage() {
   const [editingStoryId, setEditingStoryId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [scheduleStale, setScheduleStale] = useState(false)
-  const [resourceLevel, setResourceLevel] = useState(false)
+  const rlKey = `timeline.resourceLevel.${projectId}`
+  const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
 
   // Scroll sync refs for Gantt + Histogram right panels
   const ganttScrollRef = useRef<HTMLDivElement>(null)
@@ -265,16 +397,24 @@ export default function TimelinePage() {
     return groups
   }, [timeline])
 
-  // Group resource types by category
+  // Group resource types by category — only include RTs with demand in timeline
   const rtByCategory = useMemo(() => {
     if (!resourceTypes) return []
+    // Build set of RT names that appear in weeklyDemand
+    const rtNamesWithDemand = new Set<string>()
+    if (timeline?.weeklyDemand) {
+      for (const d of timeline.weeklyDemand) {
+        if (d.demandDays > 0) rtNamesWithDemand.add(d.resourceTypeName)
+      }
+    }
+    const filtered = resourceTypes.filter(rt => rtNamesWithDemand.has(rt.name))
     const map = new Map<string, ResourceType[]>()
-    for (const rt of resourceTypes) {
+    for (const rt of filtered) {
       if (!map.has(rt.category)) map.set(rt.category, [])
       map.get(rt.category)!.push(rt)
     }
     return Array.from(map.entries())
-  }, [resourceTypes])
+  }, [resourceTypes, timeline])
 
   const projectStartDate = timeline?.startDate ? new Date(timeline.startDate) : null
 
@@ -351,7 +491,7 @@ export default function TimelinePage() {
               <input
                 type="checkbox"
                 checked={resourceLevel}
-                onChange={e => setResourceLevel(e.target.checked)}
+                onChange={e => { setResourceLevel(e.target.checked); localStorage.setItem(rlKey, String(e.target.checked)) }}
                 className="rounded"
               />
               Resource leveling
@@ -418,27 +558,13 @@ export default function TimelinePage() {
                         <th className="text-left pb-1 font-normal">Resource Type</th>
                         <th className="text-right pb-1 font-normal w-20">Count</th>
                         <th className="text-right pb-1 font-normal w-24">Hrs/day</th>
-                        <th className="text-right pb-1 font-normal w-28">Day rate</th>
                       </tr>
                     </thead>
                     <tbody>
                       {rts.map(rt => (
                         <tr key={rt.id} className="border-t border-gray-50">
                           <td className="py-1.5 text-gray-700">{rt.name}</td>
-                          <td className="py-1.5 text-right">
-                            <input
-                              key={`count-${rt.id}-${rt.count}`}
-                              type="number"
-                              min="1"
-                              defaultValue={rt.count}
-                              onBlur={e => {
-                                const v = parseInt(e.target.value, 10)
-                                if (!Number.isFinite(v) || v <= 0 || v === rt.count) return
-                                updateResourceType.mutate({ id: rt.id, count: v })
-                              }}
-                              className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
-                            />
-                          </td>
+                          <td className="py-1.5 text-right text-sm text-gray-700">{rt.count}</td>
                           <td className="py-1.5 text-right">
                             <input
                               key={`hours-${rt.id}-${rt.hoursPerDay ?? 'null'}`}
@@ -455,24 +581,6 @@ export default function TimelinePage() {
                                 updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
                               }}
                               className="w-20 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
-                            />
-                          </td>
-                          <td className="py-1.5 text-right">
-                            <input
-                              key={`rate-${rt.id}-${rt.dayRate ?? 'null'}`}
-                              type="number"
-                              step="50"
-                              defaultValue={rt.dayRate ?? ''}
-                              placeholder={rt.globalType?.defaultDayRate != null ? String(rt.globalType.defaultDayRate) : '—'}
-                              onBlur={e => {
-                                const value = e.target.value.trim()
-                                const parsed = value === '' ? null : parseFloat(value)
-                                if (parsed !== null && !Number.isFinite(parsed)) return
-                                const current = rt.dayRate ?? null
-                                if (parsed === current) return
-                                updateResourceType.mutate({ id: rt.id, dayRate: parsed })
-                              }}
-                              className="w-24 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
                             />
                           </td>
                         </tr>
@@ -548,11 +656,22 @@ export default function TimelinePage() {
               {timeline.weeklyDemand && timeline.weeklyDemand.length > 0 && (
                 <ResourceHistogram
                   weeklyDemand={timeline.weeklyDemand}
+                  weeklyCapacity={timeline.weeklyCapacity}
                   totalWeeks={totalWeeks}
                   colW={64}
                   labelW={300}
                   scrollContainerRef={histScrollRef}
                   onScroll={handleHistScroll}
+                />
+              )}
+
+              {/* Named Resources — individual people and their availability */}
+              {timeline.namedResources && timeline.namedResources.length > 0 && (
+                <NamedResourcesPanel
+                  namedResources={timeline.namedResources}
+                  totalWeeks={totalWeeks}
+                  colW={64}
+                  labelW={300}
                 />
               )}
 
