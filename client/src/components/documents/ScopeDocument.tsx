@@ -7,6 +7,8 @@ const styles = StyleSheet.create({
   coverSubtitle: { fontSize: 16, color: '#6b7280', marginBottom: 8 },
   coverMeta: { fontSize: 10, color: '#9ca3af', marginTop: 40 },
   sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#dc2626', marginBottom: 10, marginTop: 20, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#fee2e2' },
+  sectionLabel: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 6, marginTop: 14 },
+  sectionLabelMuted: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#9ca3af', marginBottom: 6, marginTop: 14 },
   subheading: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 4, marginTop: 12 },
   bodyText: { fontSize: 10, color: '#4b5563', marginBottom: 4 },
   table: { marginBottom: 12 },
@@ -14,6 +16,7 @@ const styles = StyleSheet.create({
   tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f3f4f6', paddingVertical: 5, paddingHorizontal: 8 },
   tableRowAlt: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f3f4f6', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#fafafa' },
   tableRowTotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f9fafb' },
+  tableRowSubtotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#f3f4f6' },
   th: { fontFamily: 'Helvetica-Bold', fontSize: 9, color: '#6b7280' },
   td: { fontSize: 9, color: '#374151' },
   tdBold: { fontSize: 9, color: '#374151', fontFamily: 'Helvetica-Bold' },
@@ -21,6 +24,7 @@ const styles = StyleSheet.create({
   col2: { flex: 2 },
   col3: { flex: 1, textAlign: 'right' },
   col4: { flex: 1, textAlign: 'right' },
+  col5: { flex: 1, textAlign: 'right' },
   pageNumber: { position: 'absolute', bottom: 24, right: 48, fontSize: 9, color: '#9ca3af' },
   footer: { position: 'absolute', bottom: 24, left: 48, fontSize: 9, color: '#9ca3af' },
   storyItem: { fontSize: 9, color: '#6b7280', marginLeft: 16, marginBottom: 2 },
@@ -47,15 +51,18 @@ export interface ScopeDocumentProps {
   epics: Array<{
     id: string
     name: string
+    description?: string | null
     isActive: boolean
     features: Array<{
       id: string
       name: string
-      isActive: boolean
+      description?: string | null
       assumptions?: string | null
+      isActive: boolean
       userStories?: Array<{
         id: string
         name: string
+        description?: string | null
         isActive: boolean
       }>
     }>
@@ -88,6 +95,13 @@ export default function ScopeDocument({
 
   const footerText = (pageNumber: number, totalPages: number) =>
     `${project.name} | Page ${pageNumber} of ${totalPages}`
+
+  // ── Scope: split active vs inactive ──────────────────────────
+  const inScopeEpics = epics.filter(e => e.isActive)
+  const outOfScopeFullEpics = epics.filter(e => !e.isActive)
+  const partiallyOutOfScope = inScopeEpics
+    .map(e => ({ ...e, features: e.features.filter(f => !f.isActive) }))
+    .filter(e => e.features.length > 0)
 
   return (
     <Document>
@@ -131,45 +145,138 @@ export default function ScopeDocument({
         <Page size="A4" style={styles.page}>
           <Text style={styles.sectionHeading}>Scope Summary</Text>
 
-          {epics.map((epic) => (
-            <View key={epic.id}>
-              <Text style={[styles.subheading, !epic.isActive ? styles.inactiveText : {}]}>
-                {epic.name}{!epic.isActive ? ' (inactive)' : ''}
-              </Text>
-
-              {/* Features table */}
-              <View style={styles.table}>
-                <View style={styles.tableHeader}>
-                  <Text style={[styles.th, styles.col1]}>Feature</Text>
-                  <Text style={[styles.th, styles.col2]}>Status</Text>
-                </View>
-                {epic.features.map((feature, fi) => (
-                  <View key={feature.id}>
-                    <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                      <Text style={[styles.td, styles.col1, !feature.isActive ? styles.inactiveText : {}]}>
-                        {feature.name}
-                      </Text>
-                      <Text style={[styles.td, styles.col2, !feature.isActive ? styles.inactiveText : {}]}>
-                        {feature.isActive ? 'Active' : 'Inactive'}
-                      </Text>
+          {/* ── In Scope ── */}
+          <Text style={styles.sectionLabel}>In Scope</Text>
+          {inScopeEpics.length === 0 && (
+            <Text style={styles.bodyText}>No active epics.</Text>
+          )}
+          {inScopeEpics.map((epic) => {
+            const activeFeatures = epic.features.filter(f => f.isActive)
+            return (
+              <View key={epic.id}>
+                <Text style={styles.subheading}>{epic.name}</Text>
+                {epic.description ? <Text style={styles.bodyText}>{epic.description}</Text> : null}
+                {activeFeatures.length > 0 && (
+                  <View style={styles.table}>
+                    <View style={styles.tableHeader}>
+                      <Text style={[styles.th, styles.col1]}>Feature</Text>
+                      <Text style={[styles.th, styles.col2]}>Description</Text>
+                      <Text style={[styles.th, styles.col3]}>Stories</Text>
                     </View>
-                    {feature.userStories && feature.userStories.filter(s => s.isActive).map((story) => (
-                      <View key={story.id} style={styles.tableRow}>
-                        <Text style={[styles.storyItem, { flex: 5 }]}>• {story.name}</Text>
+                    {activeFeatures.map((feature, fi) => {
+                      const activeStories = (feature.userStories ?? []).filter(s => s.isActive)
+                      return (
+                        <View key={feature.id}>
+                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                            <Text style={[styles.td, styles.col1]}>{feature.name}</Text>
+                            <Text style={[styles.td, styles.col2]}>{feature.description ?? '—'}</Text>
+                            <Text style={[styles.td, styles.col3]}>{activeStories.length}</Text>
+                          </View>
+                          {feature.assumptions ? (
+                            <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                              <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>
+                                Assumptions: {feature.assumptions}
+                              </Text>
+                            </View>
+                          ) : null}
+                          {activeStories.map(story => (
+                            <View key={story.id} style={styles.tableRow}>
+                              <Text style={[styles.storyItem, { flex: 6 }]}>• {story.name}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )
+                    })}
+                  </View>
+                )}
+              </View>
+            )
+          })}
+
+          {/* ── Out of Scope ── */}
+          {(outOfScopeFullEpics.length > 0 || partiallyOutOfScope.length > 0) && (
+            <View>
+              <Text style={styles.sectionLabelMuted}>Out of Scope</Text>
+
+              {/* Fully inactive epics */}
+              {outOfScopeFullEpics.map((epic) => (
+                <View key={epic.id}>
+                  <Text style={[styles.subheading, styles.inactiveText]}>{epic.name}</Text>
+                  {epic.description ? (
+                    <Text style={[styles.bodyText, styles.inactiveText]}>{epic.description}</Text>
+                  ) : null}
+                  {epic.features.length > 0 && (
+                    <View style={styles.table}>
+                      <View style={styles.tableHeader}>
+                        <Text style={[styles.th, styles.col1]}>Feature</Text>
+                        <Text style={[styles.th, styles.col2]}>Description</Text>
+                        <Text style={[styles.th, styles.col3]}>Stories</Text>
+                      </View>
+                      {epic.features.map((feature, fi) => (
+                        <View key={feature.id}>
+                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                            <Text style={[styles.td, styles.col1, styles.inactiveText]}>{feature.name}</Text>
+                            <Text style={[styles.td, styles.col2, styles.inactiveText]}>{feature.description ?? '—'}</Text>
+                            <Text style={[styles.td, styles.col3, styles.inactiveText]}>{(feature.userStories ?? []).length}</Text>
+                          </View>
+                          {feature.assumptions ? (
+                            <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                              <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>
+                                Assumptions: {feature.assumptions}
+                              </Text>
+                            </View>
+                          ) : null}
+                          {(feature.userStories ?? []).map(story => (
+                            <View key={story.id} style={styles.tableRow}>
+                              <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>• {story.name}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              ))}
+
+              {/* Active epics that have inactive features */}
+              {partiallyOutOfScope.map((epic) => (
+                <View key={`partial-${epic.id}`}>
+                  <Text style={[styles.subheading, styles.inactiveText]}>{epic.name} (inactive features)</Text>
+                  {epic.description ? (
+                    <Text style={[styles.bodyText, styles.inactiveText]}>{epic.description}</Text>
+                  ) : null}
+                  <View style={styles.table}>
+                    <View style={styles.tableHeader}>
+                      <Text style={[styles.th, styles.col1]}>Feature</Text>
+                      <Text style={[styles.th, styles.col2]}>Description</Text>
+                      <Text style={[styles.th, styles.col3]}>Stories</Text>
+                    </View>
+                    {epic.features.map((feature, fi) => (
+                      <View key={feature.id}>
+                        <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                          <Text style={[styles.td, styles.col1, styles.inactiveText]}>{feature.name}</Text>
+                          <Text style={[styles.td, styles.col2, styles.inactiveText]}>{feature.description ?? '—'}</Text>
+                          <Text style={[styles.td, styles.col3, styles.inactiveText]}>{(feature.userStories ?? []).length}</Text>
+                        </View>
+                        {feature.assumptions ? (
+                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                            <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>
+                              Assumptions: {feature.assumptions}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {(feature.userStories ?? []).map(story => (
+                          <View key={story.id} style={styles.tableRow}>
+                            <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>• {story.name}</Text>
+                          </View>
+                        ))}
                       </View>
                     ))}
-                    {feature.assumptions && (
-                      <View style={styles.tableRow}>
-                        <Text style={[styles.storyItem, { flex: 5, fontStyle: 'italic', color: '#9ca3af' }]}>
-                          Assumptions: {feature.assumptions}
-                        </Text>
-                      </View>
-                    )}
                   </View>
-                ))}
-              </View>
+                </View>
+              ))}
             </View>
-          ))}
+          )}
 
           <Text
             style={styles.footer}
@@ -199,34 +306,47 @@ export default function ScopeDocument({
               <Text style={[styles.th, styles.col2]}>Category</Text>
               <Text style={[styles.th, styles.col3]}>Hours</Text>
               <Text style={[styles.th, styles.col4]}>Days</Text>
+              {effortData.hasCost && <Text style={[styles.th, styles.col5]}>Cost</Text>}
             </View>
 
-            {(effortData.rows ?? effortData.byResourceType ?? []).map((row: any, i: number) => (
-              <View key={i} style={i % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                <Text style={[styles.td, styles.col1]}>{row.resourceTypeName ?? row.name ?? '—'}</Text>
-                <Text style={[styles.td, styles.col2]}>{row.category ?? '—'}</Text>
-                <Text style={[styles.td, styles.col3]}>
-                  {formatNum(row.totalHours ?? row.hours)}
-                </Text>
-                <Text style={[styles.td, styles.col4]}>
-                  {formatNum(row.totalDays ?? row.days)}
-                </Text>
+            {(effortData?.byCategory ?? []).map((cat: any, ci: number) => (
+              <View key={ci}>
+                {(cat.resourceTypes ?? []).map((row: any, ri: number) => (
+                  <View key={ri} style={ri % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                    <Text style={[styles.td, styles.col1]}>{row.name ?? '—'}</Text>
+                    <Text style={[styles.td, styles.col2]}>{row.category ?? cat.category ?? '—'}</Text>
+                    <Text style={[styles.td, styles.col3]}>{formatNum(row.totalHours)}</Text>
+                    <Text style={[styles.td, styles.col4]}>{formatNum(row.totalDays)}</Text>
+                    {effortData.hasCost && (
+                      <Text style={[styles.td, styles.col5]}>
+                        {row.estimatedCost != null ? `$${formatNum(row.estimatedCost, 0)}` : '—'}
+                      </Text>
+                    )}
+                  </View>
+                ))}
+                {/* Category subtotal */}
+                <View style={styles.tableRowSubtotal}>
+                  <Text style={[styles.tdBold, styles.col1]}>{cat.category} Total</Text>
+                  <Text style={[styles.td, styles.col2]}></Text>
+                  <Text style={[styles.tdBold, styles.col3]}>{formatNum(cat.totalHours)}</Text>
+                  <Text style={[styles.tdBold, styles.col4]}>{formatNum(cat.totalDays)}</Text>
+                  {effortData.hasCost && <Text style={[styles.td, styles.col5]}></Text>}
+                </View>
               </View>
             ))}
 
-            {/* Totals row */}
-            {(effortData.totals ?? effortData.summary) && (
-              <View style={styles.tableRowTotal}>
-                <Text style={[styles.tdBold, styles.col1]}>Total</Text>
-                <Text style={[styles.td, styles.col2]}></Text>
-                <Text style={[styles.tdBold, styles.col3]}>
-                  {formatNum((effortData.totals ?? effortData.summary)?.totalHours ?? (effortData.totals ?? effortData.summary)?.hours)}
+            {/* Grand total */}
+            <View style={styles.tableRowTotal}>
+              <Text style={[styles.tdBold, styles.col1]}>Total</Text>
+              <Text style={[styles.td, styles.col2]}></Text>
+              <Text style={[styles.tdBold, styles.col3]}>{formatNum(effortData.totalHours)}</Text>
+              <Text style={[styles.tdBold, styles.col4]}>{formatNum(effortData.totalDays)}</Text>
+              {effortData.hasCost && (
+                <Text style={[styles.tdBold, styles.col5]}>
+                  {effortData.totalCost != null ? `$${formatNum(effortData.totalCost, 0)}` : '—'}
                 </Text>
-                <Text style={[styles.tdBold, styles.col4]}>
-                  {formatNum((effortData.totals ?? effortData.summary)?.totalDays ?? (effortData.totals ?? effortData.summary)?.days)}
-                </Text>
-              </View>
-            )}
+              )}
+            </View>
           </View>
 
           <Text
@@ -251,37 +371,36 @@ export default function ScopeDocument({
         <Page size="A4" style={styles.page}>
           <Text style={styles.sectionHeading}>Timeline Summary</Text>
 
-          {/* Summary row */}
-          {timelineData.summary && (
-            <View style={{ marginBottom: 16 }}>
-              <Text style={styles.bodyText}>
-                Projected Start: {formatDate(timelineData.summary.startDate)}
-              </Text>
-              <Text style={styles.bodyText}>
-                Projected End: {formatDate(timelineData.summary.endDate)}
-              </Text>
-              <Text style={styles.bodyText}>
-                Duration: {formatNum(timelineData.summary.durationWeeks)} weeks
-              </Text>
-            </View>
-          )}
+          {/* Start / end dates from top-level fields */}
+          <View style={{ marginBottom: 16 }}>
+            <Text style={styles.bodyText}>
+              Projected Start: {formatDate(timelineData.startDate)}
+            </Text>
+            <Text style={styles.bodyText}>
+              Projected End: {formatDate(timelineData.projectedEndDate)}
+            </Text>
+          </View>
 
           <View style={styles.table}>
             <View style={styles.tableHeader}>
               <Text style={[styles.th, styles.col1]}>Feature</Text>
               <Text style={[styles.th, styles.col2]}>Epic</Text>
-              <Text style={[styles.th, styles.col3]}>Start</Text>
-              <Text style={[styles.th, styles.col4]}>End</Text>
+              <Text style={[styles.th, styles.col3]}>Start Date</Text>
+              <Text style={[styles.th, styles.col4]}>End Date</Text>
+              <Text style={[styles.th, styles.col5]}>Duration</Text>
             </View>
-            {(timelineData.entries ?? timelineData.features ?? []).map((entry: any, i: number) => (
+            {(timelineData.entries ?? []).map((entry: any, i: number) => (
               <View key={i} style={i % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                <Text style={[styles.td, styles.col1]}>{entry.featureName ?? entry.name ?? '—'}</Text>
-                <Text style={[styles.td, styles.col2]}>{entry.epicName ?? entry.epic ?? '—'}</Text>
+                <Text style={[styles.td, styles.col1]}>{entry.featureName ?? '—'}</Text>
+                <Text style={[styles.td, styles.col2]}>{entry.epicName ?? '—'}</Text>
                 <Text style={[styles.td, styles.col3]}>
                   {entry.startDate ? formatDate(entry.startDate) : (entry.startWeek != null ? `Wk ${entry.startWeek}` : '—')}
                 </Text>
                 <Text style={[styles.td, styles.col4]}>
-                  {entry.endDate ? formatDate(entry.endDate) : (entry.durationWeeks != null ? `${formatNum(entry.durationWeeks)} wks` : '—')}
+                  {entry.endDate ? formatDate(entry.endDate) : '—'}
+                </Text>
+                <Text style={[styles.td, styles.col5]}>
+                  {entry.durationWeeks != null ? `${formatNum(entry.durationWeeks)} wks` : '—'}
                 </Text>
               </View>
             ))}
@@ -315,48 +434,54 @@ export default function ScopeDocument({
               <Text style={[styles.th, styles.col2]}>Category</Text>
               <Text style={[styles.th, styles.col3]}>Hours</Text>
               <Text style={[styles.th, styles.col4]}>Days</Text>
+              {resourceProfileData.summary?.hasCost && (
+                <Text style={[styles.th, styles.col5]}>Cost</Text>
+              )}
             </View>
 
-            {(resourceProfileData.rows ?? resourceProfileData.resourceTypes ?? []).map((row: any, i: number) => (
+            {(resourceProfileData.resourceRows ?? []).map((row: any, i: number) => (
               <View key={i} style={i % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                <Text style={[styles.td, styles.col1]}>{row.name ?? row.resourceTypeName ?? '—'}</Text>
+                <Text style={[styles.td, styles.col1]}>{row.name ?? '—'}</Text>
                 <Text style={[styles.td, styles.col2]}>{row.category ?? '—'}</Text>
-                <Text style={[styles.td, styles.col3]}>
-                  {formatNum(row.totalHours ?? row.hours)}
-                </Text>
-                <Text style={[styles.td, styles.col4]}>
-                  {formatNum(row.totalDays ?? row.taskDays ?? row.days)}
-                </Text>
+                <Text style={[styles.td, styles.col3]}>{formatNum(row.totalHours)}</Text>
+                <Text style={[styles.td, styles.col4]}>{formatNum(row.totalDays)}</Text>
+                {resourceProfileData.summary?.hasCost && (
+                  <Text style={[styles.td, styles.col5]}>
+                    {row.estimatedCost != null ? `$${formatNum(row.estimatedCost, 0)}` : '—'}
+                  </Text>
+                )}
               </View>
             ))}
 
             {/* Overhead rows */}
-            {(resourceProfileData.overheads ?? []).map((row: any, i: number) => (
-              <View key={`oh-${i}`} style={i % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                <Text style={[styles.td, styles.col1, { color: '#6b7280' }]}>
-                  {row.name} (overhead)
-                </Text>
-                <Text style={[styles.td, styles.col2, { color: '#6b7280' }]}>{row.category ?? '—'}</Text>
-                <Text style={[styles.td, styles.col3, { color: '#6b7280' }]}>
-                  {formatNum(row.totalHours ?? row.hours)}
-                </Text>
-                <Text style={[styles.td, styles.col4, { color: '#6b7280' }]}>
-                  {formatNum(row.totalDays ?? row.days)}
-                </Text>
+            {(resourceProfileData.overheadRows ?? []).map((row: any, i: number) => (
+              <View key={`oh-${i}`} style={styles.tableRow}>
+                <Text style={[styles.td, styles.col1, { color: '#6b7280' }]}>{row.name}</Text>
+                <Text style={[styles.td, styles.col2, { color: '#6b7280' }]}>Overhead</Text>
+                <Text style={[styles.td, styles.col3, { color: '#6b7280' }]}>—</Text>
+                <Text style={[styles.td, styles.col4, { color: '#6b7280' }]}>{formatNum(row.computedDays)}</Text>
+                {resourceProfileData.summary?.hasCost && (
+                  <Text style={[styles.td, styles.col5, { color: '#6b7280' }]}>
+                    {row.estimatedCost != null ? `$${formatNum(row.estimatedCost, 0)}` : '—'}
+                  </Text>
+                )}
               </View>
             ))}
 
             {/* Grand total */}
-            {(resourceProfileData.totals ?? resourceProfileData.summary) && (
+            {resourceProfileData.summary && (
               <View style={styles.tableRowTotal}>
                 <Text style={[styles.tdBold, styles.col1]}>Total</Text>
                 <Text style={[styles.td, styles.col2]}></Text>
-                <Text style={[styles.tdBold, styles.col3]}>
-                  {formatNum((resourceProfileData.totals ?? resourceProfileData.summary)?.totalHours ?? (resourceProfileData.totals ?? resourceProfileData.summary)?.hours)}
-                </Text>
-                <Text style={[styles.tdBold, styles.col4]}>
-                  {formatNum((resourceProfileData.totals ?? resourceProfileData.summary)?.totalDays ?? (resourceProfileData.totals ?? resourceProfileData.summary)?.days)}
-                </Text>
+                <Text style={[styles.tdBold, styles.col3]}>{formatNum(resourceProfileData.summary.totalHours)}</Text>
+                <Text style={[styles.tdBold, styles.col4]}>{formatNum(resourceProfileData.summary.totalDays)}</Text>
+                {resourceProfileData.summary?.hasCost && (
+                  <Text style={[styles.tdBold, styles.col5]}>
+                    {resourceProfileData.summary.totalCost != null
+                      ? `$${formatNum(resourceProfileData.summary.totalCost, 0)}`
+                      : '—'}
+                  </Text>
+                )}
               </View>
             )}
           </View>

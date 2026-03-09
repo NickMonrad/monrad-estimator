@@ -141,6 +141,26 @@ export default function DocumentsPage() {
     }
   }, [projectId, queryClient])
 
+  // ── Download document (JWT-authenticated) ─────────────────────
+  const handleDownload = useCallback(async (doc: GeneratedDoc) => {
+    try {
+      const response = await api.get(
+        `/projects/${projectId}/documents/${doc.id}/download`,
+        { responseType: 'blob' }
+      )
+      const url = URL.createObjectURL(response.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${doc.label}.${doc.format}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err: any) {
+      alert('Download failed')
+    }
+  }, [projectId])
+
   const toggleSection = (key: keyof typeof sections) => {
     setSections(prev => ({ ...prev, [key]: !prev[key] }))
   }
@@ -273,14 +293,13 @@ export default function DocumentsPage() {
                     <span className="flex-shrink-0 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full uppercase">
                       {doc.format}
                     </span>
-                    <a
-                      href={`/api/projects/${projectId}/documents/${doc.id}/download`}
-                      download
+                    <button
+                      onClick={() => handleDownload(doc)}
                       className="flex-shrink-0 text-xs text-red-600 hover:text-red-700 font-medium"
                       title="Download"
                     >
                       ↓
-                    </a>
+                    </button>
                     <button
                       onClick={() => handleDelete(doc.id)}
                       className="flex-shrink-0 text-xs text-gray-400 hover:text-red-500"
