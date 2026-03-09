@@ -106,8 +106,8 @@ Timeline data model + API with dependency-aware auto-scheduler, proportional poo
 ### ✅ Phase 6 — Resource Profile
 Per-resource hours/days/cost aggregation with epic → feature → story drill-down, configurable overhead items (% of task days, fixed total days, days per week × project duration), stacked bar chart, FTE calculation, dual CSV exports (resource profile + full project zip). Per-resource `hoursPerDay` and `dayRate` overrides support multi-locale teams (e.g. AU 7.6h vs NZ 8h). See [#6](https://github.com/NickMonrad/monrad-estimator/issues/6).
 
-### 🚧 Phase 7 — Document Generation *(not started)*
-Scope document and Statement of Work as PDF + Word (.docx), configurable branding and section toggles. See [#7](https://github.com/NickMonrad/monrad-estimator/issues/7).
+### 🚧 Phase 7 — Document Generation *(in progress)*
+Scope document and Statement of Work as PDF + Word (.docx), configurable branding and section toggles. Phase 7a (programmatic PDF scope document) shipped in [#129](https://github.com/NickMonrad/monrad-estimator/pull/129). See [#7](https://github.com/NickMonrad/monrad-estimator/issues/7).
 
 ### 🚧 Phase 8 — Cost Basis & Rate Cards *(partially started)*
 Day rates per resource type (global defaults + project overrides) and cost columns in Effort Review are shipped. Remaining: per-resource-type discounts, project-level discounts (value/duration/manual), cost summary UI, cost section in SOW. See [#8](https://github.com/NickMonrad/monrad-estimator/issues/8).
@@ -165,6 +165,8 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Effort Review CSV export (summary + detail, respects active filter and hasCost flag) | #120 |
 | Fix new project resource type seeding (was hardcoded, now uses live global catalog) | #122 |
 | Project-level resource type management screen — add/remove/override rates per project | #122 |
+| Fix CSV import 413 payload-too-large error on large backlogs | #127 |
+| Phase 7a: programmatic PDF scope document — cover, scope, effort (epic/feature hierarchy), timeline, resource profile; section toggles; generate & save; document history | #129 |
 
 ---
 
