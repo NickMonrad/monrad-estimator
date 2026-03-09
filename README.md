@@ -34,7 +34,7 @@ A full-stack project estimation tool that replaces a manual spreadsheet process.
 ### Prerequisites
 - Node.js 20+
 - PostgreSQL running locally (default: `localhost:5432`, database: `monrad_estimator`)
-- Docker (optional — a `westpac-pg` container is used in development)
+- Docker (optional — a local PostgreSQL container is used in development)
 
 ### Install dependencies
 
@@ -159,6 +159,10 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Backlog CSV redesign: Type column, per-level status (EpicStatus/FeatureStatus/StoryStatus), Template link on stories, upsert-by-hierarchy import, unique template names, export filename includes client/project/date, DurationDays precision fix | #110 |
 | Resource Profile: fix inherited global day rates not applied to cost calculation | #111 |
 | Effort Review: active-scope filter toggle, cost columns (day rate + total), expandable epic sub-rows in summary, Excel-like column filters in detail view, cost + totals in detail | #112 |
+| Effort Review enhancements — cost columns, active filter, epic breakdown, detail column filters | #113 |
+| Resource Profile & Commercial overhaul — named resources, rate cards, discounts, GST | #118 |
+| Remove Westpac branding references | #120 |
+| Effort Review CSV export (summary + detail, respects active filter and hasCost flag) | #120 |
 
 ---
 
@@ -183,14 +187,13 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
 | [#19](https://github.com/NickMonrad/monrad-estimator/issues/19) | Apply template button — improve discoverability |
 | [#97](https://github.com/NickMonrad/monrad-estimator/issues/97) | Timeline: show resource utilisation tooltip on feature bars |
-| [#115](https://github.com/NickMonrad/monrad-estimator/issues/115) | Effort Review CSV export (summary + detail) |
+| [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST configurable rate per project via Project Settings (ex-GST/inc-GST totals already ship in Resource Profile; rate UI missing) |
 
 ### 🚀 Feature ideas
 | # | Title |
 |---|---|
 | [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — diff UI and compare view (snapshots + rollback already shipped) |
 | [#68](https://github.com/NickMonrad/monrad-estimator/issues/68) | Timeline resource levelling + story dependencies |
-| [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST on costs — configurable rate (default 10% AU) |
 | [#70](https://github.com/NickMonrad/monrad-estimator/issues/70) | Locale and currency settings (default AU/AUD) |
 | [#71](https://github.com/NickMonrad/monrad-estimator/issues/71) | Public holiday calendars for resource/cost modelling by locale |
 | [#72](https://github.com/NickMonrad/monrad-estimator/issues/72) | Timezone setting per account (default AEST) |
