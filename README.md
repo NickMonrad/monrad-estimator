@@ -163,6 +163,8 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Resource Profile & Commercial overhaul — named resources, rate cards, discounts, GST | #118 |
 | Remove Westpac branding references | #120 |
 | Effort Review CSV export (summary + detail, respects active filter and hasCost flag) | #120 |
+| Fix new project resource type seeding (was hardcoded, now uses live global catalog) | #122 |
+| Project-level resource type management screen — add/remove/override rates per project | #122 |
 
 ---
 
