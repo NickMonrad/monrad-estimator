@@ -34,7 +34,7 @@ A full-stack project estimation tool that replaces a manual spreadsheet process.
 ### Prerequisites
 - Node.js 20+
 - PostgreSQL running locally (default: `localhost:5432`, database: `monrad_estimator`)
-- Docker (optional — a `westpac-pg` container is used in development)
+- Docker (optional — a local PostgreSQL container is used in development)
 
 ### Install dependencies
 

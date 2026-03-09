@@ -38,7 +38,7 @@ This project uses a **Sonnet-orchestrates, Codex-implements** pattern:
 | Client | React + Vite + TypeScript + Tailwind CSS |
 | Server | Node.js + Express + TypeScript |
 | ORM | Prisma 7 (driver adapter mode) |
-| Database | PostgreSQL (Docker: `westpac-pg`, port 5432, db `monrad_estimator`) |
+| Database | PostgreSQL (Docker: `monrad-pg`, port 5432, db `monrad_estimator`) |
 | Auth | JWT (server-side, `Authorization: Bearer <token>`) |
 | Testing | Vitest + supertest (server), Vitest + React Testing Library (client) |
 
