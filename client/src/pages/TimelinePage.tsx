@@ -167,7 +167,8 @@ export default function TimelinePage() {
   const [editingStoryId, setEditingStoryId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [scheduleStale, setScheduleStale] = useState(false)
-  const [resourceLevel, setResourceLevel] = useState(false)
+  const rlKey = `timeline.resourceLevel.${projectId}`
+  const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
 
   // Scroll sync refs for Gantt + Histogram right panels
   const ganttScrollRef = useRef<HTMLDivElement>(null)
@@ -490,7 +491,7 @@ export default function TimelinePage() {
               <input
                 type="checkbox"
                 checked={resourceLevel}
-                onChange={e => setResourceLevel(e.target.checked)}
+                onChange={e => { setResourceLevel(e.target.checked); localStorage.setItem(rlKey, String(e.target.checked)) }}
                 className="rounded"
               />
               Resource leveling
