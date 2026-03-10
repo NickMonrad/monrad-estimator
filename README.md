@@ -166,7 +166,8 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Fix new project resource type seeding (was hardcoded, now uses live global catalog) | #122 |
 | Project-level resource type management screen — add/remove/override rates per project | #122 |
 | Fix CSV import 413 payload-too-large error on large backlogs | #127 |
-| Phase 7a: programmatic PDF scope document — cover, scope, effort (epic/feature hierarchy), timeline, resource profile; section toggles; generate & save; document history | #129 |
+| Per-named-resource allocation modes (Full Project / Timeline / Custom) + Commercial tab overhaul | #131 |
+| Resource period start/end dates, buffer weeks indicators, commercial double-count fix, allocation label fix, CSV epic/feature descriptions + assumptions, Epic.assumptions field, document assumptions section, LAB3 colour scheme, PDF heading fixes | #132 |
 
 ---
 
@@ -209,7 +210,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | [#22](https://github.com/NickMonrad/monrad-estimator/issues/22) | Project sharing / multi-user collaboration |
 | [#10](https://github.com/NickMonrad/monrad-estimator/issues/10) | Password reset flow |
 | [#114](https://github.com/NickMonrad/monrad-estimator/issues/114) | Cross-project dashboard with summary analytics |
-| [#116](https://github.com/NickMonrad/monrad-estimator/issues/116) | Bulk operations — multi-select delete and status changes in backlog |
+| [#133](https://github.com/NickMonrad/monrad-estimator/issues/133) | Rich text editor for multi-line text fields (descriptions, assumptions) with PDF formatting |
 
 ### 🏭 Productionisation
 | # | Title |
