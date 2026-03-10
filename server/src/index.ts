@@ -22,6 +22,7 @@ import resourceProfileRoutes from './routes/resourceProfile.js'
 import featureDependenciesRouter from './routes/featureDependencies.js'
 import rateCardRoutes, { applyRateCardRouter } from './routes/rateCards.js'
 import namedResourceRoutes from './routes/namedResources.js'
+import documentRoutes from './routes/documents.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3001
@@ -53,6 +54,7 @@ app.use('/api/projects/:projectId/resource-types/:rtId/named-resources', namedRe
 app.use('/api/projects/:projectId/feature-dependencies', featureDependenciesRouter)
 app.use('/api/rate-cards', rateCardRoutes)
 app.use('/api/projects/:projectId/apply-rate-card', applyRateCardRouter)
+app.use('/api/projects/:projectId/documents', documentRoutes)
 
 export { app }
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`))

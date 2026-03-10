@@ -16,6 +16,8 @@ model User {
   updatedAt DateTime  @updatedAt
   projects  Project[]
   snapshots BacklogSnapshot[]
+  documentTemplates DocumentTemplate[] @relation("DocumentTemplateOwner")
+  generatedDocuments GeneratedDocument[] @relation("GeneratedDocumentUser")
 }
 
 model GlobalResourceType {
@@ -54,6 +56,7 @@ model Project {
   overheads   ProjectOverhead[]
   discounts   ProjectDiscount[]
   weeklyDemandCache Json?
+  generatedDocuments GeneratedDocument[]
 }
 
 enum ProjectStatus {
@@ -317,4 +320,40 @@ model ProjectDiscount {
   label          String
   order          Int           @default(0)
   createdAt      DateTime      @default(now())
+}
+
+enum DocumentTemplateType {
+  SCOPE_DOC
+  SOW
+  PROPOSAL_DECK
+}
+
+model DocumentTemplate {
+  id           String               @id @default(cuid())
+  name         String
+  type         DocumentTemplateType
+  format       String               // 'docx' | 'pptx'
+  customerName String?              // null = global; matches project.customer for scoping
+  filePath     String               // relative path under uploads/templates/
+  isDefault    Boolean              @default(false)
+  owner        User                 @relation("DocumentTemplateOwner", fields: [ownerId], references: [id])
+  ownerId      String
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  generatedDocs GeneratedDocument[]
+}
+
+model GeneratedDocument {
+  id            String               @id @default(cuid())
+  projectId     String
+  project       Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  templateId    String?
+  template      DocumentTemplate?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  type          DocumentTemplateType
+  format        String               // 'pdf' | 'docx' | 'pptx'
+  label         String
+  filePath      String               // relative path under uploads/generated/
+  generatedById String
+  generatedBy   User                 @relation("GeneratedDocumentUser", fields: [generatedById], references: [id])
+  createdAt     DateTime             @default(now())
 }

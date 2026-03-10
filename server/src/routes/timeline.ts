@@ -376,12 +376,14 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     where: { featureId: { in: allFeatureIds } },
     select: { featureId: true, dependsOnId: true },
   })
-  const allStoryIds = storyTimelineEntries.map(e => e.storyId)
+  const activeFeatureIdSet = new Set(allFeatureIds)
+  const activeStoryTimelineEntries = storyTimelineEntries.filter(e => activeFeatureIdSet.has(e.story.featureId))
+  const allStoryIds = activeStoryTimelineEntries.map(e => e.storyId)
   const storyDependencies = await prisma.storyDependency.findMany({
     where: { storyId: { in: allStoryIds } },
     select: { storyId: true, dependsOnId: true },
   })
-  const mappedStoryEntries = storyTimelineEntries.map(e => ({
+  const mappedStoryEntries = activeStoryTimelineEntries.map(e => ({
     storyId: e.storyId,
     storyName: e.story.name,
     featureId: e.story.featureId,
