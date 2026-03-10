@@ -6,7 +6,7 @@ const styles = StyleSheet.create({
   coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#dc2626', marginBottom: 12 },
   coverSubtitle: { fontSize: 16, color: '#6b7280', marginBottom: 8 },
   coverMeta: { fontSize: 10, color: '#9ca3af', marginTop: 40 },
-  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#dc2626', marginBottom: 10, marginTop: 20, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#fee2e2' },
+  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#dc2626', marginBottom: 10, marginTop: 20, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#fee2e2', lineHeight: 1.5 },
   sectionLabel: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 6, marginTop: 14 },
   sectionLabelMuted: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#9ca3af', marginBottom: 6, marginTop: 14 },
   subheading: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 4, marginTop: 12 },

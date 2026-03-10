@@ -644,7 +644,7 @@ export default function ResourceProfilePage() {
             allocatedDays: r.allocatedDays ?? r.totalDays,
             totalDays: r.totalDays,
             dayRate: r.dayRate!,
-            subtotal: r.totalDays * r.dayRate!,
+            subtotal: 0,
             allocationMode: 'AGGREGATE',
             allocationPercent: 100,
             allocationStartWeek: null as number | null,
@@ -1050,6 +1050,9 @@ export default function ResourceProfilePage() {
                         </td>
                         <td className="px-4 py-3">
                           {(() => {
+                            if (row.namedResources && row.namedResources.length > 0) {
+                              return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500">Aggregate</span>
+                            }
                             const mode = row.allocationMode ?? 'EFFORT'
                             const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
                             const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
