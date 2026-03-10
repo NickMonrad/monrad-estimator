@@ -773,7 +773,7 @@ export default function ResourceProfilePage() {
           <header className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
             <div>
               <h2 className="text-base font-semibold text-gray-900">Summary</h2>
-              <p className="text-sm text-gray-500">Role mix, overheads, and drill-down by epic → feature → story</p>
+              <p className="text-sm text-gray-500">Active scope only — click a role to drill down by epic → feature → story</p>
             </div>
           </header>
           {profileLoading && (
@@ -808,22 +808,15 @@ export default function ResourceProfilePage() {
                         className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
                       >
                         <td className="px-6 py-3">
-                          <div className="font-medium text-gray-900 flex items-center gap-2">
-                            <span
-                              className="text-xs text-gray-400 cursor-pointer hover:text-gray-600"
+                          <div className="font-medium text-gray-900">
+                            <button
+                              className="text-left hover:text-red-600 transition-colors font-medium"
                               onClick={() => toggleRow(row.resourceTypeId)}
                             >
-                              {expandedRows.has(row.resourceTypeId) ? '▼' : '▶'}
-                            </span>
-                            <span
-                              className="cursor-pointer hover:text-red-600 transition-colors"
-                              onClick={() => toggleNamedResources(row.resourceTypeId)}
-                              title="Show named resources"
-                            >
                               {row.count > 1 ? `${row.count} × ${row.name}` : row.name}
-                            </span>
+                            </button>
                             {expandedNamedResources.has(row.resourceTypeId) && (
-                              <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-medium uppercase tracking-wide">People</span>
+                              <span className="ml-2 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-medium uppercase tracking-wide">People</span>
                             )}
                           </div>
                           <p className="text-xs text-gray-500 mt-0.5">{row.category.replace('_', ' ')}</p>
@@ -832,6 +825,21 @@ export default function ResourceProfilePage() {
                               ({formatNumber(row.totalHours / row.count)}h / {formatNumber(row.totalDays / row.count)}d per person)
                             </p>
                           )}
+                          <div className="flex items-center gap-3 mt-0.5">
+                            <button
+                              className="text-xs text-red-500 hover:text-red-700 transition-colors"
+                              onClick={() => toggleRow(row.resourceTypeId)}
+                            >
+                              {expandedRows.has(row.resourceTypeId) ? '▲ Hide breakdown' : '▼ Show breakdown'}
+                            </button>
+                            <button
+                              className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                              onClick={() => toggleNamedResources(row.resourceTypeId)}
+                              title="Show named resources"
+                            >
+                              People ↗
+                            </button>
+                          </div>
                         </td>
                         <td className="text-center px-4 py-3 text-gray-800">
                           <div className="flex items-center justify-center gap-1">
