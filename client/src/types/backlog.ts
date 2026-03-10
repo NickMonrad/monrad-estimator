@@ -19,6 +19,10 @@ export interface ResourceType {
   globalTypeId?: string
   globalType?: GlobalResourceType
   projectId: string
+  allocationMode?: string
+  allocationPercent?: number
+  allocationStartWeek?: number | null
+  allocationEndWeek?: number | null
 }
 
 export interface Task {
@@ -221,6 +225,14 @@ export interface ResourceProfileRow {
   dayRate: number | null
   totalHours: number
   totalDays: number
+  effortDays: number
+  allocatedDays: number
+  allocationMode: string
+  allocationPercent: number
+  allocationStartWeek: number | null
+  allocationEndWeek: number | null
+  derivedStartWeek: number | null
+  derivedEndWeek: number | null
   estimatedCost: number | null
   epics: ResourceProfileEpic[]
 }

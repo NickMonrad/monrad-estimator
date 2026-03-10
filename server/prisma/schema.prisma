@@ -73,7 +73,11 @@ model ResourceType {
   category      ResourceCategory
   count         Int                 @default(1)
   hoursPerDay   Float?
-  dayRate       Float?
+  dayRate              Float?
+  allocationMode       AllocationMode  @default(TIMELINE)
+  allocationPercent    Float           @default(100)
+  allocationStartWeek  Float?
+  allocationEndWeek    Float?
   proposedName  String?
   globalType    GlobalResourceType? @relation(fields: [globalTypeId], references: [id])
   globalTypeId  String?
@@ -110,6 +114,12 @@ enum ResourceCategory {
   ENGINEERING
   GOVERNANCE
   PROJECT_MANAGEMENT
+}
+
+enum AllocationMode {
+  EFFORT
+  TIMELINE
+  FULL_PROJECT
 }
 
 model Epic {

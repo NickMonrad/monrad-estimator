@@ -3,6 +3,8 @@ import { ResourceCategory } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
+type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT'
+
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
@@ -39,6 +41,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
       },
       timelineEntries: true,
+      storyTimelineEntries: { select: { storyId: true, startWeek: true, durationWeeks: true } },
     },
   })
 
@@ -55,6 +58,13 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     project.timelineEntries.length > 0
       ? Math.max(...project.timelineEntries.map(te => te.startWeek + te.durationWeeks))
       : 0
+
+  // Build lookup maps for timeline entries
+  const featureEntryMap = new Map(project.timelineEntries.map(e => [e.featureId, e]))
+  const storyEntryMap = new Map(project.storyTimelineEntries.map(e => [e.storyId, e]))
+
+  // Track min start week / max end week per resource type (for TIMELINE allocation)
+  const rtWeeks = new Map<string, { starts: number[]; ends: number[] }>()
 
   type StoryAgg = { storyId: string; storyName: string; order: number; hours: number; days: number }
   type FeatureAgg = {
@@ -111,6 +121,18 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           const agg = resourceAgg.get(resourceType.id)!
           agg.totalHours += hours
           agg.totalDays += days
+
+          // Collect week ranges for TIMELINE allocation mode
+          const storyEntry = storyEntryMap.get(story.id)
+          const featureEntry = featureEntryMap.get(feature.id)
+          const entry = storyEntry ?? featureEntry
+          if (entry) {
+            if (!rtWeeks.has(resourceType.id)) {
+              rtWeeks.set(resourceType.id, { starts: [], ends: [] })
+            }
+            rtWeeks.get(resourceType.id)!.starts.push(entry.startWeek)
+            rtWeeks.get(resourceType.id)!.ends.push(entry.startWeek + entry.durationWeeks)
+          }
 
           const epicAgg =
             agg.epics.get(epic.id) ??
@@ -193,7 +215,35 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       const dayRate = resourceType.dayRate ?? resourceType.globalType?.defaultDayRate ?? null
       const totalDays = round2(agg.totalDays)
       const totalHours = round2(agg.totalHours)
-      const estimatedCost = dayRate != null ? round2(totalDays * dayRate) : null
+
+      // Compute allocation
+      const mode = (resourceType.allocationMode as AllocationMode) ?? 'EFFORT'
+      const percent = resourceType.allocationPercent ?? 100
+      const count = resourceType.count
+
+      const weeks = rtWeeks.get(resourceType.id)
+      const derivedStartWeek = weeks && weeks.starts.length > 0 ? Math.min(...weeks.starts) : null
+      const derivedEndWeek = weeks && weeks.ends.length > 0 ? Math.max(...weeks.ends) : null
+
+      const effectiveStartWeek = resourceType.allocationStartWeek ?? derivedStartWeek
+      const effectiveEndWeek = resourceType.allocationEndWeek ?? derivedEndWeek
+
+      let allocatedDays: number
+      if (mode === 'EFFORT') {
+        allocatedDays = totalDays
+      } else if (mode === 'TIMELINE') {
+        if (effectiveStartWeek != null && effectiveEndWeek != null) {
+          allocatedDays = round2((effectiveEndWeek - effectiveStartWeek) * 5 * count * (percent / 100))
+        } else {
+          allocatedDays = totalDays
+        }
+      } else {
+        // FULL_PROJECT
+        allocatedDays = round2(projectDurationWeeks * 5 * count * (percent / 100))
+      }
+
+      const allocatedCost = dayRate != null ? round2(allocatedDays * dayRate) : null
+      const estimatedCost = allocatedCost
 
       return {
         resourceTypeId: resourceType.id,
@@ -203,7 +253,15 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         hoursPerDay: agg.hoursPerDay,
         dayRate,
         totalHours,
-        totalDays,
+        effortDays: totalDays,
+        totalDays: allocatedDays,   // keep totalDays = allocatedDays so existing UI subtotal works
+        allocatedDays,
+        allocationMode: mode,
+        allocationPercent: percent,
+        allocationStartWeek: resourceType.allocationStartWeek ?? null,
+        allocationEndWeek: resourceType.allocationEndWeek ?? null,
+        derivedStartWeek,
+        derivedEndWeek,
         estimatedCost,
         epics,
       }
@@ -215,6 +273,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     })
 
   const totalResourceDays = round2(resourceRows.reduce((sum, row) => sum + row.totalDays, 0))
+  const totalEffortDays = round2(resourceRows.reduce((sum, row) => sum + row.effortDays, 0))
   const totalResourceHours = round2(resourceRows.reduce((sum, row) => sum + row.totalHours, 0))
 
   const overheadRows = project.overheads.map(overhead => {
@@ -222,7 +281,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const resourceTypeName = overhead.resourceType?.name ?? null
     const computedDays =
       overhead.type === 'PERCENTAGE'
-        ? round2((overhead.value / 100) * totalResourceDays)
+        ? round2((overhead.value / 100) * totalEffortDays)  // % of effort, not allocated days
         : overhead.type === 'DAYS_PER_WEEK'
           ? round2(overhead.value * projectDurationWeeks)
           : round2(overhead.value)

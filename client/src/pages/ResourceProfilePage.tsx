@@ -287,6 +287,13 @@ export default function ResourceProfilePage() {
   const [taxLabelDraft, setTaxLabelDraft] = useState('')
   const [editingTaxRate, setEditingTaxRate] = useState(false)
   const [taxRateDraft, setTaxRateDraft] = useState('')
+  const [editingAllocation, setEditingAllocation] = useState<string | null>(null)  // resourceTypeId
+  const [allocationDraft, setAllocationDraft] = useState<{
+    allocationMode: string
+    allocationPercent: number
+    allocationStartWeek: number | null
+    allocationEndWeek: number | null
+  } | null>(null)
 
   // ── Commercial data queries ──
   const { data: discounts = [] } = useQuery<ProjectDiscount[]>({
@@ -337,7 +344,7 @@ export default function ResourceProfilePage() {
   })
 
   const hasCost = profile?.summary.hasCost ?? false
-  const columnCount = hasCost ? 7 : 6
+  const columnCount = hasCost ? 8 : 7
 
   const toggleRow = (rtId: string) => {
     setExpandedRows(prev => {
@@ -372,6 +379,17 @@ export default function ResourceProfilePage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+    },
+  })
+
+  const updateAllocationMutation = useMutation({
+    mutationFn: ({ rtId, data }: { rtId: string; data: object }) =>
+      api.put(`/projects/${projectId}/resource-types/${rtId}`, data).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      setEditingAllocation(null)
+      setAllocationDraft(null)
     },
   })
 
@@ -602,18 +620,34 @@ export default function ResourceProfilePage() {
         id: r.resourceTypeId,
         name: r.name,
         count: r.count,
-        totalDays: r.totalDays,
+        effortDays: r.effortDays ?? r.totalDays,
+        allocatedDays: r.allocatedDays ?? r.totalDays,
+        totalDays: r.totalDays,    // totalDays = allocatedDays from server
         dayRate: r.dayRate!,
-        subtotal: r.totalDays * r.dayRate!,
+        subtotal: r.totalDays * r.dayRate!,  // uses allocatedDays
+        allocationMode: r.allocationMode ?? 'EFFORT',
+        allocationPercent: r.allocationPercent ?? 100,
+        allocationStartWeek: r.allocationStartWeek ?? null,
+        allocationEndWeek: r.allocationEndWeek ?? null,
+        derivedStartWeek: r.derivedStartWeek ?? null,
+        derivedEndWeek: r.derivedEndWeek ?? null,
         kind: 'resource' as const,
       })),
       ...profile.overheadRows.filter(r => r.dayRate != null).map(r => ({
         id: r.overheadId,
         name: r.name,
         count: 1,
+        effortDays: r.computedDays,
+        allocatedDays: r.computedDays,
         totalDays: r.computedDays,
         dayRate: r.dayRate!,
         subtotal: r.computedDays * r.dayRate!,
+        allocationMode: 'EFFORT' as string,
+        allocationPercent: 100,
+        allocationStartWeek: null as number | null,
+        allocationEndWeek: null as number | null,
+        derivedStartWeek: null as number | null,
+        derivedEndWeek: null as number | null,
         kind: 'overhead' as const,
       })),
     ]
@@ -685,6 +719,51 @@ export default function ResourceProfilePage() {
     if (!confirm('Apply this rate card? Existing day rates will be overwritten for matching resource types.')) return
     setRateCardResult(null)
     applyRateCard.mutate(selectedRateCardId)
+  }
+
+  type CommercialRow = {
+    id: string; name: string; count: number
+    effortDays: number; allocatedDays: number; totalDays: number
+    dayRate: number; subtotal: number
+    allocationMode: string; allocationPercent: number
+    allocationStartWeek: number | null; allocationEndWeek: number | null
+    derivedStartWeek: number | null; derivedEndWeek: number | null
+    kind: 'resource' | 'overhead'
+    appliedDiscounts: Array<{ id: string; label: string; type: string; value: number; calculatedAmount: number; resourceTypeId: string | null }>
+    netSubtotal: number
+  }
+
+  const startEditAllocation = (row: CommercialRow) => {
+    setEditingAllocation(row.id)
+    setAllocationDraft({
+      allocationMode: row.allocationMode,
+      allocationPercent: row.allocationPercent,
+      allocationStartWeek: row.allocationStartWeek,
+      allocationEndWeek: row.allocationEndWeek,
+    })
+  }
+
+  const getAllocationBadge = (row: CommercialRow) => {
+    const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek
+    const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek
+    if (row.allocationMode === 'EFFORT') {
+      return { label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }
+    } else if (row.allocationMode === 'TIMELINE') {
+      const sub = effectiveStart != null && effectiveEnd != null
+        ? `Wk ${Math.round(effectiveStart)} → Wk ${Math.round(effectiveEnd)}`
+        : null
+      return {
+        label: `Timeline · ${row.allocationPercent}%`,
+        color: 'bg-blue-100 text-blue-700',
+        sub,
+      }
+    } else {
+      return {
+        label: `Full Project · ${row.allocationPercent}%`,
+        color: 'bg-purple-100 text-purple-700',
+        sub: null,
+      }
+    }
   }
 
   return (
@@ -795,6 +874,7 @@ export default function ResourceProfilePage() {
                     <th className="text-left px-4 py-3 font-medium">Hrs/Day</th>
                     <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Hours</th>
                     <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Days</th>
+                    <th className="text-left px-4 py-3 font-medium">Allocation</th>
                     <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                     {hasCost && (
                       <th className="text-right px-6 py-3 font-medium">Cost</th>
@@ -889,7 +969,39 @@ export default function ResourceProfilePage() {
                           /> h
                         </td>
                         <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">{formatNumber(row.totalHours)} h</td>
-                        <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">{formatNumber(row.totalDays)} d</td>
+                        <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">
+                          {Math.abs((row.allocatedDays ?? row.totalDays) - (row.effortDays ?? row.totalDays)) > 0.5 ? (
+                            <div>
+                              <div className="font-medium">{formatNumber(row.allocatedDays ?? row.totalDays)} d</div>
+                              <div className="text-xs text-gray-400">effort: {formatNumber(row.effortDays ?? row.totalDays)}</div>
+                            </div>
+                          ) : (
+                            <span>{formatNumber(row.totalDays)} d</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {(() => {
+                            const mode = row.allocationMode ?? 'EFFORT'
+                            const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
+                            const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
+                            if (mode === 'EFFORT') {
+                              return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">T&amp;M</span>
+                            } else if (mode === 'TIMELINE') {
+                              return (
+                                <div>
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                                    Timeline · {row.allocationPercent ?? 100}%
+                                  </span>
+                                  {effectiveStart != null && effectiveEnd != null && (
+                                    <div className="text-xs text-gray-400 mt-0.5">Wk {Math.round(effectiveStart)} → Wk {Math.round(effectiveEnd)}</div>
+                                  )}
+                                </div>
+                              )
+                            } else {
+                              return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">Full Project · {row.allocationPercent ?? 100}%</span>
+                            }
+                          })()}
+                        </td>
                         <td className="text-right px-4 py-3 text-gray-900">
                           <input
                             type="number"
@@ -980,6 +1092,7 @@ export default function ResourceProfilePage() {
                       </td>
                       <td className="text-center px-4 py-3">—</td>
                       <td className="text-right px-4 py-3 font-medium text-gray-900">{formatNumber(row.computedDays, 2)} d</td>
+                      <td className="px-4 py-3">—</td>
                       <td className="text-right px-4 py-3">{row.dayRate != null ? `$${formatNumber(row.dayRate, 0)}` : '—'}</td>
                       {hasCost && (
                         <td className="text-right px-6 py-3 font-medium text-gray-900">
@@ -996,6 +1109,7 @@ export default function ResourceProfilePage() {
                       <td className="px-4 py-3">—</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">{formatNumber(profile.summary.totalHours)} h</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">{formatNumber(profile.summary.totalDays)} d</td>
+                      <td className="px-4 py-3">—</td>
                       <td className="px-4 py-3 text-right">—</td>
                       {hasCost && (
                         <td className="px-6 py-3 text-right">
@@ -1236,7 +1350,9 @@ export default function ResourceProfilePage() {
                     <tr className="bg-gray-50 text-gray-600 border-b border-gray-200">
                       <th className="text-left px-6 py-3 font-medium">Resource Type</th>
                       <th className="text-center px-4 py-3 font-medium">Count</th>
-                      <th className="text-right px-4 py-3 font-medium">Total Days</th>
+                      <th className="text-right px-4 py-3 font-medium">Effort Days</th>
+                      <th className="text-left px-4 py-3 font-medium">Allocation</th>
+                      <th className="text-right px-4 py-3 font-medium">Allocated Days</th>
                       <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                       <th className="text-right px-6 py-3 font-medium">Subtotal</th>
                     </tr>
@@ -1250,13 +1366,121 @@ export default function ResourceProfilePage() {
                             {row.kind === 'overhead' && <span className="text-xs text-amber-600 ml-2">(overhead)</span>}
                           </td>
                           <td className="text-center px-4 py-3 text-gray-800">{row.count}</td>
-                          <td className="text-right px-4 py-3 text-gray-800">{formatNumber(row.totalDays)}</td>
+                          <td className="text-right px-4 py-3 text-gray-500">{formatNumber(row.effortDays)}</td>
+                          <td className="px-4 py-3">
+                            {row.kind === 'resource' ? (() => {
+                              const badge = getAllocationBadge(row)
+                              return (
+                                <div>
+                                  <button
+                                    onClick={() => editingAllocation === row.id ? setEditingAllocation(null) : startEditAllocation(row)}
+                                    className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color} hover:opacity-80 transition-opacity`}
+                                    title="Click to edit allocation"
+                                  >
+                                    {badge.label}
+                                  </button>
+                                  {badge.sub && <div className="text-xs text-gray-400 mt-0.5">{badge.sub}</div>}
+                                </div>
+                              )
+                            })() : <span className="text-gray-400 text-xs">—</span>}
+                          </td>
+                          <td className="text-right px-4 py-3 text-gray-900 font-medium">{formatNumber(row.allocatedDays)}</td>
                           <td className="text-right px-4 py-3 text-gray-800">${formatNumber(row.dayRate, 0)}</td>
                           <td className="text-right px-6 py-3 text-gray-900">${formatNumber(row.subtotal, 0)}</td>
                         </tr>
+                        {/* Inline allocation editor */}
+                        {editingAllocation === row.id && allocationDraft && row.kind === 'resource' && (
+                          <tr className="border-b border-blue-100 bg-blue-50">
+                            <td colSpan={7} className="px-6 py-4">
+                              <div className="flex flex-wrap items-end gap-4">
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-600 mb-1">Allocation Mode</label>
+                                  <select
+                                    value={allocationDraft.allocationMode}
+                                    onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
+                                    className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  >
+                                    <option value="EFFORT">T&amp;M (effort only)</option>
+                                    <option value="TIMELINE">Timeline window</option>
+                                    <option value="FULL_PROJECT">Full project</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-600 mb-1">FTE %</label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={100}
+                                    step={5}
+                                    value={allocationDraft.allocationPercent}
+                                    onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
+                                    className="w-20 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  />
+                                </div>
+                                {allocationDraft.allocationMode === 'TIMELINE' && (
+                                  <>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                                        Start Week override
+                                        {row.derivedStartWeek != null && <span className="text-gray-400 ml-1">(auto: Wk {Math.round(row.derivedStartWeek)})</span>}
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        step={0.5}
+                                        value={allocationDraft.allocationStartWeek ?? ''}
+                                        onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
+                                        placeholder="auto"
+                                        className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                                        End Week override
+                                        {row.derivedEndWeek != null && <span className="text-gray-400 ml-1">(auto: Wk {Math.round(row.derivedEndWeek)})</span>}
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        step={0.5}
+                                        value={allocationDraft.allocationEndWeek ?? ''}
+                                        onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
+                                        placeholder="auto"
+                                        className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      />
+                                    </div>
+                                  </>
+                                )}
+                                <div className="flex gap-2 ml-auto">
+                                  <button
+                                    onClick={() => updateAllocationMutation.mutate({
+                                      rtId: row.id,
+                                      data: {
+                                        allocationMode: allocationDraft.allocationMode,
+                                        allocationPercent: allocationDraft.allocationPercent,
+                                        allocationStartWeek: allocationDraft.allocationStartWeek,
+                                        allocationEndWeek: allocationDraft.allocationEndWeek,
+                                      }
+                                    })}
+                                    disabled={updateAllocationMutation.isPending}
+                                    className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                                  >
+                                    {updateAllocationMutation.isPending ? 'Saving…' : 'Save'}
+                                  </button>
+                                  <button
+                                    onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
+                                    className="px-4 py-1.5 rounded-lg text-sm text-gray-600 hover:bg-gray-100"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
                         {row.appliedDiscounts.map(d => (
                           <tr key={d.id} className="border-b border-gray-50 bg-gray-50">
-                            <td className="px-6 py-2 pl-10 text-gray-500 italic text-xs" colSpan={4}>
+                            <td className="px-6 py-2 pl-10 text-gray-500 italic text-xs" colSpan={6}>
                               ↳ {d.label} ({d.type === 'PERCENTAGE' ? `${d.value}%` : `$${formatNumber(d.value, 0)}`})
                             </td>
                             <td className="text-right px-6 py-2 text-red-600 text-xs italic">
@@ -1266,7 +1490,7 @@ export default function ResourceProfilePage() {
                         ))}
                         {row.appliedDiscounts.length > 0 && (
                           <tr className="border-b border-gray-100 bg-gray-50">
-                            <td className="px-6 py-2 pl-10 text-gray-600 text-xs font-medium" colSpan={4}>
+                            <td className="px-6 py-2 pl-10 text-gray-600 text-xs font-medium" colSpan={6}>
                               Net subtotal
                             </td>
                             <td className="text-right px-6 py-2 text-gray-900 text-xs font-medium">
@@ -1277,7 +1501,7 @@ export default function ResourceProfilePage() {
                       </Fragment>
                     ))}
                     <tr className="bg-gray-900 text-white font-semibold">
-                      <td className="px-6 py-3 uppercase tracking-wide" colSpan={4}>Subtotal</td>
+                      <td className="px-6 py-3 uppercase tracking-wide" colSpan={6}>Subtotal</td>
                       <td className="text-right px-6 py-3">${formatNumber(commercialData.subtotal, 0)}</td>
                     </tr>
                   </tbody>
