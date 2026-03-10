@@ -1,35 +1,56 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 
+// LAB3 brand palette
+const C = {
+  navy:       '#1d245b',  // primary headings
+  blue:       '#2c60f6',  // accents, table headers
+  green:      '#62c481',  // positive highlights
+  darkGray:   '#333333',  // body text
+  midGray:    '#666666',  // secondary text
+  lightGray:  '#f5f5f5',  // table backgrounds
+  borderGray: '#e0e0e0',  // borders
+  white:      '#ffffff',
+}
+
 const styles = StyleSheet.create({
-  page: { padding: 48, fontFamily: 'Helvetica', fontSize: 10, color: '#1f2937', lineHeight: 1.5 },
-  coverPage: { padding: 48, display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' },
-  coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#dc2626', marginBottom: 12 },
-  coverSubtitle: { fontSize: 16, color: '#6b7280', marginBottom: 8 },
-  coverMeta: { fontSize: 10, color: '#9ca3af', marginTop: 40 },
-  sectionHeadingWrapper: { marginBottom: 10, marginTop: 20, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#fee2e2' },
-  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#dc2626', lineHeight: 1.8 },
-  sectionLabel: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 6, marginTop: 14 },
-  sectionLabelMuted: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#9ca3af', marginBottom: 6, marginTop: 14 },
-  subheading: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 4, marginTop: 12 },
-  bodyText: { fontSize: 10, color: '#4b5563', marginBottom: 4 },
+  page: { padding: 52, fontFamily: 'Helvetica', fontSize: 10, color: C.darkGray, lineHeight: 1.6 },
+  coverPage: { padding: 52, display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' },
+  coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: C.navy, marginBottom: 16 },
+  coverSubtitle: { fontSize: 16, color: C.blue, marginBottom: 8 },
+  coverMeta: { fontSize: 10, color: C.midGray, marginTop: 40 },
+  // Left accent bar avoids react-pdf border-bottom rendering issues on wrapping text
+  sectionHeadingWrapper: {
+    marginTop: 24,
+    marginBottom: 14,
+    paddingLeft: 10,
+    paddingTop: 6,
+    paddingBottom: 6,
+    borderLeftWidth: 4,
+    borderLeftColor: C.blue,
+  },
+  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: C.navy, lineHeight: 1.6 },
+  sectionLabel: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: C.navy, marginBottom: 6, marginTop: 14 },
+  sectionLabelMuted: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: C.midGray, marginBottom: 6, marginTop: 14 },
+  subheading: { fontSize: 10, fontFamily: 'Helvetica-Bold', color: C.darkGray, marginBottom: 4, marginTop: 10 },
+  bodyText: { fontSize: 10, color: C.darkGray, marginBottom: 4, lineHeight: 1.5 },
   table: { marginBottom: 12 },
-  tableHeader: { flexDirection: 'row', backgroundColor: '#f9fafb', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingVertical: 6, paddingHorizontal: 8 },
-  tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f3f4f6', paddingVertical: 5, paddingHorizontal: 8 },
-  tableRowAlt: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f3f4f6', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#fafafa' },
-  tableRowTotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f9fafb' },
-  tableRowSubtotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#f3f4f6' },
-  th: { fontFamily: 'Helvetica-Bold', fontSize: 9, color: '#6b7280' },
-  td: { fontSize: 9, color: '#374151' },
-  tdBold: { fontSize: 9, color: '#374151', fontFamily: 'Helvetica-Bold' },
+  tableHeader: { flexDirection: 'row', backgroundColor: C.navy, paddingVertical: 6, paddingHorizontal: 8 },
+  tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 5, paddingHorizontal: 8 },
+  tableRowAlt: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 5, paddingHorizontal: 8, backgroundColor: C.lightGray },
+  tableRowTotal: { flexDirection: 'row', borderTopWidth: 2, borderTopColor: C.navy, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: C.lightGray },
+  tableRowSubtotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.borderGray, paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#eeeeee' },
+  th: { fontFamily: 'Helvetica-Bold', fontSize: 9, color: C.white },
+  td: { fontSize: 9, color: C.darkGray },
+  tdBold: { fontSize: 9, color: C.darkGray, fontFamily: 'Helvetica-Bold' },
   col1: { flex: 3 },
   col2: { flex: 2 },
   col3: { flex: 1, textAlign: 'right' },
   col4: { flex: 1, textAlign: 'right' },
   col5: { flex: 1, textAlign: 'right' },
-  pageNumber: { position: 'absolute', bottom: 24, right: 48, fontSize: 9, color: '#9ca3af' },
-  footer: { position: 'absolute', bottom: 24, left: 48, fontSize: 9, color: '#9ca3af' },
-  storyItem: { fontSize: 9, color: '#6b7280', marginLeft: 16, marginBottom: 2 },
-  inactiveText: { color: '#9ca3af' },
+  pageNumber: { position: 'absolute', bottom: 28, right: 52, fontSize: 9, color: C.midGray },
+  footer: { position: 'absolute', bottom: 28, left: 52, fontSize: 9, color: C.midGray },
+  storyItem: { fontSize: 9, color: C.midGray, marginLeft: 16, marginBottom: 2 },
+  inactiveText: { color: '#aaaaaa' },
 })
 
 export interface ScopeDocumentProps {
@@ -178,7 +199,7 @@ export default function ScopeDocument({
                           </View>
                           {feature.assumptions ? (
                             <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                              <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>
+                              <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>
                                 Assumptions: {feature.assumptions}
                               </Text>
                             </View>
@@ -225,14 +246,14 @@ export default function ScopeDocument({
                           </View>
                           {feature.assumptions ? (
                             <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                              <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>
+                              <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>
                                 Assumptions: {feature.assumptions}
                               </Text>
                             </View>
                           ) : null}
                           {(feature.userStories ?? []).map(story => (
                             <View key={story.id} style={styles.tableRow}>
-                              <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>• {story.name}</Text>
+                              <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>• {story.name}</Text>
                             </View>
                           ))}
                         </View>
@@ -264,14 +285,14 @@ export default function ScopeDocument({
                         </View>
                         {feature.assumptions ? (
                           <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                            <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>
+                            <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>
                               Assumptions: {feature.assumptions}
                             </Text>
                           </View>
                         ) : null}
                         {(feature.userStories ?? []).map(story => (
                           <View key={story.id} style={styles.tableRow}>
-                            <Text style={[styles.storyItem, { flex: 6, color: '#9ca3af' }]}>• {story.name}</Text>
+                            <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>• {story.name}</Text>
                           </View>
                         ))}
                       </View>
@@ -363,7 +384,7 @@ export default function ScopeDocument({
                 epicRows.map((epic, ei) => (
                   <View key={ei}>
                     {/* Epic row */}
-                    <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f3f4f6' }}>
+                    <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: C.lightGray }}>
                       <Text style={[styles.tdBold, styles.col1]}>{epic.epicName}</Text>
                       <Text style={[styles.tdBold, styles.col3]}>{formatNum(epic.totalHours)}</Text>
                       <Text style={[styles.tdBold, styles.col4]}>{formatNum(epic.totalDays)}</Text>
@@ -371,14 +392,14 @@ export default function ScopeDocument({
                     {/* Feature rows */}
                     {[...epic.features.values()].map((feat, fi) => (
                       <View key={fi}>
-                        <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingVertical: 5, paddingLeft: 20, paddingRight: 8, backgroundColor: '#f9fafb' }}>
-                          <Text style={[{ fontSize: 9, color: '#374151', fontFamily: 'Helvetica-Bold' }, styles.col1]}>{feat.featureName}</Text>
-                          <Text style={[{ fontSize: 9, color: '#374151', fontFamily: 'Helvetica-Bold' }, styles.col3]}>{formatNum(feat.totalHours)}</Text>
-                          <Text style={[{ fontSize: 9, color: '#374151', fontFamily: 'Helvetica-Bold' }, styles.col4]}>{formatNum(feat.totalDays)}</Text>
+                        <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 5, paddingLeft: 20, paddingRight: 8, backgroundColor: C.lightGray }}>
+                          <Text style={[{ fontSize: 9, color: C.darkGray, fontFamily: 'Helvetica-Bold' }, styles.col1]}>{feat.featureName}</Text>
+                          <Text style={[{ fontSize: 9, color: C.darkGray, fontFamily: 'Helvetica-Bold' }, styles.col3]}>{formatNum(feat.totalHours)}</Text>
+                          <Text style={[{ fontSize: 9, color: C.darkGray, fontFamily: 'Helvetica-Bold' }, styles.col4]}>{formatNum(feat.totalDays)}</Text>
                         </View>
                         {/* Resource rows */}
                         {feat.resources.map((res, ri) => (
-                          <View key={ri} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingVertical: 4, paddingLeft: 36, paddingRight: 8 }}>
+                          <View key={ri} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 4, paddingLeft: 36, paddingRight: 8 }}>
                             <Text style={[styles.td, styles.col1]}>{res.name}</Text>
                             <Text style={[styles.td, styles.col3]}>{formatNum(res.hours)}</Text>
                             <Text style={[styles.td, styles.col4]}>{formatNum(res.days)}</Text>
@@ -391,7 +412,7 @@ export default function ScopeDocument({
               )}
 
               {/* Grand total */}
-              <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#e5e7eb' }}>
+              <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.borderGray, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: C.lightGray }}>
                 <Text style={[styles.tdBold, styles.col1]}>Total</Text>
                 <Text style={[styles.tdBold, styles.col3]}>{formatNum(effortData.totalHours)}</Text>
                 <Text style={[styles.tdBold, styles.col4]}>{formatNum(effortData.totalDays)}</Text>
@@ -529,12 +550,12 @@ export default function ScopeDocument({
             {/* Overhead rows */}
             {(resourceProfileData.overheadRows ?? []).map((row: any, i: number) => (
               <View key={`oh-${i}`} style={styles.tableRow}>
-                <Text style={[styles.td, styles.col1, { color: '#6b7280' }]}>{row.name}</Text>
-                <Text style={[styles.td, styles.col2, { color: '#6b7280' }]}>Overhead</Text>
-                <Text style={[styles.td, styles.col3, { color: '#6b7280' }]}>—</Text>
-                <Text style={[styles.td, styles.col4, { color: '#6b7280' }]}>{formatNum(row.computedDays)}</Text>
+                <Text style={[styles.td, styles.col1, { color: C.midGray }]}>{row.name}</Text>
+                <Text style={[styles.td, styles.col2, { color: C.midGray }]}>Overhead</Text>
+                <Text style={[styles.td, styles.col3, { color: C.midGray }]}>—</Text>
+                <Text style={[styles.td, styles.col4, { color: C.midGray }]}>{formatNum(row.computedDays)}</Text>
                 {resourceProfileData.summary?.hasCost && (
-                  <Text style={[styles.td, styles.col5, { color: '#6b7280' }]}>
+                  <Text style={[styles.td, styles.col5, { color: C.midGray }]}>
                     {row.estimatedCost != null ? `$${formatNum(row.estimatedCost, 0)}` : '—'}
                   </Text>
                 )}
@@ -595,10 +616,10 @@ export default function ScopeDocument({
             <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Assumptions</Text></View>
             {items.map((item, i) => (
               <View key={i} style={{ marginBottom: 10 }}>
-                <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 3 }}>
+                <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: C.darkGray, marginBottom: 3 }}>
                   {item.label}
                 </Text>
-                <Text style={{ fontSize: 8, color: '#6b7280', lineHeight: 1.5 }}>
+                <Text style={{ fontSize: 8, color: C.midGray, lineHeight: 1.5 }}>
                   {item.text}
                 </Text>
               </View>
