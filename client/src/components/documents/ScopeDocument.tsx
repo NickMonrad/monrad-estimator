@@ -17,21 +17,14 @@ const C = {
 
 const styles = StyleSheet.create({
   page: { padding: 52, fontFamily: 'Helvetica', fontSize: 10, color: '#333333', lineHeight: 1.6 },
-  coverPage: { flexDirection: 'column', justifyContent: 'center', flex: 1 },
+  coverPage: { padding: 48, display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' },
   coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 16 },
   coverSubtitle: { fontSize: 16, color: '#2c60f6', marginBottom: 8 },
   coverMeta: { fontSize: 10, color: '#666666', marginTop: 40 },
-  // Left accent bar — avoids react-pdf border-bottom height calc bug on wrapping text
-  sectionHeadingWrapper: {
-    marginTop: 24,
-    marginBottom: 14,
-    paddingLeft: 10,
-    paddingTop: 6,
-    paddingBottom: 6,
-    borderLeftWidth: 4,
-    borderLeftColor: '#2c60f6',
-  },
-  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#1d245b', lineHeight: 1.6 },
+  // Section heading: colored divider bar above the text (no border on View/Text — avoids yoga overflow)
+  sectionHeadingWrapper: { marginTop: 20, marginBottom: 12 },
+  sectionHeadingAccent: { height: 3, backgroundColor: '#2c60f6', marginBottom: 6 },
+  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#1d245b', lineHeight: 1.5 },
   sectionLabel: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 6, marginTop: 14 },
   sectionLabelMuted: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#666666', marginBottom: 6, marginTop: 14 },
   subheading: { fontSize: 10, fontFamily: 'Helvetica-Bold', color: '#333333', marginBottom: 4, marginTop: 10 },
@@ -171,7 +164,7 @@ export default function ScopeDocument({
       {/* ── Scope Summary ── */}
       {sections.scope && epics.length > 0 && (
         <Page size="A4" style={styles.page}>
-          <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Scope Summary</Text></View>
+          <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Scope Summary</Text></View>
 
           {/* ── In Scope ── */}
           <Text style={styles.sectionLabel}>In Scope</Text>
@@ -369,7 +362,7 @@ export default function ScopeDocument({
 
         return (
           <Page size="A4" style={styles.page}>
-            <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Effort Breakdown</Text></View>
+            <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Effort Breakdown</Text></View>
 
             {/* Part 1 — Effort by Epic / Feature */}
             <View style={styles.table}>
@@ -466,7 +459,7 @@ export default function ScopeDocument({
       {/* ── Timeline Summary ── */}
       {sections.timeline && timelineData && (
         <Page size="A4" style={styles.page}>
-          <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Timeline Summary</Text></View>
+          <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Timeline Summary</Text></View>
 
           {/* Start / end dates from top-level fields */}
           <View style={{ marginBottom: 16 }}>
@@ -523,7 +516,7 @@ export default function ScopeDocument({
       {/* ── Resource Profile ── */}
       {sections.resourceProfile && resourceProfileData && (
         <Page size="A4" style={styles.page}>
-          <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Resource Profile</Text></View>
+          <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Resource Profile</Text></View>
 
           <View style={styles.table}>
             <View style={styles.tableHeader}>
@@ -616,7 +609,7 @@ export default function ScopeDocument({
         if (items.length === 0) return null
         return (
           <Page size="A4" style={styles.page}>
-            <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Assumptions</Text></View>
+            <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Assumptions</Text></View>
             {items.map((item, i) => (
               <View key={i} style={{ marginBottom: 10 }}>
                 <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: C.darkGray, marginBottom: 3 }}>
