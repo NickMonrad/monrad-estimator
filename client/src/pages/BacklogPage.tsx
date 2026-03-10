@@ -24,7 +24,7 @@ export default function BacklogPage() {
   const [expandedEpics, setExpandedEpics] = useState<Set<string>>(new Set())
   const [addingEpic, setAddingEpic] = useState(false)
   const [editingEpicId, setEditingEpicId] = useState<string | null>(null)
-  const [epicForm, setEpicForm] = useState({ name: '', description: '' })
+  const [epicForm, setEpicForm] = useState({ name: '', description: '', assumptions: '' })
   const [showHistory, setShowHistory] = useState(false)
   const [showCsvImport, setShowCsvImport] = useState(false)
   const [snapshotLabel, setSnapshotLabel] = useState('')
@@ -73,7 +73,7 @@ export default function BacklogPage() {
 
   const createEpic = useMutation({
     mutationFn: (data: typeof epicForm) => api.post(`/projects/${projectId}/epics`, data),
-    onSuccess: (res) => { invalidate(); setAddingEpic(false); setEpicForm({ name: '', description: '' }); setExpandedEpics(s => { const n = new Set(s); n.add(res.data.id); return n }) },
+    onSuccess: (res) => { invalidate(); setAddingEpic(false); setEpicForm({ name: '', description: '', assumptions: '' }); setExpandedEpics(s => { const n = new Set(s); n.add(res.data.id); return n }) },
   })
 
   const updateEpic = useMutation({
@@ -400,7 +400,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   onToggle: () => void
   isEditing: boolean
   onEdit: () => void
-  onSaveEdit: (data: { name: string; description: string }) => void
+  onSaveEdit: (data: { name: string; description: string; assumptions: string }) => void
   onCancelEdit: () => void
   editSaving: boolean
   onDelete: () => void
@@ -419,26 +419,30 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
       {isEditing ? (
         <div className="p-3">
           <EpicForm
-            initial={{ name: epic.name, description: epic.description ?? '' }}
+            initial={{ name: epic.name, description: epic.description ?? '', assumptions: epic.assumptions ?? '' }}
             onSave={onSaveEdit}
             onCancel={onCancelEdit}
             saving={editSaving}
           />
         </div>
       ) : (
-        <div className={`group flex items-center gap-2 px-4 py-3 cursor-pointer hover:bg-gray-50 ${epicColour.light}`} onClick={onToggle}>
-          <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0 px-0.5 text-base leading-none mr-1" onClick={e => e.stopPropagation()}>⠿</button>
-          <span className="text-gray-400 text-sm select-none">{expanded ? '▼' : '▶'}</span>
-          <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded font-medium">Epic</span>
-          <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900'}`}>{epic.name}</span>
-          <span className="text-sm text-gray-400">
-            {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h · {(epicTotalHours / hoursPerDay).toFixed(1)}d
-          </span>
-          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-            <button onClick={onToggleActive} title={epic.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-2 py-1 ${epic.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{epic.isActive === false ? '○' : '●'}</button>
-            <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
-            <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
+        <div className={`group px-4 py-3 cursor-pointer hover:bg-gray-50 ${epicColour.light}`} onClick={onToggle}>
+          <div className="flex items-center gap-2">
+            <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0 px-0.5 text-base leading-none mr-1" onClick={e => e.stopPropagation()}>⠿</button>
+            <span className="text-gray-400 text-sm select-none">{expanded ? '▼' : '▶'}</span>
+            <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded font-medium">Epic</span>
+            <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900'}`}>{epic.name}</span>
+            <span className="text-sm text-gray-400">
+              {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h · {(epicTotalHours / hoursPerDay).toFixed(1)}d
+            </span>
+            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+              <button onClick={onToggleActive} title={epic.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-2 py-1 ${epic.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{epic.isActive === false ? '○' : '●'}</button>
+              <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
+              <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
+            </div>
           </div>
+          {epic.description && <p className="text-sm text-gray-500 mt-1 ml-7">{epic.description}</p>}
+          {epic.assumptions && <p className="text-sm text-gray-400 mt-0.5 ml-7"><span className="font-medium text-gray-500">Assumptions:</span> {epic.assumptions}</p>}
         </div>
       )}
       {expanded && (
@@ -657,7 +661,7 @@ function moveTaskInTree(tree: Epic[], taskId: string, overId: string): Epic[] {
 }
 
 function EpicForm({ initial, onSave, onCancel, saving }: {
-  initial: { name: string; description: string }
+  initial: { name: string; description: string; assumptions: string }
   onSave: (data: typeof initial) => void
   onCancel: () => void
   saving: boolean
@@ -671,6 +675,8 @@ function EpicForm({ initial, onSave, onCancel, saving }: {
       <input placeholder="Epic name *" value={form.name} onChange={f('name')}
         className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
       <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={2}
+        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
+      <textarea placeholder="Assumptions (optional)" value={form.assumptions} onChange={f('assumptions')} rows={2}
         className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
