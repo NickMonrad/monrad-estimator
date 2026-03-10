@@ -135,6 +135,20 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
+### `resource-allocation.spec.ts` — Resource Allocation (5 tests)
+
+All tests log in, create a fresh project, import a CSV with Tech Lead + Project Manager tasks, navigate to Resource Profile, and switch to the Commercial tab before running assertions.
+
+| Test | Description |
+|------|-------------|
+| commercial tab shows allocation badge | Verifies at least one `button[title="Click to edit allocation"]` is visible in the Commercial table, and its text matches `T&M`, `Timeline`, or `Full Project` |
+| allocation editor opens on badge click | Clicks the first allocation badge → asserts the inline editor appears with an "Allocation Mode" label, "FTE %" label, mode `<select>`, FTE number input, and Save/Cancel buttons |
+| changing FTE % updates allocated days | Opens the editor, sets FTE % to 50, clicks Save → asserts the editor closes and the badge is still present (row remains intact after save) |
+| cancel closes editor without changing mode badge | Opens editor, switches mode to Full Project, clicks Cancel → asserts editor is gone and badge text is unchanged |
+| summary tab shows Allocation column | Navigates back to Resource Profile tab → asserts the `<th>` with text "Allocation" is visible in the summary table |
+
+---
+
 ### `effort-review.spec.ts` — Effort Review (7 tests)
 
 | Test | Description |
