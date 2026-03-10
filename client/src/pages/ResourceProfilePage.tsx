@@ -350,7 +350,18 @@ export default function ResourceProfilePage() {
   })
 
   const hasCost = profile?.summary.hasCost ?? false
-  const columnCount = hasCost ? 8 : 7
+  const columnCount = hasCost ? 9 : 8
+
+  const weekToDate = (weekNum: number | null | undefined): Date | null => {
+    if (weekNum == null || !project?.startDate) return null
+    const d = new Date(project.startDate)
+    d.setDate(d.getDate() + Math.round(weekNum * 7))
+    return d
+  }
+  const fmtDate = (d: Date | null): string => {
+    if (!d) return ''
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  }
 
   const toggleRow = (rtId: string) => {
     setExpandedRows(prev => {
@@ -867,6 +878,11 @@ export default function ResourceProfilePage() {
                 {profile.summary.totalCost != null && ` · $${formatNumber(profile.summary.totalCost, 0)}`}
               </p>
             )}
+            {(project?.bufferWeeks ?? 0) > 0 && (
+              <p className="text-xs text-amber-600 font-medium mt-1">
+                + {project!.bufferWeeks} buffer week{project!.bufferWeeks !== 1 ? 's' : ''} applied
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -944,6 +960,7 @@ export default function ResourceProfilePage() {
                     <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Hours</th>
                     <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Days</th>
                     <th className="text-left px-4 py-3 font-medium">Allocation</th>
+                    <th className="text-left px-4 py-3 font-medium">Period</th>
                     <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                     {hasCost && (
                       <th className="text-right px-6 py-3 font-medium">Cost</th>
@@ -1074,6 +1091,17 @@ export default function ResourceProfilePage() {
                             }
                           })()}
                         </td>
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                          {(() => {
+                            const startWk = row.allocationStartWeek ?? row.derivedStartWeek
+                            const endWk = row.allocationEndWeek ?? row.derivedEndWeek
+                            const start = weekToDate(startWk)
+                            const end = weekToDate(endWk)
+                            if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
+                            if (startWk != null && endWk != null) return `Wk ${Math.round(startWk)} – Wk ${Math.round(endWk)}`
+                            return '—'
+                          })()}
+                        </td>
                         <td className="text-right px-4 py-3 text-gray-900">
                           <input
                             type="number"
@@ -1165,6 +1193,7 @@ export default function ResourceProfilePage() {
                       <td className="text-center px-4 py-3">—</td>
                       <td className="text-right px-4 py-3 font-medium text-gray-900">{formatNumber(row.computedDays, 2)} d</td>
                       <td className="px-4 py-3">—</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">—</td>
                       <td className="text-right px-4 py-3">{row.dayRate != null ? `$${formatNumber(row.dayRate, 0)}` : '—'}</td>
                       {hasCost && (
                         <td className="text-right px-6 py-3 font-medium text-gray-900">
@@ -1181,6 +1210,7 @@ export default function ResourceProfilePage() {
                       <td className="px-4 py-3">—</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">{formatNumber(profile.summary.totalHours)} h</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">{formatNumber(profile.summary.totalDays)} d</td>
+                      <td className="px-4 py-3">—</td>
                       <td className="px-4 py-3">—</td>
                       <td className="px-4 py-3 text-right">—</td>
                       {hasCost && (
@@ -1424,6 +1454,7 @@ export default function ResourceProfilePage() {
                       <th className="text-center px-4 py-3 font-medium">Count</th>
                       <th className="text-right px-4 py-3 font-medium">Effort Days</th>
                       <th className="text-left px-4 py-3 font-medium">Allocation</th>
+                      <th className="text-left px-4 py-3 font-medium">Period</th>
                       <th className="text-right px-4 py-3 font-medium">Allocated Days</th>
                       <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                       <th className="text-right px-6 py-3 font-medium">Subtotal</th>
@@ -1461,6 +1492,17 @@ export default function ResourceProfilePage() {
                               )
                             })() : <span className="text-gray-400 text-xs">—</span>}
                           </td>
+                          <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                            {(row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' ? (() => {
+                              const startWk = row.allocationStartWeek ?? row.derivedStartWeek
+                              const endWk = row.allocationEndWeek ?? row.derivedEndWeek
+                              const start = weekToDate(startWk)
+                              const end = weekToDate(endWk)
+                              if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
+                              if (startWk != null && endWk != null) return `Wk ${Math.round(startWk)} – Wk ${Math.round(endWk)}`
+                              return '—'
+                            })() : '—'}
+                          </td>
                           <td className="text-right px-4 py-3 text-gray-900 font-medium">{formatNumber(row.allocatedDays)}</td>
                           <td className="text-right px-4 py-3 text-gray-800">${formatNumber(row.dayRate, 0)}</td>
                           <td className="text-right px-6 py-3 text-gray-900">${formatNumber(row.subtotal, 0)}</td>
@@ -1468,7 +1510,7 @@ export default function ResourceProfilePage() {
                         {/* Inline allocation editor */}
                         {editingAllocation === row.id && allocationDraft && (row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' && (
                           <tr className="border-b border-blue-100 bg-blue-50">
-                            <td colSpan={7} className="px-6 py-4">
+                            <td colSpan={8} className="px-6 py-4">
                               <div className="flex flex-wrap items-end gap-4">
                                 <div>
                                   <label className="block text-xs font-medium text-gray-600 mb-1">Allocation Mode</label>
@@ -1572,7 +1614,7 @@ export default function ResourceProfilePage() {
                         )}
                         {row.appliedDiscounts.map(d => (
                           <tr key={d.id} className="border-b border-gray-50 bg-gray-50">
-                            <td className="px-6 py-2 pl-10 text-gray-500 italic text-xs" colSpan={6}>
+                            <td className="px-6 py-2 pl-10 text-gray-500 italic text-xs" colSpan={7}>
                               ↳ {d.label} ({d.type === 'PERCENTAGE' ? `${d.value}%` : `$${formatNumber(d.value, 0)}`})
                             </td>
                             <td className="text-right px-6 py-2 text-red-600 text-xs italic">
@@ -1582,7 +1624,7 @@ export default function ResourceProfilePage() {
                         ))}
                         {row.appliedDiscounts.length > 0 && (
                           <tr className="border-b border-gray-100 bg-gray-50">
-                            <td className="px-6 py-2 pl-10 text-gray-600 text-xs font-medium" colSpan={6}>
+                            <td className="px-6 py-2 pl-10 text-gray-600 text-xs font-medium" colSpan={7}>
                               Net subtotal
                             </td>
                             <td className="text-right px-6 py-2 text-gray-900 text-xs font-medium">
@@ -1593,7 +1635,7 @@ export default function ResourceProfilePage() {
                       </Fragment>
                     ))}
                     <tr className="bg-gray-900 text-white font-semibold">
-                      <td className="px-6 py-3 uppercase tracking-wide" colSpan={6}>Subtotal</td>
+                      <td className="px-6 py-3 uppercase tracking-wide" colSpan={7}>Subtotal</td>
                       <td className="text-right px-6 py-3">${formatNumber(commercialData.subtotal, 0)}</td>
                     </tr>
                   </tbody>

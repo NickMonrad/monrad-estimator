@@ -500,6 +500,11 @@ export default function TimelinePage() {
               <div className="text-sm text-gray-600">
                 <span className="text-gray-400">Projected end:</span>{' '}
                 <span className="font-medium">{new Date(timeline.projectedEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                {(project?.bufferWeeks ?? 0) > 0 && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 ml-2">
+                    +{project!.bufferWeeks}w buffer
+                  </span>
+                )}
               </div>
             )}
             {timeline?.startDate && (
