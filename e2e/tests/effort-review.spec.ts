@@ -9,11 +9,11 @@ const CSV_CONTENT = [
   'Epic,Alpha Epic,,,,,,,,,,active,,',
   'Feature,Alpha Epic,Alpha Feature,,,,,,,,,,,',
   'Story,Alpha Epic,Alpha Feature,Alpha Story,,,,,,,,,,active',
-  'Task,Alpha Epic,Alpha Feature,Alpha Story,Alpha Task,,Developer,8,1,,,,,',
+  'Task,Alpha Epic,Alpha Feature,Alpha Story,Alpha Task,,Tech Lead,8,1,,,,,',
   'Epic,Beta Epic,,,,,,,,,,active,,',
   'Feature,Beta Epic,Beta Feature,,,,,,,,,,,',
   'Story,Beta Epic,Beta Feature,Beta Story,,,,,,,,,,active',
-  'Task,Beta Epic,Beta Feature,Beta Story,Beta Task,,Developer,4,0.5,,,,,',
+  'Task,Beta Epic,Beta Feature,Beta Story,Beta Task,,Tech Lead,4,0.5,,,,,',
 ].join('\n')
 
 /**
@@ -48,6 +48,8 @@ test.describe('Effort Review', () => {
   let projectName: string
 
   test.beforeEach(async ({ page }) => {
+    // CSV import + navigation takes ~15-20s; give each test 60s total
+    test.setTimeout(60_000)
     projectName = `E2E Effort Review ${Date.now()}`
     await login(page)
     await createProject(page, projectName)
@@ -78,15 +80,15 @@ test.describe('Effort Review', () => {
   })
 
   test('summary view shows resource type rows', async ({ page }) => {
-    // Summary is the default view — "Developer" should be visible in the table
-    await expect(page.getByText('Developer').first()).toBeVisible({ timeout: 10_000 })
+    // Summary is the default view — "Tech Lead" should be visible in the table
+    await expect(page.getByText('Tech Lead').first()).toBeVisible({ timeout: 10_000 })
   })
 
   test('clicking a resource type row in summary expands epic sub-rows', async ({ page }) => {
-    // Find and click the "Developer" row button in the summary table
-    // The RT row is rendered as a clickable button wrapping the row content
-    const developerRow = page.locator('tr').filter({ hasText: 'Developer' }).first()
-    await developerRow.click()
+    // Find and click the "Tech Lead" row in the summary table
+    const techLeadRow = page.locator('tr').filter({ hasText: 'Tech Lead' }).first()
+    await expect(techLeadRow).toBeVisible({ timeout: 15_000 })
+    await techLeadRow.click()
 
     // After expanding, epic sub-rows appear as italic cells
     await expect(

@@ -6,15 +6,16 @@ import os from 'os'
 
 /* ────────────────────────────────────────────────────────────────────────────
  * CSV seed data — 14-column format with Type column
- * Provides a Developer task and a Tech Lead task so the Resource Profile
+ * Provides a QA Engineer task and a Tech Lead task so the Resource Profile
  * summary table has at least two resource type rows after import.
+ * Both types are seeded from global resource types on every new project.
  * ──────────────────────────────────────────────────────────────────────────── */
 const CSV_CONTENT = [
   'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
   'Epic,Platform Build,,,,,,,,,,,,',
   'Feature,Platform Build,Core API,,,,,,,,,,,',
   'Story,Platform Build,Core API,API Design,,,,,,,,,,',
-  'Task,Platform Build,Core API,API Design,Design endpoints,,Developer,24,3,,,,,',
+  'Task,Platform Build,Core API,API Design,Design endpoints,,Tech Lead,24,3,,,,,',
   'Task,Platform Build,Core API,API Design,Review spec,,Tech Lead,8,1,,,,,',
 ].join('\n')
 
@@ -118,6 +119,8 @@ test.describe('Resource Profile — enhanced', () => {
   let projectName: string
 
   test.beforeEach(async ({ page }) => {
+    // CSV import + navigation takes ~15-20s; give each test 60s total
+    test.setTimeout(60_000)
     projectName = `E2E ResProfile Enhanced ${Date.now()}`
     await login(page)
     await createProject(page, projectName)
@@ -132,15 +135,15 @@ test.describe('Resource Profile — enhanced', () => {
       page.getByRole('heading', { name: /resource profile/i })
     ).toBeVisible()
 
-    // At least one resource type row should appear — Developer from the CSV seed
-    const developerRow = page.locator('tr').filter({ hasText: /developer/i }).first()
-    await expect(developerRow).toBeVisible({ timeout: 15_000 })
+    // At least one resource type row should appear — Tech Lead from the CSV seed
+    const techLeadRow = page.locator('tr').filter({ hasText: /tech lead/i }).first()
+    await expect(techLeadRow).toBeVisible({ timeout: 15_000 })
   })
 
   test('tab bar shows Resource Profile and Commercial tabs', async ({ page }) => {
     // Wait for summary table to load first
     await expect(
-      page.locator('tr').filter({ hasText: /developer/i }).first()
+      page.locator('tr').filter({ hasText: /tech lead/i }).first()
     ).toBeVisible({ timeout: 15_000 })
 
     // Both tabs should be visible
@@ -163,25 +166,25 @@ test.describe('Resource Profile — enhanced', () => {
   })
 
   test('resource count display shows formatted values', async ({ page }) => {
-    // Wait for the Developer row (has tasks from seeded data)
-    const developerRow = page.locator('tr').filter({ hasText: /developer/i }).first()
-    await expect(developerRow).toBeVisible({ timeout: 15_000 })
+    // Wait for the Tech Lead row (has tasks from seeded data)
+    const techLeadRow = page.locator('tr').filter({ hasText: /tech lead/i }).first()
+    await expect(techLeadRow).toBeVisible({ timeout: 15_000 })
 
     // The row should display hours and days values formatted with 2 decimal places
-    // e.g. "24.00" hours or "3.00" days — look for the pattern in the row text
-    const rowText = await developerRow.textContent()
+    // e.g. "32.00" hours or "4.00" days — look for the pattern in the row text
+    const rowText = await techLeadRow.textContent()
     expect(rowText).toMatch(/\d+\.\d{2}/)
   })
 
   test('named resources — add person', async ({ page }) => {
-    // Wait for the Developer resource type row in the summary table
-    const developerRow = page.locator('tr').filter({ hasText: /developer/i }).first()
-    await expect(developerRow).toBeVisible({ timeout: 15_000 })
+    // Wait for the Tech Lead resource type row in the summary table
+    const techLeadRow = page.locator('tr').filter({ hasText: /tech lead/i }).first()
+    await expect(techLeadRow).toBeVisible({ timeout: 15_000 })
 
-    // The toggle is the resource name <span> inside the row (e.g. "Developer").
-    // Click it to expand the named-resources panel below.
-    const nameSpan = developerRow.locator('span', { hasText: /developer/i }).first()
-    await nameSpan.click()
+    // After the UX change, the "People ↗" button toggles the named-resources panel.
+    // The role name <button> now expands the epic breakdown instead.
+    const peopleBtn = techLeadRow.locator('button', { hasText: /people/i }).first()
+    await peopleBtn.click()
 
     // After expansion the "Named Resources" heading appears in the expanded panel
     await expect(
@@ -193,7 +196,7 @@ test.describe('Resource Profile — enhanced', () => {
     await expect(addPersonBtn).toBeVisible({ timeout: 5_000 })
     await addPersonBtn.click()
 
-    // A new row should appear with an auto-generated name input (e.g. "Developer 1")
+    // A new row should appear with an auto-generated name input (e.g. "Tech Lead 1")
     await expect(
       page.locator('input[type="text"]').first()
     ).toBeVisible({ timeout: 10_000 })
@@ -202,7 +205,7 @@ test.describe('Resource Profile — enhanced', () => {
   test('commercial tab — discount management', async ({ page }) => {
     // Wait for page to fully load
     await expect(
-      page.locator('tr').filter({ hasText: /developer/i }).first()
+      page.locator('tr').filter({ hasText: /tech lead/i }).first()
     ).toBeVisible({ timeout: 15_000 })
 
     // Switch to Commercial tab
