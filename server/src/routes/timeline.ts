@@ -76,7 +76,7 @@ function computeResourceBreakdown(
 }
 
 function buildResponse(
-  project: { id: string; startDate: Date | null; hoursPerDay: number },
+  project: { id: string; startDate: Date | null; hoursPerDay: number; bufferWeeks?: number | null },
   entries: Array<{
     featureId: string
     feature: { name: string; order: number; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
@@ -98,9 +98,10 @@ function buildResponse(
   resourceTypes: ResourceTypeWithNamed[] = [],
   simulatedDemand?: Map<string, number>,  // key: `${rtName}|${week}` → days consumed
 ) {
-  const maxWeek = entries.length > 0
+  const rawMaxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
     : null
+  const maxWeek = rawMaxWeek != null ? rawMaxWeek + (project.bufferWeeks ?? 0) : null
   const projectedEndDate = (project.startDate && maxWeek != null)
     ? (() => { const d = new Date(project.startDate); d.setDate(d.getDate() + maxWeek * 7); return d.toISOString() })()
     : null
@@ -177,37 +178,58 @@ function buildResponse(
     for (const rt of resourceTypes) {
       if (!rtNamesWithHours.has(rt.name)) continue
       const hpd = rt.hoursPerDay ?? project.hoursPerDay
-      for (let w = 0; w < maxWeek; w++) {
+      for (let w = 0; w < Math.ceil(maxWeek); w++) {
         const capDays = getWeeklyCapacity(rt, w, project.hoursPerDay) / hpd
         weeklyCapacity.push({ week: w, resourceTypeName: rt.name, capacityDays: Math.round(capDays * 10) / 10 })
       }
     }
   }
 
+  // Build derived weeks per RT for display (Bug #8)
+  const rtDerivedWeeks = new Map<string, { start: number; end: number }>()
+  for (const d of weeklyDemand) {
+    const rtName = d.resourceTypeName
+    const week = d.week
+    const existing = rtDerivedWeeks.get(rtName)
+    if (!existing) {
+      rtDerivedWeeks.set(rtName, { start: week, end: week })
+    } else {
+      existing.start = Math.min(existing.start, week)
+      existing.end = Math.max(existing.end, week)
+    }
+  }
+
   // Build named resources list from resource types, auto-generating numbered
   // entries for RTs with count > 0 but no named resources that have demand.
-  const namedResourcesList = resourceTypes.flatMap(rt => {
-    if (rt.namedResources && rt.namedResources.length > 0) {
-      return rt.namedResources.map(nr => ({
-        resourceTypeName: rt.name,
-        name: nr.name,
-        startWeek: nr.startWeek,
-        endWeek: nr.endWeek,
-        allocationPct: nr.allocationPct,
-      }))
-    }
-    // Auto-generate synthetic named resources when RT has count > 0 and demand
-    if (rt.count > 0 && rtNamesWithHours.has(rt.name)) {
-      return Array.from({ length: rt.count }, (_, i) => ({
-        resourceTypeName: rt.name,
-        name: `${rt.name} ${i + 1}`,
-        startWeek: null as number | null,
-        endWeek: null as number | null,
-        allocationPct: 100,
-      }))
-    }
-    return []
-  })
+  // Bug #7: filter to only include NRs where the RT actually has demand
+  const namedResourcesList = resourceTypes
+    .filter(rt => rt.namedResources && rt.namedResources.length > 0 ? rtNamesWithHours.has(rt.name) : true)
+    .flatMap(rt => {
+      if (rt.namedResources && rt.namedResources.length > 0) {
+        // Bug #7: only include if RT has demand
+        if (!rtNamesWithHours.has(rt.name)) return []
+        const derivedRt = rtDerivedWeeks.get(rt.name)
+        return rt.namedResources.map(nr => ({
+          resourceTypeName: rt.name,
+          name: nr.name,
+          // Bug #8: use derived start/end for display, but keep allocationPct from actual NR
+          startWeek: nr.startWeek ?? (derivedRt?.start ?? null),
+          endWeek: nr.endWeek ?? (derivedRt?.end ?? null),
+          allocationPct: nr.allocationPct,
+        }))
+      }
+      // Auto-generate synthetic named resources when RT has count > 0 and demand
+      if (rt.count > 0 && rtNamesWithHours.has(rt.name)) {
+        return Array.from({ length: rt.count }, (_, i) => ({
+          resourceTypeName: rt.name,
+          name: `${rt.name} ${i + 1}`,
+          startWeek: null as number | null,
+          endWeek: null as number | null,
+          allocationPct: 100,
+        }))
+      }
+      return []
+    })
 
   return {
     projectId: project.id,

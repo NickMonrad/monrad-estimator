@@ -34,6 +34,7 @@ export default function DocumentsPage() {
     effort: true,
     timeline: true,
     resourceProfile: true,
+    assumptions: true,
   })
   const [label, setLabel] = useState(defaultLabel)
   const [generating, setGenerating] = useState(false)
@@ -229,6 +230,7 @@ export default function DocumentsPage() {
                 ['effort', 'Effort Breakdown'],
                 ['timeline', 'Timeline Summary'],
                 ['resourceProfile', 'Resource Profile'],
+                ['assumptions', 'Assumptions'],
               ] as const).map(([key, label]) => (
                 <label key={key} className="flex items-center gap-2 cursor-pointer">
                   <input

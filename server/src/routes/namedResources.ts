@@ -1,4 +1,5 @@
 import { Router, Response } from 'express'
+import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
@@ -59,6 +60,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
   }
 
+  // If RT's allocationMode is not EFFORT, copy the RT's allocation settings as defaults for the new NR
+  const rtAllocationMode = rt.allocationMode as AllocationMode
+  const inheritAllocation = rtAllocationMode !== 'EFFORT'
+
   const resource = await prisma.namedResource.create({
     data: {
       name,
@@ -67,6 +72,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       ...(endWeek !== undefined && { endWeek }),
       ...(allocationPct !== undefined && { allocationPct }),
       ...(pricingModel !== undefined && { pricingModel }),
+      ...(inheritAllocation && {
+        allocationMode: rtAllocationMode,
+        allocationPercent: rt.allocationPercent ?? 100,
+        allocationStartWeek: rt.allocationStartWeek ?? null,
+        allocationEndWeek: rt.allocationEndWeek ?? null,
+      }),
     },
   })
 
@@ -90,7 +101,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
 
-  const { name, startWeek, endWeek, allocationPct, pricingModel } = req.body
+  const { name, startWeek, endWeek, allocationPct, pricingModel, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
 
   if (allocationPct !== undefined && (allocationPct < 0 || allocationPct > 100)) {
     res.status(400).json({ error: 'allocationPct must be between 0 and 100' }); return
@@ -100,7 +111,33 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
   }
 
-  const data: Record<string, unknown> = { name, startWeek, endWeek, allocationPct, pricingModel }
+  const data: Record<string, unknown> = { name, startWeek, endWeek, allocationPct, pricingModel, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }
+  Object.keys(data).forEach(key => {
+    if (data[key] === undefined) delete data[key]
+  })
+
+  const resource = await prisma.namedResource.update({
+    where: { id },
+    data,
+  })
+  res.json(resource)
+})
+
+// PATCH /projects/:projectId/resource-types/:rtId/named-resources/:id
+router.patch('/:id', async (req: AuthRequest, res: Response) => {
+  const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
+  const project = await ownedProject(projectId, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const rt = await verifyResourceType(rtId, projectId)
+  if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
+
+  const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
+  if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
+
+  const { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
+
+  const data: Record<string, unknown> = { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }
   Object.keys(data).forEach(key => {
     if (data[key] === undefined) delete data[key]
   })

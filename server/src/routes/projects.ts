@@ -77,11 +77,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 // Update project
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const { name, description, customer, status, hoursPerDay, taxRate, taxLabel } = req.body
+  const bufferWeeks = req.body.bufferWeeks !== undefined ? (parseInt(req.body.bufferWeeks) ?? 0) : undefined
   const existing = await prisma.project.findFirst({ where: { id: req.params.id as string, ownerId: req.userId } })
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   const project = await prisma.project.update({
     where: { id: req.params.id as string },
-    data: { name, description, customer, status, hoursPerDay, taxRate, taxLabel },
+    data: { name, description, customer, status, hoursPerDay, taxRate, taxLabel, ...(bufferWeeks !== undefined && { bufferWeeks }) },
   })
   res.json(project)
 })

@@ -41,6 +41,7 @@ model Project {
   customer    String?
   status      ProjectStatus @default(DRAFT)
   hoursPerDay Float         @default(7.6)
+  bufferWeeks Int           @default(0)
   startDate   DateTime?
   taxRate      Float?    @default(10)
   taxLabel     String    @default("GST")
@@ -126,6 +127,7 @@ model Epic {
   id                String   @id @default(cuid())
   name              String
   description       String?
+  assumptions       String?
   order             Int      @default(0)
   featureMode       String   @default("sequential")
   scheduleMode      String   @default("sequential")
@@ -295,6 +297,10 @@ model NamedResource {
   startWeek      Int?
   endWeek        Int?
   allocationPct  Int          @default(100)
+  allocationMode    AllocationMode  @default(EFFORT)
+  allocationPercent Float           @default(100)
+  allocationStartWeek Float?
+  allocationEndWeek   Float?
   pricingModel   String       @default("ACTUAL_DAYS")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt

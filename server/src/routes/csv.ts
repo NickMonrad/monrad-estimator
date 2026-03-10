@@ -225,7 +225,7 @@ router.post('/stage-csv', async (req: AuthRequest, res: Response) => {
     if (type === 'Task' && !task) errors.push('Task name is required')
 
     if (resourceType && !rtNames.has(resourceType.toLowerCase())) {
-      warnings.push(`Resource type "${resourceType}" not found in project — will be left blank on import`)
+      warnings.push(`Resource type "${resourceType}" not found in project — will be created automatically on import`)
     }
 
     // Template validation — only meaningful on Story rows
@@ -305,6 +305,22 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
   })
   const rtByName = new Map(resourceTypes.map(r => [r.name.toLowerCase(), r]))
 
+  // Auto-create any resource types referenced in the CSV that don't exist yet
+  const newRtNames = [
+    ...new Set(
+      rows
+        .filter(row => row.resourceType && !rtByName.has(row.resourceType.toLowerCase()))
+        .map(row => row.resourceType)
+    ),
+  ]
+  for (const rtName of newRtNames) {
+    const newRt = await prisma.resourceType.create({
+      data: { name: rtName, category: 'ENGINEERING', count: 1, projectId },
+      select: { id: true, name: true, hoursPerDay: true },
+    })
+    rtByName.set(rtName.toLowerCase(), newRt)
+  }
+
   // Auto-snapshot before import
   const existingEpics = await prisma.epic.findMany({
     where: { projectId },
@@ -345,12 +361,28 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
       let epic = await prisma.epic.findFirst({ where: { projectId, name: row.epic } })
       if (!epic) {
         epic = await prisma.epic.create({
-          data: { name: row.epic, projectId, order: epicOrder++, isActive: row.type === 'Epic' ? row.epicStatus : true },
+          data: {
+            name: row.epic,
+            projectId,
+            order: epicOrder++,
+            isActive: row.type === 'Epic' ? row.epicStatus : true,
+            description: row.type === 'Epic' ? (row.description || null) : null,
+            assumptions: row.type === 'Epic' ? (row.assumptions || null) : null,
+          },
         })
         epicsCreated++
       } else if (row.type === 'Epic') {
         // Only update status when this is a canonical Epic row
-        await prisma.epic.update({ where: { id: epic.id }, data: { isActive: row.epicStatus } })
+        await prisma.epic.update({
+          where: { id: epic.id },
+          data: {
+            isActive: row.epicStatus,
+            ...(row.type === 'Epic' ? {
+              description: row.description || null,
+              assumptions: row.assumptions || null,
+            } : {}),
+          },
+        })
         epicsUpdated++
       }
       epicMap.set(epicKey, epic.id)
@@ -366,11 +398,27 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
       if (!feature) {
         const featCount = await prisma.feature.count({ where: { epicId } })
         feature = await prisma.feature.create({
-          data: { name: row.feature, epicId, order: featCount, isActive: row.type === 'Feature' ? row.featureStatus : true },
+          data: {
+            name: row.feature,
+            epicId,
+            order: featCount,
+            isActive: row.type === 'Feature' ? row.featureStatus : true,
+            description: row.type === 'Feature' ? (row.description || null) : null,
+            assumptions: row.type === 'Feature' ? (row.assumptions || null) : null,
+          },
         })
         featuresCreated++
       } else if (row.type === 'Feature') {
-        await prisma.feature.update({ where: { id: feature.id }, data: { isActive: row.featureStatus } })
+        await prisma.feature.update({
+          where: { id: feature.id },
+          data: {
+            isActive: row.featureStatus,
+            ...(row.type === 'Feature' ? {
+              description: row.description || null,
+              assumptions: row.assumptions || null,
+            } : {}),
+          },
+        })
         featuresUpdated++
       }
       featureMap.set(featureKey, feature.id)
@@ -411,6 +459,10 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
           data: {
             isActive: row.storyStatus,
             ...(appliedTemplateId !== null ? { appliedTemplateId } : {}),
+            ...(row.type === 'Story' ? {
+              description: row.description || null,
+              assumptions: row.assumptions || null,
+            } : {}),
           },
         })
         storiesUpdated++
