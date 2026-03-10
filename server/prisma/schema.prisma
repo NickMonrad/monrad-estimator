@@ -127,6 +127,7 @@ model Epic {
   id                String   @id @default(cuid())
   name              String
   description       String?
+  assumptions       String?
   order             Int      @default(0)
   featureMode       String   @default("sequential")
   scheduleMode      String   @default("sequential")

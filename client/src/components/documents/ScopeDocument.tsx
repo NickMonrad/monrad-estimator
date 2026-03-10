@@ -44,6 +44,7 @@ export interface ScopeDocumentProps {
     effort: boolean
     timeline: boolean
     resourceProfile: boolean
+    assumptions: boolean
   }
   effortData: any   // from GET /api/projects/:id/effort
   timelineData: any // from GET /api/projects/:id/timeline
@@ -52,6 +53,7 @@ export interface ScopeDocumentProps {
     id: string
     name: string
     description?: string | null
+    assumptions?: string | null
     isActive: boolean
     features: Array<{
       id: string
@@ -63,6 +65,7 @@ export interface ScopeDocumentProps {
         id: string
         name: string
         description?: string | null
+        assumptions?: string | null
         isActive: boolean
       }>
     }>
@@ -571,6 +574,37 @@ export default function ScopeDocument({
           />
         </Page>
       )}
+
+      {/* ── Assumptions ── */}
+      {sections.assumptions && (() => {
+        // Collect all assumptions with context labels
+        const items: Array<{ label: string; text: string }> = []
+        for (const epic of epics) {
+          if (epic.assumptions) items.push({ label: epic.name, text: epic.assumptions })
+          for (const feature of epic.features) {
+            if (feature.assumptions) items.push({ label: `${epic.name} › ${feature.name}`, text: feature.assumptions })
+            for (const story of feature.userStories ?? []) {
+              if (story.assumptions) items.push({ label: `${feature.name} › ${story.name}`, text: story.assumptions })
+            }
+          }
+        }
+        if (items.length === 0) return null
+        return (
+          <Page size="A4" style={styles.page}>
+            <Text style={styles.sectionHeading}>Assumptions</Text>
+            {items.map((item, i) => (
+              <View key={i} style={{ marginBottom: 10 }}>
+                <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 3 }}>
+                  {item.label}
+                </Text>
+                <Text style={{ fontSize: 8, color: '#6b7280', lineHeight: 1.5 }}>
+                  {item.text}
+                </Text>
+              </View>
+            ))}
+          </Page>
+        )
+      })()}
     </Document>
   )
 }
