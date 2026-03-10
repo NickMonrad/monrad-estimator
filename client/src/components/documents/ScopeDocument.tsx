@@ -1,39 +1,21 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 
-// LAB3 brand palette (hex literals used directly to avoid react-pdf StyleSheet issues)
-// navy: #1d245b  blue: #2c60f6  green: #62c481  darkGray: #333333
-// midGray: #666666  lightGray: #f5f5f5  borderGray: #e0e0e0
-
-const C = {
-  navy:       '#1d245b',
-  blue:       '#2c60f6',
-  green:      '#62c481',
-  darkGray:   '#333333',
-  midGray:    '#666666',
-  lightGray:  '#f5f5f5',
-  borderGray: '#e0e0e0',
-  white:      '#ffffff',
-}
-
 const styles = StyleSheet.create({
-  page: { padding: 52, fontFamily: 'Helvetica', fontSize: 10, color: '#333333', lineHeight: 1.6 },
+  page: { padding: 48, fontFamily: 'Helvetica', fontSize: 10, color: '#333333', lineHeight: 1.5 },
   coverPage: { padding: 48, display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' },
-  coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 16 },
+  coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 12 },
   coverSubtitle: { fontSize: 16, color: '#2c60f6', marginBottom: 8 },
   coverMeta: { fontSize: 10, color: '#666666', marginTop: 40 },
-  // Section heading: colored divider bar above the text (no border on View/Text — avoids yoga overflow)
-  sectionHeadingWrapper: { marginTop: 20, marginBottom: 12 },
-  sectionHeadingAccent: { height: 3, backgroundColor: '#2c60f6', marginBottom: 6 },
-  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#1d245b', lineHeight: 1.5 },
-  sectionLabel: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 6, marginTop: 14 },
-  sectionLabelMuted: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#666666', marginBottom: 6, marginTop: 14 },
-  subheading: { fontSize: 10, fontFamily: 'Helvetica-Bold', color: '#333333', marginBottom: 4, marginTop: 10 },
-  bodyText: { fontSize: 10, color: '#333333', marginBottom: 4, lineHeight: 1.5 },
+  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 10, marginTop: 20, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#c5cbea', lineHeight: 1.5 },
+  sectionLabel: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 6, marginTop: 14 },
+  sectionLabelMuted: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#666666', marginBottom: 6, marginTop: 14 },
+  subheading: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#333333', marginBottom: 4, marginTop: 12 },
+  bodyText: { fontSize: 10, color: '#333333', marginBottom: 4 },
   table: { marginBottom: 12 },
   tableHeader: { flexDirection: 'row', backgroundColor: '#1d245b', paddingVertical: 6, paddingHorizontal: 8 },
   tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 5, paddingHorizontal: 8 },
   tableRowAlt: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#f5f5f5' },
-  tableRowTotal: { flexDirection: 'row', borderTopWidth: 2, borderTopColor: '#1d245b', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f5f5f5' },
+  tableRowTotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#1d245b', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f5f5f5' },
   tableRowSubtotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e0e0e0', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#eeeeee' },
   th: { fontFamily: 'Helvetica-Bold', fontSize: 9, color: '#ffffff' },
   td: { fontSize: 9, color: '#333333' },
@@ -43,8 +25,8 @@ const styles = StyleSheet.create({
   col3: { flex: 1, textAlign: 'right' },
   col4: { flex: 1, textAlign: 'right' },
   col5: { flex: 1, textAlign: 'right' },
-  pageNumber: { position: 'absolute', bottom: 28, right: 52, fontSize: 9, color: '#666666' },
-  footer: { position: 'absolute', bottom: 28, left: 52, fontSize: 9, color: '#666666' },
+  pageNumber: { position: 'absolute', bottom: 24, right: 48, fontSize: 9, color: '#666666' },
+  footer: { position: 'absolute', bottom: 24, left: 48, fontSize: 9, color: '#666666' },
   storyItem: { fontSize: 9, color: '#666666', marginLeft: 16, marginBottom: 2 },
   inactiveText: { color: '#aaaaaa' },
 })
@@ -164,7 +146,7 @@ export default function ScopeDocument({
       {/* ── Scope Summary ── */}
       {sections.scope && epics.length > 0 && (
         <Page size="A4" style={styles.page}>
-          <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Scope Summary</Text></View>
+          <Text style={styles.sectionHeading}>Scope Summary</Text>
 
           {/* ── In Scope ── */}
           <Text style={styles.sectionLabel}>In Scope</Text>
@@ -195,7 +177,7 @@ export default function ScopeDocument({
                           </View>
                           {feature.assumptions ? (
                             <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                              <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>
+                              <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
                                 Assumptions: {feature.assumptions}
                               </Text>
                             </View>
@@ -242,14 +224,14 @@ export default function ScopeDocument({
                           </View>
                           {feature.assumptions ? (
                             <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                              <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>
+                              <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
                                 Assumptions: {feature.assumptions}
                               </Text>
                             </View>
                           ) : null}
                           {(feature.userStories ?? []).map(story => (
                             <View key={story.id} style={styles.tableRow}>
-                              <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>• {story.name}</Text>
+                              <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>• {story.name}</Text>
                             </View>
                           ))}
                         </View>
@@ -281,14 +263,14 @@ export default function ScopeDocument({
                         </View>
                         {feature.assumptions ? (
                           <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                            <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>
+                            <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
                               Assumptions: {feature.assumptions}
                             </Text>
                           </View>
                         ) : null}
                         {(feature.userStories ?? []).map(story => (
                           <View key={story.id} style={styles.tableRow}>
-                            <Text style={[styles.storyItem, { flex: 6, color: C.midGray }]}>• {story.name}</Text>
+                            <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>• {story.name}</Text>
                           </View>
                         ))}
                       </View>
@@ -362,7 +344,7 @@ export default function ScopeDocument({
 
         return (
           <Page size="A4" style={styles.page}>
-            <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Effort Breakdown</Text></View>
+            <Text style={styles.sectionHeading}>Effort Breakdown</Text>
 
             {/* Part 1 — Effort by Epic / Feature */}
             <View style={styles.table}>
@@ -380,7 +362,7 @@ export default function ScopeDocument({
                 epicRows.map((epic, ei) => (
                   <View key={ei}>
                     {/* Epic row */}
-                    <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: C.lightGray }}>
+                    <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f5f5f5' }}>
                       <Text style={[styles.tdBold, styles.col1]}>{epic.epicName}</Text>
                       <Text style={[styles.tdBold, styles.col3]}>{formatNum(epic.totalHours)}</Text>
                       <Text style={[styles.tdBold, styles.col4]}>{formatNum(epic.totalDays)}</Text>
@@ -388,14 +370,14 @@ export default function ScopeDocument({
                     {/* Feature rows */}
                     {[...epic.features.values()].map((feat, fi) => (
                       <View key={fi}>
-                        <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 5, paddingLeft: 20, paddingRight: 8, backgroundColor: C.lightGray }}>
-                          <Text style={[{ fontSize: 9, color: C.darkGray, fontFamily: 'Helvetica-Bold' }, styles.col1]}>{feat.featureName}</Text>
-                          <Text style={[{ fontSize: 9, color: C.darkGray, fontFamily: 'Helvetica-Bold' }, styles.col3]}>{formatNum(feat.totalHours)}</Text>
-                          <Text style={[{ fontSize: 9, color: C.darkGray, fontFamily: 'Helvetica-Bold' }, styles.col4]}>{formatNum(feat.totalDays)}</Text>
+                        <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 5, paddingLeft: 20, paddingRight: 8, backgroundColor: '#f5f5f5' }}>
+                          <Text style={[{ fontSize: 9, color: '#333333', fontFamily: 'Helvetica-Bold' }, styles.col1]}>{feat.featureName}</Text>
+                          <Text style={[{ fontSize: 9, color: '#333333', fontFamily: 'Helvetica-Bold' }, styles.col3]}>{formatNum(feat.totalHours)}</Text>
+                          <Text style={[{ fontSize: 9, color: '#333333', fontFamily: 'Helvetica-Bold' }, styles.col4]}>{formatNum(feat.totalDays)}</Text>
                         </View>
                         {/* Resource rows */}
                         {feat.resources.map((res, ri) => (
-                          <View key={ri} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 4, paddingLeft: 36, paddingRight: 8 }}>
+                          <View key={ri} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 4, paddingLeft: 36, paddingRight: 8 }}>
                             <Text style={[styles.td, styles.col1]}>{res.name}</Text>
                             <Text style={[styles.td, styles.col3]}>{formatNum(res.hours)}</Text>
                             <Text style={[styles.td, styles.col4]}>{formatNum(res.days)}</Text>
@@ -408,7 +390,7 @@ export default function ScopeDocument({
               )}
 
               {/* Grand total */}
-              <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.borderGray, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: C.lightGray }}>
+              <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e0e0e0', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#e0e0e0' }}>
                 <Text style={[styles.tdBold, styles.col1]}>Total</Text>
                 <Text style={[styles.tdBold, styles.col3]}>{formatNum(effortData.totalHours)}</Text>
                 <Text style={[styles.tdBold, styles.col4]}>{formatNum(effortData.totalDays)}</Text>
@@ -459,7 +441,7 @@ export default function ScopeDocument({
       {/* ── Timeline Summary ── */}
       {sections.timeline && timelineData && (
         <Page size="A4" style={styles.page}>
-          <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Timeline Summary</Text></View>
+          <Text style={styles.sectionHeading}>Timeline Summary</Text>
 
           {/* Start / end dates from top-level fields */}
           <View style={{ marginBottom: 16 }}>
@@ -516,7 +498,7 @@ export default function ScopeDocument({
       {/* ── Resource Profile ── */}
       {sections.resourceProfile && resourceProfileData && (
         <Page size="A4" style={styles.page}>
-          <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Resource Profile</Text></View>
+          <Text style={styles.sectionHeading}>Resource Profile</Text>
 
           <View style={styles.table}>
             <View style={styles.tableHeader}>
@@ -546,12 +528,12 @@ export default function ScopeDocument({
             {/* Overhead rows */}
             {(resourceProfileData.overheadRows ?? []).map((row: any, i: number) => (
               <View key={`oh-${i}`} style={styles.tableRow}>
-                <Text style={[styles.td, styles.col1, { color: C.midGray }]}>{row.name}</Text>
-                <Text style={[styles.td, styles.col2, { color: C.midGray }]}>Overhead</Text>
-                <Text style={[styles.td, styles.col3, { color: C.midGray }]}>—</Text>
-                <Text style={[styles.td, styles.col4, { color: C.midGray }]}>{formatNum(row.computedDays)}</Text>
+                <Text style={[styles.td, styles.col1, { color: '#666666' }]}>{row.name}</Text>
+                <Text style={[styles.td, styles.col2, { color: '#666666' }]}>Overhead</Text>
+                <Text style={[styles.td, styles.col3, { color: '#666666' }]}>—</Text>
+                <Text style={[styles.td, styles.col4, { color: '#666666' }]}>{formatNum(row.computedDays)}</Text>
                 {resourceProfileData.summary?.hasCost && (
-                  <Text style={[styles.td, styles.col5, { color: C.midGray }]}>
+                  <Text style={[styles.td, styles.col5, { color: '#666666' }]}>
                     {row.estimatedCost != null ? `$${formatNum(row.estimatedCost, 0)}` : '—'}
                   </Text>
                 )}
@@ -609,13 +591,13 @@ export default function ScopeDocument({
         if (items.length === 0) return null
         return (
           <Page size="A4" style={styles.page}>
-            <View style={styles.sectionHeadingWrapper}><View style={styles.sectionHeadingAccent} /><Text style={styles.sectionHeading}>Assumptions</Text></View>
+            <Text style={styles.sectionHeading}>Assumptions</Text>
             {items.map((item, i) => (
               <View key={i} style={{ marginBottom: 10 }}>
-                <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: C.darkGray, marginBottom: 3 }}>
+                <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#333333', marginBottom: 3 }}>
                   {item.label}
                 </Text>
-                <Text style={{ fontSize: 8, color: C.midGray, lineHeight: 1.5 }}>
+                <Text style={{ fontSize: 8, color: '#666666', lineHeight: 1.5 }}>
                   {item.text}
                 </Text>
               </View>
