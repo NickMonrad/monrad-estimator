@@ -8,7 +8,8 @@
     "test:e2e": "npm run test --workspace=e2e",
     "test:e2e:headed": "npm run test:headed --workspace=e2e",
     "test:e2e:report": "npm run report --workspace=e2e",
-    "screenshots": "npm run screenshots --workspace=e2e"
+    "screenshots": "npm run screenshots --workspace=e2e",
+    "db:backup": "mkdir -p backups && docker exec monrad-pg pg_dump -U postgres -d monrad_estimator --format=custom -f /tmp/monrad-backup.dump && docker cp monrad-pg:/tmp/monrad-backup.dump \"backups/backup-$(date +%Y%m%d-%H%M%S).dump\" && echo 'Backup saved to backups/'"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

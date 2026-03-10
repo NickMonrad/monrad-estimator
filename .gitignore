@@ -8,3 +8,4 @@ server/uploads/templates/*
 !server/uploads/templates/.gitkeep
 server/uploads/generated/*
 !server/uploads/generated/.gitkeep
+backups/

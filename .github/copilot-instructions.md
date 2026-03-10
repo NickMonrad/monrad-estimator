@@ -104,7 +104,9 @@ kill <PID1> <PID2> ...
 
 - No `url=` in datasource block — connection string goes in `prisma.config.ts` via `PrismaPg` adapter
 - Requires `@prisma/adapter-pg` and `previewFeatures = ["driverAdapters"]`
+- **ALWAYS run `npm run db:backup` from the repo root before any schema changes** — this creates a timestamped `.dump` file in `backups/`. Never run `prisma migrate dev`, `prisma migrate reset`, or `prisma db push` without backing up first.
 - After schema changes: `npx prisma migrate dev --name <name>` then `npx prisma generate`
+- **Never run `prisma migrate reset`** without explicit user confirmation — it wipes all data.
 - JSON fields (e.g. `BacklogSnapshot.snapshot`) require `as unknown as T` cast when reading back
 - When adding new Prisma models or methods, update the global mock in `server/src/test/setup.ts`
 
@@ -259,6 +261,7 @@ These rules apply to every session — they exist to avoid repeated back-and-for
 
 ## Known Gotchas
 
+- **DB backup before schema changes:** Always run `npm run db:backup` from the repo root before any Prisma migration. Backups are saved to `backups/` (gitignored). **Never run `prisma migrate reset` without explicit user confirmation** — it irreversibly wipes all data.
 - **Restart local servers after code changes:** After making significant changes (e.g. before/after raising a PR), always restart the local dev servers so the running code reflects the latest changes. Stale server processes will keep serving old code. Check for existing processes with `ps aux | grep tsx` and `ps aux | grep vite`, then restart: `cd server && npx tsx src/index.ts &` and `cd client && npx vite &`.
 - **Port conflicts:** stale Vite processes pile up on 5173, 5174, etc. — kill by PID before restarting
 - **macOS lsof:** port 3001 shows as `redwood-broker` in lsof output — this is normal
