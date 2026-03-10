@@ -3,8 +3,8 @@ import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 const styles = StyleSheet.create({
   page: { padding: 48, fontFamily: 'Helvetica', fontSize: 10, color: '#333333', lineHeight: 1.5 },
   coverPage: { padding: 48, display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' },
-  coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 12 },
-  coverSubtitle: { fontSize: 16, color: '#2c60f6', marginBottom: 8 },
+  coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 12, lineHeight: 1.4 },
+  coverSubtitle: { fontSize: 16, color: '#2c60f6', marginBottom: 8, lineHeight: 1.4 },
   coverMeta: { fontSize: 10, color: '#666666', marginTop: 40 },
   sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 12, marginTop: 20, lineHeight: 1.5 },
   sectionLabel: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 6, marginTop: 14 },
