@@ -78,6 +78,7 @@ export interface Project {
   customer?: string
   status: string
   hoursPerDay: number
+  bufferWeeks?: number
   startDate?: string
   updatedAt: string
   taxRate?: number | null
@@ -235,6 +236,19 @@ export interface ResourceProfileRow {
   derivedEndWeek: number | null
   estimatedCost: number | null
   epics: ResourceProfileEpic[]
+  namedResources?: Array<{
+    id: string
+    name: string
+    allocationMode: string
+    allocationPercent: number
+    allocationStartWeek: number | null
+    allocationEndWeek: number | null
+    startWeek: number | null
+    endWeek: number | null
+    allocatedDays: number
+    derivedStartWeek: number | null
+    derivedEndWeek: number | null
+  }>
 }
 
 export interface OverheadProfileRow {

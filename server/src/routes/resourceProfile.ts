@@ -16,7 +16,12 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   const project = await prisma.project.findFirst({
     where: { id: projectId, ownerId: req.userId },
     include: {
-      resourceTypes: { include: { globalType: true } },
+      resourceTypes: {
+        include: {
+          globalType: true,
+          namedResources: { orderBy: { createdAt: 'asc' } }
+        }
+      },
       epics: {
         orderBy: { order: 'asc' },
         include: {
@@ -53,11 +58,11 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
 
-  // Project duration in weeks from the latest timeline entry end point
+  // Project duration in weeks from the latest timeline entry end point + buffer weeks
   const projectDurationWeeks =
-    project.timelineEntries.length > 0
+    (project.timelineEntries.length > 0
       ? Math.max(...project.timelineEntries.map(te => te.startWeek + te.durationWeeks))
-      : 0
+      : 0) + (project.bufferWeeks ?? 0)
 
   // Build lookup maps for timeline entries
   const featureEntryMap = new Map(project.timelineEntries.map(e => [e.featureId, e]))
@@ -228,18 +233,71 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       const effectiveStartWeek = resourceType.allocationStartWeek ?? derivedStartWeek
       const effectiveEndWeek = resourceType.allocationEndWeek ?? derivedEndWeek
 
+      // If named resources exist, compute per-NR allocatedDays
+      const hasNamedResources = resourceType.namedResources && resourceType.namedResources.length > 0
+
       let allocatedDays: number
-      if (mode === 'EFFORT') {
-        allocatedDays = totalDays
-      } else if (mode === 'TIMELINE') {
-        if (effectiveStartWeek != null && effectiveEndWeek != null) {
-          allocatedDays = round2((effectiveEndWeek - effectiveStartWeek) * 5 * count * (percent / 100))
-        } else {
-          allocatedDays = totalDays
-        }
+      let namedResourcesOutput: Array<{
+        id: string
+        name: string
+        allocationMode: string
+        allocationPercent: number
+        allocationStartWeek: number | null
+        allocationEndWeek: number | null
+        startWeek: number | null
+        endWeek: number | null
+        allocatedDays: number
+        derivedStartWeek: number | null
+        derivedEndWeek: number | null
+      }>
+
+      if (hasNamedResources) {
+        // Compute per-NR allocated days
+        namedResourcesOutput = resourceType.namedResources.map(nr => {
+          const nrMode = (nr.allocationMode as AllocationMode) ?? 'EFFORT'
+          const nrPercent = nr.allocationPercent ?? 100
+          let nrAllocatedDays: number
+          if (nrMode === 'EFFORT') {
+            // Split effort equally across named resources
+            nrAllocatedDays = round2(totalDays / resourceType.namedResources.length)
+          } else if (nrMode === 'TIMELINE') {
+            const effectiveStart = nr.allocationStartWeek ?? nr.startWeek ?? derivedStartWeek ?? 0
+            const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek ?? derivedEndWeek ?? effectiveStart
+            nrAllocatedDays = round2(Math.max(0, effectiveEnd - effectiveStart) * 5 * (nrPercent / 100))
+          } else {
+            // FULL_PROJECT
+            nrAllocatedDays = round2(projectDurationWeeks * 5 * (nrPercent / 100))
+          }
+          return {
+            id: nr.id,
+            name: nr.name,
+            allocationMode: nrMode,
+            allocationPercent: nrPercent,
+            allocationStartWeek: nr.allocationStartWeek ?? null,
+            allocationEndWeek: nr.allocationEndWeek ?? null,
+            startWeek: nr.startWeek ?? null,
+            endWeek: nr.endWeek ?? null,
+            allocatedDays: nrAllocatedDays,
+            derivedStartWeek,
+            derivedEndWeek,
+          }
+        })
+        // Total RT allocatedDays = sum of NR allocatedDays
+        allocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
       } else {
-        // FULL_PROJECT
-        allocatedDays = round2(projectDurationWeeks * 5 * count * (percent / 100))
+        namedResourcesOutput = []
+        if (mode === 'EFFORT') {
+          allocatedDays = totalDays
+        } else if (mode === 'TIMELINE') {
+          if (effectiveStartWeek != null && effectiveEndWeek != null) {
+            allocatedDays = round2((effectiveEndWeek - effectiveStartWeek) * 5 * count * (percent / 100))
+          } else {
+            allocatedDays = totalDays
+          }
+        } else {
+          // FULL_PROJECT
+          allocatedDays = round2(projectDurationWeeks * 5 * count * (percent / 100))
+        }
       }
 
       const allocatedCost = dayRate != null ? round2(allocatedDays * dayRate) : null
@@ -264,6 +322,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         derivedEndWeek,
         estimatedCost,
         epics,
+        namedResources: namedResourcesOutput,
       }
     })
     .sort((a, b) => {

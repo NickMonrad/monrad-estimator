@@ -97,8 +97,11 @@ function NamedResourcesPanel({
           data,
         )
         .then((r) => r.data),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+    },
   })
 
   const deleteResource = useMutation({
@@ -106,8 +109,11 @@ function NamedResourcesPanel({
       api.delete(
         `/projects/${projectId}/resource-types/${rtId}/named-resources/${id}`,
       ),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+    },
   })
 
   return (
@@ -393,6 +399,17 @@ export default function ResourceProfilePage() {
     },
   })
 
+  const updateNrAllocationMutation = useMutation({
+    mutationFn: ({ rtId, nrId, data }: { rtId: string; nrId: string; data: object }) =>
+      api.patch(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`, data).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      setEditingAllocation(null)
+      setAllocationDraft(null)
+    },
+  })
+
   const addPerson = useMutation({
     mutationFn: (rtId: string) =>
       api.post(`/projects/${projectId}/resource-types/${rtId}/named-resources`, {
@@ -616,23 +633,68 @@ export default function ResourceProfilePage() {
 
     // All rows (resource + overhead) with day rates
     const costRows = [
-      ...profile.resourceRows.filter(r => r.dayRate != null).map(r => ({
-        id: r.resourceTypeId,
-        name: r.name,
-        count: r.count,
-        effortDays: r.effortDays ?? r.totalDays,
-        allocatedDays: r.allocatedDays ?? r.totalDays,
-        totalDays: r.totalDays,    // totalDays = allocatedDays from server
-        dayRate: r.dayRate!,
-        subtotal: r.totalDays * r.dayRate!,  // uses allocatedDays
-        allocationMode: r.allocationMode ?? 'EFFORT',
-        allocationPercent: r.allocationPercent ?? 100,
-        allocationStartWeek: r.allocationStartWeek ?? null,
-        allocationEndWeek: r.allocationEndWeek ?? null,
-        derivedStartWeek: r.derivedStartWeek ?? null,
-        derivedEndWeek: r.derivedEndWeek ?? null,
-        kind: 'resource' as const,
-      })),
+      ...profile.resourceRows.filter(r => r.dayRate != null).flatMap(r => {
+        if (r.namedResources && r.namedResources.length > 0) {
+          // RT-level aggregate row (non-editable allocation, just shows totals)
+          const rtRow = {
+            id: r.resourceTypeId,
+            name: r.name,
+            count: r.count,
+            effortDays: r.effortDays ?? r.totalDays,
+            allocatedDays: r.allocatedDays ?? r.totalDays,
+            totalDays: r.totalDays,
+            dayRate: r.dayRate!,
+            subtotal: r.totalDays * r.dayRate!,
+            allocationMode: 'AGGREGATE',
+            allocationPercent: 100,
+            allocationStartWeek: null as number | null,
+            allocationEndWeek: null as number | null,
+            derivedStartWeek: r.derivedStartWeek ?? null,
+            derivedEndWeek: r.derivedEndWeek ?? null,
+            kind: 'resource' as const,
+            resourceTypeId: r.resourceTypeId,
+          }
+          // Per-NR rows
+          const nrRows = r.namedResources.map(nr => ({
+            id: nr.id,
+            name: `  ${nr.name}`,
+            count: 1,
+            effortDays: nr.allocatedDays,
+            allocatedDays: nr.allocatedDays,
+            totalDays: nr.allocatedDays,
+            dayRate: r.dayRate!,
+            subtotal: nr.allocatedDays * r.dayRate!,
+            allocationMode: nr.allocationMode,
+            allocationPercent: nr.allocationPercent,
+            allocationStartWeek: nr.allocationStartWeek ?? null,
+            allocationEndWeek: nr.allocationEndWeek ?? null,
+            derivedStartWeek: nr.derivedStartWeek ?? r.derivedStartWeek ?? null,
+            derivedEndWeek: nr.derivedEndWeek ?? r.derivedEndWeek ?? null,
+            kind: 'named-resource' as const,
+            resourceTypeId: r.resourceTypeId,
+          }))
+          return [rtRow, ...nrRows]
+        }
+        // No NRs — RT-level row as before
+        return [{
+          id: r.resourceTypeId,
+          name: r.name,
+          count: r.count,
+          effortDays: r.effortDays ?? r.totalDays,
+          allocatedDays: r.allocatedDays ?? r.totalDays,
+          totalDays: r.totalDays,
+          dayRate: r.dayRate!,
+          subtotal: r.totalDays * r.dayRate!,
+          allocationMode: r.allocationMode ?? 'EFFORT',
+          allocationPercent: r.allocationPercent ?? 100,
+          allocationStartWeek: r.allocationStartWeek ?? null,
+          allocationEndWeek: r.allocationEndWeek ?? null,
+          derivedStartWeek: r.derivedStartWeek ?? null,
+          derivedEndWeek: r.derivedEndWeek ?? null,
+          kind: 'resource' as const,
+          resourceTypeId: r.resourceTypeId,
+        }]
+      }),
       ...profile.overheadRows.filter(r => r.dayRate != null).map(r => ({
         id: r.overheadId,
         name: r.name,
@@ -649,6 +711,7 @@ export default function ResourceProfilePage() {
         derivedStartWeek: null as number | null,
         derivedEndWeek: null as number | null,
         kind: 'overhead' as const,
+        resourceTypeId: r.overheadId,
       })),
     ]
 
@@ -659,13 +722,16 @@ export default function ResourceProfilePage() {
     // Build net subtotals per row (applying RT-level discounts)
     const rowsWithDiscounts = costRows.map(row => {
       const appliedDiscounts = rtDiscounts
-        .filter(d => d.resourceTypeId === row.id)
+        .filter(d => d.resourceTypeId === row.resourceTypeId)
         .map(d => ({
           ...d,
           calculatedAmount: d.type === 'PERCENTAGE' ? (d.value / 100) * row.subtotal : d.value,
         }))
-      const totalDiscount = appliedDiscounts.reduce((sum, d) => sum + d.calculatedAmount, 0)
-      return { ...row, appliedDiscounts, netSubtotal: row.subtotal - totalDiscount }
+      // For aggregate rows (AGGREGATE mode), don't double-count discounts — NR rows handle their own
+      const skipDiscounts = row.allocationMode === 'AGGREGATE'
+      const effectiveDiscounts = skipDiscounts ? [] : appliedDiscounts
+      const totalDiscount = effectiveDiscounts.reduce((sum, d) => sum + d.calculatedAmount, 0)
+      return { ...row, appliedDiscounts: effectiveDiscounts, netSubtotal: row.subtotal - totalDiscount }
     })
 
     const subtotal = rowsWithDiscounts.reduce((sum, r) => sum + r.netSubtotal, 0)
@@ -728,7 +794,8 @@ export default function ResourceProfilePage() {
     allocationMode: string; allocationPercent: number
     allocationStartWeek: number | null; allocationEndWeek: number | null
     derivedStartWeek: number | null; derivedEndWeek: number | null
-    kind: 'resource' | 'overhead'
+    kind: 'resource' | 'named-resource' | 'overhead'
+    resourceTypeId: string  // for mutations — NR rows need their RT id for the PATCH URL
     appliedDiscounts: Array<{ id: string; label: string; type: string; value: number; calculatedAmount: number; resourceTypeId: string | null }>
     netSubtotal: number
   }
@@ -746,7 +813,9 @@ export default function ResourceProfilePage() {
   const getAllocationBadge = (row: CommercialRow) => {
     const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek
     const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek
-    if (row.allocationMode === 'EFFORT') {
+    if (row.allocationMode === 'AGGREGATE') {
+      return { label: 'Aggregate', color: 'bg-gray-100 text-gray-400', sub: null }
+    } else if (row.allocationMode === 'EFFORT') {
       return { label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }
     } else if (row.allocationMode === 'TIMELINE') {
       const sub = effectiveStart != null && effectiveEnd != null
@@ -852,7 +921,7 @@ export default function ResourceProfilePage() {
           <header className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
             <div>
               <h2 className="text-base font-semibold text-gray-900">Summary</h2>
-              <p className="text-sm text-gray-500">Active scope only — click a role to drill down by epic → feature → story</p>
+              <p className="text-sm text-gray-500">Active scope only — role mix, overheads, and allocation modes</p>
             </div>
           </header>
           {profileLoading && (
@@ -1360,16 +1429,21 @@ export default function ResourceProfilePage() {
                   <tbody>
                     {commercialData.rows.map(row => (
                       <Fragment key={row.id}>
-                        <tr className="border-b border-gray-100">
+                        <tr className={`border-b border-gray-100 ${row.kind === 'named-resource' ? 'bg-gray-50' : ''}`}>
                           <td className="px-6 py-3 text-gray-900 font-medium">
                             {row.name}
                             {row.kind === 'overhead' && <span className="text-xs text-amber-600 ml-2">(overhead)</span>}
+                            {row.kind === 'named-resource' && <span className="text-xs text-blue-500 ml-2">(person)</span>}
                           </td>
                           <td className="text-center px-4 py-3 text-gray-800">{row.count}</td>
                           <td className="text-right px-4 py-3 text-gray-500">{formatNumber(row.effortDays)}</td>
                           <td className="px-4 py-3">
-                            {row.kind === 'resource' ? (() => {
+                            {(row.kind === 'resource' || row.kind === 'named-resource') ? (() => {
                               const badge = getAllocationBadge(row)
+                              const isAggregate = row.allocationMode === 'AGGREGATE'
+                              if (isAggregate) {
+                                return <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color}`}>{badge.label}</span>
+                              }
                               return (
                                 <div>
                                   <button
@@ -1389,7 +1463,7 @@ export default function ResourceProfilePage() {
                           <td className="text-right px-6 py-3 text-gray-900">${formatNumber(row.subtotal, 0)}</td>
                         </tr>
                         {/* Inline allocation editor */}
-                        {editingAllocation === row.id && allocationDraft && row.kind === 'resource' && (
+                        {editingAllocation === row.id && allocationDraft && (row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' && (
                           <tr className="border-b border-blue-100 bg-blue-50">
                             <td colSpan={7} className="px-6 py-4">
                               <div className="flex flex-wrap items-end gap-4">
@@ -1453,19 +1527,34 @@ export default function ResourceProfilePage() {
                                 )}
                                 <div className="flex gap-2 ml-auto">
                                   <button
-                                    onClick={() => updateAllocationMutation.mutate({
-                                      rtId: row.id,
-                                      data: {
-                                        allocationMode: allocationDraft.allocationMode,
-                                        allocationPercent: allocationDraft.allocationPercent,
-                                        allocationStartWeek: allocationDraft.allocationStartWeek,
-                                        allocationEndWeek: allocationDraft.allocationEndWeek,
+                                    onClick={() => {
+                                      if (row.kind === 'named-resource') {
+                                        updateNrAllocationMutation.mutate({
+                                          rtId: row.resourceTypeId,
+                                          nrId: row.id,
+                                          data: {
+                                            allocationMode: allocationDraft.allocationMode,
+                                            allocationPercent: allocationDraft.allocationPercent,
+                                            allocationStartWeek: allocationDraft.allocationStartWeek,
+                                            allocationEndWeek: allocationDraft.allocationEndWeek,
+                                          }
+                                        })
+                                      } else {
+                                        updateAllocationMutation.mutate({
+                                          rtId: row.id,
+                                          data: {
+                                            allocationMode: allocationDraft.allocationMode,
+                                            allocationPercent: allocationDraft.allocationPercent,
+                                            allocationStartWeek: allocationDraft.allocationStartWeek,
+                                            allocationEndWeek: allocationDraft.allocationEndWeek,
+                                          }
+                                        })
                                       }
-                                    })}
-                                    disabled={updateAllocationMutation.isPending}
+                                    }}
+                                    disabled={updateAllocationMutation.isPending || updateNrAllocationMutation.isPending}
                                     className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
                                   >
-                                    {updateAllocationMutation.isPending ? 'Saving…' : 'Save'}
+                                    {(updateAllocationMutation.isPending || updateNrAllocationMutation.isPending) ? 'Saving…' : 'Save'}
                                   </button>
                                   <button
                                     onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}

@@ -12,7 +12,7 @@ export default function ProjectSettingsPage() {
   const { user, logout } = useAuth()
   const qc = useQueryClient()
 
-  const [form, setForm] = useState({ name: '', description: '', customer: '', status: 'DRAFT', hoursPerDay: 7.6 })
+  const [form, setForm] = useState({ name: '', description: '', customer: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0 })
   const [saved, setSaved] = useState(false)
 
   const { data: project, isLoading } = useQuery({
@@ -28,6 +28,7 @@ export default function ProjectSettingsPage() {
         customer: project.customer ?? '',
         status: project.status ?? 'DRAFT',
         hoursPerDay: project.hoursPerDay ?? 7.6,
+        bufferWeeks: project.bufferWeeks ?? 0,
       })
     }
   }, [project])
@@ -37,6 +38,8 @@ export default function ProjectSettingsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['project', id] })
       qc.invalidateQueries({ queryKey: ['projects'] })
+      qc.invalidateQueries({ queryKey: ['timeline', id] })
+      qc.invalidateQueries({ queryKey: ['resource-profile', id] })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     },
@@ -104,6 +107,17 @@ export default function ProjectSettingsPage() {
             >
               {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Buffer weeks at end</label>
+            <input
+              type="number" value={form.bufferWeeks}
+              onChange={e => setForm(v => ({ ...v, bufferWeeks: parseInt(e.target.value) || 0 }))}
+              min={0} max={52} step={1}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">Adds extra weeks to the end of the project (e.g. for handover). Affects FULL_PROJECT allocation and timeline display.</p>
           </div>
 
           <div>
