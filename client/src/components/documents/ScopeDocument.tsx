@@ -1,24 +1,27 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 
-// LAB3 brand palette
+// LAB3 brand palette (hex literals used directly to avoid react-pdf StyleSheet issues)
+// navy: #1d245b  blue: #2c60f6  green: #62c481  darkGray: #333333
+// midGray: #666666  lightGray: #f5f5f5  borderGray: #e0e0e0
+
 const C = {
-  navy:       '#1d245b',  // primary headings
-  blue:       '#2c60f6',  // accents, table headers
-  green:      '#62c481',  // positive highlights
-  darkGray:   '#333333',  // body text
-  midGray:    '#666666',  // secondary text
-  lightGray:  '#f5f5f5',  // table backgrounds
-  borderGray: '#e0e0e0',  // borders
+  navy:       '#1d245b',
+  blue:       '#2c60f6',
+  green:      '#62c481',
+  darkGray:   '#333333',
+  midGray:    '#666666',
+  lightGray:  '#f5f5f5',
+  borderGray: '#e0e0e0',
   white:      '#ffffff',
 }
 
 const styles = StyleSheet.create({
-  page: { padding: 52, fontFamily: 'Helvetica', fontSize: 10, color: C.darkGray, lineHeight: 1.6 },
-  coverPage: { padding: 52, display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' },
-  coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: C.navy, marginBottom: 16 },
-  coverSubtitle: { fontSize: 16, color: C.blue, marginBottom: 8 },
-  coverMeta: { fontSize: 10, color: C.midGray, marginTop: 40 },
-  // Left accent bar avoids react-pdf border-bottom rendering issues on wrapping text
+  page: { padding: 52, fontFamily: 'Helvetica', fontSize: 10, color: '#333333', lineHeight: 1.6 },
+  coverPage: { flexDirection: 'column', justifyContent: 'center', flex: 1 },
+  coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 16 },
+  coverSubtitle: { fontSize: 16, color: '#2c60f6', marginBottom: 8 },
+  coverMeta: { fontSize: 10, color: '#666666', marginTop: 40 },
+  // Left accent bar — avoids react-pdf border-bottom height calc bug on wrapping text
   sectionHeadingWrapper: {
     marginTop: 24,
     marginBottom: 14,
@@ -26,30 +29,30 @@ const styles = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 6,
     borderLeftWidth: 4,
-    borderLeftColor: C.blue,
+    borderLeftColor: '#2c60f6',
   },
-  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: C.navy, lineHeight: 1.6 },
-  sectionLabel: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: C.navy, marginBottom: 6, marginTop: 14 },
-  sectionLabelMuted: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: C.midGray, marginBottom: 6, marginTop: 14 },
-  subheading: { fontSize: 10, fontFamily: 'Helvetica-Bold', color: C.darkGray, marginBottom: 4, marginTop: 10 },
-  bodyText: { fontSize: 10, color: C.darkGray, marginBottom: 4, lineHeight: 1.5 },
+  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#1d245b', lineHeight: 1.6 },
+  sectionLabel: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 6, marginTop: 14 },
+  sectionLabelMuted: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#666666', marginBottom: 6, marginTop: 14 },
+  subheading: { fontSize: 10, fontFamily: 'Helvetica-Bold', color: '#333333', marginBottom: 4, marginTop: 10 },
+  bodyText: { fontSize: 10, color: '#333333', marginBottom: 4, lineHeight: 1.5 },
   table: { marginBottom: 12 },
-  tableHeader: { flexDirection: 'row', backgroundColor: C.navy, paddingVertical: 6, paddingHorizontal: 8 },
-  tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 5, paddingHorizontal: 8 },
-  tableRowAlt: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.borderGray, paddingVertical: 5, paddingHorizontal: 8, backgroundColor: C.lightGray },
-  tableRowTotal: { flexDirection: 'row', borderTopWidth: 2, borderTopColor: C.navy, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: C.lightGray },
-  tableRowSubtotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.borderGray, paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#eeeeee' },
-  th: { fontFamily: 'Helvetica-Bold', fontSize: 9, color: C.white },
-  td: { fontSize: 9, color: C.darkGray },
-  tdBold: { fontSize: 9, color: C.darkGray, fontFamily: 'Helvetica-Bold' },
+  tableHeader: { flexDirection: 'row', backgroundColor: '#1d245b', paddingVertical: 6, paddingHorizontal: 8 },
+  tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 5, paddingHorizontal: 8 },
+  tableRowAlt: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#f5f5f5' },
+  tableRowTotal: { flexDirection: 'row', borderTopWidth: 2, borderTopColor: '#1d245b', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f5f5f5' },
+  tableRowSubtotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#e0e0e0', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#eeeeee' },
+  th: { fontFamily: 'Helvetica-Bold', fontSize: 9, color: '#ffffff' },
+  td: { fontSize: 9, color: '#333333' },
+  tdBold: { fontSize: 9, color: '#333333', fontFamily: 'Helvetica-Bold' },
   col1: { flex: 3 },
   col2: { flex: 2 },
   col3: { flex: 1, textAlign: 'right' },
   col4: { flex: 1, textAlign: 'right' },
   col5: { flex: 1, textAlign: 'right' },
-  pageNumber: { position: 'absolute', bottom: 28, right: 52, fontSize: 9, color: C.midGray },
-  footer: { position: 'absolute', bottom: 28, left: 52, fontSize: 9, color: C.midGray },
-  storyItem: { fontSize: 9, color: C.midGray, marginLeft: 16, marginBottom: 2 },
+  pageNumber: { position: 'absolute', bottom: 28, right: 52, fontSize: 9, color: '#666666' },
+  footer: { position: 'absolute', bottom: 28, left: 52, fontSize: 9, color: '#666666' },
+  storyItem: { fontSize: 9, color: '#666666', marginLeft: 16, marginBottom: 2 },
   inactiveText: { color: '#aaaaaa' },
 })
 
