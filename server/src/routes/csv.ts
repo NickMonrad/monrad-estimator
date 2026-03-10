@@ -225,7 +225,7 @@ router.post('/stage-csv', async (req: AuthRequest, res: Response) => {
     if (type === 'Task' && !task) errors.push('Task name is required')
 
     if (resourceType && !rtNames.has(resourceType.toLowerCase())) {
-      warnings.push(`Resource type "${resourceType}" not found in project — will be left blank on import`)
+      warnings.push(`Resource type "${resourceType}" not found in project — will be created automatically on import`)
     }
 
     // Template validation — only meaningful on Story rows
@@ -304,6 +304,22 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
     select: { id: true, name: true, hoursPerDay: true },
   })
   const rtByName = new Map(resourceTypes.map(r => [r.name.toLowerCase(), r]))
+
+  // Auto-create any resource types referenced in the CSV that don't exist yet
+  const newRtNames = [
+    ...new Set(
+      rows
+        .filter(row => row.resourceType && !rtByName.has(row.resourceType.toLowerCase()))
+        .map(row => row.resourceType)
+    ),
+  ]
+  for (const rtName of newRtNames) {
+    const newRt = await prisma.resourceType.create({
+      data: { name: rtName, category: 'ENGINEERING', count: 1, projectId },
+      select: { id: true, name: true, hoursPerDay: true },
+    })
+    rtByName.set(rtName.toLowerCase(), newRt)
+  }
 
   // Auto-snapshot before import
   const existingEpics = await prisma.epic.findMany({
