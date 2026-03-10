@@ -50,11 +50,26 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  const { name, category, count, proposedName, hoursPerDay, dayRate } = req.body
+  const { name, category, count, proposedName, hoursPerDay, dayRate, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
+
+  // Validate new allocation fields
+  if (allocationMode !== undefined && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode)) {
+    res.status(400).json({ error: 'Invalid allocationMode' }); return
+  }
+  if (allocationPercent !== undefined && (allocationPercent < 1 || allocationPercent > 100)) {
+    res.status(400).json({ error: 'allocationPercent must be 1–100' }); return
+  }
+
   const data: Record<string, unknown> = { name, category, count, proposedName, hoursPerDay, dayRate }
   Object.keys(data).forEach(key => {
     if (data[key] === undefined) delete data[key]
   })
+  if (allocationMode !== undefined) data.allocationMode = allocationMode
+  if (allocationPercent !== undefined) data.allocationPercent = allocationPercent
+  // Allow explicit null to clear overrides
+  if ('allocationStartWeek' in req.body) data.allocationStartWeek = allocationStartWeek ?? null
+  if ('allocationEndWeek' in req.body) data.allocationEndWeek = allocationEndWeek ?? null
+
   const rt = await prisma.resourceType.update({
     where: { id: req.params.id as string },
     data,
