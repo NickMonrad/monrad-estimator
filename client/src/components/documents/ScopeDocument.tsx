@@ -6,7 +6,8 @@ const styles = StyleSheet.create({
   coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#dc2626', marginBottom: 12 },
   coverSubtitle: { fontSize: 16, color: '#6b7280', marginBottom: 8 },
   coverMeta: { fontSize: 10, color: '#9ca3af', marginTop: 40 },
-  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#dc2626', marginBottom: 10, marginTop: 20, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#fee2e2', lineHeight: 1.5 },
+  sectionHeadingWrapper: { marginBottom: 10, marginTop: 20, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#fee2e2' },
+  sectionHeading: { fontSize: 14, fontFamily: 'Helvetica-Bold', color: '#dc2626', lineHeight: 1.8 },
   sectionLabel: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 6, marginTop: 14 },
   sectionLabelMuted: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: '#9ca3af', marginBottom: 6, marginTop: 14 },
   subheading: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 4, marginTop: 12 },
@@ -146,7 +147,7 @@ export default function ScopeDocument({
       {/* ── Scope Summary ── */}
       {sections.scope && epics.length > 0 && (
         <Page size="A4" style={styles.page}>
-          <Text style={styles.sectionHeading}>Scope Summary</Text>
+          <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Scope Summary</Text></View>
 
           {/* ── In Scope ── */}
           <Text style={styles.sectionLabel}>In Scope</Text>
@@ -344,7 +345,7 @@ export default function ScopeDocument({
 
         return (
           <Page size="A4" style={styles.page}>
-            <Text style={styles.sectionHeading}>Effort Breakdown</Text>
+            <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Effort Breakdown</Text></View>
 
             {/* Part 1 — Effort by Epic / Feature */}
             <View style={styles.table}>
@@ -441,7 +442,7 @@ export default function ScopeDocument({
       {/* ── Timeline Summary ── */}
       {sections.timeline && timelineData && (
         <Page size="A4" style={styles.page}>
-          <Text style={styles.sectionHeading}>Timeline Summary</Text>
+          <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Timeline Summary</Text></View>
 
           {/* Start / end dates from top-level fields */}
           <View style={{ marginBottom: 16 }}>
@@ -498,7 +499,7 @@ export default function ScopeDocument({
       {/* ── Resource Profile ── */}
       {sections.resourceProfile && resourceProfileData && (
         <Page size="A4" style={styles.page}>
-          <Text style={styles.sectionHeading}>Resource Profile</Text>
+          <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Resource Profile</Text></View>
 
           <View style={styles.table}>
             <View style={styles.tableHeader}>
@@ -591,7 +592,7 @@ export default function ScopeDocument({
         if (items.length === 0) return null
         return (
           <Page size="A4" style={styles.page}>
-            <Text style={styles.sectionHeading}>Assumptions</Text>
+            <View style={styles.sectionHeadingWrapper}><Text style={styles.sectionHeading}>Assumptions</Text></View>
             {items.map((item, i) => (
               <View key={i} style={{ marginBottom: 10 }}>
                 <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#374151', marginBottom: 3 }}>
