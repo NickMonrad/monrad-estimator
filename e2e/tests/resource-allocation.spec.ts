@@ -45,10 +45,53 @@ async function setupCommercialTab(page: import('@playwright/test').Page) {
   // Navigate to Resource Profile page
   const url = page.url()
   const projectId = url.match(/\/projects\/([^/]+)/)?.[1]!
-  await page.goto(`/projects/${projectId}/resource-profile`)
+
+  // Navigate and simultaneously capture the resource-types GET response so we know the
+  // React Query `resourceTypes` state is populated before we interact with the inputs.
+  // Without this guarantee, the onBlur handler cannot find the RT id → no PUT fires.
+  const [rtLoadResponse] = await Promise.all([
+    page.waitForResponse(
+      resp =>
+        resp.url().includes(`/projects/${projectId}/resource-types`) &&
+        !resp.url().includes('/named-resources') &&
+        resp.request().method() === 'GET',
+      { timeout: 15_000 }
+    ),
+    page.goto(`/projects/${projectId}/resource-profile`),
+  ])
+  expect(rtLoadResponse.ok()).toBeTruthy()
+
   await expect(
     page.getByRole('heading', { name: /resource profile/i })
   ).toBeVisible({ timeout: 10_000 })
+
+  // Set day rates in the Summary tab (required for rows to appear on the Commercial tab).
+  // The Summary tab is the default view. Day rate inputs have class `w-20` and placeholder "—".
+  // Resource types are PROJECT-SCOPED; each new project starts with dayRate=null unless the
+  // global type has a defaultDayRate. Check inputValue() after data loads:
+  //   - non-empty → inherited defaultDayRate, Commercial tab already works, skip
+  //   - empty     → must set, fill and wait for the PUT to /projects/:id/resource-types/:id
+  await expect(page.locator('input.w-20').first()).toBeVisible({ timeout: 10_000 })
+  const dayRateInputs = page.locator('input.w-20')
+  const drCount = await dayRateInputs.count()
+  for (let i = 0; i < drCount; i++) {
+    const input = dayRateInputs.nth(i)
+    const currentValue = await input.inputValue()
+    if (currentValue !== '') continue  // day rate already inherited/set — skip
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        resp =>
+          resp.url().includes(`/projects/${projectId}/resource-types/`) &&
+          resp.request().method() === 'PUT',
+        { timeout: 10_000 }
+      ),
+      (async () => {
+        await input.fill('1200')
+        await input.press('Tab')
+      })(),
+    ])
+    expect(response.ok()).toBeTruthy()
+  }
 
   // Switch to Commercial tab
   await page.getByRole('button', { name: /commercial/i }).click()
