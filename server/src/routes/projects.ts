@@ -5,22 +5,53 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 const router = Router()
 router.use(authenticate)
 
-// Helper: ownership check
+// Helper: strict ownership check (for destructive/admin ops)
 async function ownedProject(id: string, userId: string) {
   return prisma.project.findFirst({ where: { id, ownerId: userId } })
+}
+
+// Helper: org-aware access check (read/update ops visible to org members)
+async function canAccessProject(projectId: string, userId: string) {
+  const userOrgIds = (await prisma.organisationMember.findMany({
+    where: { userId },
+    select: { orgId: true },
+  })).map(m => m.orgId)
+
+  return prisma.project.findFirst({
+    where: {
+      id: projectId,
+      OR: [
+        { ownerId: userId },
+        ...(userOrgIds.length > 0 ? [{ orgId: { in: userOrgIds } }] : []),
+      ],
+    },
+    include: { resourceTypes: true, _count: { select: { epics: true } }, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
+  })
 }
 
 // List projects for current user
 // ?archived=true → only deleted projects; default → only live projects
 router.get('/', async (req: AuthRequest, res: Response) => {
   const archived = req.query.archived === 'true'
+  const userOrgIds = (await prisma.organisationMember.findMany({
+    where: { userId: req.userId! },
+    select: { orgId: true },
+  })).map(m => m.orgId)
+
   const projects = await prisma.project.findMany({
     where: {
-      ownerId: req.userId,
       deletedAt: archived ? { not: null } : null,
+      OR: [
+        { ownerId: req.userId! },
+        ...(userOrgIds.length > 0 ? [{ orgId: { in: userOrgIds } }] : []),
+      ],
     },
     orderBy: { updatedAt: 'desc' },
-    include: { _count: { select: { epics: true } } },
+    include: {
+      _count: { select: { epics: true } },
+      org: { select: { id: true, name: true } },
+      customer: { select: { id: true, name: true } },
+    },
   })
   res.json(projects)
 })
@@ -242,18 +273,23 @@ router.delete('/:id/permanent', async (req: AuthRequest, res: Response) => {
 
 // Get single project
 router.get('/:id', async (req: AuthRequest, res: Response) => {
-  const project = await prisma.project.findFirst({
-    where: { id: req.params.id as string, ownerId: req.userId },
-    include: { resourceTypes: true, _count: { select: { epics: true } } },
-  })
+  const project = await canAccessProject(req.params.id as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Not found' }); return }
   res.json(project)
 })
 
 // Create project
 router.post('/', async (req: AuthRequest, res: Response) => {
-  const { name, description, customer } = req.body
+  const { name, description, customerId, orgId } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
+
+  // Validate org membership if orgId provided
+  if (orgId) {
+    const membership = await prisma.organisationMember.findUnique({
+      where: { orgId_userId: { orgId, userId: req.userId! } },
+    })
+    if (!membership) { res.status(403).json({ error: 'Not a member of that org' }); return }
+  }
 
   // Fetch global types to seed into the new project
   const globalTypes = await prisma.globalResourceType.findMany()
@@ -269,25 +305,26 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     data: {
       name,
       description,
-      customer,
+      customerId,
+      orgId,
       ownerId: req.userId!,
       // Seed default resource types
       resourceTypes: { create: seedTypes },
     },
-    include: { resourceTypes: true },
+    include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
   })
   res.status(201).json(project)
 })
 
 // Update project
 router.put('/:id', async (req: AuthRequest, res: Response) => {
-  const { name, description, customer, status, hoursPerDay, taxRate, taxLabel } = req.body
+  const { name, description, customerId, status, hoursPerDay, taxRate, taxLabel } = req.body
   const bufferWeeks = req.body.bufferWeeks !== undefined ? (parseInt(req.body.bufferWeeks) ?? 0) : undefined
   const existing = await ownedProject(req.params.id as string, req.userId!)
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   const project = await prisma.project.update({
     where: { id: req.params.id as string },
-    data: { name, description, customer, status, hoursPerDay, taxRate, taxLabel, ...(bufferWeeks !== undefined && { bufferWeeks }) },
+    data: { name, description, customerId, status, hoursPerDay, taxRate, taxLabel, ...(bufferWeeks !== undefined && { bufferWeeks }) },
   })
   res.json(project)
 })
@@ -298,6 +335,28 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   await prisma.project.update({ where: { id: req.params.id as string }, data: { deletedAt: new Date() } })
   res.json({ message: 'Project archived' })
+})
+
+// POST /api/projects/:id/move-to-org
+router.post('/:id/move-to-org', async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string
+  const { orgId } = req.body
+  if (!orgId) { res.status(400).json({ error: 'orgId is required' }); return }
+
+  const existing = await prisma.project.findFirst({ where: { id, ownerId: req.userId } })
+  if (!existing) { res.status(404).json({ error: 'Not found' }); return }
+
+  const membership = await prisma.organisationMember.findUnique({
+    where: { orgId_userId: { orgId: orgId as string, userId: req.userId! } },
+  })
+  if (!membership) { res.status(403).json({ error: 'Not a member of that org' }); return }
+
+  const project = await prisma.project.update({
+    where: { id },
+    data: { orgId: orgId as string },
+    include: { org: { select: { id: true, name: true } } },
+  })
+  res.json(project)
 })
 
 export default router

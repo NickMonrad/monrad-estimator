@@ -67,7 +67,7 @@ export interface StagedRow {
 }
 
 async function ownedProject(projectId: string, userId: string) {
-  return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
+  return prisma.project.findFirst({ where: { id: projectId, ownerId: userId }, include: { customer: { select: { name: true } } } })
 }
 
 function parseNum(val: string | undefined): number {
@@ -159,7 +159,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
   res.setHeader('Content-Type', 'text/csv')
   const datestamp = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const safeName = (s: string) => s.replace(/[^a-zA-Z0-9 \-_]/g, '').trim()
-  const clientPart = project.customer ? `${safeName(project.customer)} - ` : ''
+  const clientPart = project.customer?.name ? `${safeName(project.customer.name)} - ` : ''
   const filename = `${clientPart}${safeName(project.name)} - ${datestamp}.csv`
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
   res.send(csv)
