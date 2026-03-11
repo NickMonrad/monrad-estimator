@@ -10,12 +10,13 @@ interface Project {
   id: string
   name: string
   description?: string
-  customer?: string | { id: string; name: string }
-  status: string
+  customer?: { id: string; name: string }
   hoursPerDay: number
   updatedAt: string
   deletedAt?: string | null
   _count: { epics: number }
+  org?: { id: string; name: string }
+  customer?: { id: string; name: string }
 }
 
 const STATUS_COLOURS: Record<string, string> = {
@@ -31,7 +32,7 @@ export default function ProjectsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [showNew, setShowNew] = useState(false)
-  const [form, setForm] = useState({ name: '', description: '', customer: '' })
+  const [form, setForm] = useState({ name: '', description: '' })
   const [search, setSearch] = useState('')
   const { triggerClick: geocitiesClick } = useGeocitiesEgg()
   const [showArchived, setShowArchived] = useState(false)
@@ -47,7 +48,7 @@ export default function ProjectsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
       setShowNew(false)
-      setForm({ name: '', description: '', customer: '' })
+      setForm({ name: '', description: '' })
     },
   })
 
@@ -94,6 +95,8 @@ export default function ProjectsPage() {
             <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Resource Types</Link>
             <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Templates</Link>
             <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Rate Cards</Link>
+            <Link to="/orgs" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Team</Link>
+            <Link to="/customers" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Customers</Link>
           </div>
           <div className="flex items-center gap-3">
             <ThemeToggle />
@@ -140,13 +143,6 @@ export default function ProjectsPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Project name *</label>
                 <input
                   type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Project name"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
-                <input
-                  type="text" value={form.customer} onChange={e => setForm(f => ({ ...f, customer: e.target.value }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
@@ -199,7 +195,8 @@ export default function ProjectsPage() {
                     {project.status}
                   </span>
                 </div>
-                {project.customer && <p className="text-xs text-gray-500 mb-2">Customer: {typeof project.customer === 'string' ? project.customer : project.customer.name}</p>}
+                {project.org && <span className="text-xs bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 mb-1 inline-block">{project.org.name}</span>}
+                {project.customer && <p className="text-xs text-gray-500 mb-1">Customer: {project.customer.name}</p>}
                 {project.description && <p className="text-sm text-gray-600 mb-3 line-clamp-2">{project.description}</p>}
                 <div className="flex items-center justify-between text-xs text-gray-400 mt-2">
                   <span>{project._count.epics} epic{project._count.epics !== 1 ? 's' : ''}</span>

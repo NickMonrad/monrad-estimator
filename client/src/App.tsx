@@ -18,6 +18,9 @@ import TimelinePage from './pages/TimelinePage'
 import ResourceProfilePage from './pages/ResourceProfilePage'
 import ProjectResourceTypesPage from './pages/ProjectResourceTypesPage'
 import DocumentsPage from './pages/DocumentsPage'
+import OrgsPage from './pages/OrgsPage'
+import AcceptInvitePage from './pages/AcceptInvitePage'
+import CustomersPage from './pages/CustomersPage'
 
 const queryClient = new QueryClient()
 
@@ -50,6 +53,9 @@ function AppRoutes() {
       <Route path="/templates" element={<PrivateRoute><TemplateLibraryPage /></PrivateRoute>} />
       <Route path="/resource-types" element={<PrivateRoute><GlobalResourceTypesPage /></PrivateRoute>} />
       <Route path="/rate-cards" element={<PrivateRoute><RateCardsPage /></PrivateRoute>} />
+      <Route path="/orgs" element={<PrivateRoute><OrgsPage /></PrivateRoute>} />
+      <Route path="/customers" element={<PrivateRoute><CustomersPage /></PrivateRoute>} />
+      <Route path="/accept-invite" element={<AcceptInvitePage />} />
     </Routes>
   )
 }

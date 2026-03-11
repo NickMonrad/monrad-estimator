@@ -1,10 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '../lib/api'
+import { api, getCustomers } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 
 const STATUS_OPTIONS = ['DRAFT', 'ACTIVE', 'REVIEW', 'COMPLETE', 'ARCHIVED']
+
+interface Customer {
+  id: string
+  name: string
+}
 
 export default function ProjectSettingsPage() {
   const { id } = useParams<{ id: string }>()
@@ -12,8 +17,9 @@ export default function ProjectSettingsPage() {
   const { user, logout } = useAuth()
   const qc = useQueryClient()
 
-  const [form, setForm] = useState({ name: '', description: '', customer: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0 })
+  const [form, setForm] = useState({ name: '', description: '', customerId: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0 })
   const [saved, setSaved] = useState(false)
+  const [customers, setCustomers] = useState<Customer[]>([])
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', id],
@@ -21,11 +27,15 @@ export default function ProjectSettingsPage() {
   })
 
   useEffect(() => {
+    getCustomers().then(setCustomers).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     if (project) {
       setForm({
         name: project.name ?? '',
         description: project.description ?? '',
-        customer: project.customer ?? '',
+        customerId: project.customerId ?? '',
         status: project.status ?? 'DRAFT',
         hoursPerDay: project.hoursPerDay ?? 7.6,
         bufferWeeks: project.bufferWeeks ?? 0,
@@ -85,11 +95,27 @@ export default function ProjectSettingsPage() {
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Organisation</label>
+            <p className="text-sm text-gray-600 py-2">
+              {project.org ? (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">{project.org.name}</span>
+              ) : (
+                <span className="text-gray-400">Personal project</span>
+              )}
+            </p>
+          </div>
+
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
-            <input
-              type="text" value={form.customer} onChange={f('customer')}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
-            />
+            <select
+              value={form.customerId} onChange={f('customerId')}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+            >
+              <option value="">No customer</option>
+              {customers.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
           </div>
 
           <div>
