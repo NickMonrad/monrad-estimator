@@ -590,10 +590,13 @@ export default function ScopeDocument({
         // Collect all assumptions with context labels
         const items: Array<{ label: string; text: string }> = []
         for (const epic of epics) {
+          if (!epic.isActive) continue
           if (epic.assumptions) items.push({ label: epic.name, text: epic.assumptions })
           for (const feature of epic.features) {
+            if (!feature.isActive) continue
             if (feature.assumptions) items.push({ label: `${epic.name} › ${feature.name}`, text: feature.assumptions })
             for (const story of feature.userStories ?? []) {
+              if (!story.isActive) continue
               if (story.assumptions) items.push({ label: `${feature.name} › ${story.name}`, text: story.assumptions })
             }
           }
