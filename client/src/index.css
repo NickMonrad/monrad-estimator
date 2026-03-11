@@ -1,2 +1,10 @@
 @import "tailwindcss";
 
+@theme {
+  --color-lab3-navy: #1d245b;
+  --color-lab3-blue: #2c60f6;
+  --color-lab3-green: #62c481;
+}
+
+@variant dark (&:is(.dark *));
+

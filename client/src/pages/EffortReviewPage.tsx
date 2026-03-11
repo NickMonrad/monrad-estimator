@@ -313,13 +313,14 @@ export default function EffortReviewPage() {
   const hasCost = filteredEffort?.hasCost ?? false
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants throughout this page */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-red-600 transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">Monrad Estimator</button>
             <span>/</span>
-            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-red-600 transition-colors">{project?.name ?? '…'}</button>
+            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy transition-colors">{project?.name ?? '…'}</button>
             <span>/</span>
             <span className="text-gray-700">Effort Review</span>
           </div>
@@ -357,13 +358,13 @@ export default function EffortReviewPage() {
             <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
               <button
                 onClick={() => setView('summary')}
-                className={`px-4 py-2 font-medium transition-colors ${view === 'summary' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`px-4 py-2 font-medium transition-colors ${view === 'summary' ? 'bg-lab3-navy text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
               >
                 Summary
               </button>
               <button
                 onClick={() => setView('detail')}
-                className={`px-4 py-2 font-medium transition-colors ${view === 'detail' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`px-4 py-2 font-medium transition-colors ${view === 'detail' ? 'bg-lab3-navy text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
               >
                 Detail
               </button>

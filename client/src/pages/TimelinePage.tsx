@@ -419,12 +419,13 @@ export default function TimelinePage() {
   const projectStartDate = timeline?.startDate ? new Date(timeline.startDate) : null
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants throughout this page */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
-              <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center">
                 <span className="text-white text-xs font-bold">M</span>
               </div>
             </button>
@@ -455,14 +456,14 @@ export default function TimelinePage() {
                 value={startDateInput}
                 onChange={e => setStartDateInput(e.target.value)}
                 onBlur={handleStartDateBlur}
-                className="border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-400"
+                className="border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue"
               />
             </div>
             <div className="w-px h-7 bg-gray-200" />
             <button
               onClick={handleSchedule}
               disabled={scheduleTimeline.isPending}
-              className="bg-red-600 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
             >
               {scheduleTimeline.isPending ? 'Scheduling…' : 'Auto-schedule'}
             </button>

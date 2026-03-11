@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
+import ThemeToggle from '../components/layout/ThemeToggle'
+import { useGeocitiesEgg } from '../hooks/useGeocitiesEgg'
 
 interface Project {
   id: string
@@ -30,6 +32,7 @@ export default function ProjectsPage() {
   const [showNew, setShowNew] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', customer: '' })
   const [search, setSearch] = useState('')
+  const { triggerClick: geocitiesClick } = useGeocitiesEgg()
 
   const { data: projects = [], isLoading } = useQuery<Project[]>({
     queryKey: ['projects'],
@@ -46,40 +49,46 @@ export default function ProjectsPage() {
   })
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+            {/* Logo — 5 rapid clicks triggers Geocities easter egg */}
+            <button
+              onClick={geocitiesClick}
+              className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center focus:outline-none"
+              aria-label="Monrad Estimator logo"
+            >
               <span className="text-white text-xs font-bold">M</span>
-            </div>
-            <span className="font-semibold text-gray-900">Monrad Estimator</span>
-            <Link to="/resource-types" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Resource Types</Link>
-            <Link to="/templates" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Templates</Link>
-            <Link to="/rate-cards" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Rate Cards</Link>
+            </button>
+            <span className="font-semibold text-gray-900 dark:text-white">Monrad Estimator</span>
+            <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Resource Types</Link>
+            <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Templates</Link>
+            <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Rate Cards</Link>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <ThemeToggle />
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-xl font-semibold text-gray-900">Projects</h1>
+          <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Projects</h1>
           <div className="flex items-center gap-3">
             <input
               type="text"
               placeholder="Search projects…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
             <button
               onClick={() => setShowNew(true)}
-              className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+              className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors"
             >
               + New project
             </button>
@@ -88,35 +97,35 @@ export default function ProjectsPage() {
 
         {/* New project form */}
         {showNew && (
-          <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-            <h2 className="font-medium text-gray-900 mb-4">New project</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
+            <h2 className="font-medium text-gray-900 dark:text-white mb-4">New project</h2>
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Project name *</label>
                 <input
                   type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Project name"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
                 <input
                   type="text" value={form.customer} onChange={e => setForm(f => ({ ...f, customer: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
                 <textarea
                   value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
             </div>
             <div className="flex gap-2">
               <button
                 onClick={() => createProject.mutate(form)} disabled={!form.name || createProject.isPending}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
               >
                 {createProject.isPending ? 'Creating…' : 'Create project'}
               </button>
@@ -146,10 +155,10 @@ export default function ProjectsPage() {
               <div
                 key={project.id}
                 onClick={() => navigate(`/projects/${project.id}`)}
-                className="bg-white rounded-xl border border-gray-200 p-5 cursor-pointer hover:border-red-300 hover:shadow-sm transition-all"
+                className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 cursor-pointer hover:border-lab3-blue/30 hover:shadow-sm transition-all"
               >
                 <div className="flex items-start justify-between mb-2">
-                  <h3 className="font-medium text-gray-900">{project.name}</h3>
+                  <h3 className="font-medium text-gray-900 dark:text-white">{project.name}</h3>
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOURS[project.status] ?? 'bg-gray-100 text-gray-700'}`}>
                     {project.status}
                   </span>
