@@ -43,6 +43,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       projectId: req.params.projectId as string,
     },
   })
+  // Auto-create a default named resource so the resource profile has a person ready to configure
+  await prisma.namedResource.create({
+    data: { name: `${name} 1`, resourceTypeId: rt.id },
+  })
+  await prisma.resourceType.update({ where: { id: rt.id }, data: { count: 1 } })
   res.status(201).json(rt)
 })
 
