@@ -644,7 +644,13 @@ export default function ResourceProfilePage() {
 
     // All rows (resource + overhead) with day rates
     const costRows = [
-      ...profile.resourceRows.filter(r => r.dayRate != null).flatMap(r => {
+      ...profile.resourceRows.filter(r => r.dayRate != null).flatMap((r): Array<{
+        id: string; name: string; count: number; effortDays: number; allocatedDays: number;
+        totalDays: number; dayRate: number; subtotal: number; allocationMode: string;
+        allocationPercent: number; allocationStartWeek: number | null; allocationEndWeek: number | null;
+        derivedStartWeek: number | null; derivedEndWeek: number | null;
+        kind: 'named-resource' | 'resource'; resourceTypeId: string;
+      }> => {
         if (r.namedResources && r.namedResources.length > 0) {
           // Per-NR rows only — no aggregate row in commercial tab
           const nrRows = r.namedResources.map(nr => ({
