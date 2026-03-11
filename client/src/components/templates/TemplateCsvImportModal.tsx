@@ -77,7 +77,7 @@ export default function TemplateCsvImportModal({ onClose, onImported }: Props) {
               </p>
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
                 <input ref={fileRef} type="file" accept=".csv" onChange={handleFile} className="hidden" />
-                <button onClick={() => fileRef.current?.click()} className="text-sm text-red-600 underline">
+                <button onClick={() => fileRef.current?.click()} className="text-sm text-lab3-blue underline">
                   {csvText ? '✓ File loaded — click to change' : 'Choose CSV file'}
                 </button>
                 {csvText && <p className="text-xs text-gray-500 mt-1">{csvText.split('\n').length - 1} data rows</p>}
@@ -166,7 +166,7 @@ export default function TemplateCsvImportModal({ onClose, onImported }: Props) {
               <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
               <button
                 onClick={handlePreview} disabled={loading || !csvText}
-                className="bg-red-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50"
+                className="bg-lab3-navy text-white text-sm px-4 py-2 rounded-lg hover:bg-lab3-blue disabled:opacity-50"
               >
                 {loading ? 'Parsing…' : 'Review & Confirm →'}
               </button>
@@ -177,7 +177,7 @@ export default function TemplateCsvImportModal({ onClose, onImported }: Props) {
               <button onClick={() => setStep('upload')} className="text-sm text-gray-500 hover:text-gray-700">← Back</button>
               <button
                 onClick={handleImport} disabled={loading || (preview?.newTemplates.length === 0 && preview?.updatedTemplates.length === 0)}
-                className="bg-red-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50"
+                className="bg-lab3-navy text-white text-sm px-4 py-2 rounded-lg hover:bg-lab3-blue disabled:opacity-50"
               >
                 {loading ? 'Importing…' : `✓ Import Templates`}
               </button>

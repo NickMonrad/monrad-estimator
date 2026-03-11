@@ -36,22 +36,23 @@ export default function ProjectDetailPage() {
   ]
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants to feature cards in this file */}
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
-              <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center">
                 <span className="text-white text-xs font-bold">M</span>
               </div>
-              <span className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">Monrad Estimator</span>
+              <span className="font-semibold text-gray-900 dark:text-white group-hover:text-lab3-navy dark:group-hover:text-lab3-blue transition-colors">Monrad Estimator</span>
             </button>
-            <span className="text-gray-300">/</span>
-            <span className="text-gray-600 text-sm">{project.name}</span>
+            <span className="text-gray-300 dark:text-gray-600">/</span>
+            <span className="text-gray-600 dark:text-gray-400 text-sm">{project.name}</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
         </div>
       </header>
@@ -63,7 +64,7 @@ export default function ProjectDetailPage() {
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOURS[project.status]}`}>
               {project.status}
             </span>
-            <button onClick={() => navigate(`/projects/${id}/settings`)} title="Edit project settings" className="text-gray-400 hover:text-red-600 transition-colors">✏️</button>
+            <button onClick={() => navigate(`/projects/${id}/settings`)} title="Edit project settings" className="text-gray-400 hover:text-lab3-navy transition-colors">✏️</button>
           </div>
           {project.customer && <p className="text-sm text-gray-500">Customer: {project.customer}</p>}
           {project.description && <p className="text-sm text-gray-600 mt-1">{project.description}</p>}
@@ -74,7 +75,7 @@ export default function ProjectDetailPage() {
             <button
               key={item.label}
               onClick={() => navigate(item.href)}
-              className="bg-white rounded-xl border border-gray-200 p-5 text-left hover:border-red-300 hover:shadow-sm transition-all"
+              className="bg-white rounded-xl border border-gray-200 p-5 text-left hover:border-lab3-blue/30 hover:shadow-sm transition-all"
             >
               <div className="text-2xl mb-2">{item.icon}</div>
               <div className="font-medium text-gray-900 mb-1">{item.label}</div>
