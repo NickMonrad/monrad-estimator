@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { PDFViewer, pdf } from '@react-pdf/renderer'
 import { api } from '../lib/api'
+import { useAuth } from '../hooks/useAuth'
 import ScopeDocument from '../components/documents/ScopeDocument'
 import type { ScopeDocumentProps } from '../components/documents/ScopeDocument'
 
@@ -27,6 +28,7 @@ export default function DocumentsPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { user } = useAuth()
 
   const [sections, setSections] = useState({
     cover: true,
@@ -87,12 +89,15 @@ export default function DocumentsPage() {
       customer: project?.customer ?? null,
       description: project?.description ?? null,
       startDate: project?.startDate ?? null,
+      endDate: timelineData?.projectedEndDate ?? null,
     },
     sections,
     effortData: effortData ?? null,
     timelineData: timelineData ?? null,
     resourceProfileData: resourceProfileData ?? null,
     epics: epics ?? [],
+    generatedBy: user?.name ?? user?.email ?? 'Monrad Estimator',
+    documentLabel: label,
   }
 
   // ── Generate & Save ───────────────────────────────────────────
