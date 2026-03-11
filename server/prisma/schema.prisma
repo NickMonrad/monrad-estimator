@@ -18,7 +18,9 @@ model User {
   snapshots BacklogSnapshot[]
   documentTemplates DocumentTemplate[] @relation("DocumentTemplateOwner")
   generatedDocuments GeneratedDocument[] @relation("GeneratedDocumentUser")
-  resetTokens PasswordResetToken[]
+  resetTokens       PasswordResetToken[]
+  orgMemberships    OrganisationMember[]
+  ownedCustomers    Customer[]
 }
 
 model PasswordResetToken {
@@ -49,7 +51,10 @@ model Project {
   id          String        @id @default(cuid())
   name        String
   description String?
-  customer    String?
+  orgId      String?
+  org        Organisation? @relation(fields: [orgId], references: [id])
+  customerId String?
+  customer   Customer?     @relation(fields: [customerId], references: [id])
   status      ProjectStatus @default(DRAFT)
   hoursPerDay Float         @default(7.6)
   bufferWeeks Int           @default(0)
@@ -385,4 +390,59 @@ model GeneratedDocument {
   generatedById String
   generatedBy   User                 @relation("GeneratedDocumentUser", fields: [generatedById], references: [id])
   createdAt     DateTime             @default(now())
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model Organisation {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  members   OrganisationMember[]
+  invites   OrganisationInvite[]
+  projects  Project[]
+  customers Customer[]
+}
+
+model OrganisationMember {
+  id        String       @id @default(cuid())
+  org       Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId     String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  role      OrgRole      @default(MEMBER)
+  joinedAt  DateTime     @default(now())
+  @@unique([orgId, userId])
+}
+
+model OrganisationInvite {
+  id          String       @id @default(cuid())
+  org         Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId       String
+  email       String
+  tokenHash   String       @unique
+  role        OrgRole      @default(MEMBER)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime     @default(now())
+}
+
+model Customer {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  accountCode String?
+  crmLink     String?
+  org         Organisation? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  orgId       String?
+  owner       User          @relation(fields: [ownerId], references: [id])
+  ownerId     String
+  projects    Project[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 }
