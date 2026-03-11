@@ -54,10 +54,11 @@ export default function TemplateLibraryPage() {
   const [taskForm, setTaskForm] = useState({ name: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' })
   const [showTplImport, setShowTplImport] = useState(false)
   const [showHistoryId, setShowHistoryId] = useState<string | null>(null)
+  const [showArchived, setShowArchived] = useState(false)
 
   const { data: templates = [], isLoading } = useQuery<FeatureTemplate[]>({
-    queryKey: ['templates'],
-    queryFn: () => api.get('/templates').then(r => r.data),
+    queryKey: ['templates', showArchived],
+    queryFn: () => api.get('/templates', { params: showArchived ? { archived: 'true' } : {} }).then(r => r.data),
   })
 
   const { data: globalResourceTypes = [] } = useQuery<GlobalResourceType[]>({
@@ -79,6 +80,11 @@ export default function TemplateLibraryPage() {
 
   const deleteTemplate = useMutation({
     mutationFn: (id: string) => api.delete(`/templates/${id}`),
+    onSuccess: invalidate,
+  })
+
+  const restoreTemplate = useMutation({
+    mutationFn: (id: string) => api.post(`/templates/${id}/restore`),
     onSuccess: invalidate,
   })
 
@@ -156,7 +162,13 @@ export default function TemplateLibraryPage() {
               className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
               ⬆ Import CSV
             </button>
-            {!adding && (
+            <button
+              onClick={() => { setShowArchived(a => !a); setAdding(false) }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${showArchived ? 'bg-gray-800 text-white border-gray-800 hover:bg-gray-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+            >
+              {showArchived ? '← Live templates' : 'Archived'}
+            </button>
+            {!adding && !showArchived && (
               <button onClick={() => setAdding(true)}
                 className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors">
                 + New template
@@ -209,17 +221,28 @@ export default function TemplateLibraryPage() {
                       {tpl.tasks.length} task{tpl.tasks.length !== 1 ? 's' : ''}
                     </span>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                      <button onClick={() => setShowHistoryId(showHistoryId === tpl.id ? null : tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">History</button>
-                      <button onClick={() => setEditingId(tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
-                      <button
-                        onClick={async () => {
-                          const res = await api.get(`/templates/${tpl.id}/export-csv`, { responseType: 'blob' })
-                          const url = URL.createObjectURL(res.data)
-                          const a = document.createElement('a'); a.href = url; a.download = `${tpl.name.toLowerCase().replace(/\s+/g, '-')}.csv`; a.click()
-                          URL.revokeObjectURL(url)
-                        }}
-                        className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">⬇</button>
-                      <button onClick={() => deleteTemplate.mutate(tpl.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
+                      {showArchived ? (
+                        <button
+                          onClick={() => restoreTemplate.mutate(tpl.id)}
+                          disabled={restoreTemplate.isPending}
+                          className="text-xs text-green-600 hover:text-green-800 px-2 py-1 font-medium disabled:opacity-50">
+                          Restore
+                        </button>
+                      ) : (
+                        <>
+                          <button onClick={() => setShowHistoryId(showHistoryId === tpl.id ? null : tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">History</button>
+                          <button onClick={() => setEditingId(tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
+                          <button
+                            onClick={async () => {
+                              const res = await api.get(`/templates/${tpl.id}/export-csv`, { responseType: 'blob' })
+                              const url = URL.createObjectURL(res.data)
+                              const a = document.createElement('a'); a.href = url; a.download = `${tpl.name.toLowerCase().replace(/\s+/g, '-')}.csv`; a.click()
+                              URL.revokeObjectURL(url)
+                            }}
+                            className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">⬇</button>
+                          <button onClick={() => deleteTemplate.mutate(tpl.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Archive</button>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
@@ -303,8 +326,8 @@ export default function TemplateLibraryPage() {
 
             {templates.length === 0 && !adding && (
               <div className="text-center py-16 text-gray-400">
-                <p className="text-lg mb-1">No templates yet</p>
-                <p className="text-sm">Create a template to speed up backlog creation</p>
+                <p className="text-lg mb-1">{showArchived ? 'No archived templates' : 'No templates yet'}</p>
+                <p className="text-sm">{showArchived ? 'Archived templates appear here' : 'Create a template to speed up backlog creation'}</p>
               </div>
             )}
           </div>
