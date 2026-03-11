@@ -12,7 +12,7 @@ const styles = StyleSheet.create({
   subheading: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#333333', marginBottom: 4, marginTop: 12 },
   bodyText: { fontSize: 10, color: '#333333', marginBottom: 4 },
   table: { marginBottom: 12 },
-  tableHeader: { flexDirection: 'row', backgroundColor: '#1d245b', paddingVertical: 6, paddingHorizontal: 8, breakInside: 'avoid', breakAfter: 'avoid' },
+  tableHeader: { flexDirection: 'row', backgroundColor: '#1d245b', paddingVertical: 6, paddingHorizontal: 8 },
   tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 5, paddingHorizontal: 8 },
   tableRowAlt: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#f5f5f5' },
   tableRowTotal: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#1d245b', paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f5f5f5' },
@@ -179,7 +179,7 @@ export default function ScopeDocument({
                     {activeFeatures.map((feature, fi) => {
                       const activeStories = (feature.userStories ?? []).filter(s => s.isActive)
                       return (
-                        <View key={feature.id} wrap={false}>
+                        <View key={feature.id}>
                           <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                             <Text style={[styles.td, styles.col1]}>{feature.name}</Text>
                             <Text style={[styles.td, styles.col2]}>{feature.description ?? '—'}</Text>
@@ -226,7 +226,7 @@ export default function ScopeDocument({
                         <Text style={[styles.th, styles.col3]}>Stories</Text>
                       </View>
                       {epic.features.map((feature, fi) => (
-                        <View key={feature.id} wrap={false}>
+                        <View key={feature.id}>
                           <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                             <Text style={[styles.td, styles.col1, styles.inactiveText]}>{feature.name}</Text>
                             <Text style={[styles.td, styles.col2, styles.inactiveText]}>{feature.description ?? '—'}</Text>
@@ -265,7 +265,7 @@ export default function ScopeDocument({
                       <Text style={[styles.th, styles.col3]}>Stories</Text>
                     </View>
                     {epic.features.map((feature, fi) => (
-                      <View key={feature.id} wrap={false}>
+                      <View key={feature.id}>
                         <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                           <Text style={[styles.td, styles.col1, styles.inactiveText]}>{feature.name}</Text>
                           <Text style={[styles.td, styles.col2, styles.inactiveText]}>{feature.description ?? '—'}</Text>
