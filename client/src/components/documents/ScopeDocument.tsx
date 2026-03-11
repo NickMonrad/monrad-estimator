@@ -180,20 +180,20 @@ export default function ScopeDocument({
                       const activeStories = (feature.userStories ?? []).filter(s => s.isActive)
                       return (
                         <View key={feature.id}>
-                          <View wrap={false} style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                             <Text style={[styles.td, styles.col1]}>{feature.name}</Text>
                             <Text style={[styles.td, styles.col2]}>{feature.description ?? '—'}</Text>
                             <Text style={[styles.td, styles.col3]}>{activeStories.length}</Text>
                           </View>
                           {feature.assumptions ? (
-                            <View wrap={false} style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                            <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                               <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
                                 Assumptions: {feature.assumptions}
                               </Text>
                             </View>
                           ) : null}
                           {activeStories.map(story => (
-                            <View wrap={false} key={story.id} style={styles.tableRow}>
+                            <View key={story.id} style={styles.tableRow}>
                               <Text style={[styles.storyItem, { flex: 6 }]}>• {story.name}</Text>
                             </View>
                           ))}
@@ -227,20 +227,20 @@ export default function ScopeDocument({
                       </View>
                       {epic.features.map((feature, fi) => (
                         <View key={feature.id}>
-                          <View wrap={false} style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                             <Text style={[styles.td, styles.col1, styles.inactiveText]}>{feature.name}</Text>
                             <Text style={[styles.td, styles.col2, styles.inactiveText]}>{feature.description ?? '—'}</Text>
                             <Text style={[styles.td, styles.col3, styles.inactiveText]}>{(feature.userStories ?? []).length}</Text>
                           </View>
                           {feature.assumptions ? (
-                            <View wrap={false} style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                            <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                               <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
                                 Assumptions: {feature.assumptions}
                               </Text>
                             </View>
                           ) : null}
                           {(feature.userStories ?? []).map(story => (
-                            <View wrap={false} key={story.id} style={styles.tableRow}>
+                            <View key={story.id} style={styles.tableRow}>
                               <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>• {story.name}</Text>
                             </View>
                           ))}
@@ -266,20 +266,20 @@ export default function ScopeDocument({
                     </View>
                     {epic.features.map((feature, fi) => (
                       <View key={feature.id}>
-                        <View wrap={false} style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                        <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                           <Text style={[styles.td, styles.col1, styles.inactiveText]}>{feature.name}</Text>
                           <Text style={[styles.td, styles.col2, styles.inactiveText]}>{feature.description ?? '—'}</Text>
                           <Text style={[styles.td, styles.col3, styles.inactiveText]}>{(feature.userStories ?? []).length}</Text>
                         </View>
                         {feature.assumptions ? (
-                          <View wrap={false} style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
                             <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
                               Assumptions: {feature.assumptions}
                             </Text>
                           </View>
                         ) : null}
                         {(feature.userStories ?? []).map(story => (
-                          <View wrap={false} key={story.id} style={styles.tableRow}>
+                          <View key={story.id} style={styles.tableRow}>
                             <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>• {story.name}</Text>
                           </View>
                         ))}
