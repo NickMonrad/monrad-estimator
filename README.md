@@ -168,6 +168,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Fix CSV import 413 payload-too-large error on large backlogs | #127 |
 | Per-named-resource allocation modes (Full Project / Timeline / Custom) + Commercial tab overhaul | #131 |
 | Resource period start/end dates, buffer weeks indicators, commercial double-count fix, allocation label fix, CSV epic/feature descriptions + assumptions, Epic.assumptions field, document assumptions section, LAB3 colour scheme, PDF heading fixes | #132 |
+| PDF cover page: generated-by username, generation time, document label, projected end date; backlog CSV fix for epic/feature descriptions; commercial tab removes aggregate row; auto-create person on resource type creation; assumptions exclude out-of-scope items | #135 |
 
 ---
 
@@ -211,6 +212,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | [#10](https://github.com/NickMonrad/monrad-estimator/issues/10) | Password reset flow |
 | [#114](https://github.com/NickMonrad/monrad-estimator/issues/114) | Cross-project dashboard with summary analytics |
 | [#133](https://github.com/NickMonrad/monrad-estimator/issues/133) | Rich text editor for multi-line text fields (descriptions, assumptions) with PDF formatting |
+| [#136](https://github.com/NickMonrad/monrad-estimator/issues/136) | Replace @react-pdf/renderer — wrap={false} crashes Yoga layout engine (rows split across page breaks) |
 
 ### 🏭 Productionisation
 | # | Title |

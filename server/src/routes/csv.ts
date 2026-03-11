@@ -113,7 +113,8 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
       // Epic row
       rows.push([
         'Epic', epic.name, '', '', '',
-        '', '', '', '', '', '',
+        '', '', '', '',
+        epic.description ?? '', epic.assumptions ?? '',
         epic.isActive ? 'active' : 'inactive', '', '',
       ])
 
@@ -121,7 +122,8 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
         // Feature row
         rows.push([
           'Feature', epic.name, feature.name, '', '',
-          '', '', '', '', '', '',
+          '', '', '', '',
+          feature.description ?? '', feature.assumptions ?? '',
           '', feature.isActive ? 'active' : 'inactive', '',
         ])
 
@@ -130,7 +132,8 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
           rows.push([
             'Story', epic.name, feature.name, story.name, '',
             story.appliedTemplate?.name ?? '',
-            '', '', '', '', '',
+            '', '', '',
+            story.description ?? '', story.assumptions ?? '',
             '', '', story.isActive ? 'active' : 'inactive',
           ])
 

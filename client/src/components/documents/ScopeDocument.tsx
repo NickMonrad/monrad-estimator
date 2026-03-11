@@ -37,6 +37,7 @@ export interface ScopeDocumentProps {
     customer: string | null
     description: string | null
     startDate: string | null
+    endDate: string | null
   }
   sections: {
     cover: boolean
@@ -70,6 +71,8 @@ export interface ScopeDocumentProps {
       }>
     }>
   }>
+  generatedBy: string
+  documentLabel: string
 }
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -93,8 +96,11 @@ export default function ScopeDocument({
   timelineData,
   resourceProfileData,
   epics,
+  generatedBy,
+  documentLabel,
 }: ScopeDocumentProps) {
   const today = new Date().toLocaleDateString('en-AU', { year: 'numeric', month: 'long', day: 'numeric' })
+  const now = new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })
 
   const footerText = (pageNumber: number, totalPages: number) =>
     `${project.name} | Page ${pageNumber} of ${totalPages}`
@@ -120,10 +126,14 @@ export default function ScopeDocument({
             {project.description && (
               <Text style={{ ...styles.bodyText, marginTop: 16 }}>{project.description}</Text>
             )}
-            <Text style={styles.coverMeta}>Prepared by Monrad Estimator</Text>
-            <Text style={styles.coverMeta}>Generated: {today}</Text>
+            <Text style={styles.coverMeta}>Prepared by {generatedBy}</Text>
+            <Text style={styles.coverMeta}>Generated: {today} at {now}</Text>
+            <Text style={styles.coverMeta}>Document: {documentLabel}</Text>
             {project.startDate && (
               <Text style={styles.coverMeta}>Projected Start: {formatDate(project.startDate)}</Text>
+            )}
+            {project.endDate && (
+              <Text style={styles.coverMeta}>Projected End: {formatDate(project.endDate)}</Text>
             )}
           </View>
           <Text
@@ -580,10 +590,13 @@ export default function ScopeDocument({
         // Collect all assumptions with context labels
         const items: Array<{ label: string; text: string }> = []
         for (const epic of epics) {
+          if (!epic.isActive) continue
           if (epic.assumptions) items.push({ label: epic.name, text: epic.assumptions })
           for (const feature of epic.features) {
+            if (!feature.isActive) continue
             if (feature.assumptions) items.push({ label: `${epic.name} › ${feature.name}`, text: feature.assumptions })
             for (const story of feature.userStories ?? []) {
+              if (!story.isActive) continue
               if (story.assumptions) items.push({ label: `${feature.name} › ${story.name}`, text: story.assumptions })
             }
           }
