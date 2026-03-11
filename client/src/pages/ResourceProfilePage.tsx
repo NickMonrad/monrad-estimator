@@ -646,29 +646,10 @@ export default function ResourceProfilePage() {
     const costRows = [
       ...profile.resourceRows.filter(r => r.dayRate != null).flatMap(r => {
         if (r.namedResources && r.namedResources.length > 0) {
-          // RT-level aggregate row (non-editable allocation, just shows totals)
-          const rtRow = {
-            id: r.resourceTypeId,
-            name: r.name,
-            count: r.count,
-            effortDays: r.effortDays ?? r.totalDays,
-            allocatedDays: r.allocatedDays ?? r.totalDays,
-            totalDays: r.totalDays,
-            dayRate: r.dayRate!,
-            subtotal: 0,
-            allocationMode: 'AGGREGATE',
-            allocationPercent: 100,
-            allocationStartWeek: null as number | null,
-            allocationEndWeek: null as number | null,
-            derivedStartWeek: r.derivedStartWeek ?? null,
-            derivedEndWeek: r.derivedEndWeek ?? null,
-            kind: 'resource' as const,
-            resourceTypeId: r.resourceTypeId,
-          }
-          // Per-NR rows
+          // Per-NR rows only — no aggregate row in commercial tab
           const nrRows = r.namedResources.map(nr => ({
             id: nr.id,
-            name: `  ${nr.name}`,
+            name: nr.name,
             count: 1,
             effortDays: nr.allocatedDays,
             allocatedDays: nr.allocatedDays,
@@ -684,7 +665,7 @@ export default function ResourceProfilePage() {
             kind: 'named-resource' as const,
             resourceTypeId: r.resourceTypeId,
           }))
-          return [rtRow, ...nrRows]
+          return nrRows
         }
         // No NRs — RT-level row as before
         return [{
