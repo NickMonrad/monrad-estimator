@@ -33,26 +33,38 @@ A full-stack project estimation tool that replaces a manual spreadsheet process.
 
 ### Prerequisites
 - Node.js 20+
-- PostgreSQL running locally (default: `localhost:5432`, database: `monrad_estimator`)
-- Docker (optional — a local PostgreSQL container is used in development)
+- Docker (recommended — easiest way to run PostgreSQL locally)
 
-### Install dependencies
+### 1. Start PostgreSQL
+
+**With Docker (recommended):**
+```bash
+docker run -d \
+  --name monrad-pg \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=monrad_estimator \
+  -p 5432:5432 \
+  postgres:15
+```
+
+**Without Docker (existing PostgreSQL install):** ensure a database named `monrad_estimator` exists and update `DATABASE_URL` in step 2 with your credentials.
+
+### 2. Install dependencies
 
 ```bash
-cd server && npm install
-cd ../client && npm install
-cd ../e2e && npm install
+npm install          # installs root + all workspaces
 ```
 
-### Configure environment
+### 3. Configure environment
 
-Create `server/.env`:
-```env
-DATABASE_URL=postgresql://postgres:password@localhost:5432/monrad_estimator
-JWT_SECRET=your-secret-here
+```bash
+cp server/.env.example server/.env
 ```
 
-### Run database migrations
+`server/.env.example` contains sensible defaults for local development. Edit it if your PostgreSQL credentials differ from the Docker command above.
+
+### 4. Run database migrations
 
 ```bash
 cd server
@@ -60,14 +72,10 @@ npx prisma migrate deploy
 npx prisma generate
 ```
 
-### Start development servers
+### 5. Start development servers
 
 ```bash
-# Terminal 1 — API (port 3001)
-cd server && npx tsx src/index.ts
-
-# Terminal 2 — Client (port 5173)
-cd client && npm run dev
+npm run dev          # API on :3001 + Vite on :5173 (concurrently)
 ```
 
 ### Run tests
