@@ -125,7 +125,7 @@ export default function ProjectsPage() {
       <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Logo — 5 rapid clicks triggers Geocities easter egg */}
+            {/* Logo — 3 rapid clicks triggers Geocities easter egg */}
             <button
               onClick={geocitiesClick}
               className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center focus:outline-none"
@@ -157,7 +157,7 @@ export default function ProjectsPage() {
               placeholder="Search projects…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm w-56 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
             <button
               onClick={() => { setShowArchived(a => !a); setSearch('') }}
