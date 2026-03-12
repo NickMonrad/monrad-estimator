@@ -66,7 +66,7 @@ export default function ProjectDetailPage() {
             </span>
             <button onClick={() => navigate(`/projects/${id}/settings`)} title="Edit project settings" className="text-gray-400 hover:text-lab3-navy transition-colors">✏️</button>
           </div>
-          {project.customer && <p className="text-sm text-gray-500">Customer: {project.customer}</p>}
+          {project.customer && <p className="text-sm text-gray-500">Customer: {project.customer.name ?? project.customer}</p>}
           {project.description && <p className="text-sm text-gray-600 mt-1">{project.description}</p>}
         </div>
 
