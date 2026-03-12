@@ -23,9 +23,10 @@ interface CustomerForm {
   description: string
   accountCode: string
   crmLink: string
+  orgId: string
 }
 
-const emptyForm: CustomerForm = { name: '', description: '', accountCode: '', crmLink: '' }
+const emptyForm: CustomerForm = { name: '', description: '', accountCode: '', crmLink: '', orgId: '' }
 
 export default function CustomersPage() {
   const { user, logout } = useAuth()
@@ -91,7 +92,7 @@ export default function CustomersPage() {
 
   function handleEdit(customer: Customer) {
     setEditId(customer.id)
-    setForm({ name: customer.name, description: customer.description ?? '', accountCode: customer.accountCode ?? '', crmLink: customer.crmLink ?? '' })
+    setForm({ name: customer.name, description: customer.description ?? '', accountCode: customer.accountCode ?? '', crmLink: customer.crmLink ?? '', orgId: customer.orgId ?? '' })
     setShowForm(true)
   }
 
@@ -191,6 +192,21 @@ export default function CustomersPage() {
                 />
               </div>
             </div>
+            {orgs.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Team (Organisation)</label>
+                <select
+                  value={form.orgId}
+                  onChange={e => setForm(p => ({ ...p, orgId: e.target.value }))}
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                >
+                  <option value="">No team</option>
+                  {orgs.map(o => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <button type="submit" className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700">
                 {editId ? 'Update' : 'Create'}
