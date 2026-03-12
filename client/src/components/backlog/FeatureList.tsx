@@ -50,11 +50,11 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
           saving={isSaving}
         />
       ) : (
-        <div className={`group flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 hover:border-blue-300 cursor-pointer border-l-2 ${epicColour?.border ?? 'border-l-blue-200'}`}
+        <div className={`group flex items-center gap-2 bg-blue-50 dark:bg-blue-950 border border-blue-100 dark:border-blue-900 rounded-lg px-3 py-2 hover:border-blue-300 dark:hover:border-blue-700 cursor-pointer border-l-2 ${epicColour?.border ?? 'border-l-blue-200'}`}
           onClick={onToggle}>
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-blue-300 hover:text-blue-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
-          <span className="text-blue-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
-          <span className="text-xs text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded">Feature</span>
+          <span className="text-blue-500 dark:text-blue-400 text-xs select-none">{expanded ? '▼' : '▶'}</span>
+          <span className="text-xs text-blue-500 dark:text-blue-300 bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded">Feature</span>
           <span className={`text-sm flex-1 truncate ${feature.isActive === false ? 'line-through text-gray-400 dark:text-gray-500' : 'text-gray-800 dark:text-gray-200'}`}>{feature.name}</span>
           <span className="text-xs text-gray-400 dark:text-gray-500">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
           <button onClick={e => { e.stopPropagation(); onApplyTemplate() }}

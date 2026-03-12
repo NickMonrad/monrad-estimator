@@ -416,7 +416,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes} className={`bg-white rounded-xl border border-gray-200 overflow-hidden border-l-4 ${epicColour.border}`}>
+    <div ref={setNodeRef} style={style} {...attributes} className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden border-l-4 ${epicColour.border}`}>
       {isEditing ? (
         <div className="p-3">
           <EpicForm
@@ -427,12 +427,12 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
           />
         </div>
       ) : (
-        <div className={`group px-4 py-3 cursor-pointer hover:bg-gray-50 ${epicColour.light}`} onClick={onToggle}>
+        <div className={`group px-4 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 ${epicColour.light} ${epicColour.darkLight}`} onClick={onToggle}>
           <div className="flex items-center gap-2">
             <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0 px-0.5 text-base leading-none mr-1" onClick={e => e.stopPropagation()}>⠿</button>
             <span className="text-gray-400 dark:text-gray-500 text-sm select-none">{expanded ? '▼' : '▶'}</span>
-            <span className="text-xs text-lab3-navy bg-blue-50 px-2 py-0.5 rounded font-medium">Epic</span>
-            <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900'}`}>{epic.name}</span>
+            <span className="text-xs text-lab3-navy dark:text-blue-300 bg-blue-50 dark:bg-blue-900 px-2 py-0.5 rounded font-medium">Epic</span>
+            <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900 dark:text-white'}`}>{epic.name}</span>
             <span className="text-sm text-gray-400 dark:text-gray-500">
               {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h · {(epicTotalHours / hoursPerDay).toFixed(1)}d
             </span>

@@ -53,11 +53,11 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
           saving={isSaving}
         />
       ) : (
-        <div className={`group flex items-center gap-2 bg-purple-50 border border-purple-100 rounded-lg px-3 py-2 hover:border-purple-300 cursor-pointer border-l ${epicColour?.border ?? 'border-l-purple-100'}`}
+        <div className={`group flex items-center gap-2 bg-purple-50 dark:bg-purple-950 border border-purple-100 dark:border-purple-900 rounded-lg px-3 py-2 hover:border-purple-300 dark:hover:border-purple-700 cursor-pointer border-l ${epicColour?.border ?? 'border-l-purple-100'}`}
           onClick={onToggle}>
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-purple-300 hover:text-purple-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
-          <span className="text-purple-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
-          <span className="text-xs text-purple-500 bg-purple-100 px-1.5 py-0.5 rounded">Story</span>
+          <span className="text-purple-500 dark:text-purple-400 text-xs select-none">{expanded ? '▼' : '▶'}</span>
+          <span className="text-xs text-purple-500 dark:text-purple-300 bg-purple-100 dark:bg-purple-900 px-1.5 py-0.5 rounded">Story</span>
           <span className={`text-sm flex-1 truncate ${story.isActive === false ? 'line-through text-gray-400 dark:text-gray-500' : 'text-gray-800 dark:text-gray-200'}`}>{story.name}</span>
           <span className="text-xs text-gray-400 dark:text-gray-500">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
           {story.appliedTemplateId && (
