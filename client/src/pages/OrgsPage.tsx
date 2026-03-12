@@ -92,7 +92,7 @@ export default function OrgsPage() {
             <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
               <span className="text-white text-xs font-bold">M</span>
             </div>
-            <Link to="/projects" className="font-semibold text-gray-900">Monrad Estimator</Link>
+            <Link to="/" className="font-semibold text-gray-900">Monrad Estimator</Link>
             <Link to="/resource-types" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Resource Types</Link>
             <Link to="/templates" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Templates</Link>
             <Link to="/rate-cards" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Rate Cards</Link>
