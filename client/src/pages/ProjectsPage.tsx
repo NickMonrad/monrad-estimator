@@ -291,7 +291,7 @@ export default function ProjectsPage() {
                 <div className="flex items-start justify-between mb-2">
                   <h3 className="font-medium text-gray-900 dark:text-white">{project.name}</h3>
                   <div className="flex items-center gap-1">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOURS[project.status] ?? 'bg-gray-100 text-gray-700'}`}>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOURS[project.status ?? ''] ?? 'bg-gray-100 text-gray-700'}`}>
                       {project.status}
                     </span>
                     {!showArchived && (
