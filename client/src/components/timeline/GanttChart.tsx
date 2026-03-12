@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import type { TimelineEntry } from '../../types/backlog'
 import { getEpicColour } from '../../lib/epicColours'
+import { useIsDark } from '../../hooks/useIsDark'
 
 // ---------------------------------------------------------------------------
 // Local types (not yet in backlog.ts)
@@ -318,6 +319,20 @@ export default function GanttChart({
   }, [dragging, onDragFeature, onDragStory])
 
   // -----------------------------------------------------------------------
+  // Dark mode colour palette for SVG (Tailwind dark: can't apply to SVG attrs)
+  // -----------------------------------------------------------------------
+  const isDark = useIsDark()
+  const svgColors = {
+    bg:           isDark ? '#111827' : '#fafafa',   // gray-900 / gray-50
+    gridLine:     isDark ? '#374151' : '#f3f4f6',   // gray-700 / gray-100
+    weekSep:      isDark ? '#374151' : '#e5e7eb',   // gray-700 / gray-200
+    rowSep:       isDark ? '#1f2937' : '#f9fafb',   // gray-800 / gray-50
+    headerText:   isDark ? '#9ca3af' : '#6b7280',   // gray-400 / gray-500
+    weekNumText:  isDark ? '#6b7280' : '#9ca3af',   // gray-500 / gray-400
+    epicBand:     isDark ? '#1e293b' : '#f8fafc',   // slate-800 / slate-50
+  }
+
+  // -----------------------------------------------------------------------
   // Feature lookup for dependency arrows
   // -----------------------------------------------------------------------
   const featureById = useMemo(() => {
@@ -336,18 +351,18 @@ export default function GanttChart({
   // Render
   // -----------------------------------------------------------------------
   return (
-    <div className="flex overflow-hidden border border-gray-100 rounded-lg">
+    <div className="flex overflow-hidden border border-gray-100 dark:border-gray-700 rounded-lg">
       {/* Left label panel — sticky, no horizontal scroll */}
       <div
         style={{ width: LABEL_W, flexShrink: 0 }}
-        className="relative bg-white border-r border-gray-100 z-10"
+        className="relative bg-white dark:bg-gray-800 border-r border-gray-100 dark:border-gray-700 z-10"
       >
         {/* Label header */}
         <div
           style={{ height: HEADER_H }}
-          className="border-b border-gray-100 flex items-end px-3 pb-2"
+          className="border-b border-gray-100 dark:border-gray-700 flex items-end px-3 pb-2"
         >
-          <span className="text-xs font-medium text-gray-500">Feature</span>
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Feature</span>
         </div>
 
         {/* Label rows */}
@@ -362,7 +377,7 @@ export default function GanttChart({
                   height: EPIC_ROW_H,
                   backgroundColor: `${colour.hex}14`, // ~8% opacity
                 }}
-                className="border-b border-gray-100 flex items-center px-3 gap-1 cursor-pointer select-none"
+                className="border-b border-gray-100 dark:border-gray-700 flex items-center px-3 gap-1 cursor-pointer select-none"
                 onClick={() =>
                   setExpandedEpics(prev => {
                     const next = new Set(prev)
@@ -381,18 +396,18 @@ export default function GanttChart({
                     <button
                       onClick={() => onMoveEpic(row.epicId, 'up', row.epicIdx)}
                       disabled={row.epicIdx === 0}
-                      className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
+                      className="text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
                       title="Move epic up"
                     >▲</button>
                     <button
                       onClick={() => onMoveEpic(row.epicId, 'down', row.epicIdx)}
                       disabled={row.epicIdx === row.epicCount - 1}
-                      className="text-gray-300 hover:text-gray-600 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
+                      className="text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
                       title="Move epic down"
                     >▼</button>
                   </div>
                 )}
-                <span className="mr-1 text-xs text-gray-400">{isOpen ? '▼' : '▶'}</span>
+                <span className="mr-1 text-xs text-gray-400 dark:text-gray-500">{isOpen ? '▼' : '▶'}</span>
                 <span
                   className="text-sm font-semibold truncate"
                   style={{ color: colour.hex }}
@@ -416,7 +431,7 @@ export default function GanttChart({
                         : 'Features run in parallel — click for sequential'
                     }
                     aria-label={row.epicFeatureMode === 'sequential' ? 'sequential' : 'parallel'}
-                    className="ml-1 text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-white flex-shrink-0"
+                    className="ml-1 text-xs px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 flex-shrink-0"
                   >
                     {row.epicFeatureMode === 'sequential' ? '↓ seq' : '⇉ par'}
                   </button>
@@ -439,7 +454,7 @@ export default function GanttChart({
                     className={`text-xs px-1.5 py-0.5 rounded border font-medium flex-shrink-0 ${
                       row.epicScheduleMode === 'parallel'
                         ? 'bg-purple-100 text-purple-700 border-purple-300'
-                        : 'bg-gray-100 text-gray-500 border-gray-200'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-600'
                     }`}
                   >
                     {row.epicScheduleMode === 'parallel' ? '⬛' : '⏭'}
@@ -456,10 +471,10 @@ export default function GanttChart({
               <div
                 key={row.key}
                 style={{ height: FEAT_ROW_H }}
-                className="border-b border-gray-50 flex items-center px-3 gap-1"
+                className="border-b border-gray-50 dark:border-gray-700 flex items-center px-3 gap-1"
               >
                 <button
-                  className="text-xs text-gray-400 w-4 flex-shrink-0 disabled:opacity-30"
+                  className="text-xs text-gray-400 dark:text-gray-500 w-4 flex-shrink-0 disabled:opacity-30"
                   disabled={!hasStories}
                   onClick={() =>
                     setExpandedFeatures(prev => {
@@ -473,7 +488,7 @@ export default function GanttChart({
                   {hasStories ? (isOpen ? '▼' : '▶') : ''}
                 </button>
                 <span
-                  className="text-sm truncate flex-1 text-gray-700 cursor-pointer hover:text-blue-600"
+                  className="text-sm truncate flex-1 text-gray-700 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
                   title={row.entry.featureName}
                   onClick={() => setEditingFeatureId(row.entry.featureId)}
                 >
@@ -482,7 +497,7 @@ export default function GanttChart({
                 {/* Reorder buttons */}
                 <div className="flex flex-col gap-px flex-shrink-0">
                   <button
-                    className="text-gray-300 hover:text-gray-600 text-xs leading-none disabled:opacity-20"
+                    className="text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 text-xs leading-none disabled:opacity-20"
                     disabled={row.featureIdx === 0 || !onMoveFeature}
                     onClick={() => onMoveFeature?.(row.entry.epicId, row.featureIdx, 'up')}
                     title="Move feature up"
@@ -490,7 +505,7 @@ export default function GanttChart({
                     ▲
                   </button>
                   <button
-                    className="text-gray-300 hover:text-gray-600 text-xs leading-none disabled:opacity-20"
+                    className="text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 text-xs leading-none disabled:opacity-20"
                     disabled={row.featureIdx === row.totalFeaturesInEpic - 1 || !onMoveFeature}
                     onClick={() => onMoveFeature?.(row.entry.epicId, row.featureIdx, 'down')}
                     title="Move feature down"
@@ -507,10 +522,10 @@ export default function GanttChart({
             <div
               key={row.key}
               style={{ height: STORY_ROW_H }}
-              className="border-b border-gray-50 flex items-center pl-6 pr-3"
+              className="border-b border-gray-50 dark:border-gray-700 flex items-center pl-6 pr-3"
             >
               <span
-                className="text-xs text-gray-500 truncate"
+                className="text-xs text-gray-500 dark:text-gray-400 truncate"
                 title={row.entry.storyName}
               >
                 {row.entry.storyName}
@@ -535,7 +550,7 @@ export default function GanttChart({
           </defs>
 
           {/* Background fill */}
-          <rect x={0} y={0} width={totalWeeks * COL_W} height={totalHeight} fill="#fafafa" style={{ pointerEvents: 'none' }} />
+          <rect x={0} y={0} width={totalWeeks * COL_W} height={totalHeight} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
 
           {/* Week header + vertical grid lines */}
           {Array.from({ length: totalWeeks }, (_, i) => (
@@ -545,7 +560,7 @@ export default function GanttChart({
                 y1={0}
                 x2={i * COL_W}
                 y2={totalHeight}
-                stroke="#f3f4f6"
+                stroke={svgColors.gridLine}
                 strokeWidth={1}
               />
               <text
@@ -553,7 +568,7 @@ export default function GanttChart({
                 y={HEADER_H - (projectStartDate ? 14 : 8)}
                 textAnchor="middle"
                 fontSize={11}
-                fill="#6b7280"
+                fill={svgColors.headerText}
               >
                 W{i + 1}
               </text>
@@ -563,7 +578,7 @@ export default function GanttChart({
                   y={HEADER_H - 2}
                   textAnchor="middle"
                   fontSize={9}
-                  fill="#9ca3af"
+                  fill={svgColors.weekNumText}
                 >
                   {formatDate(addDays(projectStartDate, i * 7))}
                 </text>
@@ -577,7 +592,7 @@ export default function GanttChart({
             y1={HEADER_H}
             x2={totalWeeks * COL_W}
             y2={HEADER_H}
-            stroke="#e5e7eb"
+            stroke={svgColors.weekSep}
             strokeWidth={1}
           />
 
@@ -617,7 +632,7 @@ export default function GanttChart({
                     y1={y + EPIC_ROW_H}
                     x2={totalWeeks * COL_W}
                     y2={y + EPIC_ROW_H}
-                    stroke="#f3f4f6"
+                    stroke={svgColors.gridLine}
                     strokeWidth={1}
                   />
                 </g>
@@ -683,7 +698,7 @@ export default function GanttChart({
                     y1={y + FEAT_ROW_H}
                     x2={totalWeeks * COL_W}
                     y2={y + FEAT_ROW_H}
-                    stroke="#f9fafb"
+                    stroke={svgColors.rowSep}
                     strokeWidth={1}
                   />
                 </g>
@@ -732,7 +747,7 @@ export default function GanttChart({
                   y1={y + STORY_ROW_H}
                   x2={totalWeeks * COL_W}
                   y2={y + STORY_ROW_H}
-                  stroke="#f9fafb"
+                  stroke={svgColors.rowSep}
                   strokeWidth={1}
                 />
               </g>

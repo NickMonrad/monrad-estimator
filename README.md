@@ -64,6 +64,31 @@ cp server/.env.example server/.env
 
 `server/.env.example` contains sensible defaults for local development. Edit it if your PostgreSQL credentials differ from the Docker command above.
 
+#### Email / SMTP (optional)
+
+Email is used for password reset links and org invite emails. Without SMTP configured, both flows still work — the email content and link are printed to the server console instead.
+
+To enable real email delivery, add the following to `server/.env`:
+
+```env
+SMTP_HOST="smtp-relay.brevo.com"   # or your provider's SMTP host
+SMTP_PORT="587"
+SMTP_USER="your-smtp-login"
+SMTP_PASS="your-smtp-key-or-password"
+SMTP_FROM="Monrad Estimator <you@yourdomain.com>"
+CLIENT_URL="http://localhost:5173"  # base URL used in email links
+```
+
+**Recommended free providers:**
+
+| Provider | Free tier | Notes |
+|---|---|---|
+| [Brevo](https://brevo.com) | 300 emails/day | SMTP login = account email, password = generated SMTP key |
+| [Resend](https://resend.com) | 3,000 emails/month | Requires a verified domain |
+| [SendGrid](https://sendgrid.com) | 100 emails/day | Industry standard |
+
+For **Brevo**: generate an SMTP key at *Settings → SMTP & API → SMTP*, then verify a sender address at *Senders & IPs → Add a sender*.
+
 ### 4. Run database migrations
 
 ```bash
@@ -177,6 +202,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Per-named-resource allocation modes (Full Project / Timeline / Custom) + Commercial tab overhaul | #131 |
 | Resource period start/end dates, buffer weeks indicators, commercial double-count fix, allocation label fix, CSV epic/feature descriptions + assumptions, Epic.assumptions field, document assumptions section, LAB3 colour scheme, PDF heading fixes | #132 |
 | PDF cover page: generated-by username, generation time, document label, projected end date; backlog CSV fix for epic/feature descriptions; commercial tab removes aggregate row; auto-create person on resource type creation; assumptions exclude out-of-scope items | #135 |
+| Comprehensive dark mode theming across all pages and components; standardised headers with M icon, ThemeToggle, and breadcrumb nav on all global and project pages; SVG dark mode (Gantt, histogram, named resources) via `useIsDark` hook; epic/feature/story colour hierarchy in dark mode | #143 |
 
 ---
 
@@ -190,6 +216,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 ### 🔧 Near-term enhancements
 | # | Title |
 |---|---|
+| [#150](https://github.com/NickMonrad/monrad-estimator/issues/150) | Resource Profile: warn when project resources have no rates applied |
 | [#108](https://github.com/NickMonrad/monrad-estimator/issues/108) | docs: comprehensive functional specification (`docs/FUNCTIONAL_SPEC.md`) |
 | [#109](https://github.com/NickMonrad/monrad-estimator/issues/109) | Global Customer entity (name, description, account code, CRM link) + link to projects |
 | [#57](https://github.com/NickMonrad/monrad-estimator/issues/57) | Template tasks: assumptions + description fields |
@@ -206,6 +233,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 ### 🚀 Feature ideas
 | # | Title |
 |---|---|
+| [#149](https://github.com/NickMonrad/monrad-estimator/issues/149) | Timeline: consistent tooltips on Resource Demand + Named Resources; custom feature colours in Gantt; export timeline to image + CSV |
 | [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — diff UI and compare view (snapshots + rollback already shipped) |
 | [#68](https://github.com/NickMonrad/monrad-estimator/issues/68) | Timeline resource levelling + story dependencies |
 | [#70](https://github.com/NickMonrad/monrad-estimator/issues/70) | Locale and currency settings (default AU/AUD) |
@@ -242,7 +270,6 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 ### 🎉 Fun
 | # | Title |
 |---|---|
-| [#33](https://github.com/NickMonrad/monrad-estimator/issues/33) | Dark mode theme |
 | [#34](https://github.com/NickMonrad/monrad-estimator/issues/34) | Geocities theme |
 | [#90](https://github.com/NickMonrad/monrad-estimator/issues/90) | Use issues backlog as screenshot test data |
 | [#91](https://github.com/NickMonrad/monrad-estimator/issues/91) | Custom profile picture upload |

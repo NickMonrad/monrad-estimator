@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import { authenticate } from './middleware/auth.js'
 import authRoutes from './routes/auth.js'
 import projectRoutes from './routes/projects.js'
 import epicRoutes from './routes/epics.js'
@@ -22,6 +23,8 @@ import resourceProfileRoutes from './routes/resourceProfile.js'
 import featureDependenciesRouter from './routes/featureDependencies.js'
 import rateCardRoutes, { applyRateCardRouter } from './routes/rateCards.js'
 import namedResourceRoutes from './routes/namedResources.js'
+import orgRoutes from './routes/orgs.js'
+import customerRoutes from './routes/customers.js'
 import documentRoutes from './routes/documents.js'
 
 const app = express()
@@ -55,6 +58,8 @@ app.use('/api/projects/:projectId/feature-dependencies', featureDependenciesRout
 app.use('/api/rate-cards', rateCardRoutes)
 app.use('/api/projects/:projectId/apply-rate-card', applyRateCardRouter)
 app.use('/api/projects/:projectId/documents', documentRoutes)
+app.use('/api/orgs', authenticate, orgRoutes)
+app.use('/api/customers', authenticate, customerRoutes)
 
 export { app }
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`))

@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from 'react'
 const GEOCITIES_CSS = `
   * { font-family: 'Comic Sans MS', cursive, sans-serif !important; cursor: crosshair !important; }
   body {
+    padding-top: 32px !important;
     background: repeating-linear-gradient(
       45deg,
       #ff00ff,
@@ -64,7 +65,7 @@ function removeGeocities() {
 
 /**
  * Geocities easter egg hook.
- * Click the logo 5 times within 2 seconds to activate.
+ * Click the logo 3 times within 2 seconds to activate.
  * Click 5 more times to deactivate.
  *
  * Returns { triggerClick, isActive } — wire triggerClick to the logo onClick.
@@ -86,7 +87,7 @@ export function useGeocitiesEgg() {
     // Keep only clicks within the last 2 seconds
     clicksRef.current = clicksRef.current.filter(t => now - t < 2000)
 
-    if (clicksRef.current.length >= 5) {
+    if (clicksRef.current.length >= 3) {
       clicksRef.current = []
       setIsActive(prev => {
         if (prev) {

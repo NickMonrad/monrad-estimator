@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { PDFViewer, pdf } from '@react-pdf/renderer'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
+import ThemeToggle from '../components/layout/ThemeToggle'
 import ScopeDocument from '../components/documents/ScopeDocument'
 import type { ScopeDocumentProps } from '../components/documents/ScopeDocument'
 
@@ -28,7 +29,7 @@ export default function DocumentsPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { user } = useAuth()
+  const { user, logout } = useAuth()
 
   const [sections, setSections] = useState({
     cover: true,
@@ -173,31 +174,37 @@ export default function DocumentsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* TODO: dark mode — add dark: variants throughout this page */}
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-6 py-4">
-        <nav className="text-sm text-gray-500 flex items-center gap-1 mb-1">
-          <button onClick={() => navigate('/')} className="hover:text-gray-700">Monrad Estimator</button>
-          <span>/</span>
-          <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-gray-700">
-            {project?.name ?? '…'}
-          </button>
-          <span>/</span>
-          <span className="text-gray-900 font-medium">Documents</span>
-        </nav>
-        <h1 className="text-xl font-semibold text-gray-900">Documents</h1>
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
+              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center"><span className="text-white text-xs font-bold">M</span></div>
+              <span className="font-semibold text-gray-900 dark:text-white group-hover:text-lab3-navy dark:group-hover:text-lab3-blue transition-colors">Monrad Estimator</span>
+            </button>
+            <span>/</span>
+            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">{project?.name ?? '…'}</button>
+            <span>/</span>
+            <span className="text-gray-700 dark:text-gray-300">Documents</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
+          </div>
+        </div>
       </header>
 
       <div className="max-w-screen-xl mx-auto px-6 py-6 flex gap-6">
         {/* ── Left column: PDF Viewer ── */}
         <div className="flex-1" style={{ minWidth: 0 }}>
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
             {allLoaded ? (
               <PDFViewer style={{ width: '100%', height: '700px' }}>
                 <ScopeDocument {...scopeDocProps} />
               </PDFViewer>
             ) : (
-              <div className="flex items-center justify-center h-64 text-gray-400">
+              <div className="flex items-center justify-center h-64 text-gray-400 dark:text-gray-500">
                 Loading preview…
               </div>
             )}
@@ -208,27 +215,27 @@ export default function DocumentsPage() {
         <div className="w-80 flex-shrink-0 space-y-4">
 
           {/* Document type */}
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3">Document Type</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Document Type</h2>
             <div className="space-y-2">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="radio" name="docType" defaultChecked className="accent-red-600" />
-                <span className="text-sm text-gray-800">Scope Document</span>
+                <span className="text-sm text-gray-800 dark:text-gray-200">Scope Document</span>
               </label>
               <label className="flex items-center gap-2 opacity-40 cursor-not-allowed">
                 <input type="radio" name="docType" disabled />
-                <span className="text-sm text-gray-800">SOW <span className="text-xs text-gray-400">(coming soon)</span></span>
+                <span className="text-sm text-gray-800 dark:text-gray-200">SOW <span className="text-xs text-gray-400 dark:text-gray-500">(coming soon)</span></span>
               </label>
               <label className="flex items-center gap-2 opacity-40 cursor-not-allowed">
                 <input type="radio" name="docType" disabled />
-                <span className="text-sm text-gray-800">Proposal Deck <span className="text-xs text-gray-400">(coming soon)</span></span>
+                <span className="text-sm text-gray-800 dark:text-gray-200">Proposal Deck <span className="text-xs text-gray-400 dark:text-gray-500">(coming soon)</span></span>
               </label>
             </div>
           </div>
 
           {/* Sections */}
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3">Sections</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Sections</h2>
             <div className="space-y-2">
               {([
                 ['cover', 'Cover Page'],
@@ -245,20 +252,20 @@ export default function DocumentsPage() {
                     onChange={() => toggleSection(key)}
                     className="accent-red-600"
                   />
-                  <span className="text-sm text-gray-800">{label}</span>
+                  <span className="text-sm text-gray-800 dark:text-gray-200">{label}</span>
                 </label>
               ))}
             </div>
           </div>
 
           {/* Label */}
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
-            <h2 className="text-sm font-semibold text-gray-700 mb-2">Document Label</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Document Label</h2>
             <input
               type="text"
               value={label}
               onChange={e => setLabel(e.target.value)}
-              className="w-full text-sm border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-red-400"
+              className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:border-red-400"
               placeholder="Label for this document"
             />
           </div>
@@ -277,20 +284,20 @@ export default function DocumentsPage() {
           )}
 
           {/* Generated documents history */}
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3">Generated Documents</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Generated Documents</h2>
 
             {docsLoading ? (
-              <p className="text-xs text-gray-400">Loading…</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">Loading…</p>
             ) : generatedDocs.length === 0 ? (
-              <p className="text-xs text-gray-400">No documents generated yet.</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">No documents generated yet.</p>
             ) : (
               <ul className="space-y-3">
                 {generatedDocs.map(doc => (
                   <li key={doc.id} className="flex items-start gap-2 text-sm">
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-800 truncate">{doc.label}</p>
-                      <p className="text-xs text-gray-400">
+                      <p className="font-medium text-gray-800 dark:text-white truncate">{doc.label}</p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500">
                         {new Date(doc.createdAt).toLocaleDateString('en-AU', {
                           year: 'numeric', month: 'short', day: 'numeric',
                         })}
@@ -298,7 +305,7 @@ export default function DocumentsPage() {
                         {doc.generatedBy.email}
                       </p>
                     </div>
-                    <span className="flex-shrink-0 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full uppercase">
+                    <span className="flex-shrink-0 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full uppercase">
                       {doc.format}
                     </span>
                     <button
@@ -310,7 +317,7 @@ export default function DocumentsPage() {
                     </button>
                     <button
                       onClick={() => handleDelete(doc.id)}
-                      className="flex-shrink-0 text-xs text-gray-400 hover:text-red-500"
+                      className="flex-shrink-0 text-xs text-gray-400 dark:text-gray-500 hover:text-red-500"
                       title="Delete"
                     >
                       ✕

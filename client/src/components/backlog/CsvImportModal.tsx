@@ -100,11 +100,11 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-700">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Import Backlog from CSV</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Import Backlog from CSV</h2>
             <div className="flex items-center gap-2 mt-1">
               {(['upload', 'staging', 'confirm'] as Step[]).map((s, i) => (
                 <span key={s} className="flex items-center gap-1 text-xs">
@@ -116,7 +116,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
               ))}
             </div>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xl">✕</button>
         </div>
 
         {/* Body */}
@@ -128,7 +128,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
           {/* Step 1: Upload */}
           {step === 'upload' && (
             <div className="text-center py-8">
-              <p className="text-gray-500 mb-2 text-sm">Upload a CSV with your backlog data. Not sure of the format?</p>
+              <p className="text-gray-500 dark:text-gray-400 mb-2 text-sm">Upload a CSV with your backlog data. Not sure of the format?</p>
               <button
                 onClick={() => {
                   const headers = 'Epic,Feature,Story,Task,ResourceType,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge,HoursEffort,DurationDays,Description,Assumptions'
@@ -160,7 +160,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
             <div>
               {summary && (
                 <div className="flex gap-3 mb-4 text-sm flex-wrap">
-                  <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">{summary.total} rows</span>
+                  <span className="bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-3 py-1 rounded-full">{summary.total} rows</span>
                   {summary.errorCount > 0 && <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full font-medium">⚠ {summary.errorCount} row{summary.errorCount !== 1 ? 's' : ''} with errors</span>}
                   {summary.warningCount > 0 && <span className="bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full">⚡ {summary.warningCount} warning{summary.warningCount !== 1 ? 's' : ''}</span>}
                 </div>
@@ -197,26 +197,26 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                 </div>
               )}
 
-              <div className="overflow-x-auto border border-gray-200 rounded-lg">
+              <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
                 <table className="w-full text-xs">
-                  <thead className="bg-gray-50 border-b border-gray-200">
+                  <thead className="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-700">
                     <tr>
                       {['Row', 'Epic', 'Feature', 'Story', 'Task', 'Resource Type', 'Hours', 'Days', ''].map(h => (
-                        <th key={h} className="text-left px-3 py-2 text-gray-500 font-medium whitespace-nowrap">{h}</th>
+                        <th key={h} className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {staged.map((row, i) => (
-                      <tr key={i} className={`border-b border-gray-100 ${row.errors.length > 0 ? 'bg-red-50' : row.warnings.length > 0 ? 'bg-yellow-50' : ''}`}>
-                        <td className="px-3 py-2 text-gray-400">
+                      <tr key={i} className={`border-b border-gray-100 dark:border-gray-700 ${row.errors.length > 0 ? 'bg-red-50 dark:bg-red-950/30' : row.warnings.length > 0 ? 'bg-yellow-50 dark:bg-yellow-950/20' : 'dark:bg-gray-800'}`}>
+                        <td className="px-3 py-2 text-gray-400 dark:text-gray-500">
                           {row.errors.length > 0 ? <span className="text-red-500 font-bold">⚠ {row.rowIndex}</span> : row.rowIndex}
                         </td>
                         {(['epic', 'feature', 'story', 'task', 'resourceType'] as const).map(field => (
                           <td key={field} className="px-2 py-1">
                             {editingRow === i ? (
                               <input
-                                className="border border-gray-300 rounded px-1 py-0.5 w-24 text-xs"
+                                className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-24 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                                 value={row[field] as string}
                                 onChange={e => updateRow(i, field, e.target.value)}
                               />
@@ -227,12 +227,12 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                         ))}
                         <td className="px-2 py-1">
                           {editingRow === i ? (
-                            <input type="number" className="border border-gray-300 rounded px-1 py-0.5 w-16 text-xs" value={row.hoursEffort} onChange={e => updateRow(i, 'hoursEffort', parseFloat(e.target.value) || 0)} />
+                            <input type="number" className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-16 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white" value={row.hoursEffort} onChange={e => updateRow(i, 'hoursEffort', parseFloat(e.target.value) || 0)} />
                           ) : (
                             <span className="cursor-pointer hover:text-lab3-navy" onClick={() => setEditingRow(i)}>{row.hoursEffort || '—'}</span>
                           )}
                         </td>
-                        <td className="px-2 py-1 text-gray-500">{row.durationDays || '—'}</td>
+                        <td className="px-2 py-1 text-gray-500 dark:text-gray-400">{row.durationDays || '—'}</td>
                         <td className="px-2 py-1">
                           <button onClick={() => removeRow(i)} className="text-gray-400 hover:text-red-600 text-xs">✕</button>
                         </td>
@@ -242,7 +242,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                 </table>
               </div>
               {editingRow !== null && (
-                <p className="text-xs text-gray-400 mt-2">Click a cell to edit. Press elsewhere to deselect.</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">Click a cell to edit. Press elsewhere to deselect.</p>
               )}
             </div>
           )}
@@ -251,21 +251,21 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
           {step === 'confirm' && (
             <div className="text-center py-12">
               <div className="text-5xl mb-4">📋</div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-2">Ready to import {staged.length} rows</h3>
-              <p className="text-sm text-gray-500 mb-2">This will add epics, features, stories and tasks to your backlog.</p>
-              <p className="text-sm text-gray-500">A snapshot of your current backlog will be saved automatically before import.</p>
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-2">Ready to import {staged.length} rows</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">This will add epics, features, stories and tasks to your backlog.</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">A snapshot of your current backlog will be saved automatically before import.</p>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-between items-center">
-          <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
+        <div className="px-6 py-4 border-t border-gray-100 dark:border-gray-700 flex justify-between items-center">
+          <button onClick={onClose} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Cancel</button>
           <div className="flex gap-3">
             {step === 'staging' && (
               <button
                 onClick={() => { setStep('upload'); setStaged([]); setSummary(null) }}
-                className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
                 ← Re-upload
               </button>
@@ -284,7 +284,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
             )}
             {step === 'confirm' && (
               <>
-                <button onClick={() => setStep('staging')} className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">← Back</button>
+                <button onClick={() => setStep('staging')} className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">← Back</button>
                 <button
                   onClick={handleCommit}
                   disabled={loading}

@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react'
+import { useIsDark } from '../../hooks/useIsDark'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -56,6 +57,14 @@ export default function ResourceHistogram({
   scrollContainerRef,
   onScroll,
 }: Props) {
+
+  const isDark = useIsDark()
+  const svgColors = {
+    bg:       isDark ? '#111827' : '#fafafa',
+    gridLine: isDark ? '#374151' : '#f3f4f6',
+    text:     isDark ? '#6b7280' : '#9ca3af',
+    capLine:  isDark ? '#6b7280' : '#9ca3af',
+  }
 
   // Build capacity lookup: week|rtName → capacityDays
   const capacityLookup = useMemo(() => {
@@ -118,18 +127,18 @@ export default function ResourceHistogram({
   const svgW = totalWeeks * colW
 
   return (
-    <div className="border-t border-gray-200 flex overflow-hidden">
+    <div className="border-t border-gray-200 dark:border-gray-700 flex overflow-hidden">
       {/* Left label panel — sticky */}
       <div
         style={{ width: labelW, flexShrink: 0 }}
-        className="relative bg-white border-r border-gray-100 z-10"
+        className="relative bg-white dark:bg-gray-800 border-r border-gray-100 dark:border-gray-700 z-10"
       >
         {/* Header */}
         <div
           style={{ height: HEADER_H }}
-          className="border-b border-gray-100 flex items-center px-3"
+          className="border-b border-gray-100 dark:border-gray-700 flex items-center px-3"
         >
-          <span className="text-xs font-medium text-gray-500">Resource Demand</span>
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Resource Demand</span>
         </div>
 
         {/* Resource type rows */}
@@ -140,10 +149,10 @@ export default function ResourceHistogram({
             <div
               key={rt.name}
               style={{ height: ROW_H }}
-              className="border-b border-gray-50 flex flex-col justify-center px-3"
+              className="border-b border-gray-50 dark:border-gray-700 flex flex-col justify-center px-3"
             >
-              <span className="text-xs font-medium text-gray-700 truncate">{rt.name}</span>
-              <span className="text-xs text-gray-400 mt-0.5">{engLabel}</span>
+              <span className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{rt.name}</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{engLabel}</span>
             </div>
           )
         })}
@@ -161,7 +170,7 @@ export default function ResourceHistogram({
           style={{ display: 'block' }}
         >
           {/* Background */}
-          <rect x={0} y={0} width={svgW} height={totalH} fill="#fafafa" style={{ pointerEvents: 'none' }} />
+          <rect x={0} y={0} width={svgW} height={totalH} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
 
           {/* Column grid lines */}
           {Array.from({ length: totalWeeks + 1 }).map((_, i) => (
@@ -171,7 +180,7 @@ export default function ResourceHistogram({
               y1={0}
               x2={i * colW}
               y2={totalH}
-              stroke="#f3f4f6"
+              stroke={svgColors.gridLine}
               strokeWidth={1}
             />
           ))}
@@ -186,7 +195,7 @@ export default function ResourceHistogram({
                 y={HEADER_H - 6}
                 textAnchor="middle"
                 fontSize={9}
-                fill="#9ca3af"
+                fill={svgColors.text}
               >
                 W{i}
               </text>
@@ -206,7 +215,7 @@ export default function ResourceHistogram({
                   y1={rowY + ROW_H}
                   x2={svgW}
                   y2={rowY + ROW_H}
-                  stroke="#f3f4f6"
+                  stroke={svgColors.gridLine}
                   strokeWidth={1}
                 />
 
@@ -224,7 +233,7 @@ export default function ResourceHistogram({
                       y1={capY}
                       x2={(w + 1) * colW}
                       y2={capY}
-                      stroke="#9ca3af"
+                      stroke={svgColors.capLine}
                       strokeWidth={1}
                       strokeDasharray="4 3"
                       opacity={0.6}
