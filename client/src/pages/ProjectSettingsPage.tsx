@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api, getCustomers } from '../lib/api'
+import { api, getCustomers, getOrgs, moveProjectToOrg } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 
 const STATUS_OPTIONS = ['DRAFT', 'ACTIVE', 'REVIEW', 'COMPLETE', 'ARCHIVED']
 
 interface Customer {
+  id: string
+  name: string
+}
+
+interface Org {
   id: string
   name: string
 }
@@ -20,6 +25,9 @@ export default function ProjectSettingsPage() {
   const [form, setForm] = useState({ name: '', description: '', customerId: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0 })
   const [saved, setSaved] = useState(false)
   const [customers, setCustomers] = useState<Customer[]>([])
+  const [orgs, setOrgs] = useState<Org[]>([])
+  const [selectedOrgId, setSelectedOrgId] = useState('')
+  const [orgSaved, setOrgSaved] = useState(false)
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', id],
@@ -28,6 +36,7 @@ export default function ProjectSettingsPage() {
 
   useEffect(() => {
     getCustomers().then(setCustomers).catch(() => {})
+    getOrgs().then(setOrgs).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -40,6 +49,7 @@ export default function ProjectSettingsPage() {
         hoursPerDay: project.hoursPerDay ?? 7.6,
         bufferWeeks: project.bufferWeeks ?? 0,
       })
+      setSelectedOrgId(project.orgId ?? '')
     }
   }, [project])
 
@@ -96,13 +106,31 @@ export default function ProjectSettingsPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Organisation</label>
-            <p className="text-sm text-gray-600 py-2">
-              {project.org ? (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">{project.org.name}</span>
-              ) : (
-                <span className="text-gray-400">Personal project</span>
-              )}
-            </p>
+            <div className="flex gap-2 items-center">
+              <select
+                value={selectedOrgId}
+                onChange={e => { setSelectedOrgId(e.target.value); setOrgSaved(false) }}
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              >
+                <option value="">Personal project</option>
+                {orgs.map(o => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={async () => {
+                  await moveProjectToOrg(id!, selectedOrgId)
+                  qc.invalidateQueries({ queryKey: ['project', id] })
+                  setOrgSaved(true)
+                  setTimeout(() => setOrgSaved(false), 2000)
+                }}
+                disabled={selectedOrgId === (project?.orgId ?? '')}
+                className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {orgSaved ? '✓ Saved' : 'Apply'}
+              </button>
+            </div>
           </div>
 
           <div>

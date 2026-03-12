@@ -339,24 +339,31 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
 
 // POST /api/projects/:id/move-to-org
 router.post('/:id/move-to-org', async (req: AuthRequest, res: Response) => {
-  const id = req.params.id as string
-  const { orgId } = req.body
-  if (!orgId) { res.status(400).json({ error: 'orgId is required' }); return }
+  try {
+    const id = req.params.id as string
+    const { orgId } = req.body
 
-  const existing = await prisma.project.findFirst({ where: { id, ownerId: req.userId } })
-  if (!existing) { res.status(404).json({ error: 'Not found' }); return }
+    const existing = await prisma.project.findFirst({ where: { id, ownerId: req.userId } })
+    if (!existing) { res.status(404).json({ error: 'Not found' }); return }
 
-  const membership = await prisma.organisationMember.findUnique({
-    where: { orgId_userId: { orgId: orgId as string, userId: req.userId! } },
-  })
-  if (!membership) { res.status(403).json({ error: 'Not a member of that org' }); return }
+    // orgId = '' or null means remove from org (make personal)
+    if (orgId) {
+      const membership = await prisma.organisationMember.findUnique({
+        where: { orgId_userId: { orgId: orgId as string, userId: req.userId! } },
+      })
+      if (!membership) { res.status(403).json({ error: 'Not a member of that org' }); return }
+    }
 
-  const project = await prisma.project.update({
-    where: { id },
-    data: { orgId: orgId as string },
+    const project = await prisma.project.update({
+      where: { id },
+      data: { orgId: orgId || null },
     include: { org: { select: { id: true, name: true } } },
   })
   res.json(project)
+  } catch (err) {
+    console.error('POST /projects/:id/move-to-org error:', err)
+    res.status(500).json({ error: 'Failed to update project org' })
+  }
 })
 
 export default router
