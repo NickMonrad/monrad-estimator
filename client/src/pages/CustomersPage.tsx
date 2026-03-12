@@ -221,8 +221,8 @@ export default function CustomersPage() {
                 )}
               </div>
               <div className="flex gap-2">
-                <button onClick={() => handleEdit(customer)} className="text-gray-500 text-sm hover:text-gray-700">Edit</button>
-                <button onClick={() => handleDelete(customer.id)} className="text-red-600 text-sm hover:text-red-800">Delete</button>
+                <button onClick={() => handleEdit(customer)} className="text-xs px-3 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium transition-colors">Edit</button>
+                <button onClick={() => handleDelete(customer.id)} className="text-xs px-3 py-1 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 font-medium transition-colors">Delete</button>
               </div>
             </div>
           ))}
