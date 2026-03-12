@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import type { TimelineEntry } from '../../types/backlog'
 import { getEpicColour } from '../../lib/epicColours'
+import { useIsDark } from '../../hooks/useIsDark'
 
 // ---------------------------------------------------------------------------
 // Local types (not yet in backlog.ts)
@@ -318,6 +319,20 @@ export default function GanttChart({
   }, [dragging, onDragFeature, onDragStory])
 
   // -----------------------------------------------------------------------
+  // Dark mode colour palette for SVG (Tailwind dark: can't apply to SVG attrs)
+  // -----------------------------------------------------------------------
+  const isDark = useIsDark()
+  const svgColors = {
+    bg:           isDark ? '#111827' : '#fafafa',   // gray-900 / gray-50
+    gridLine:     isDark ? '#374151' : '#f3f4f6',   // gray-700 / gray-100
+    weekSep:      isDark ? '#374151' : '#e5e7eb',   // gray-700 / gray-200
+    rowSep:       isDark ? '#1f2937' : '#f9fafb',   // gray-800 / gray-50
+    headerText:   isDark ? '#9ca3af' : '#6b7280',   // gray-400 / gray-500
+    weekNumText:  isDark ? '#6b7280' : '#9ca3af',   // gray-500 / gray-400
+    epicBand:     isDark ? '#1e293b' : '#f8fafc',   // slate-800 / slate-50
+  }
+
+  // -----------------------------------------------------------------------
   // Feature lookup for dependency arrows
   // -----------------------------------------------------------------------
   const featureById = useMemo(() => {
@@ -535,7 +550,7 @@ export default function GanttChart({
           </defs>
 
           {/* Background fill */}
-          <rect x={0} y={0} width={totalWeeks * COL_W} height={totalHeight} fill="#fafafa" style={{ pointerEvents: 'none' }} />
+          <rect x={0} y={0} width={totalWeeks * COL_W} height={totalHeight} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
 
           {/* Week header + vertical grid lines */}
           {Array.from({ length: totalWeeks }, (_, i) => (
@@ -545,7 +560,7 @@ export default function GanttChart({
                 y1={0}
                 x2={i * COL_W}
                 y2={totalHeight}
-                stroke="#f3f4f6"
+                stroke={svgColors.gridLine}
                 strokeWidth={1}
               />
               <text
@@ -553,7 +568,7 @@ export default function GanttChart({
                 y={HEADER_H - (projectStartDate ? 14 : 8)}
                 textAnchor="middle"
                 fontSize={11}
-                fill="#6b7280"
+                fill={svgColors.headerText}
               >
                 W{i + 1}
               </text>
@@ -563,7 +578,7 @@ export default function GanttChart({
                   y={HEADER_H - 2}
                   textAnchor="middle"
                   fontSize={9}
-                  fill="#9ca3af"
+                  fill={svgColors.weekNumText}
                 >
                   {formatDate(addDays(projectStartDate, i * 7))}
                 </text>
@@ -577,7 +592,7 @@ export default function GanttChart({
             y1={HEADER_H}
             x2={totalWeeks * COL_W}
             y2={HEADER_H}
-            stroke="#e5e7eb"
+            stroke={svgColors.weekSep}
             strokeWidth={1}
           />
 
@@ -617,7 +632,7 @@ export default function GanttChart({
                     y1={y + EPIC_ROW_H}
                     x2={totalWeeks * COL_W}
                     y2={y + EPIC_ROW_H}
-                    stroke="#f3f4f6"
+                    stroke={svgColors.gridLine}
                     strokeWidth={1}
                   />
                 </g>
@@ -683,7 +698,7 @@ export default function GanttChart({
                     y1={y + FEAT_ROW_H}
                     x2={totalWeeks * COL_W}
                     y2={y + FEAT_ROW_H}
-                    stroke="#f9fafb"
+                    stroke={svgColors.rowSep}
                     strokeWidth={1}
                   />
                 </g>
@@ -732,7 +747,7 @@ export default function GanttChart({
                   y1={y + STORY_ROW_H}
                   x2={totalWeeks * COL_W}
                   y2={y + STORY_ROW_H}
-                  stroke="#f9fafb"
+                  stroke={svgColors.rowSep}
                   strokeWidth={1}
                 />
               </g>
