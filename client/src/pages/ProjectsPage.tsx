@@ -27,6 +27,7 @@ interface Org {
 interface Customer {
   id: string
   name: string
+  orgId?: string
 }
 
 const STATUS_OPTIONS = ['DRAFT', 'ACTIVE', 'REVIEW', 'COMPLETE', 'ARCHIVED']
@@ -223,7 +224,15 @@ export default function ProjectsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
                   <select
-                    value={form.customerId} onChange={e => setForm(f => ({ ...f, customerId: e.target.value }))}
+                    value={form.customerId} onChange={e => {
+                      const cid = e.target.value
+                      const cust = customers.find(c => c.id === cid)
+                      setForm(f => ({
+                        ...f,
+                        customerId: cid,
+                        orgId: cid && cust?.orgId && !f.orgId ? cust.orgId : f.orgId,
+                      }))
+                    }}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
                   >
                     <option value="">No customer</option>
