@@ -153,7 +153,7 @@ function NamedResourcesPanel({
                       if (val && val !== r.name)
                         updateResource.mutate({ id: r.id, name: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-red-400 w-full"
+                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -166,7 +166,7 @@ function NamedResourcesPanel({
                       if (val !== r.startWeek)
                         updateResource.mutate({ id: r.id, startWeek: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-red-400 w-full"
+                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -179,7 +179,7 @@ function NamedResourcesPanel({
                       if (val !== r.endWeek)
                         updateResource.mutate({ id: r.id, endWeek: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-red-400 w-full"
+                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -197,7 +197,7 @@ function NamedResourcesPanel({
                         updateResource.mutate({ id: r.id, allocationPct: val })
                       }
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-red-400 w-full"
+                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <select
                     defaultValue={r.pricingModel}
@@ -209,7 +209,7 @@ function NamedResourcesPanel({
                         })
                       }
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-red-400 w-full"
+                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   >
                     <option value="ACTUAL_DAYS">Actual Days</option>
                     <option value="PRO_RATA">Pro-rata</option>
@@ -229,7 +229,7 @@ function NamedResourcesPanel({
           <button
             onClick={() => createResource.mutate()}
             disabled={createResource.isPending}
-            className="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
+            className="text-sm text-lab3-blue hover:text-lab3-navy font-medium disabled:opacity-50"
           >
             {createResource.isPending ? 'Adding…' : '+ Add person'}
           </button>
@@ -834,15 +834,16 @@ export default function ResourceProfilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants throughout this page */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-red-600 transition-colors font-semibold text-gray-900">
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">
               Monrad Estimator
             </button>
             <span>/</span>
-            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-red-600 transition-colors">
+            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy transition-colors">
               {project?.name ?? '…'}
             </button>
             <span>/</span>
@@ -882,7 +883,7 @@ export default function ResourceProfilePage() {
             <button
               onClick={handleExportFull}
               disabled={!profile}
-              className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
             >
               ⬇ Export Full Project
             </button>
@@ -896,7 +897,7 @@ export default function ResourceProfilePage() {
               onClick={() => setActiveTab('profile')}
               className={`pb-2 text-sm font-medium transition-colors ${
                 activeTab === 'profile'
-                  ? 'border-b-2 border-red-600 text-red-600'
+                  ? 'border-b-2 border-lab3-navy text-lab3-navy'
                   : 'text-gray-500 hover:text-gray-700'
               }`}
             >
@@ -906,7 +907,7 @@ export default function ResourceProfilePage() {
               onClick={() => setActiveTab('commercial')}
               className={`pb-2 text-sm font-medium transition-colors ${
                 activeTab === 'commercial'
-                  ? 'border-b-2 border-red-600 text-red-600'
+                  ? 'border-b-2 border-lab3-navy text-lab3-navy'
                   : 'text-gray-500 hover:text-gray-700'
               }`}
             >
@@ -963,7 +964,7 @@ export default function ResourceProfilePage() {
                         <td className="px-6 py-3">
                           <div className="font-medium text-gray-900">
                             <button
-                              className="text-left hover:text-red-600 transition-colors font-medium"
+                              className="text-left hover:text-lab3-navy transition-colors font-medium"
                               onClick={() => toggleRow(row.resourceTypeId)}
                             >
                               {row.count > 1 ? `${row.count} × ${row.name}` : row.name}
@@ -1267,7 +1268,7 @@ export default function ResourceProfilePage() {
                   type="text"
                   value={form.name}
                   onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                   placeholder="e.g. Delivery management"
                 />
               </div>
@@ -1276,7 +1277,7 @@ export default function ResourceProfilePage() {
                 <select
                   value={form.resourceTypeId}
                   onChange={e => setForm(f => ({ ...f, resourceTypeId: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   <option value="">No resource type</option>
                   {resourceTypes.map(rt => (
@@ -1315,7 +1316,7 @@ export default function ResourceProfilePage() {
                   step={form.type === 'PERCENTAGE' ? 0.5 : 0.1}
                   value={form.value}
                   onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
             </div>
@@ -1330,7 +1331,7 @@ export default function ResourceProfilePage() {
               <button
                 onClick={handleFormSubmit}
                 disabled={createOverhead.isPending || updateOverhead.isPending}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
               >
                 {editingId
                   ? (updateOverhead.isPending ? 'Saving…' : 'Save changes')
@@ -1397,7 +1398,7 @@ export default function ResourceProfilePage() {
                 <select
                   value={selectedRateCardId}
                   onChange={e => { setSelectedRateCardId(e.target.value); setRateCardResult(null) }}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   <option value="">Select a rate card…</option>
                   {rateCards.map(rc => (
@@ -1408,7 +1409,7 @@ export default function ResourceProfilePage() {
               <button
                 onClick={handleApplyRateCard}
                 disabled={!selectedRateCardId || applyRateCard.isPending}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
               >
                 {applyRateCard.isPending ? 'Applying…' : 'Apply'}
               </button>
@@ -1693,7 +1694,7 @@ export default function ResourceProfilePage() {
                       value={discountForm.label}
                       onChange={e => setDiscountForm(f => ({ ...f, label: e.target.value }))}
                       placeholder="e.g. Early bird"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     />
                   </div>
                   <div>
@@ -1701,7 +1702,7 @@ export default function ResourceProfilePage() {
                     <select
                       value={discountForm.type}
                       onChange={e => setDiscountForm(f => ({ ...f, type: e.target.value as 'PERCENTAGE' | 'FIXED_AMOUNT' }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     >
                       <option value="PERCENTAGE">Percentage</option>
                       <option value="FIXED_AMOUNT">Fixed Amount</option>
@@ -1717,7 +1718,7 @@ export default function ResourceProfilePage() {
                       step={discountForm.type === 'PERCENTAGE' ? 0.5 : 1}
                       value={discountForm.value}
                       onChange={e => setDiscountForm(f => ({ ...f, value: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     />
                   </div>
                 </div>
@@ -1726,7 +1727,7 @@ export default function ResourceProfilePage() {
                   <button
                     onClick={handleDiscountSubmit}
                     disabled={createDiscount.isPending}
-                    className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                    className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
                   >
                     {createDiscount.isPending ? 'Adding…' : 'Add discount'}
                   </button>
@@ -1766,7 +1767,7 @@ export default function ResourceProfilePage() {
                       updateTax.mutate({ taxRate: null })
                     }
                   }}
-                  className="h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                  className="h-4 w-4 rounded border-gray-300 text-lab3-navy focus:ring-lab3-blue"
                 />
                 <span className="text-sm text-gray-600">Enable tax</span>
               </label>
@@ -1788,7 +1789,7 @@ export default function ResourceProfilePage() {
                             setEditingTaxLabel(false)
                           }
                         }}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm w-24 focus:outline-none focus:ring-1 focus:ring-red-500"
+                        className="border border-gray-300 rounded px-2 py-1 text-sm w-24 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
                         autoFocus
                       />
                       <button
@@ -1807,7 +1808,7 @@ export default function ResourceProfilePage() {
                   ) : (
                     <button
                       onClick={() => { setTaxLabelDraft(commercialData.taxLabel); setEditingTaxLabel(true) }}
-                      className="text-sm font-medium text-gray-900 hover:text-red-600 transition-colors"
+                      className="text-sm font-medium text-gray-900 hover:text-lab3-navy transition-colors"
                     >
                       {commercialData.taxLabel}
                     </button>
@@ -1832,7 +1833,7 @@ export default function ResourceProfilePage() {
                             }
                           }
                         }}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm w-20 focus:outline-none focus:ring-1 focus:ring-red-500"
+                        className="border border-gray-300 rounded px-2 py-1 text-sm w-20 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
                         autoFocus
                       />
                       <span className="text-sm text-gray-500">%</span>
@@ -1858,7 +1859,7 @@ export default function ResourceProfilePage() {
                   ) : (
                     <button
                       onClick={() => { setTaxRateDraft(String(commercialData.taxRate ?? 10)); setEditingTaxRate(true) }}
-                      className="text-sm font-medium text-gray-900 hover:text-red-600 transition-colors"
+                      className="text-sm font-medium text-gray-900 hover:text-lab3-navy transition-colors"
                     >
                       {commercialData.taxRate}%
                     </button>

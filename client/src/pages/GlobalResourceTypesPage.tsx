@@ -76,7 +76,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           type="text"
           value={form.name}
           onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="Name *"
         />
       </td>
@@ -84,7 +84,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
         <select
           value={form.category}
           onChange={e => setForm(f => ({ ...f, category: e.target.value as GlobalResourceType['category'] }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
         >
           {CATEGORIES.map(c => (
             <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -96,7 +96,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           type="text"
           value={form.description}
           onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="Description"
         />
       </td>
@@ -106,7 +106,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           step="0.1"
           value={form.defaultHoursPerDay}
           onChange={e => setForm(f => ({ ...f, defaultHoursPerDay: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="7.6"
         />
       </td>
@@ -116,7 +116,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           step="50"
           value={form.defaultDayRate}
           onChange={e => setForm(f => ({ ...f, defaultDayRate: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="1200"
         />
       </td>
@@ -126,7 +126,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           <button
             onClick={() => onSave(form)}
             disabled={!form.name || saving}
-            className="text-xs bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
+            className="text-xs bg-lab3-navy text-white px-3 py-1 rounded hover:bg-lab3-blue disabled:opacity-50 transition-colors"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -197,11 +197,12 @@ export default function GlobalResourceTypesPage() {
   const sorted = sortTypes(types)
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants throughout this page */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-red-600 transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">Monrad Estimator</button>
             <span>/</span>
             <span className="text-gray-700">Resource Types</span>
           </div>
@@ -220,7 +221,7 @@ export default function GlobalResourceTypesPage() {
           </div>
           <button
             onClick={() => setShowAddForm(true)}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+            className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors"
           >
             + Add resource type
           </button>
@@ -326,7 +327,7 @@ export default function GlobalResourceTypesPage() {
                   type="text"
                   value={addForm.name}
                   onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
               <div>
@@ -334,7 +335,7 @@ export default function GlobalResourceTypesPage() {
                 <select
                   value={addForm.category}
                   onChange={e => setAddForm(f => ({ ...f, category: e.target.value as GlobalResourceType['category'] }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   {CATEGORIES.map(c => (
                     <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -347,7 +348,7 @@ export default function GlobalResourceTypesPage() {
                   type="text"
                   value={addForm.description}
                   onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
               <div>
@@ -357,7 +358,7 @@ export default function GlobalResourceTypesPage() {
                   step="0.1"
                   value={addForm.defaultHoursPerDay}
                   onChange={e => setAddForm(f => ({ ...f, defaultHoursPerDay: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                   placeholder="7.6"
                 />
               </div>
@@ -368,7 +369,7 @@ export default function GlobalResourceTypesPage() {
                   step="50"
                   value={addForm.defaultDayRate}
                   onChange={e => setAddForm(f => ({ ...f, defaultDayRate: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                   placeholder="1200"
                 />
               </div>
@@ -377,7 +378,7 @@ export default function GlobalResourceTypesPage() {
               <button
                 onClick={() => createType.mutate(addForm)}
                 disabled={!addForm.name || createType.isPending}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
               >
                 {createType.isPending ? 'Saving…' : 'Save'}
               </button>

@@ -191,7 +191,7 @@ function TaskForm({ initial, resourceTypes, hoursPerDay, onSave, onCancel, savin
       </div>
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || !form.resourceTypeId || saving}
-          className="bg-red-600 text-white px-3 py-1 rounded text-xs font-medium hover:bg-red-700 disabled:opacity-50">
+          className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save'}
         </button>
         <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 hover:bg-gray-100">Cancel</button>

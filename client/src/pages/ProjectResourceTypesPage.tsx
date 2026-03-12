@@ -68,7 +68,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           type="text"
           value={form.name}
           onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="Name *"
         />
       </td>
@@ -76,7 +76,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
         <select
           value={form.category}
           onChange={e => setForm(f => ({ ...f, category: e.target.value as ResourceCategory }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
         >
           {CATEGORIES.map(c => (
             <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -90,7 +90,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           step="0.1"
           value={form.hoursPerDay}
           onChange={e => setForm(f => ({ ...f, hoursPerDay: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="7.6"
         />
       </td>
@@ -100,7 +100,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           step="50"
           value={form.dayRate}
           onChange={e => setForm(f => ({ ...f, dayRate: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="1200"
         />
       </td>
@@ -110,7 +110,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           <button
             onClick={() => onSave(form)}
             disabled={!form.name || saving}
-            className="text-xs bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
+            className="text-xs bg-lab3-navy text-white px-3 py-1 rounded hover:bg-lab3-blue disabled:opacity-50 transition-colors"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -217,13 +217,14 @@ export default function ProjectResourceTypesPage() {
   const availableGlobalTypes = globalTypes.filter(gt => !existingGlobalIds.has(gt.id))
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants throughout this page */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-red-600 transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">Monrad Estimator</button>
             <span>/</span>
-            <button onClick={() => navigate(`/projects/${id}`)} className="hover:text-red-600 transition-colors">{project?.name ?? '…'}</button>
+            <button onClick={() => navigate(`/projects/${id}`)} className="hover:text-lab3-navy transition-colors">{project?.name ?? '…'}</button>
             <span>/</span>
             <span className="text-gray-700">Resource Types</span>
           </div>
@@ -244,7 +245,7 @@ export default function ProjectResourceTypesPage() {
           </div>
           <button
             onClick={() => { setShowAddModal(true); setAddTab('global') }}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+            className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors"
           >
             + Add Resource Type
           </button>
@@ -360,13 +361,13 @@ export default function ProjectResourceTypesPage() {
             <div className="flex border-b border-gray-200">
               <button
                 onClick={() => setAddTab('global')}
-                className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'global' ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-500 hover:text-gray-700'}`}
+                className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'global' ? 'text-lab3-navy border-b-2 border-lab3-navy' : 'text-gray-500 hover:text-gray-700'}`}
               >
                 From Global Catalog
               </button>
               <button
                 onClick={() => setAddTab('new')}
-                className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'new' ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-500 hover:text-gray-700'}`}
+                className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'new' ? 'text-lab3-navy border-b-2 border-lab3-navy' : 'text-gray-500 hover:text-gray-700'}`}
               >
                 Create New
               </button>
@@ -384,7 +385,7 @@ export default function ProjectResourceTypesPage() {
                           key={gt.id}
                           onClick={() => addFromGlobal.mutate(gt)}
                           disabled={addFromGlobal.isPending}
-                          className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:border-red-300 hover:bg-red-50 transition-all disabled:opacity-50"
+                          className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:border-lab3-blue/30 hover:bg-blue-50 transition-all disabled:opacity-50"
                         >
                           <div className="flex items-center justify-between">
                             <div>
@@ -417,7 +418,7 @@ export default function ProjectResourceTypesPage() {
                         type="text"
                         value={newForm.name}
                         onChange={e => setNewForm(f => ({ ...f, name: e.target.value }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                         placeholder="e.g. Data Engineer"
                       />
                     </div>
@@ -426,7 +427,7 @@ export default function ProjectResourceTypesPage() {
                       <select
                         value={newForm.category}
                         onChange={e => setNewForm(f => ({ ...f, category: e.target.value as ResourceCategory }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                       >
                         {CATEGORIES.map(c => (
                           <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -440,7 +441,7 @@ export default function ProjectResourceTypesPage() {
                         step="0.1"
                         value={newForm.hoursPerDay}
                         onChange={e => setNewForm(f => ({ ...f, hoursPerDay: e.target.value }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                         placeholder="7.6"
                       />
                     </div>
@@ -451,7 +452,7 @@ export default function ProjectResourceTypesPage() {
                         step="50"
                         value={newForm.dayRate}
                         onChange={e => setNewForm(f => ({ ...f, dayRate: e.target.value }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                         placeholder="1200"
                       />
                     </div>
@@ -460,7 +461,7 @@ export default function ProjectResourceTypesPage() {
                     <button
                       onClick={() => createNew.mutate()}
                       disabled={!newForm.name || createNew.isPending}
-                      className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                      className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
                     >
                       {createNew.isPending ? 'Saving…' : 'Create'}
                     </button>

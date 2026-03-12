@@ -208,8 +208,8 @@ Full Playwright authoring conventions are in `.github/instructions/playwright.in
 
 ## UI Conventions
 
-- Design system: red (`red-600`) as primary action colour, gray tones for secondary/borders
-- Buttons: `bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium` (primary), `border border-gray-200 text-gray-600` (secondary)
+- Design system: LAB3 navy (`#1d245b`, `bg-lab3-navy`) as primary action colour, LAB3 blue (`#2c60f6`, `bg-lab3-blue`) for hover/accents, gray tones for secondary/borders
+- Buttons: `bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue` (primary), `border border-gray-200 text-gray-600` (secondary)
 - No external UI component libraries — hand-rolled Tailwind components only
 - Modals use `fixed inset-0 bg-black/40 flex items-center justify-center z-50`
 - Always show loading states and empty states

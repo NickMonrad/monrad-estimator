@@ -220,7 +220,7 @@ function InlineForm({ label, initial, onSave, onCancel, saving }: {
         className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
-          className="bg-red-600 text-white px-3 py-1 rounded text-xs font-medium hover:bg-red-700 disabled:opacity-50">
+          className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save'}
         </button>
         <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 hover:bg-gray-100">Cancel</button>
