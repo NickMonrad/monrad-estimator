@@ -63,7 +63,7 @@ interface EditRowProps {
 function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
   const [form, setForm] = useState(initial)
   return (
-    <tr className="bg-blue-50">
+    <tr className="bg-blue-50 dark:bg-blue-950/30">
       <td className="px-4 py-2">
         <input
           type="text"
@@ -272,7 +272,7 @@ export default function ProjectResourceTypesPage() {
                   <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {resourceTypes.map(rt =>
                   editingId === rt.id ? (
                     <EditRow
@@ -366,13 +366,13 @@ export default function ProjectResourceTypesPage() {
             <div className="flex border-b border-gray-200 dark:border-gray-700">
               <button
                 onClick={() => setAddTab('global')}
-                className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'global' ? 'text-lab3-navy border-b-2 border-lab3-navy' : 'text-gray-500 hover:text-gray-700'}`}
+                className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'global' ? 'text-lab3-navy dark:text-lab3-blue border-b-2 border-lab3-navy dark:border-lab3-blue' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}
               >
                 From Global Catalog
               </button>
               <button
                 onClick={() => setAddTab('new')}
-                className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'new' ? 'text-lab3-navy border-b-2 border-lab3-navy' : 'text-gray-500 hover:text-gray-700'}`}
+                className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'new' ? 'text-lab3-navy dark:text-lab3-blue border-b-2 border-lab3-navy dark:border-lab3-blue' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}
               >
                 Create New
               </button>
