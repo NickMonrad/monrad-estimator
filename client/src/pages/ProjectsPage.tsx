@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, Link } from 'react-router-dom'
-import { api, getOrgs, moveProjectToOrg } from '../lib/api'
+import { api, getOrgs, getCustomers, moveProjectToOrg } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import ThemeToggle from '../components/layout/ThemeToggle'
 import { useGeocitiesEgg } from '../hooks/useGeocitiesEgg'
@@ -24,6 +24,13 @@ interface Org {
   name: string
 }
 
+interface Customer {
+  id: string
+  name: string
+}
+
+const STATUS_OPTIONS = ['DRAFT', 'ACTIVE', 'REVIEW', 'COMPLETE', 'ARCHIVED']
+
 const STATUS_COLOURS: Record<string, string> = {
   DRAFT: 'bg-gray-100 text-gray-700',
   ACTIVE: 'bg-blue-100 text-blue-700',
@@ -37,7 +44,7 @@ export default function ProjectsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [showNew, setShowNew] = useState(false)
-  const [form, setForm] = useState({ name: '', description: '' })
+  const [form, setForm] = useState({ name: '', description: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0, customerId: '', orgId: '' })
   const [search, setSearch] = useState('')
   const { triggerClick: geocitiesClick } = useGeocitiesEgg()
   const [showArchived, setShowArchived] = useState(false)
@@ -56,12 +63,17 @@ export default function ProjectsPage() {
     queryFn: getOrgs,
   })
 
+  const { data: customers = [] } = useQuery<Customer[]>({
+    queryKey: ['customers'],
+    queryFn: getCustomers,
+  })
+
   const createProject = useMutation({
     mutationFn: (data: typeof form) => api.post('/projects', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
       setShowNew(false)
-      setForm({ name: '', description: '' })
+      setForm({ name: '', description: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0, customerId: '', orgId: '' })
     },
   })
 
@@ -175,6 +187,15 @@ export default function ProjectsPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                <select
+                  value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                >
+                  {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
                 <textarea
@@ -182,6 +203,46 @@ export default function ProjectsPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Hours per day</label>
+                <input
+                  type="number" step="0.1" min="1" max="24"
+                  value={form.hoursPerDay} onChange={e => setForm(f => ({ ...f, hoursPerDay: parseFloat(e.target.value) || 7.6 }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Buffer weeks</label>
+                <input
+                  type="number" min="0"
+                  value={form.bufferWeeks} onChange={e => setForm(f => ({ ...f, bufferWeeks: parseInt(e.target.value) || 0 }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+              {customers.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
+                  <select
+                    value={form.customerId} onChange={e => setForm(f => ({ ...f, customerId: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  >
+                    <option value="">No customer</option>
+                    {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              )}
+              {orgs.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Team</label>
+                  <select
+                    value={form.orgId} onChange={e => setForm(f => ({ ...f, orgId: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  >
+                    <option value="">Personal project</option>
+                    {orgs.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
             <div className="flex gap-2">
               <button
