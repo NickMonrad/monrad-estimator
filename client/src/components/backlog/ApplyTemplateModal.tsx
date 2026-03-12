@@ -71,7 +71,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
             <select
               value={selectedTemplateId}
               onChange={e => setSelectedTemplateId(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             >
               <option value="">Select a template…</option>
               {templates.map(tpl => (
@@ -99,7 +99,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
                   onClick={() => setComplexity(c)}
                   className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
                     complexity === c
-                      ? 'bg-red-600 text-white'
+                      ? 'bg-lab3-navy text-white'
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
@@ -117,7 +117,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
                 value={storyName}
                 onChange={e => setStoryName(e.target.value)}
                 placeholder="Enter story name…"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
               />
             </div>
           )}
@@ -127,7 +127,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
           <button
             onClick={() => apply.mutate()}
             disabled={!selectedTemplateId || !storyName.trim() || apply.isPending}
-            className="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+            className="flex-1 bg-lab3-navy text-white py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
           >
             {apply.isPending ? 'Applying…' : 'Apply template'}
           </button>

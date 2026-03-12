@@ -61,7 +61,7 @@ export default function TemplateHistoryPanel({ templateId, templateName, onResto
           placeholder="Snapshot label (optional)"
           value={labelInput}
           onChange={e => setLabelInput(e.target.value)}
-          className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-red-400"
+          className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-lab3-blue"
         />
         <button
           onClick={() => createSnapshot.mutate(labelInput)}
@@ -97,7 +97,7 @@ export default function TemplateHistoryPanel({ templateId, templateName, onResto
                   <button
                     onClick={() => { if (window.confirm(`Restore "${snap.label ?? 'this snapshot'}"? Current state will be auto-saved first.`)) restore.mutate(snap.id) }}
                     disabled={restore.isPending}
-                    className="text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
+                    className="text-lab3-blue hover:text-lab3-navy font-medium disabled:opacity-50"
                   >
                     Restore
                   </button>

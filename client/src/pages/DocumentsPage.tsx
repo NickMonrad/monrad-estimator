@@ -172,7 +172,8 @@ export default function DocumentsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants throughout this page */}
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4">
         <nav className="text-sm text-gray-500 flex items-center gap-1 mb-1">
@@ -266,7 +267,7 @@ export default function DocumentsPage() {
           <button
             onClick={handleGenerate}
             disabled={!allLoaded || generating}
-            className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-colors"
+            className="w-full bg-lab3-navy hover:bg-lab3-blue disabled:opacity-50 text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-colors"
           >
             {generating ? 'Generating…' : 'Generate & Save'}
           </button>
@@ -302,7 +303,7 @@ export default function DocumentsPage() {
                     </span>
                     <button
                       onClick={() => handleDownload(doc)}
-                      className="flex-shrink-0 text-xs text-red-600 hover:text-red-700 font-medium"
+                      className="flex-shrink-0 text-xs text-lab3-blue hover:text-lab3-navy font-medium"
                       title="Download"
                     >
                       ↓

@@ -3,15 +3,18 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
+import ThemeToggle from '../components/layout/ThemeToggle'
+import { useGeocitiesEgg } from '../hooks/useGeocitiesEgg'
 
 interface Project {
   id: string
   name: string
   description?: string
-  customer?: string
+  customer?: string | { id: string; name: string }
   status: string
   hoursPerDay: number
   updatedAt: string
+  deletedAt?: string | null
   _count: { epics: number }
 }
 
@@ -30,10 +33,13 @@ export default function ProjectsPage() {
   const [showNew, setShowNew] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', customer: '' })
   const [search, setSearch] = useState('')
+  const { triggerClick: geocitiesClick } = useGeocitiesEgg()
+  const [showArchived, setShowArchived] = useState(false)
+  const [cloningId, setCloningId] = useState<string | null>(null)
 
   const { data: projects = [], isLoading } = useQuery<Project[]>({
-    queryKey: ['projects'],
-    queryFn: () => api.get('/projects').then(r => r.data),
+    queryKey: ['projects', showArchived],
+    queryFn: () => api.get('/projects', { params: showArchived ? { archived: 'true' } : {} }).then(r => r.data),
   })
 
   const createProject = useMutation({
@@ -45,78 +51,117 @@ export default function ProjectsPage() {
     },
   })
 
+  const deleteProject = useMutation({
+    mutationFn: (id: string) => api.delete(`/projects/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  })
+
+  const restoreProject = useMutation({
+    mutationFn: (id: string) => api.post(`/projects/${id}/restore`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  })
+
+  const permanentDelete = useMutation({
+    mutationFn: (id: string) => api.delete(`/projects/${id}/permanent`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  })
+
+  const cloneProject = async (id: string) => {
+    setCloningId(id)
+    try {
+      await api.post(`/projects/${id}/clone`)
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+    } finally {
+      setCloningId(null)
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+            {/* Logo — 5 rapid clicks triggers Geocities easter egg */}
+            <button
+              onClick={geocitiesClick}
+              className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center focus:outline-none"
+              aria-label="Monrad Estimator logo"
+            >
               <span className="text-white text-xs font-bold">M</span>
-            </div>
-            <span className="font-semibold text-gray-900">Monrad Estimator</span>
-            <Link to="/resource-types" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Resource Types</Link>
-            <Link to="/templates" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Templates</Link>
-            <Link to="/rate-cards" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Rate Cards</Link>
+            </button>
+            <span className="font-semibold text-gray-900 dark:text-white">Monrad Estimator</span>
+            <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Resource Types</Link>
+            <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Templates</Link>
+            <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Rate Cards</Link>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <ThemeToggle />
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-xl font-semibold text-gray-900">Projects</h1>
+          <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Projects</h1>
           <div className="flex items-center gap-3">
             <input
               type="text"
               placeholder="Search projects…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
             <button
-              onClick={() => setShowNew(true)}
-              className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+              onClick={() => { setShowArchived(a => !a); setSearch('') }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${showArchived ? 'bg-gray-800 text-white border-gray-800 hover:bg-gray-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
             >
-              + New project
+              {showArchived ? '← Live projects' : 'Archived'}
             </button>
+            {!showArchived && (
+              <button
+                onClick={() => setShowNew(true)}
+                className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors"
+              >
+                + New project
+              </button>
+            )}
           </div>
         </div>
 
         {/* New project form */}
-        {showNew && (
-          <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-            <h2 className="font-medium text-gray-900 mb-4">New project</h2>
+        {showNew && !showArchived && (
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
+            <h2 className="font-medium text-gray-900 dark:text-white mb-4">New project</h2>
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Project name *</label>
                 <input
                   type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Project name"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
                 <input
                   type="text" value={form.customer} onChange={e => setForm(f => ({ ...f, customer: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
                 <textarea
                   value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
             </div>
             <div className="flex gap-2">
               <button
                 onClick={() => createProject.mutate(form)} disabled={!form.name || createProject.isPending}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
               >
                 {createProject.isPending ? 'Creating…' : 'Create project'}
               </button>
@@ -135,8 +180,8 @@ export default function ProjectsPage() {
           <div className="text-center py-12 text-gray-400">Loading…</div>
         ) : projects.length === 0 ? (
           <div className="text-center py-12 text-gray-400">
-            <p className="text-lg mb-2">No projects yet</p>
-            <p className="text-sm">Create your first project to get started</p>
+            <p className="text-lg mb-2">{showArchived ? 'No archived projects' : 'No projects yet'}</p>
+            <p className="text-sm">{showArchived ? 'Deleted projects appear here' : 'Create your first project to get started'}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -145,20 +190,72 @@ export default function ProjectsPage() {
               .map(project => (
               <div
                 key={project.id}
-                onClick={() => navigate(`/projects/${project.id}`)}
-                className="bg-white rounded-xl border border-gray-200 p-5 cursor-pointer hover:border-red-300 hover:shadow-sm transition-all"
+                className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 ${!showArchived ? 'cursor-pointer hover:border-lab3-blue/30 hover:shadow-sm' : 'opacity-75'} transition-all`}
+                onClick={!showArchived ? () => navigate(`/projects/${project.id}`) : undefined}
               >
                 <div className="flex items-start justify-between mb-2">
-                  <h3 className="font-medium text-gray-900">{project.name}</h3>
+                  <h3 className="font-medium text-gray-900 dark:text-white">{project.name}</h3>
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOURS[project.status] ?? 'bg-gray-100 text-gray-700'}`}>
                     {project.status}
                   </span>
                 </div>
-                {project.customer && <p className="text-xs text-gray-500 mb-2">Customer: {project.customer}</p>}
+                {project.customer && <p className="text-xs text-gray-500 mb-2">Customer: {typeof project.customer === 'string' ? project.customer : project.customer.name}</p>}
                 {project.description && <p className="text-sm text-gray-600 mb-3 line-clamp-2">{project.description}</p>}
-                <div className="flex items-center justify-between text-xs text-gray-400">
+                <div className="flex items-center justify-between text-xs text-gray-400 mt-2">
                   <span>{project._count.epics} epic{project._count.epics !== 1 ? 's' : ''}</span>
                   <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
+                </div>
+                {/* Action buttons */}
+                <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100" onClick={e => e.stopPropagation()}>
+                  {showArchived ? (
+                    <>
+                      <button
+                        onClick={() => restoreProject.mutate(project.id)}
+                        disabled={restoreProject.isPending}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 border border-green-200 font-medium transition-colors disabled:opacity-50"
+                      >
+                        Restore
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Permanently delete "${project.name}"? This cannot be undone.`)) {
+                            permanentDelete.mutate(project.id)
+                          }
+                        }}
+                        disabled={permanentDelete.isPending}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 font-medium transition-colors disabled:opacity-50"
+                      >
+                        Delete forever
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => navigate(`/projects/${project.id}`)}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg text-gray-600 hover:bg-gray-100 border border-gray-200 font-medium transition-colors"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => cloneProject(project.id)}
+                        disabled={cloningId === project.id}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg text-gray-600 hover:bg-gray-100 border border-gray-200 font-medium transition-colors disabled:opacity-50"
+                      >
+                        {cloningId === project.id ? 'Cloning…' : 'Clone'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Archive "${project.name}"?`)) {
+                            deleteProject.mutate(project.id)
+                          }
+                        }}
+                        disabled={deleteProject.isPending}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg text-red-600 hover:bg-red-50 border border-red-200 font-medium transition-colors disabled:opacity-50"
+                      >
+                        Archive
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}

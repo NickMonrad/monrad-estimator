@@ -54,10 +54,11 @@ export default function TemplateLibraryPage() {
   const [taskForm, setTaskForm] = useState({ name: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' })
   const [showTplImport, setShowTplImport] = useState(false)
   const [showHistoryId, setShowHistoryId] = useState<string | null>(null)
+  const [showArchived, setShowArchived] = useState(false)
 
   const { data: templates = [], isLoading } = useQuery<FeatureTemplate[]>({
-    queryKey: ['templates'],
-    queryFn: () => api.get('/templates').then(r => r.data),
+    queryKey: ['templates', showArchived],
+    queryFn: () => api.get('/templates', { params: showArchived ? { archived: 'true' } : {} }).then(r => r.data),
   })
 
   const { data: globalResourceTypes = [] } = useQuery<GlobalResourceType[]>({
@@ -79,6 +80,11 @@ export default function TemplateLibraryPage() {
 
   const deleteTemplate = useMutation({
     mutationFn: (id: string) => api.delete(`/templates/${id}`),
+    onSuccess: invalidate,
+  })
+
+  const restoreTemplate = useMutation({
+    mutationFn: (id: string) => api.post(`/templates/${id}/restore`),
     onSuccess: invalidate,
   })
 
@@ -123,11 +129,12 @@ export default function TemplateLibraryPage() {
   const fmt = (h: number) => `${h}h (${(h / HOURS_PER_DAY).toFixed(1)}d)`
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants throughout this page */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-red-600 transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">Monrad Estimator</button>
             <span>/</span>
             <span className="text-gray-700">Template Library</span>
           </div>
@@ -156,9 +163,15 @@ export default function TemplateLibraryPage() {
               className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
               ⬆ Import CSV
             </button>
-            {!adding && (
+            <button
+              onClick={() => { setShowArchived(a => !a); setAdding(false) }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${showArchived ? 'bg-gray-800 text-white border-gray-800 hover:bg-gray-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+            >
+              {showArchived ? '← Live templates' : 'Archived'}
+            </button>
+            {!adding && !showArchived && (
               <button onClick={() => setAdding(true)}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors">
+                className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors">
                 + New template
               </button>
             )}
@@ -209,17 +222,28 @@ export default function TemplateLibraryPage() {
                       {tpl.tasks.length} task{tpl.tasks.length !== 1 ? 's' : ''}
                     </span>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                      <button onClick={() => setShowHistoryId(showHistoryId === tpl.id ? null : tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">History</button>
-                      <button onClick={() => setEditingId(tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
-                      <button
-                        onClick={async () => {
-                          const res = await api.get(`/templates/${tpl.id}/export-csv`, { responseType: 'blob' })
-                          const url = URL.createObjectURL(res.data)
-                          const a = document.createElement('a'); a.href = url; a.download = `${tpl.name.toLowerCase().replace(/\s+/g, '-')}.csv`; a.click()
-                          URL.revokeObjectURL(url)
-                        }}
-                        className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">⬇</button>
-                      <button onClick={() => deleteTemplate.mutate(tpl.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
+                      {showArchived ? (
+                        <button
+                          onClick={() => restoreTemplate.mutate(tpl.id)}
+                          disabled={restoreTemplate.isPending}
+                          className="text-xs text-green-600 hover:text-green-800 px-2 py-1 font-medium disabled:opacity-50">
+                          Restore
+                        </button>
+                      ) : (
+                        <>
+                          <button onClick={() => setShowHistoryId(showHistoryId === tpl.id ? null : tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">History</button>
+                          <button onClick={() => setEditingId(tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
+                          <button
+                            onClick={async () => {
+                              const res = await api.get(`/templates/${tpl.id}/export-csv`, { responseType: 'blob' })
+                              const url = URL.createObjectURL(res.data)
+                              const a = document.createElement('a'); a.href = url; a.download = `${tpl.name.toLowerCase().replace(/\s+/g, '-')}.csv`; a.click()
+                              URL.revokeObjectURL(url)
+                            }}
+                            className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">⬇</button>
+                          <button onClick={() => deleteTemplate.mutate(tpl.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Archive</button>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
@@ -303,8 +327,8 @@ export default function TemplateLibraryPage() {
 
             {templates.length === 0 && !adding && (
               <div className="text-center py-16 text-gray-400">
-                <p className="text-lg mb-1">No templates yet</p>
-                <p className="text-sm">Create a template to speed up backlog creation</p>
+                <p className="text-lg mb-1">{showArchived ? 'No archived templates' : 'No templates yet'}</p>
+                <p className="text-sm">{showArchived ? 'Archived templates appear here' : 'Create a template to speed up backlog creation'}</p>
               </div>
             )}
           </div>
@@ -334,15 +358,15 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-2">
         <input placeholder="Template name *" value={form.name} onChange={f('name')}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
         <input placeholder="Category (e.g. Security, Auth)" value={form.category} onChange={f('category')}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       </div>
       <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={2}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
+        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
-          className="bg-red-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50">
+          className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save template'}
         </button>
         <button onClick={onCancel} className="px-4 py-1.5 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>
@@ -391,7 +415,7 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
       </div>
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || !form.resourceTypeName || saving}
-          className="bg-red-600 text-white px-3 py-1 rounded text-xs font-medium hover:bg-red-700 disabled:opacity-50">
+          className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save task'}
         </button>
         <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 hover:bg-gray-100">Cancel</button>

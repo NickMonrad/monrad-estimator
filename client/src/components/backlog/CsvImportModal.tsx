@@ -109,7 +109,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
               {(['upload', 'staging', 'confirm'] as Step[]).map((s, i) => (
                 <span key={s} className="flex items-center gap-1 text-xs">
                   {i > 0 && <span className="text-gray-300">›</span>}
-                  <span className={`font-medium ${step === s ? 'text-red-600' : 'text-gray-400'}`}>
+                  <span className={`font-medium ${step === s ? 'text-lab3-navy' : 'text-gray-400'}`}>
                     {i + 1}. {s === 'upload' ? 'Upload' : s === 'staging' ? 'Review & Edit' : 'Confirm'}
                   </span>
                 </span>
@@ -138,7 +138,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                   const a = document.createElement('a'); a.href = url; a.download = 'backlog-template.csv'; a.click()
                   URL.revokeObjectURL(url)
                 }}
-                className="text-red-600 underline text-sm hover:text-red-700 mb-6 inline-block"
+                className="text-lab3-blue underline text-sm hover:text-lab3-navy mb-6 inline-block"
               >
                 ⬇ Download blank CSV template
               </button>
@@ -147,7 +147,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                 <button
                   onClick={() => fileRef.current?.click()}
                   disabled={loading}
-                  className="bg-red-600 text-white px-6 py-3 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                  className="bg-lab3-navy text-white px-6 py-3 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
                 >
                   {loading ? 'Parsing…' : '📂 Choose CSV file'}
                 </button>
@@ -221,7 +221,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                                 onChange={e => updateRow(i, field, e.target.value)}
                               />
                             ) : (
-                              <span className="cursor-pointer hover:text-red-600" onClick={() => setEditingRow(i)}>{row[field] || <span className="text-gray-300 italic">empty</span>}</span>
+                              <span className="cursor-pointer hover:text-lab3-navy" onClick={() => setEditingRow(i)}>{row[field] || <span className="text-gray-300 italic">empty</span>}</span>
                             )}
                           </td>
                         ))}
@@ -229,7 +229,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                           {editingRow === i ? (
                             <input type="number" className="border border-gray-300 rounded px-1 py-0.5 w-16 text-xs" value={row.hoursEffort} onChange={e => updateRow(i, 'hoursEffort', parseFloat(e.target.value) || 0)} />
                           ) : (
-                            <span className="cursor-pointer hover:text-red-600" onClick={() => setEditingRow(i)}>{row.hoursEffort || '—'}</span>
+                            <span className="cursor-pointer hover:text-lab3-navy" onClick={() => setEditingRow(i)}>{row.hoursEffort || '—'}</span>
                           )}
                         </td>
                         <td className="px-2 py-1 text-gray-500">{row.durationDays || '—'}</td>
@@ -275,7 +275,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                 onClick={() => setStep('confirm')}
                 disabled={staged.filter(r => r.errors.length > 0).length > 0}
                 title={staged.filter(r => r.errors.length > 0).length > 0 ? 'Fix or remove all error rows before proceeding' : undefined}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 {staged.filter(r => r.errors.length > 0).length > 0
                   ? `Fix ${staged.filter(r => r.errors.length > 0).length} error${staged.filter(r => r.errors.length > 0).length !== 1 ? 's' : ''} to continue`
@@ -288,7 +288,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                 <button
                   onClick={handleCommit}
                   disabled={loading}
-                  className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                  className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
                 >
                   {loading ? 'Importing…' : '✓ Import Backlog'}
                 </button>
