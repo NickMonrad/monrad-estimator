@@ -50,20 +50,20 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
           saving={isSaving}
         />
       ) : (
-        <div className={`group flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 hover:border-blue-300 cursor-pointer border-l-2 ${epicColour?.border ?? 'border-l-blue-200'}`}
+        <div className={`group flex items-center gap-2 bg-blue-50 dark:bg-blue-950 border border-blue-100 dark:border-blue-900 rounded-lg px-3 py-2 hover:border-blue-300 dark:hover:border-blue-700 cursor-pointer border-l-2 ${epicColour?.border ?? 'border-l-blue-200'}`}
           onClick={onToggle}>
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-blue-300 hover:text-blue-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
-          <span className="text-blue-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
-          <span className="text-xs text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded">Feature</span>
-          <span className={`text-sm flex-1 truncate ${feature.isActive === false ? 'line-through text-gray-400' : 'text-gray-800'}`}>{feature.name}</span>
-          <span className="text-xs text-gray-400">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
+          <span className="text-blue-500 dark:text-blue-400 text-xs select-none">{expanded ? '▼' : '▶'}</span>
+          <span className="text-xs text-blue-500 dark:text-blue-300 bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded">Feature</span>
+          <span className={`text-sm flex-1 truncate ${feature.isActive === false ? 'line-through text-gray-400 dark:text-gray-500' : 'text-gray-800 dark:text-gray-200'}`}>{feature.name}</span>
+          <span className="text-xs text-gray-400 dark:text-gray-500">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
           <button onClick={e => { e.stopPropagation(); onApplyTemplate() }}
             className="text-xs text-purple-500 hover:text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2 py-0.5 rounded transition-colors">
             + Template
           </button>
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-            <button onClick={onToggleActive} title={feature.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${feature.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{feature.isActive === false ? '○' : '●'}</button>
-            <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+            <button onClick={onToggleActive} title={feature.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${feature.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600'}`}>{feature.isActive === false ? '○' : '●'}</button>
+            <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
         </div>
@@ -153,7 +153,7 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
           saving={createFeature.isPending}
         />
       ) : (
-        <button onClick={() => setAdding(true)} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 py-1 pl-1 ml-2">
+        <button onClick={() => setAdding(true)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 flex items-center gap-1 py-1 pl-1 ml-2">
           + Add feature
         </button>
       )}
@@ -173,19 +173,19 @@ function InlineForm({ label, initial, onSave, onCancel, saving }: {
     setForm(v => ({ ...v, [field]: e.target.value }))
 
   return (
-    <div className="bg-white border border-blue-200 rounded-lg px-3 py-2 space-y-2">
+    <div className="bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 space-y-2">
       <input placeholder={`${label} name *`} value={form.name} onChange={f('name')}
-        className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
       <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={1}
-        className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
       <textarea placeholder="Assumptions" value={form.assumptions} onChange={f('assumptions')} rows={1}
-        className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
           className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save'}
         </button>
-        <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 hover:bg-gray-100">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
     </div>
   )

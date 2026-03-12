@@ -14,6 +14,7 @@ import {
 } from 'recharts'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
+import ThemeToggle from '../components/layout/ThemeToggle'
 import type {
   Project,
   ResourceProfile,
@@ -118,21 +119,21 @@ function NamedResourcesPanel({
 
   return (
     <tr>
-      <td colSpan={columnCount} className="px-10 py-4 bg-gray-50 border-b border-gray-100">
+      <td colSpan={columnCount} className="px-10 py-4 bg-gray-50 dark:bg-gray-700 border-b border-gray-100 dark:border-gray-700">
         <div className="space-y-3">
-          <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+          <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
             Named Resources
           </h4>
 
           {isLoading ? (
-            <p className="text-sm text-gray-400">Loading…</p>
+            <p className="text-sm text-gray-400 dark:text-gray-500">Loading…</p>
           ) : resources.length === 0 ? (
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
               No named resources — using aggregate count ({rtCount})
             </p>
           ) : (
             <div className="space-y-0.5">
-              <div className="grid grid-cols-[1fr_110px_110px_80px_140px_28px] gap-2 text-xs font-medium text-gray-500 px-2 py-1">
+              <div className="grid grid-cols-[1fr_110px_110px_80px_140px_28px] gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 px-2 py-1">
                 <span>Name</span>
                 <span>Start Week</span>
                 <span>End Week</span>
@@ -143,7 +144,7 @@ function NamedResourcesPanel({
               {resources.map((r) => (
                 <div
                   key={r.id}
-                  className="grid grid-cols-[1fr_110px_110px_80px_140px_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100"
+                  className="grid grid-cols-[1fr_110px_110px_80px_140px_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                 >
                   <input
                     type="text"
@@ -153,7 +154,7 @@ function NamedResourcesPanel({
                       if (val && val !== r.name)
                         updateResource.mutate({ id: r.id, name: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -166,7 +167,7 @@ function NamedResourcesPanel({
                       if (val !== r.startWeek)
                         updateResource.mutate({ id: r.id, startWeek: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -179,7 +180,7 @@ function NamedResourcesPanel({
                       if (val !== r.endWeek)
                         updateResource.mutate({ id: r.id, endWeek: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -197,7 +198,7 @@ function NamedResourcesPanel({
                         updateResource.mutate({ id: r.id, allocationPct: val })
                       }
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <select
                     defaultValue={r.pricingModel}
@@ -209,14 +210,14 @@ function NamedResourcesPanel({
                         })
                       }
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   >
                     <option value="ACTUAL_DAYS">Actual Days</option>
                     <option value="PRO_RATA">Pro-rata</option>
                   </select>
                   <button
                     onClick={() => deleteResource.mutate(r.id)}
-                    className="text-gray-400 hover:text-red-600 text-lg leading-none"
+                    className="text-gray-400 dark:text-gray-500 hover:text-red-600 text-lg leading-none"
                     title="Delete"
                   >
                     ×
@@ -836,22 +837,24 @@ export default function ResourceProfilePage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* TODO: dark mode — add dark: variants throughout this page */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">
-              Monrad Estimator
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
+              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center"><span className="text-white text-xs font-bold">M</span></div>
+              <span className="font-semibold text-gray-900 dark:text-white group-hover:text-lab3-navy dark:group-hover:text-lab3-blue transition-colors">Monrad Estimator</span>
             </button>
             <span>/</span>
-            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy transition-colors">
+            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">
               {project?.name ?? '…'}
             </button>
             <span>/</span>
-            <span className="text-gray-700">Resource Profile</span>
+            <span className="text-gray-700 dark:text-gray-300">Resource Profile</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <ThemeToggle />
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
         </div>
       </header>
@@ -859,9 +862,9 @@ export default function ResourceProfilePage() {
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Resource Profile</h1>
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Resource Profile</h1>
             {profile && (
-              <p className="text-sm text-gray-500 mt-1">
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                 Total {formatNumber(profile.summary.totalHours)}h · {formatNumber(profile.summary.totalDays)} days
                 {profile.summary.totalCost != null && ` · $${formatNumber(profile.summary.totalCost, 0)}`}
               </p>
@@ -876,7 +879,7 @@ export default function ResourceProfilePage() {
             <button
               onClick={handleExportProfile}
               disabled={!profile}
-              className="border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 disabled:opacity-50"
+              className="border border-gray-300 text-gray-700 dark:text-gray-300 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
             >
               ⬇ Export Resource Profile
             </button>
@@ -891,14 +894,14 @@ export default function ResourceProfilePage() {
         </div>
 
         {/* ── Tab bar ── */}
-        <div className="border-b border-gray-200">
+        <div className="border-b border-gray-200 dark:border-gray-700">
           <nav className="flex gap-6">
             <button
               onClick={() => setActiveTab('profile')}
               className={`pb-2 text-sm font-medium transition-colors ${
                 activeTab === 'profile'
-                  ? 'border-b-2 border-lab3-navy text-lab3-navy'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'border-b-2 border-lab3-navy text-lab3-navy dark:border-lab3-blue dark:text-lab3-blue'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
               }`}
             >
               Resource Profile
@@ -907,8 +910,8 @@ export default function ResourceProfilePage() {
               onClick={() => setActiveTab('commercial')}
               className={`pb-2 text-sm font-medium transition-colors ${
                 activeTab === 'commercial'
-                  ? 'border-b-2 border-lab3-navy text-lab3-navy'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'border-b-2 border-lab3-navy text-lab3-navy dark:border-lab3-blue dark:text-lab3-blue'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
               }`}
             >
               Commercial
@@ -921,18 +924,18 @@ export default function ResourceProfilePage() {
         {/* ═══════════════════════════════════════════════════════ */}
         {activeTab === 'profile' && (
         <>
-        <section className="bg-white rounded-xl border border-gray-200">
-          <header className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+        <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <header className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Summary</h2>
-              <p className="text-sm text-gray-500">Active scope only — role mix, overheads, and allocation modes</p>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">Summary</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Active scope only — role mix, overheads, and allocation modes</p>
             </div>
           </header>
           {profileLoading && (
-            <div className="py-12 text-center text-gray-400">Loading resource profile…</div>
+            <div className="py-12 text-center text-gray-400 dark:text-gray-500">Loading resource profile…</div>
           )}
           {!profileLoading && profile && profile.resourceRows.length === 0 && profile.overheadRows.length === 0 && (
-            <div className="py-12 text-center text-gray-400">
+            <div className="py-12 text-center text-gray-400 dark:text-gray-500">
               <p className="text-lg mb-1">No tasks assigned yet.</p>
               <p className="text-sm">Add tasks to your backlog to see the resource profile.</p>
             </div>
@@ -941,7 +944,7 @@ export default function ResourceProfilePage() {
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
-                  <tr className="bg-gray-50 text-gray-600 border-b border-gray-200">
+                  <tr className="bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
                     <th className="text-left px-6 py-3 font-medium">Role</th>
                     <th className="text-center px-4 py-3 font-medium">Count</th>
                     <th className="text-left px-4 py-3 font-medium">Hrs/Day</th>
@@ -959,10 +962,10 @@ export default function ResourceProfilePage() {
                   {filteredResourceRows.map(row => (
                     <Fragment key={row.resourceTypeId}>
                       <tr
-                        className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
+                        className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                       >
                         <td className="px-6 py-3">
-                          <div className="font-medium text-gray-900">
+                          <div className="font-medium text-gray-900 dark:text-white">
                             <button
                               className="text-left hover:text-lab3-navy transition-colors font-medium"
                               onClick={() => toggleRow(row.resourceTypeId)}
@@ -973,9 +976,9 @@ export default function ResourceProfilePage() {
                               <span className="ml-2 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-medium uppercase tracking-wide">People</span>
                             )}
                           </div>
-                          <p className="text-xs text-gray-500 mt-0.5">{row.category.replace('_', ' ')}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{row.category.replace('_', ' ')}</p>
                           {row.count > 1 && (
-                            <p className="text-xs text-gray-500 mt-0.5">
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                               ({formatNumber(row.totalHours / row.count)}h / {formatNumber(row.totalDays / row.count)}d per person)
                             </p>
                           )}
@@ -987,7 +990,7 @@ export default function ResourceProfilePage() {
                               {expandedRows.has(row.resourceTypeId) ? '▲ Hide breakdown' : '▼ Show breakdown'}
                             </button>
                             <button
-                              className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                              className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 transition-colors"
                               onClick={() => toggleNamedResources(row.resourceTypeId)}
                               title="Show named resources"
                             >
@@ -995,7 +998,7 @@ export default function ResourceProfilePage() {
                             </button>
                           </div>
                         </td>
-                        <td className="text-center px-4 py-3 text-gray-800">
+                        <td className="text-center px-4 py-3 text-gray-800 dark:text-gray-100">
                           <div className="flex items-center justify-center gap-1">
                             <button
                               onClick={(e) => {
@@ -1003,7 +1006,7 @@ export default function ResourceProfilePage() {
                                 removeLastPerson.mutate(row.resourceTypeId)
                               }}
                               disabled={row.count <= 1}
-                              className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium"
+                              className="w-6 h-6 rounded border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium"
                               title="Remove person"
                             >
                               −
@@ -1014,14 +1017,14 @@ export default function ResourceProfilePage() {
                                 e.stopPropagation()
                                 addPerson.mutate(row.resourceTypeId)
                               }}
-                              className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-green-600 text-sm font-medium"
+                              className="w-6 h-6 rounded border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-green-600 text-sm font-medium"
                               title="Add person"
                             >
                               +
                             </button>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-gray-800">
+                        <td className="px-4 py-3 text-gray-800 dark:text-gray-100">
                           <input
                             type="number"
                             step="0.5"
@@ -1038,16 +1041,16 @@ export default function ResourceProfilePage() {
                               if (parsed === current) return
                               if (rt) updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
                             }}
-                            className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            className="w-16 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm text-right bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                             placeholder="—"
                           /> h
                         </td>
-                        <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">{formatNumber(row.totalHours)} h</td>
-                        <td className="text-right px-4 py-3 text-gray-900 whitespace-nowrap">
+                        <td className="text-right px-4 py-3 text-gray-900 dark:text-white whitespace-nowrap">{formatNumber(row.totalHours)} h</td>
+                        <td className="text-right px-4 py-3 text-gray-900 dark:text-white whitespace-nowrap">
                           {Math.abs((row.allocatedDays ?? row.totalDays) - (row.effortDays ?? row.totalDays)) > 0.5 ? (
                             <div>
                               <div className="font-medium">{formatNumber(row.allocatedDays ?? row.totalDays)} d</div>
-                              <div className="text-xs text-gray-400">effort: {formatNumber(row.effortDays ?? row.totalDays)}</div>
+                              <div className="text-xs text-gray-400 dark:text-gray-500">effort: {formatNumber(row.effortDays ?? row.totalDays)}</div>
                             </div>
                           ) : (
                             <span>{formatNumber(row.totalDays)} d</span>
@@ -1056,13 +1059,13 @@ export default function ResourceProfilePage() {
                         <td className="px-4 py-3">
                           {(() => {
                             if (row.namedResources && row.namedResources.length > 0) {
-                              return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500">Aggregate</span>
+                              return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Aggregate</span>
                             }
                             const mode = row.allocationMode ?? 'EFFORT'
                             const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
                             const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
                             if (mode === 'EFFORT') {
-                              return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">T&amp;M</span>
+                              return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">T&amp;M</span>
                             } else if (mode === 'TIMELINE') {
                               return (
                                 <div>
@@ -1070,7 +1073,7 @@ export default function ResourceProfilePage() {
                                     Timeline · {row.allocationPercent ?? 100}%
                                   </span>
                                   {effectiveStart != null && effectiveEnd != null && (
-                                    <div className="text-xs text-gray-400 mt-0.5">Wk {Math.round(effectiveStart)} → Wk {Math.round(effectiveEnd)}</div>
+                                    <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.round(effectiveStart)} → Wk {Math.round(effectiveEnd)}</div>
                                   )}
                                 </div>
                               )
@@ -1079,7 +1082,7 @@ export default function ResourceProfilePage() {
                             }
                           })()}
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                        <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                           {(() => {
                             const startWk = row.allocationStartWeek ?? row.derivedStartWeek
                             const endWk = row.allocationEndWeek ?? row.derivedEndWeek
@@ -1090,7 +1093,7 @@ export default function ResourceProfilePage() {
                             return '—'
                           })()}
                         </td>
-                        <td className="text-right px-4 py-3 text-gray-900">
+                        <td className="text-right px-4 py-3 text-gray-900 dark:text-white">
                           <input
                             type="number"
                             min="0"
@@ -1105,12 +1108,12 @@ export default function ResourceProfilePage() {
                               const rt = resourceTypes.find(r => r.id === row.resourceTypeId)
                               if (rt && val !== (rt.dayRate ?? null)) updateResourceType.mutate({ id: rt.id, dayRate: val })
                             }}
-                            className="w-20 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            className="w-20 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm text-right bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                             placeholder="—"
                           />
                         </td>
                         {hasCost && (
-                          <td className="text-right px-6 py-3 text-gray-900">
+                          <td className="text-right px-6 py-3 text-gray-900 dark:text-white">
                             {row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}
                           </td>
                         )}
@@ -1124,23 +1127,23 @@ export default function ResourceProfilePage() {
                         />
                       )}
                       {expandedRows.has(row.resourceTypeId) && (
-                        <tr className="bg-gray-50">
+                        <tr className="bg-gray-50 dark:bg-gray-700">
                           <td colSpan={columnCount} className="px-10 py-4">
                             <div className="space-y-4">
                               {row.epics.map(epic => (
                                 <div key={epic.epicId} className="border-l-2 border-red-200 pl-3">
-                                  <div className="flex items-center justify-between text-sm font-semibold text-gray-800">
+                                  <div className="flex items-center justify-between text-sm font-semibold text-gray-800 dark:text-gray-100">
                                     <span>{epic.epicName}</span>
                                     <span>{formatNumber(epic.days)} d · {formatNumber(epic.hours)} h</span>
                                   </div>
                                   <div className="mt-2 space-y-2">
                                     {epic.features.map(feature => (
                                       <div key={feature.featureId} className="ml-4">
-                                        <div className="flex items-center justify-between text-sm text-gray-600">
+                                        <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
                                           <span>{feature.featureName}</span>
                                           <span>{formatNumber(feature.days)} d · {formatNumber(feature.hours)} h</span>
                                         </div>
-                                        <ul className="mt-1 ml-4 text-xs text-gray-500 space-y-0.5">
+                                        <ul className="mt-1 ml-4 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
                                           {feature.stories.map(story => (
                                             <li key={story.storyId} className="flex items-center justify-between">
                                               <span>{story.storyName}</span>
@@ -1161,10 +1164,10 @@ export default function ResourceProfilePage() {
                   ))}
 
                   {profile.overheadRows.map(row => (
-                    <tr key={row.overheadId} className="bg-amber-50 text-gray-700 italic border-b border-amber-100">
+                    <tr key={row.overheadId} className="bg-amber-50 dark:bg-amber-950 text-gray-700 dark:text-gray-300 italic border-b border-amber-100 dark:border-amber-900">
                       <td className="px-6 py-3">
                         <div className="font-medium">{row.name}</div>
-                        {row.resourceTypeName && <p className="text-xs text-gray-500 normal-case not-italic">Linked to: {row.resourceTypeName}</p>}
+                        {row.resourceTypeName && <p className="text-xs text-gray-500 dark:text-gray-400 normal-case not-italic">Linked to: {row.resourceTypeName}</p>}
                       </td>
                       <td className="text-center px-4 py-3">
                         {profile.projectDurationWeeks > 0
@@ -1179,12 +1182,12 @@ export default function ResourceProfilePage() {
                             : `— ${formatNumber(row.value, 2)} fixed days`}
                       </td>
                       <td className="text-center px-4 py-3">—</td>
-                      <td className="text-right px-4 py-3 font-medium text-gray-900">{formatNumber(row.computedDays, 2)} d</td>
+                      <td className="text-right px-4 py-3 font-medium text-gray-900 dark:text-white">{formatNumber(row.computedDays, 2)} d</td>
                       <td className="px-4 py-3">—</td>
-                      <td className="px-4 py-3 text-xs text-gray-500">—</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">—</td>
                       <td className="text-right px-4 py-3">{row.dayRate != null ? `$${formatNumber(row.dayRate, 0)}` : '—'}</td>
                       {hasCost && (
-                        <td className="text-right px-6 py-3 font-medium text-gray-900">
+                        <td className="text-right px-6 py-3 font-medium text-gray-900 dark:text-white">
                           {row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}
                         </td>
                       )}
@@ -1214,23 +1217,23 @@ export default function ResourceProfilePage() {
           )}
         </section>
 
-        <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+        <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-5">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Overhead configuration</h2>
-              <p className="text-sm text-gray-500">Percentages or days applied on top of task estimates.</p>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">Overhead configuration</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Percentages or days applied on top of task estimates.</p>
             </div>
           </div>
 
           <div className="space-y-3">
             {overheadItems.length === 0 && (
-              <p className="text-sm text-gray-500">No overheads yet. Add one below.</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">No overheads yet. Add one below.</p>
             )}
             {overheadItems.map(item => (
-              <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 border border-gray-100 rounded-lg px-4 py-3">
+              <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 border border-gray-100 dark:border-gray-700 rounded-lg px-4 py-3">
                 <div>
-                  <p className="font-medium text-gray-900">{item.name}</p>
-                  <p className="text-xs text-gray-500">
+                  <p className="font-medium text-gray-900 dark:text-white">{item.name}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
                     {item.type === 'PERCENTAGE'
                       ? `${item.value}% of task days`
                       : item.type === 'DAYS_PER_WEEK'
@@ -1258,26 +1261,26 @@ export default function ResourceProfilePage() {
           </div>
 
           <div className="border border-dashed border-gray-300 rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
               {editingId ? 'Edit overhead' : 'Add overhead'}
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Name</label>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Name</label>
                 <input
                   type="text"
                   value={form.name}
                   onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                   placeholder="e.g. Delivery management"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Bill using resource rate (optional)</label>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Bill using resource rate (optional)</label>
                 <select
                   value={form.resourceTypeId}
                   onChange={e => setForm(f => ({ ...f, resourceTypeId: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   <option value="">No resource type</option>
                   {resourceTypes.map(rt => (
@@ -1288,7 +1291,7 @@ export default function ResourceProfilePage() {
             </div>
             <div className="mt-4 flex flex-wrap gap-4">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Type</label>
                 <div className="flex gap-2">
                   {TYPE_OPTIONS.map(opt => (
                     <button
@@ -1307,7 +1310,7 @@ export default function ResourceProfilePage() {
                 </div>
               </div>
               <div className="flex-1 min-w-[160px]">
-                <label className="block text-xs font-medium text-gray-500 mb-1">
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
                   {form.type === 'PERCENTAGE' ? 'Percentage (%)' : form.type === 'DAYS_PER_WEEK' ? 'Days per week' : 'Fixed total days'}
                 </label>
                 <input
@@ -1316,7 +1319,7 @@ export default function ResourceProfilePage() {
                   step={form.type === 'PERCENTAGE' ? 0.5 : 0.1}
                   value={form.value}
                   onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
             </div>
@@ -1324,7 +1327,7 @@ export default function ResourceProfilePage() {
               <p className="text-xs text-amber-600 mt-2">⚠ No timeline set for this project — computed days will be 0 until you add features to the timeline.</p>
             )}
             {form.type === 'DAYS_PER_WEEK' && (profile?.projectDurationWeeks ?? 0) > 0 && form.value !== '' && (
-              <p className="text-xs text-gray-500 mt-2">= {formatNumber(parseFloat(form.value || '0') * (profile?.projectDurationWeeks ?? 0), 2)} total days ({formatNumber(profile?.projectDurationWeeks ?? 0)} weeks)</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">= {formatNumber(parseFloat(form.value || '0') * (profile?.projectDurationWeeks ?? 0), 2)} total days ({formatNumber(profile?.projectDurationWeeks ?? 0)} weeks)</p>
             )}
             {formError && <p className="text-sm text-red-600 mt-2">{formError}</p>}
             <div className="mt-4 flex gap-2">
@@ -1340,7 +1343,7 @@ export default function ResourceProfilePage() {
               {editingId && (
                 <button
                   onClick={resetForm}
-                  className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100"
+                  className="px-4 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                 >
                   Cancel
                 </button>
@@ -1349,15 +1352,15 @@ export default function ResourceProfilePage() {
           </div>
         </section>
 
-        <section className="bg-white rounded-xl border border-gray-200 p-6">
+        <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Capacity vs overhead</h2>
-              <p className="text-sm text-gray-500">Stacked days by role</p>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">Capacity vs overhead</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Stacked days by role</p>
             </div>
           </div>
           {chartData.length === 0 ? (
-            <div className="text-center text-gray-400 py-10 text-sm">Not enough data yet</div>
+            <div className="text-center text-gray-400 dark:text-gray-500 py-10 text-sm">Not enough data yet</div>
           ) : (
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -1387,18 +1390,18 @@ export default function ResourceProfilePage() {
         {activeTab === 'commercial' && (
         <>
           {/* ── Apply Rate Card ── */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Apply Rate Card</h2>
-              <p className="text-sm text-gray-500">Select a rate card to bulk-apply day rates to matching resource types.</p>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">Apply Rate Card</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Select a rate card to bulk-apply day rates to matching resource types.</p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex-1 min-w-[200px]">
-                <label className="block text-xs font-medium text-gray-500 mb-1">Rate Card</label>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Rate Card</label>
                 <select
                   value={selectedRateCardId}
                   onChange={e => { setSelectedRateCardId(e.target.value); setRateCardResult(null) }}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   <option value="">Select a rate card…</option>
                   {rateCards.map(rc => (
@@ -1423,13 +1426,13 @@ export default function ResourceProfilePage() {
           </section>
 
           {/* ── Cost Summary Table ── */}
-          <section className="bg-white rounded-xl border border-gray-200">
-            <header className="px-6 py-4 border-b border-gray-100">
-              <h2 className="text-base font-semibold text-gray-900">Cost Summary</h2>
-              <p className="text-sm text-gray-500">Breakdown by resource type with day rates and discounts</p>
+          <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+            <header className="px-6 py-4 border-b border-gray-100 dark:border-gray-700">
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">Cost Summary</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Breakdown by resource type with day rates and discounts</p>
             </header>
             {!commercialData || commercialData.rows.length === 0 ? (
-              <div className="py-12 text-center text-gray-400">
+              <div className="py-12 text-center text-gray-400 dark:text-gray-500">
                 <p className="text-lg mb-1">No costed resources.</p>
                 <p className="text-sm">Assign day rates to resource types to see the cost summary.</p>
               </div>
@@ -1437,7 +1440,7 @@ export default function ResourceProfilePage() {
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead>
-                    <tr className="bg-gray-50 text-gray-600 border-b border-gray-200">
+                    <tr className="bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
                       <th className="text-left px-6 py-3 font-medium">Resource Type</th>
                       <th className="text-center px-4 py-3 font-medium">Count</th>
                       <th className="text-right px-4 py-3 font-medium">Effort Days</th>
@@ -1452,13 +1455,13 @@ export default function ResourceProfilePage() {
                     {commercialData.rows.map(row => (
                       <Fragment key={row.id}>
                         <tr className={`border-b border-gray-100 ${row.kind === 'named-resource' ? 'bg-gray-50' : ''}`}>
-                          <td className="px-6 py-3 text-gray-900 font-medium">
+                          <td className="px-6 py-3 text-gray-900 dark:text-white font-medium">
                             {row.name}
                             {row.kind === 'overhead' && <span className="text-xs text-amber-600 ml-2">(overhead)</span>}
                             {row.kind === 'named-resource' && <span className="text-xs text-blue-500 ml-2">(person)</span>}
                           </td>
-                          <td className="text-center px-4 py-3 text-gray-800">{row.count}</td>
-                          <td className="text-right px-4 py-3 text-gray-500">{formatNumber(row.effortDays)}</td>
+                          <td className="text-center px-4 py-3 text-gray-800 dark:text-gray-100">{row.count}</td>
+                          <td className="text-right px-4 py-3 text-gray-500 dark:text-gray-400">{formatNumber(row.effortDays)}</td>
                           <td className="px-4 py-3">
                             {(row.kind === 'resource' || row.kind === 'named-resource') ? (() => {
                               const badge = getAllocationBadge(row)
@@ -1475,12 +1478,12 @@ export default function ResourceProfilePage() {
                                   >
                                     {badge.label}
                                   </button>
-                                  {badge.sub && <div className="text-xs text-gray-400 mt-0.5">{badge.sub}</div>}
+                                  {badge.sub && <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{badge.sub}</div>}
                                 </div>
                               )
-                            })() : <span className="text-gray-400 text-xs">—</span>}
+                            })() : <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>}
                           </td>
-                          <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                          <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                             {(row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' ? (() => {
                               const startWk = row.allocationStartWeek ?? row.derivedStartWeek
                               const endWk = row.allocationEndWeek ?? row.derivedEndWeek
@@ -1491,9 +1494,9 @@ export default function ResourceProfilePage() {
                               return '—'
                             })() : '—'}
                           </td>
-                          <td className="text-right px-4 py-3 text-gray-900 font-medium">{formatNumber(row.allocatedDays)}</td>
-                          <td className="text-right px-4 py-3 text-gray-800">${formatNumber(row.dayRate, 0)}</td>
-                          <td className="text-right px-6 py-3 text-gray-900">${formatNumber(row.subtotal, 0)}</td>
+                          <td className="text-right px-4 py-3 text-gray-900 dark:text-white font-medium">{formatNumber(row.allocatedDays)}</td>
+                          <td className="text-right px-4 py-3 text-gray-800 dark:text-gray-100">${formatNumber(row.dayRate, 0)}</td>
+                          <td className="text-right px-6 py-3 text-gray-900 dark:text-white">${formatNumber(row.subtotal, 0)}</td>
                         </tr>
                         {/* Inline allocation editor */}
                         {editingAllocation === row.id && allocationDraft && (row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' && (
@@ -1501,11 +1504,11 @@ export default function ResourceProfilePage() {
                             <td colSpan={8} className="px-6 py-4">
                               <div className="flex flex-wrap items-end gap-4">
                                 <div>
-                                  <label className="block text-xs font-medium text-gray-600 mb-1">Allocation Mode</label>
+                                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Allocation Mode</label>
                                   <select
                                     value={allocationDraft.allocationMode}
                                     onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
-                                    className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                   >
                                     <option value="EFFORT">T&amp;M (effort only)</option>
                                     <option value="TIMELINE">Timeline window</option>
@@ -1513,7 +1516,7 @@ export default function ResourceProfilePage() {
                                   </select>
                                 </div>
                                 <div>
-                                  <label className="block text-xs font-medium text-gray-600 mb-1">FTE %</label>
+                                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">FTE %</label>
                                   <input
                                     type="number"
                                     min={1}
@@ -1521,15 +1524,15 @@ export default function ResourceProfilePage() {
                                     step={5}
                                     value={allocationDraft.allocationPercent}
                                     onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
-                                    className="w-20 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                   />
                                 </div>
                                 {allocationDraft.allocationMode === 'TIMELINE' && (
                                   <>
                                     <div>
-                                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                         Start Week override
-                                        {row.derivedStartWeek != null && <span className="text-gray-400 ml-1">(auto: Wk {Math.round(row.derivedStartWeek)})</span>}
+                                        {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.round(row.derivedStartWeek)})</span>}
                                       </label>
                                       <input
                                         type="number"
@@ -1538,13 +1541,13 @@ export default function ResourceProfilePage() {
                                         value={allocationDraft.allocationStartWeek ?? ''}
                                         onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
                                         placeholder="auto"
-                                        className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                       />
                                     </div>
                                     <div>
-                                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                         End Week override
-                                        {row.derivedEndWeek != null && <span className="text-gray-400 ml-1">(auto: Wk {Math.round(row.derivedEndWeek)})</span>}
+                                        {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.round(row.derivedEndWeek)})</span>}
                                       </label>
                                       <input
                                         type="number"
@@ -1553,7 +1556,7 @@ export default function ResourceProfilePage() {
                                         value={allocationDraft.allocationEndWeek ?? ''}
                                         onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
                                         placeholder="auto"
-                                        className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                       />
                                     </div>
                                   </>
@@ -1591,7 +1594,7 @@ export default function ResourceProfilePage() {
                                   </button>
                                   <button
                                     onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
-                                    className="px-4 py-1.5 rounded-lg text-sm text-gray-600 hover:bg-gray-100"
+                                    className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                                   >
                                     Cancel
                                   </button>
@@ -1601,8 +1604,8 @@ export default function ResourceProfilePage() {
                           </tr>
                         )}
                         {row.appliedDiscounts.map(d => (
-                          <tr key={d.id} className="border-b border-gray-50 bg-gray-50">
-                            <td className="px-6 py-2 pl-10 text-gray-500 italic text-xs" colSpan={7}>
+                          <tr key={d.id} className="border-b border-gray-50 bg-gray-50 dark:bg-gray-700">
+                            <td className="px-6 py-2 pl-10 text-gray-500 dark:text-gray-400 italic text-xs" colSpan={7}>
                               ↳ {d.label} ({d.type === 'PERCENTAGE' ? `${d.value}%` : `$${formatNumber(d.value, 0)}`})
                             </td>
                             <td className="text-right px-6 py-2 text-red-600 text-xs italic">
@@ -1611,11 +1614,11 @@ export default function ResourceProfilePage() {
                           </tr>
                         ))}
                         {row.appliedDiscounts.length > 0 && (
-                          <tr className="border-b border-gray-100 bg-gray-50">
-                            <td className="px-6 py-2 pl-10 text-gray-600 text-xs font-medium" colSpan={7}>
+                          <tr className="border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
+                            <td className="px-6 py-2 pl-10 text-gray-600 dark:text-gray-400 text-xs font-medium" colSpan={7}>
                               Net subtotal
                             </td>
-                            <td className="text-right px-6 py-2 text-gray-900 text-xs font-medium">
+                            <td className="text-right px-6 py-2 text-gray-900 dark:text-white text-xs font-medium">
                               ${formatNumber(row.netSubtotal, 0)}
                             </td>
                           </tr>
@@ -1633,23 +1636,23 @@ export default function ResourceProfilePage() {
           </section>
 
           {/* ── Project Discounts ── */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-base font-semibold text-gray-900">Project Discounts</h2>
-                <p className="text-sm text-gray-500">Discounts applied to the overall project subtotal</p>
+                <h2 className="text-base font-semibold text-gray-900 dark:text-white">Project Discounts</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Discounts applied to the overall project subtotal</p>
               </div>
             </div>
 
             {commercialData && commercialData.projectDiscounts.length === 0 && !showDiscountForm && (
-              <p className="text-sm text-gray-500">No project-level discounts yet.</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">No project-level discounts yet.</p>
             )}
 
             {commercialData && commercialData.projectDiscounts.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead>
-                    <tr className="bg-gray-50 text-gray-600 border-b border-gray-200">
+                    <tr className="bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
                       <th className="text-left px-4 py-2 font-medium">Label</th>
                       <th className="text-left px-4 py-2 font-medium">Type</th>
                       <th className="text-right px-4 py-2 font-medium">Value</th>
@@ -1659,10 +1662,10 @@ export default function ResourceProfilePage() {
                   </thead>
                   <tbody>
                     {commercialData.projectDiscounts.map(d => (
-                      <tr key={d.id} className="border-b border-gray-100">
-                        <td className="px-4 py-2 text-gray-900">{d.label}</td>
-                        <td className="px-4 py-2 text-gray-600">{d.type === 'PERCENTAGE' ? 'Percentage' : 'Fixed Amount'}</td>
-                        <td className="text-right px-4 py-2 text-gray-800">
+                      <tr key={d.id} className="border-b border-gray-100 dark:border-gray-700">
+                        <td className="px-4 py-2 text-gray-900 dark:text-white">{d.label}</td>
+                        <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{d.type === 'PERCENTAGE' ? 'Percentage' : 'Fixed Amount'}</td>
+                        <td className="text-right px-4 py-2 text-gray-800 dark:text-gray-100">
                           {d.type === 'PERCENTAGE' ? `${d.value}%` : `$${formatNumber(d.value, 0)}`}
                         </td>
                         <td className="text-right px-4 py-2 text-red-600 font-medium">
@@ -1685,31 +1688,31 @@ export default function ResourceProfilePage() {
 
             {showDiscountForm ? (
               <div className="border border-dashed border-gray-300 rounded-lg p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-gray-900">Add project discount</h3>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Add project discount</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Label</label>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Label</label>
                     <input
                       type="text"
                       value={discountForm.label}
                       onChange={e => setDiscountForm(f => ({ ...f, label: e.target.value }))}
                       placeholder="e.g. Early bird"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Type</label>
                     <select
                       value={discountForm.type}
                       onChange={e => setDiscountForm(f => ({ ...f, type: e.target.value as 'PERCENTAGE' | 'FIXED_AMOUNT' }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     >
                       <option value="PERCENTAGE">Percentage</option>
                       <option value="FIXED_AMOUNT">Fixed Amount</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
                       {discountForm.type === 'PERCENTAGE' ? 'Percentage (%)' : 'Amount ($)'}
                     </label>
                     <input
@@ -1718,7 +1721,7 @@ export default function ResourceProfilePage() {
                       step={discountForm.type === 'PERCENTAGE' ? 0.5 : 1}
                       value={discountForm.value}
                       onChange={e => setDiscountForm(f => ({ ...f, value: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     />
                   </div>
                 </div>
@@ -1733,7 +1736,7 @@ export default function ResourceProfilePage() {
                   </button>
                   <button
                     onClick={() => { setShowDiscountForm(false); setDiscountFormError(null) }}
-                    className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100"
+                    className="px-4 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                   >
                     Cancel
                   </button>
@@ -1750,11 +1753,11 @@ export default function ResourceProfilePage() {
           </section>
 
           {/* ── Tax ── */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-base font-semibold text-gray-900">Tax</h2>
-                <p className="text-sm text-gray-500">Apply tax to the after-discount total</p>
+                <h2 className="text-base font-semibold text-gray-900 dark:text-white">Tax</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Apply tax to the after-discount total</p>
               </div>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -1767,16 +1770,16 @@ export default function ResourceProfilePage() {
                       updateTax.mutate({ taxRate: null })
                     }
                   }}
-                  className="h-4 w-4 rounded border-gray-300 text-lab3-navy focus:ring-lab3-blue"
+                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-lab3-navy focus:ring-lab3-blue dark:bg-gray-700 dark:text-white"
                 />
-                <span className="text-sm text-gray-600">Enable tax</span>
+                <span className="text-sm text-gray-600 dark:text-gray-400">Enable tax</span>
               </label>
             </div>
 
             {commercialData?.taxEnabled && (
-              <div className="flex flex-wrap items-center gap-6 border border-gray-100 rounded-lg px-4 py-3">
+              <div className="flex flex-wrap items-center gap-6 border border-gray-100 dark:border-gray-700 rounded-lg px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-500">Label:</span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">Label:</span>
                   {editingTaxLabel ? (
                     <div className="flex items-center gap-1">
                       <input
@@ -1789,7 +1792,7 @@ export default function ResourceProfilePage() {
                             setEditingTaxLabel(false)
                           }
                         }}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm w-24 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+                        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm w-24 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
                         autoFocus
                       />
                       <button
@@ -1800,7 +1803,7 @@ export default function ResourceProfilePage() {
                       </button>
                       <button
                         onClick={() => setEditingTaxLabel(false)}
-                        className="text-xs text-gray-500 hover:text-gray-700"
+                        className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700"
                       >
                         Cancel
                       </button>
@@ -1808,14 +1811,14 @@ export default function ResourceProfilePage() {
                   ) : (
                     <button
                       onClick={() => { setTaxLabelDraft(commercialData.taxLabel); setEditingTaxLabel(true) }}
-                      className="text-sm font-medium text-gray-900 hover:text-lab3-navy transition-colors"
+                      className="text-sm font-medium text-gray-900 dark:text-white hover:text-lab3-navy transition-colors"
                     >
                       {commercialData.taxLabel}
                     </button>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-500">Rate:</span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">Rate:</span>
                   {editingTaxRate ? (
                     <div className="flex items-center gap-1">
                       <input
@@ -1833,10 +1836,10 @@ export default function ResourceProfilePage() {
                             }
                           }
                         }}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm w-20 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+                        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm w-20 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
                         autoFocus
                       />
-                      <span className="text-sm text-gray-500">%</span>
+                      <span className="text-sm text-gray-500 dark:text-gray-400">%</span>
                       <button
                         onClick={() => {
                           const val = parseFloat(taxRateDraft)
@@ -1851,7 +1854,7 @@ export default function ResourceProfilePage() {
                       </button>
                       <button
                         onClick={() => setEditingTaxRate(false)}
-                        className="text-xs text-gray-500 hover:text-gray-700"
+                        className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700"
                       >
                         Cancel
                       </button>
@@ -1859,15 +1862,15 @@ export default function ResourceProfilePage() {
                   ) : (
                     <button
                       onClick={() => { setTaxRateDraft(String(commercialData.taxRate ?? 10)); setEditingTaxRate(true) }}
-                      className="text-sm font-medium text-gray-900 hover:text-lab3-navy transition-colors"
+                      className="text-sm font-medium text-gray-900 dark:text-white hover:text-lab3-navy transition-colors"
                     >
                       {commercialData.taxRate}%
                     </button>
                   )}
                 </div>
                 <div className="flex items-center gap-2 ml-auto">
-                  <span className="text-sm text-gray-500">Tax amount:</span>
-                  <span className="text-sm font-medium text-gray-900">${formatNumber(commercialData.taxAmount, 0)}</span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">Tax amount:</span>
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">${formatNumber(commercialData.taxAmount, 0)}</span>
                 </div>
               </div>
             )}
@@ -1878,7 +1881,7 @@ export default function ResourceProfilePage() {
             <section className="bg-gray-900 rounded-xl p-6">
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <div className="space-y-1">
-                  <div className="text-sm text-gray-400">
+                  <div className="text-sm text-gray-400 dark:text-gray-500">
                     Subtotal: ${formatNumber(commercialData.subtotal, 0)}
                     {commercialData.totalProjectDiscount > 0 && (
                       <span> − Discounts: ${formatNumber(commercialData.totalProjectDiscount, 0)}</span>
@@ -1889,7 +1892,7 @@ export default function ResourceProfilePage() {
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm text-gray-400 uppercase tracking-wide">Grand Total</p>
+                  <p className="text-sm text-gray-400 dark:text-gray-500 uppercase tracking-wide">Grand Total</p>
                   <p className="text-3xl font-bold text-white">${formatNumber(commercialData.grandTotal, 0)}</p>
                 </div>
               </div>
