@@ -247,15 +247,15 @@ const CATEGORY_LABELS: Record<ResourceCategory, string> = {
 }
 
 const CATEGORY_ROW_BG: Record<ResourceCategory, string> = {
-  ENGINEERING: 'bg-blue-50',
-  GOVERNANCE: 'bg-amber-50',
-  PROJECT_MANAGEMENT: 'bg-green-50',
+  ENGINEERING: 'bg-blue-50 dark:bg-blue-950',
+  GOVERNANCE: 'bg-amber-50 dark:bg-amber-950',
+  PROJECT_MANAGEMENT: 'bg-green-50 dark:bg-green-950',
 }
 
 const CATEGORY_HEADER_BG: Record<ResourceCategory, string> = {
-  ENGINEERING: 'bg-blue-100',
-  GOVERNANCE: 'bg-amber-100',
-  PROJECT_MANAGEMENT: 'bg-green-100',
+  ENGINEERING: 'bg-blue-100 dark:bg-blue-900',
+  GOVERNANCE: 'bg-amber-100 dark:bg-amber-900',
+  PROJECT_MANAGEMENT: 'bg-green-100 dark:bg-green-900',
 }
 
 const CATEGORY_BAR_BG: Record<ResourceCategory, string> = {
