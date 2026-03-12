@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/ThemeToggle'
+import ThemeToggle from '../components/layout/ThemeToggle'
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer, getOrgs } from '../lib/api'
 
 interface Customer {

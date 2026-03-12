@@ -7,7 +7,7 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/ThemeToggle'
+import ThemeToggle from '../components/layout/ThemeToggle'
 import TemplateCsvImportModal from '../components/templates/TemplateCsvImportModal'
 import TemplateHistoryPanel from '../components/templates/TemplateHistoryPanel'
 

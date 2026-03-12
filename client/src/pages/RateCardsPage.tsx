@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/ThemeToggle'
+import ThemeToggle from '../components/layout/ThemeToggle'
 
 /* ── Types ─────────────────────────────────────────────── */
 
