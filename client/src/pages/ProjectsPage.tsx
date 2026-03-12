@@ -14,9 +14,9 @@ interface Project {
   hoursPerDay: number
   updatedAt: string
   deletedAt?: string | null
+  status?: string
   _count: { epics: number }
   org?: { id: string; name: string }
-  customer?: { id: string; name: string }
 }
 
 interface Org {
