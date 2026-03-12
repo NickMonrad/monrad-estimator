@@ -900,8 +900,8 @@ export default function ResourceProfilePage() {
               onClick={() => setActiveTab('profile')}
               className={`pb-2 text-sm font-medium transition-colors ${
                 activeTab === 'profile'
-                  ? 'border-b-2 border-lab3-navy text-lab3-navy'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'border-b-2 border-lab3-navy text-lab3-navy dark:border-lab3-blue dark:text-lab3-blue'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
               }`}
             >
               Resource Profile
@@ -910,8 +910,8 @@ export default function ResourceProfilePage() {
               onClick={() => setActiveTab('commercial')}
               className={`pb-2 text-sm font-medium transition-colors ${
                 activeTab === 'commercial'
-                  ? 'border-b-2 border-lab3-navy text-lab3-navy'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'border-b-2 border-lab3-navy text-lab3-navy dark:border-lab3-blue dark:text-lab3-blue'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
               }`}
             >
               Commercial
@@ -1164,7 +1164,7 @@ export default function ResourceProfilePage() {
                   ))}
 
                   {profile.overheadRows.map(row => (
-                    <tr key={row.overheadId} className="bg-amber-50 text-gray-700 dark:text-gray-300 italic border-b border-amber-100">
+                    <tr key={row.overheadId} className="bg-amber-50 dark:bg-amber-950 text-gray-700 dark:text-gray-300 italic border-b border-amber-100 dark:border-amber-900">
                       <td className="px-6 py-3">
                         <div className="font-medium">{row.name}</div>
                         {row.resourceTypeName && <p className="text-xs text-gray-500 dark:text-gray-400 normal-case not-italic">Linked to: {row.resourceTypeName}</p>}
