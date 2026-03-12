@@ -8,10 +8,11 @@ interface Project {
   id: string
   name: string
   description?: string
-  customer?: string
+  customer?: string | { id: string; name: string }
   status: string
   hoursPerDay: number
   updatedAt: string
+  deletedAt?: string | null
   _count: { epics: number }
 }
 
@@ -30,10 +31,12 @@ export default function ProjectsPage() {
   const [showNew, setShowNew] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', customer: '' })
   const [search, setSearch] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
+  const [cloningId, setCloningId] = useState<string | null>(null)
 
   const { data: projects = [], isLoading } = useQuery<Project[]>({
-    queryKey: ['projects'],
-    queryFn: () => api.get('/projects').then(r => r.data),
+    queryKey: ['projects', showArchived],
+    queryFn: () => api.get('/projects', { params: showArchived ? { archived: 'true' } : {} }).then(r => r.data),
   })
 
   const createProject = useMutation({
@@ -44,6 +47,31 @@ export default function ProjectsPage() {
       setForm({ name: '', description: '', customer: '' })
     },
   })
+
+  const deleteProject = useMutation({
+    mutationFn: (id: string) => api.delete(`/projects/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  })
+
+  const restoreProject = useMutation({
+    mutationFn: (id: string) => api.post(`/projects/${id}/restore`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  })
+
+  const permanentDelete = useMutation({
+    mutationFn: (id: string) => api.delete(`/projects/${id}/permanent`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  })
+
+  const cloneProject = async (id: string) => {
+    setCloningId(id)
+    try {
+      await api.post(`/projects/${id}/clone`)
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+    } finally {
+      setCloningId(null)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -78,16 +106,24 @@ export default function ProjectsPage() {
               className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-red-500"
             />
             <button
-              onClick={() => setShowNew(true)}
-              className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+              onClick={() => { setShowArchived(a => !a); setSearch('') }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${showArchived ? 'bg-gray-800 text-white border-gray-800 hover:bg-gray-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
             >
-              + New project
+              {showArchived ? '← Live projects' : 'Archived'}
             </button>
+            {!showArchived && (
+              <button
+                onClick={() => setShowNew(true)}
+                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+              >
+                + New project
+              </button>
+            )}
           </div>
         </div>
 
         {/* New project form */}
-        {showNew && (
+        {showNew && !showArchived && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
             <h2 className="font-medium text-gray-900 mb-4">New project</h2>
             <div className="grid grid-cols-2 gap-4 mb-4">
@@ -135,8 +171,8 @@ export default function ProjectsPage() {
           <div className="text-center py-12 text-gray-400">Loading…</div>
         ) : projects.length === 0 ? (
           <div className="text-center py-12 text-gray-400">
-            <p className="text-lg mb-2">No projects yet</p>
-            <p className="text-sm">Create your first project to get started</p>
+            <p className="text-lg mb-2">{showArchived ? 'No archived projects' : 'No projects yet'}</p>
+            <p className="text-sm">{showArchived ? 'Deleted projects appear here' : 'Create your first project to get started'}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -145,8 +181,8 @@ export default function ProjectsPage() {
               .map(project => (
               <div
                 key={project.id}
-                onClick={() => navigate(`/projects/${project.id}`)}
-                className="bg-white rounded-xl border border-gray-200 p-5 cursor-pointer hover:border-red-300 hover:shadow-sm transition-all"
+                className={`bg-white rounded-xl border border-gray-200 p-5 ${!showArchived ? 'cursor-pointer hover:border-red-300 hover:shadow-sm' : 'opacity-75'} transition-all`}
+                onClick={!showArchived ? () => navigate(`/projects/${project.id}`) : undefined}
               >
                 <div className="flex items-start justify-between mb-2">
                   <h3 className="font-medium text-gray-900">{project.name}</h3>
@@ -154,11 +190,63 @@ export default function ProjectsPage() {
                     {project.status}
                   </span>
                 </div>
-                {project.customer && <p className="text-xs text-gray-500 mb-2">Customer: {project.customer}</p>}
+                {project.customer && <p className="text-xs text-gray-500 mb-2">Customer: {typeof project.customer === 'string' ? project.customer : project.customer.name}</p>}
                 {project.description && <p className="text-sm text-gray-600 mb-3 line-clamp-2">{project.description}</p>}
-                <div className="flex items-center justify-between text-xs text-gray-400">
+                <div className="flex items-center justify-between text-xs text-gray-400 mt-2">
                   <span>{project._count.epics} epic{project._count.epics !== 1 ? 's' : ''}</span>
                   <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
+                </div>
+                {/* Action buttons */}
+                <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100" onClick={e => e.stopPropagation()}>
+                  {showArchived ? (
+                    <>
+                      <button
+                        onClick={() => restoreProject.mutate(project.id)}
+                        disabled={restoreProject.isPending}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 border border-green-200 font-medium transition-colors disabled:opacity-50"
+                      >
+                        Restore
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Permanently delete "${project.name}"? This cannot be undone.`)) {
+                            permanentDelete.mutate(project.id)
+                          }
+                        }}
+                        disabled={permanentDelete.isPending}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 font-medium transition-colors disabled:opacity-50"
+                      >
+                        Delete forever
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => navigate(`/projects/${project.id}`)}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg text-gray-600 hover:bg-gray-100 border border-gray-200 font-medium transition-colors"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => cloneProject(project.id)}
+                        disabled={cloningId === project.id}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg text-gray-600 hover:bg-gray-100 border border-gray-200 font-medium transition-colors disabled:opacity-50"
+                      >
+                        {cloningId === project.id ? 'Cloning…' : 'Clone'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Archive "${project.name}"?`)) {
+                            deleteProject.mutate(project.id)
+                          }
+                        }}
+                        disabled={deleteProject.isPending}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg text-red-600 hover:bg-red-50 border border-red-200 font-medium transition-colors disabled:opacity-50"
+                      >
+                        Archive
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
