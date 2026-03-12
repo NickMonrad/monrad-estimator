@@ -18,6 +18,17 @@ model User {
   snapshots BacklogSnapshot[]
   documentTemplates DocumentTemplate[] @relation("DocumentTemplateOwner")
   generatedDocuments GeneratedDocument[] @relation("GeneratedDocumentUser")
+  resetTokens PasswordResetToken[]
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique   // store hashed token, never plaintext
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 }
 
 model GlobalResourceType {
