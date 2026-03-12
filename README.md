@@ -64,6 +64,31 @@ cp server/.env.example server/.env
 
 `server/.env.example` contains sensible defaults for local development. Edit it if your PostgreSQL credentials differ from the Docker command above.
 
+#### Email / SMTP (optional)
+
+Email is used for password reset links and org invite emails. Without SMTP configured, both flows still work — the email content and link are printed to the server console instead.
+
+To enable real email delivery, add the following to `server/.env`:
+
+```env
+SMTP_HOST="smtp-relay.brevo.com"   # or your provider's SMTP host
+SMTP_PORT="587"
+SMTP_USER="your-smtp-login"
+SMTP_PASS="your-smtp-key-or-password"
+SMTP_FROM="Monrad Estimator <you@yourdomain.com>"
+CLIENT_URL="http://localhost:5173"  # base URL used in email links
+```
+
+**Recommended free providers:**
+
+| Provider | Free tier | Notes |
+|---|---|---|
+| [Brevo](https://brevo.com) | 300 emails/day | SMTP login = account email, password = generated SMTP key |
+| [Resend](https://resend.com) | 3,000 emails/month | Requires a verified domain |
+| [SendGrid](https://sendgrid.com) | 100 emails/day | Industry standard |
+
+For **Brevo**: generate an SMTP key at *Settings → SMTP & API → SMTP*, then verify a sender address at *Senders & IPs → Add a sender*.
+
 ### 4. Run database migrations
 
 ```bash
