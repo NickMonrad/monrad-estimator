@@ -107,6 +107,7 @@ router.post('/:id/clone', async (req: AuthRequest, res: Response) => {
       name: `Copy of ${source.name}`,
       description: source.description,
       customerId: source.customerId,
+      orgId: source.orgId,
       status: 'DRAFT',
       hoursPerDay: source.hoursPerDay,
       bufferWeeks: source.bufferWeeks,
