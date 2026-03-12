@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from 'react'
 const GEOCITIES_CSS = `
   * { font-family: 'Comic Sans MS', cursive, sans-serif !important; cursor: crosshair !important; }
   body {
+    padding-top: 32px !important;
     background: repeating-linear-gradient(
       45deg,
       #ff00ff,
