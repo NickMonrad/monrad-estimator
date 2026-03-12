@@ -62,16 +62,16 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Apply template</h2>
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md p-6">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Apply template</h2>
 
         <div className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-gray-700 block mb-1">Template</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Template</label>
             <select
               value={selectedTemplateId}
               onChange={e => setSelectedTemplateId(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             >
               <option value="">Select a template…</option>
               {templates.map(tpl => (
@@ -84,14 +84,14 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
 
           {selectedTemplateId && (
             <div>
-              <p className="text-xs text-gray-500 mb-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
                 {templates.find(t => t.id === selectedTemplateId)?.tasks.length ?? 0} tasks will be created
               </p>
             </div>
           )}
 
           <div>
-            <label className="text-sm font-medium text-gray-700 block mb-2">Complexity</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-2">Complexity</label>
             <div className="flex gap-2">
               {(Object.keys(COMPLEXITY_LABELS) as Complexity[]).map(c => (
                 <button
@@ -100,7 +100,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
                   className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
                     complexity === c
                       ? 'bg-lab3-navy text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                   }`}
                 >
                   {COMPLEXITY_LABELS[c]}
@@ -111,13 +111,13 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
 
           {selectedTemplateId && (
             <div>
-              <label className="text-sm font-medium text-gray-700 block mb-1">Story name</label>
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Story name</label>
               <input
                 type="text"
                 value={storyName}
                 onChange={e => setStoryName(e.target.value)}
                 placeholder="Enter story name…"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
               />
             </div>
           )}
@@ -131,7 +131,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
           >
             {apply.isPending ? 'Applying…' : 'Apply template'}
           </button>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
             Cancel
           </button>
         </div>

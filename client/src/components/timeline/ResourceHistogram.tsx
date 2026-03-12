@@ -118,18 +118,18 @@ export default function ResourceHistogram({
   const svgW = totalWeeks * colW
 
   return (
-    <div className="border-t border-gray-200 flex overflow-hidden">
+    <div className="border-t border-gray-200 dark:border-gray-700 flex overflow-hidden">
       {/* Left label panel — sticky */}
       <div
         style={{ width: labelW, flexShrink: 0 }}
-        className="relative bg-white border-r border-gray-100 z-10"
+        className="relative bg-white dark:bg-gray-800 border-r border-gray-100 dark:border-gray-700 z-10"
       >
         {/* Header */}
         <div
           style={{ height: HEADER_H }}
-          className="border-b border-gray-100 flex items-center px-3"
+          className="border-b border-gray-100 dark:border-gray-700 flex items-center px-3"
         >
-          <span className="text-xs font-medium text-gray-500">Resource Demand</span>
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Resource Demand</span>
         </div>
 
         {/* Resource type rows */}
@@ -140,10 +140,10 @@ export default function ResourceHistogram({
             <div
               key={rt.name}
               style={{ height: ROW_H }}
-              className="border-b border-gray-50 flex flex-col justify-center px-3"
+              className="border-b border-gray-50 dark:border-gray-700 flex flex-col justify-center px-3"
             >
-              <span className="text-xs font-medium text-gray-700 truncate">{rt.name}</span>
-              <span className="text-xs text-gray-400 mt-0.5">{engLabel}</span>
+              <span className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{rt.name}</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{engLabel}</span>
             </div>
           )
         })}

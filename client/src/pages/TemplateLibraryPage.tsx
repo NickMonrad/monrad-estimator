@@ -130,24 +130,23 @@ export default function TemplateLibraryPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* TODO: dark mode — add dark: variants throughout this page */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900 dark:text-white">Monrad Estimator</button>
             <span>/</span>
-            <span className="text-gray-700">Template Library</span>
+            <span className="text-gray-700 dark:text-gray-300">Template Library</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-xl font-semibold text-gray-900">Template Library</h1>
+          <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Template Library</h1>
           <div className="flex items-center gap-2">
             <button
               onClick={async () => {
@@ -156,16 +155,16 @@ export default function TemplateLibraryPage() {
                 const a = document.createElement('a'); a.href = url; a.download = 'templates.csv'; a.click()
                 URL.revokeObjectURL(url)
               }}
-              className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+              className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
               ⬇ Export CSV
             </button>
             <button onClick={() => setShowTplImport(true)}
-              className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+              className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
               ⬆ Import CSV
             </button>
             <button
               onClick={() => { setShowArchived(a => !a); setAdding(false) }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${showArchived ? 'bg-gray-800 text-white border-gray-800 hover:bg-gray-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+              className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${showArchived ? 'bg-gray-800 text-white border-gray-800 hover:bg-gray-700' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
             >
               {showArchived ? '← Live templates' : 'Archived'}
             </button>
@@ -183,8 +182,8 @@ export default function TemplateLibraryPage() {
         ) : (
           <div className="space-y-3">
             {adding && (
-              <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 p-4">
-                <h3 className="text-sm font-medium text-gray-700 mb-3">New template</h3>
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 dark:border-blue-800 p-4">
+                <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">New template</h3>
                 <TemplateForm
                   initial={templateForm}
                   onSave={(data) => createTemplate.mutate(data)}
@@ -195,7 +194,7 @@ export default function TemplateLibraryPage() {
             )}
 
             {templates.map(tpl => (
-              <div key={tpl.id} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 overflow-hidden">
+              <div key={tpl.id} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                 {editingId === tpl.id ? (
                   <div className="p-4">
                     <TemplateForm
@@ -206,19 +205,19 @@ export default function TemplateLibraryPage() {
                     />
                   </div>
                 ) : (
-                  <div className="group flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-gray-50"
+                  <div className="group flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
                     onClick={() => toggle(tpl.id)}>
                     <span className="text-gray-400 text-sm select-none">{expandedIds.has(tpl.id) ? '▼' : '▶'}</span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium text-gray-900">{tpl.name}</span>
+                        <span className="font-medium text-gray-900 dark:text-white">{tpl.name}</span>
                         {tpl.category && (
                           <span className="text-xs text-purple-600 bg-purple-50 px-2 py-0.5 rounded">{tpl.category}</span>
                         )}
                       </div>
-                      {tpl.description && <p className="text-xs text-gray-500 mt-0.5 truncate">{tpl.description}</p>}
+                      {tpl.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{tpl.description}</p>}
                     </div>
-                    <span className="text-xs text-gray-400 whitespace-nowrap">
+                    <span className="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">
                       {tpl.tasks.length} task{tpl.tasks.length !== 1 ? 's' : ''}
                     </span>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
@@ -231,8 +230,8 @@ export default function TemplateLibraryPage() {
                         </button>
                       ) : (
                         <>
-                          <button onClick={() => setShowHistoryId(showHistoryId === tpl.id ? null : tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">History</button>
-                          <button onClick={() => setEditingId(tpl.id)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
+                          <button onClick={() => setShowHistoryId(showHistoryId === tpl.id ? null : tpl.id)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-2 py-1">History</button>
+                          <button onClick={() => setEditingId(tpl.id)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-2 py-1">Edit</button>
                           <button
                             onClick={async () => {
                               const res = await api.get(`/templates/${tpl.id}/export-csv`, { responseType: 'blob' })
@@ -249,14 +248,14 @@ export default function TemplateLibraryPage() {
                 )}
 
                 {expandedIds.has(tpl.id) && (
-                  <div className="border-t border-gray-100 px-5 py-4">
+                  <div className="border-t border-gray-100 dark:border-gray-700 px-5 py-4">
                     {tpl.tasks.length > 0 && (
                       <DndContext sensors={sensors} collisionDetection={closestCenter}
                         onDragEnd={(e) => handleDragEnd(tpl.id, tpl.tasks, e)}>
                         <SortableContext items={tpl.tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
                           <table className="w-full text-sm mb-3">
                             <thead>
-                              <tr className="text-xs text-gray-400 border-b border-gray-100">
+                              <tr className="text-xs text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700">
                                 <th className="pb-2 w-5"></th>
                                 <th className="text-left pb-2 font-medium">Task</th>
                                 <th className="text-left pb-2 font-medium">Resource type</th>
@@ -308,7 +307,7 @@ export default function TemplateLibraryPage() {
                       />
                     ) : (
                       <button onClick={() => setAddingTaskForId(tpl.id)}
-                        className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 py-1">
+                        className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 flex items-center gap-1 py-1">
                         + Add task
                       </button>
                     )}
@@ -326,7 +325,7 @@ export default function TemplateLibraryPage() {
             ))}
 
             {templates.length === 0 && !adding && (
-              <div className="text-center py-16 text-gray-400">
+              <div className="text-center py-16 text-gray-400 dark:text-gray-500">
                 <p className="text-lg mb-1">{showArchived ? 'No archived templates' : 'No templates yet'}</p>
                 <p className="text-sm">{showArchived ? 'Archived templates appear here' : 'Create a template to speed up backlog creation'}</p>
               </div>
@@ -369,7 +368,7 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
           className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save template'}
         </button>
-        <button onClick={onCancel} className="px-4 py-1.5 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>
+        <button onClick={onCancel} className="px-4 py-1.5 rounded-lg text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
     </div>
   )
@@ -389,7 +388,7 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
     setForm(v => ({ ...v, [field]: parseFloat(e.target.value) || 0 }))
 
   return (
-    <div className="bg-gray-50 rounded-lg px-3 py-2 space-y-2">
+    <div className="bg-gray-50 dark:bg-gray-700 rounded-lg px-3 py-2 space-y-2">
       <div className="grid grid-cols-2 gap-2">
         <input placeholder="Task name *" value={form.name} onChange={fText('name')}
           className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
@@ -407,7 +406,7 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
       <div className="grid grid-cols-5 gap-2">
         {(['hoursExtraSmall', 'hoursSmall', 'hoursMedium', 'hoursLarge', 'hoursExtraLarge'] as const).map((field, i) => (
           <div key={field}>
-            <label className="text-xs text-gray-400 block mb-1">{['XS', 'S', 'M', 'L', 'XL'][i]} hours</label>
+            <label className="text-xs text-gray-400 dark:text-gray-500 block mb-1">{['XS', 'S', 'M', 'L', 'XL'][i]} hours</label>
             <input type="number" min="0" step="0.5" value={form[field]} onChange={fNum(field)}
               className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
           </div>
@@ -418,7 +417,7 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
           className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save task'}
         </button>
-        <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 hover:bg-gray-100">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
     </div>
   )
@@ -434,20 +433,20 @@ function SortableTaskRow({ task, fmt, onEdit, onDelete }: {
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }
 
   return (
-    <tr ref={setNodeRef} style={style} className="group border-b border-gray-50 last:border-0 bg-white">
+    <tr ref={setNodeRef} style={style} className="group border-b border-gray-50 dark:border-gray-700 last:border-0 bg-white dark:bg-gray-800">
       <td className="py-2 pr-1">
         <span {...attributes} {...listeners}
-          className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 select-none px-1 text-base">
+          className="cursor-grab active:cursor-grabbing text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400 select-none px-1 text-base">
           ⠿
         </span>
       </td>
-      <td className="py-2 pr-4 text-gray-800">{task.name}</td>
-      <td className="py-2 pr-4 text-gray-500">{task.resourceTypeName}</td>
-      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursExtraSmall)}</td>
-      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursSmall)}</td>
-      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursMedium)}</td>
-      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursLarge)}</td>
-      <td className="py-2 pr-3 text-right text-gray-600 text-xs whitespace-nowrap">{fmt(task.hoursExtraLarge)}</td>
+      <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{task.name}</td>
+      <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">{task.resourceTypeName}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmt(task.hoursExtraSmall)}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmt(task.hoursSmall)}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmt(task.hoursMedium)}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmt(task.hoursLarge)}</td>
+      <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmt(task.hoursExtraLarge)}</td>
       <td className="py-2">
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>

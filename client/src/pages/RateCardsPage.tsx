@@ -93,9 +93,9 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
 
       {/* Panel */}
       <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto mx-4">
-        <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+        <div className="px-6 py-5 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
+          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
             </svg>
@@ -123,7 +123,7 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
               onChange={e => setIsDefault(e.target.checked)}
               className="rounded border-gray-300 dark:border-gray-600 text-lab3-navy focus:ring-lab3-blue dark:bg-gray-700 dark:text-white"
             />
-            <span className="text-sm text-gray-700">Set as default rate card</span>
+            <span className="text-sm text-gray-700 dark:text-gray-300">Set as default rate card</span>
           </label>
 
           {/* Entries */}
@@ -145,24 +145,24 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
             </div>
 
             {entries.length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center border border-dashed border-gray-200 rounded-lg">
+              <p className="text-sm text-gray-400 dark:text-gray-500 py-4 text-center border border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
                 No entries yet — add a resource type above
               </p>
             ) : (
-              <table className="w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
+              <table className="w-full text-sm border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                 <thead>
-                  <tr className="bg-gray-50 border-b border-gray-200">
-                    <th className="px-4 py-2 text-left font-medium text-gray-600">Resource Type</th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600">Day Rate</th>
+                  <tr className="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">Resource Type</th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">Day Rate</th>
                     <th className="px-4 py-2 w-10" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {entries.map((entry, idx) => {
                     const rt = globalResourceTypes.find(t => t.id === entry.globalResourceTypeId)
                     return (
-                      <tr key={entry.globalResourceTypeId} className="hover:bg-gray-50">
-                        <td className="px-4 py-2 text-gray-900">{rt?.name ?? 'Unknown'}</td>
+                      <tr key={entry.globalResourceTypeId} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                        <td className="px-4 py-2 text-gray-900 dark:text-white">{rt?.name ?? 'Unknown'}</td>
                         <td className="px-4 py-2">
                           <input
                             type="number"
@@ -195,10 +195,10 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
+        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+            className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
           >
             Cancel
           </button>
@@ -288,18 +288,17 @@ export default function RateCardsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* TODO: dark mode — add dark: variants throughout this page */}
       {/* Header */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900 dark:text-white">Monrad Estimator</button>
             <span>/</span>
-            <span className="text-gray-700">Rate Cards</span>
+            <span className="text-gray-700 dark:text-gray-300">Rate Cards</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
         </div>
       </header>
@@ -308,8 +307,8 @@ export default function RateCardsPage() {
         {/* Title + action */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Rate Cards</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Create and manage reusable rate card templates for project pricing</p>
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Rate Cards</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Create and manage reusable rate card templates for project pricing</p>
           </div>
           <button
             onClick={() => setShowCreate(true)}
@@ -323,8 +322,8 @@ export default function RateCardsPage() {
         {isLoading ? (
           <div className="text-center py-12 text-gray-400">Loading…</div>
         ) : rateCards.length === 0 ? (
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 text-center py-16">
-            <p className="text-gray-400 mb-4">No rate cards yet</p>
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 text-center py-16">
+            <p className="text-gray-400 dark:text-gray-500 mb-4">No rate cards yet</p>
             <button
               onClick={() => setShowCreate(true)}
               className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors"
@@ -337,10 +336,10 @@ export default function RateCardsPage() {
             {rateCards.map(rc => {
               const expanded = expandedIds.has(rc.id)
               return (
-                <div key={rc.id} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 overflow-hidden">
+                <div key={rc.id} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                   {/* Card header */}
                   <div
-                    className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
+                    className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                     onClick={() => toggleExpand(rc.id)}
                   >
                     <div className="flex items-center gap-3">
@@ -354,7 +353,7 @@ export default function RateCardsPage() {
                         <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
                       </svg>
 
-                      <span className="font-medium text-gray-900">{rc.name}</span>
+                      <span className="font-medium text-gray-900 dark:text-white">{rc.name}</span>
 
                       {/* Version badge */}
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">
@@ -369,7 +368,7 @@ export default function RateCardsPage() {
                       )}
 
                       {/* Entry count */}
-                      <span className="text-xs text-gray-400">
+                      <span className="text-xs text-gray-400 dark:text-gray-500">
                         {rc.entries.length} {rc.entries.length === 1 ? 'entry' : 'entries'}
                       </span>
                     </div>
@@ -379,7 +378,7 @@ export default function RateCardsPage() {
                       {!rc.isDefault && (
                         <button
                           onClick={() => setDefault.mutate(rc.id)}
-                          className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
+                          className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-white px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                           title="Set as default"
                         >
                           Set default
@@ -408,28 +407,28 @@ export default function RateCardsPage() {
 
                   {/* Expanded entries table */}
                   {expanded && (
-                    <div className="border-t border-gray-200 bg-gray-50 px-5 py-4">
+                    <div className="border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700 px-5 py-4">
                       {rc.entries.length === 0 ? (
-                        <p className="text-sm text-gray-400 text-center py-4">No rate entries</p>
+                        <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-4">No rate entries</p>
                       ) : (
                         <table className="w-full text-sm">
                           <thead>
-                            <tr className="border-b border-gray-200">
-                              <th className="px-4 py-2 text-left font-medium text-gray-600">Resource Type</th>
-                              <th className="px-4 py-2 text-left font-medium text-gray-600">Category</th>
-                              <th className="px-4 py-2 text-right font-medium text-gray-600">Day Rate</th>
+                            <tr className="border-b border-gray-200 dark:border-gray-600">
+                              <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">Resource Type</th>
+                              <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">Category</th>
+                              <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">Day Rate</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-gray-100">
+                          <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                             {rc.entries.map(entry => (
                               <tr key={entry.id}>
-                                <td className="px-4 py-2 text-gray-900">{entry.globalResourceType.name}</td>
+                                <td className="px-4 py-2 text-gray-900 dark:text-white">{entry.globalResourceType.name}</td>
                                 <td className="px-4 py-2">
-                                  <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">
+                                  <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300">
                                     {entry.globalResourceType.category.replace(/_/g, ' ')}
                                   </span>
                                 </td>
-                                <td className="px-4 py-2 text-right text-gray-900 font-medium">
+                                <td className="px-4 py-2 text-right text-gray-900 dark:text-white font-medium">
                                   ${entry.dayRate.toLocaleString()}
                                 </td>
                               </tr>

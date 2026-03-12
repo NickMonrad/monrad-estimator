@@ -58,8 +58,8 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
           <button {...listeners} className="cursor-grab active:cursor-grabbing text-purple-300 hover:text-purple-500 shrink-0 px-0.5 text-base leading-none" onClick={e => e.stopPropagation()}>⠿</button>
           <span className="text-purple-500 text-xs select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-purple-500 bg-purple-100 px-1.5 py-0.5 rounded">Story</span>
-          <span className={`text-sm flex-1 truncate ${story.isActive === false ? 'line-through text-gray-400' : 'text-gray-800'}`}>{story.name}</span>
-          <span className="text-xs text-gray-400">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
+          <span className={`text-sm flex-1 truncate ${story.isActive === false ? 'line-through text-gray-400 dark:text-gray-500' : 'text-gray-800 dark:text-gray-200'}`}>{story.name}</span>
+          <span className="text-xs text-gray-400 dark:text-gray-500">{story.tasks.length} task{story.tasks.length !== 1 ? 's' : ''} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
           {story.appliedTemplateId && (
             <button onClick={e => { e.stopPropagation(); onRefresh() }} title="Refresh tasks from template"
               className="text-xs text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors">
@@ -191,7 +191,7 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
           saving={createStory.isPending}
         />
       ) : (
-        <button onClick={() => setAdding(true)} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 py-1 pl-1 ml-2">
+        <button onClick={() => setAdding(true)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 flex items-center gap-1 py-1 pl-1 ml-2">
           + Add user story
         </button>
       )}
@@ -211,19 +211,19 @@ function InlineForm({ label, initial, onSave, onCancel, saving }: {
     setForm(v => ({ ...v, [field]: e.target.value }))
 
   return (
-    <div className="bg-white border border-blue-200 rounded-lg px-3 py-2 space-y-2">
+    <div className="bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 space-y-2">
       <input placeholder={`${label} name *`} value={form.name} onChange={f('name')}
-        className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
       <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={1}
-        className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
       <textarea placeholder="Assumptions" value={form.assumptions} onChange={f('assumptions')} rows={1}
-        className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
           className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save'}
         </button>
-        <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 hover:bg-gray-100">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
     </div>
   )
