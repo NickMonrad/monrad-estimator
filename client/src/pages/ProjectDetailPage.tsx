@@ -31,7 +31,6 @@ export default function ProjectDetailPage() {
     { label: 'Resource Profile', href: `/projects/${id}/resource-profile`, icon: '👥', desc: 'Role mix, overhead and cost profile' },
     { label: 'Resource Types', href: `/projects/${id}/resource-types`, icon: '🎭', desc: 'Manage roles and rate overrides' },
     { label: 'Documents', href: `/projects/${id}/documents`, icon: '📄', desc: 'Generate scope doc and SOW' },
-    { label: 'Template Library', href: `/templates`, icon: '🧩', desc: 'Browse and manage feature templates' },
     { label: 'Settings', href: `/projects/${id}/settings`, icon: '⚙️', desc: 'Edit project name, customer, hours per day' },
   ]
 
