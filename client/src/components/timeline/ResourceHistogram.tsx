@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react'
+import { useIsDark } from '../../hooks/useIsDark'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -56,6 +57,14 @@ export default function ResourceHistogram({
   scrollContainerRef,
   onScroll,
 }: Props) {
+
+  const isDark = useIsDark()
+  const svgColors = {
+    bg:       isDark ? '#111827' : '#fafafa',
+    gridLine: isDark ? '#374151' : '#f3f4f6',
+    text:     isDark ? '#6b7280' : '#9ca3af',
+    capLine:  isDark ? '#6b7280' : '#9ca3af',
+  }
 
   // Build capacity lookup: week|rtName → capacityDays
   const capacityLookup = useMemo(() => {
@@ -161,7 +170,7 @@ export default function ResourceHistogram({
           style={{ display: 'block' }}
         >
           {/* Background */}
-          <rect x={0} y={0} width={svgW} height={totalH} fill="#fafafa" style={{ pointerEvents: 'none' }} />
+          <rect x={0} y={0} width={svgW} height={totalH} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
 
           {/* Column grid lines */}
           {Array.from({ length: totalWeeks + 1 }).map((_, i) => (
@@ -171,7 +180,7 @@ export default function ResourceHistogram({
               y1={0}
               x2={i * colW}
               y2={totalH}
-              stroke="#f3f4f6"
+              stroke={svgColors.gridLine}
               strokeWidth={1}
             />
           ))}
@@ -186,7 +195,7 @@ export default function ResourceHistogram({
                 y={HEADER_H - 6}
                 textAnchor="middle"
                 fontSize={9}
-                fill="#9ca3af"
+                fill={svgColors.text}
               >
                 W{i}
               </text>
@@ -206,7 +215,7 @@ export default function ResourceHistogram({
                   y1={rowY + ROW_H}
                   x2={svgW}
                   y2={rowY + ROW_H}
-                  stroke="#f3f4f6"
+                  stroke={svgColors.gridLine}
                   strokeWidth={1}
                 />
 
@@ -224,7 +233,7 @@ export default function ResourceHistogram({
                       y1={capY}
                       x2={(w + 1) * colW}
                       y2={capY}
-                      stroke="#9ca3af"
+                      stroke={svgColors.capLine}
                       strokeWidth={1}
                       strokeDasharray="4 3"
                       opacity={0.6}
