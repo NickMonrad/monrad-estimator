@@ -45,6 +45,7 @@ model Project {
   startDate   DateTime?
   taxRate      Float?    @default(10)
   taxLabel     String    @default("GST")
+  deletedAt   DateTime?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   owner       User          @relation(fields: [ownerId], references: [id])
@@ -231,6 +232,7 @@ model FeatureTemplate {
   name        String            @unique
   category    String?
   description String?
+  deletedAt   DateTime?
   tasks       TemplateTask[]
   snapshots   TemplateSnapshot[]
   userStories UserStory[]
