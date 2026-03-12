@@ -8,7 +8,7 @@ interface Project {
   id: string
   name: string
   description?: string
-  customer?: string
+  customer?: string | { id: string; name: string }
   status: string
   hoursPerDay: number
   updatedAt: string
@@ -190,7 +190,7 @@ export default function ProjectsPage() {
                     {project.status}
                   </span>
                 </div>
-                {project.customer && <p className="text-xs text-gray-500 mb-2">Customer: {project.customer}</p>}
+                {project.customer && <p className="text-xs text-gray-500 mb-2">Customer: {typeof project.customer === 'string' ? project.customer : project.customer.name}</p>}
                 {project.description && <p className="text-sm text-gray-600 mb-3 line-clamp-2">{project.description}</p>}
                 <div className="flex items-center justify-between text-xs text-gray-400 mt-2">
                   <span>{project._count.epics} epic{project._count.epics !== 1 ? 's' : ''}</span>
