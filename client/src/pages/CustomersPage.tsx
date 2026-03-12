@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../lib/api'
 
 interface Customer {
@@ -21,6 +23,7 @@ interface CustomerForm {
 const emptyForm: CustomerForm = { name: '', description: '', accountCode: '', crmLink: '' }
 
 export default function CustomersPage() {
+  const { user, logout } = useAuth()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -74,16 +77,37 @@ export default function CustomersPage() {
   if (loading) return <div className="p-6">Loading...</div>
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Customers</h1>
-        <button
-          onClick={() => { setShowForm(true); setEditId(null); setForm(emptyForm) }}
-          className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700"
-        >
-          + New Customer
-        </button>
-      </div>
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b border-gray-200">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+              <span className="text-white text-xs font-bold">M</span>
+            </div>
+            <Link to="/projects" className="font-semibold text-gray-900">Monrad Estimator</Link>
+            <Link to="/resource-types" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Resource Types</Link>
+            <Link to="/templates" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Templates</Link>
+            <Link to="/rate-cards" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Rate Cards</Link>
+            <Link to="/orgs" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Team</Link>
+            <Link to="/customers" className="text-sm text-gray-500 hover:text-red-600 transition-colors ml-2">Customers</Link>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-6 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">Customers</h1>
+          <button
+            onClick={() => { setShowForm(true); setEditId(null); setForm(emptyForm) }}
+            className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700"
+          >
+            + New Customer
+          </button>
+        </div>
 
       {error && <div className="mb-4 p-3 bg-red-50 text-red-600 rounded">{error}</div>}
 
@@ -173,6 +197,7 @@ export default function CustomersPage() {
           ))}
         </div>
       )}
+      </main>
     </div>
   )
 }
