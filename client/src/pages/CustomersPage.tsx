@@ -213,7 +213,7 @@ export default function CustomersPage() {
                     </span>
                   )}
                 </div>
-                {customer.description && <p className="text-sm text-gray-500">{customer.description}</p>}
+                {customer.description && <p className="text-sm text-gray-500 truncate">{customer.description}</p>}
                 {customer.crmLink && (
                   <a href={customer.crmLink} target="_blank" rel="noopener noreferrer" className="text-xs text-red-600 hover:underline">
                     CRM →
