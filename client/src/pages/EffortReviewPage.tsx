@@ -395,7 +395,7 @@ export default function EffortReviewPage() {
           </div>
         )}
 
-        {isLoading && <div className="text-center py-12 text-gray-400">Loading…</div>}
+        {isLoading && <div className="text-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>}
 
         {filteredEffort && filteredEffort.byCategory.length === 0 && (
           <div className="text-center py-16 text-gray-400 dark:text-gray-500">
@@ -495,12 +495,12 @@ function SummaryView({
                   <>
                     <tr
                       key={rt.resourceTypeId}
-                      className={`${CATEGORY_ROW_BG[rt.category]} border-t border-gray-100 ${hasEpics ? 'cursor-pointer' : ''}`}
+                      className={`${CATEGORY_ROW_BG[rt.category]} border-t border-gray-100 dark:border-gray-700 ${hasEpics ? 'cursor-pointer' : ''}`}
                       onClick={hasEpics ? () => toggleRtEpic(rt.resourceTypeId) : undefined}
                     >
                       <td className="px-4 py-2.5 text-gray-800 dark:text-gray-200 pl-8">
                         {hasEpics && (
-                          <span className="mr-2 text-xs text-gray-400">{isExpanded ? '▼' : '▶'}</span>
+                          <span className="mr-2 text-xs text-gray-400 dark:text-gray-500">{isExpanded ? '▼' : '▶'}</span>
                         )}
                         {rt.name}
                       </td>
@@ -533,7 +533,7 @@ function SummaryView({
                     {isExpanded && hasEpics && rt.byEpic.map(epic => (
                       <tr
                         key={`${rt.resourceTypeId}-epic-${epic.epicName}`}
-                        className={`${CATEGORY_ROW_BG[rt.category]} border-t border-gray-100 opacity-90`}
+                        className={`${CATEGORY_ROW_BG[rt.category]} border-t border-gray-100 dark:border-gray-700 opacity-90`}
                       >
                         <td className="px-4 py-2 text-gray-700 dark:text-gray-300 pl-12 italic">{epic.epicName}</td>
                         <td />
@@ -556,7 +556,7 @@ function SummaryView({
 
               {/* Category subtotal row */}
               {!collapsedCategories.has(cat.category) && (
-                <tr key={`subtotal-${cat.category}`} className={`${CATEGORY_HEADER_BG[cat.category]} border-t border-gray-200`}>
+                <tr key={`subtotal-${cat.category}`} className={`${CATEGORY_HEADER_BG[cat.category]} border-t border-gray-200 dark:border-gray-700`}>
                   <td colSpan={3} className="px-4 py-2 pl-8 font-semibold text-gray-700 dark:text-gray-300 text-xs uppercase tracking-wide">
                     {CATEGORY_LABELS[cat.category]} subtotal
                   </td>
@@ -711,7 +711,7 @@ function DetailView({
               placeholder="Task name…"
               className="text-sm border border-gray-200 dark:border-gray-600 rounded px-2 py-1.5 pl-7 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 w-40"
             />
-            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 text-xs">🔍</span>
           </div>
 
           {hasAnyFilter && (

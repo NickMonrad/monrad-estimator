@@ -62,8 +62,8 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
             + Template
           </button>
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-            <button onClick={onToggleActive} title={feature.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${feature.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{feature.isActive === false ? '○' : '●'}</button>
-            <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+            <button onClick={onToggleActive} title={feature.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${feature.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600'}`}>{feature.isActive === false ? '○' : '●'}</button>
+            <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
         </div>

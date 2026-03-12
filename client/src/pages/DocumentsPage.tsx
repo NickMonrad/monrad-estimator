@@ -309,7 +309,7 @@ export default function DocumentsPage() {
                     </button>
                     <button
                       onClick={() => handleDelete(doc.id)}
-                      className="flex-shrink-0 text-xs text-gray-400 hover:text-red-500"
+                      className="flex-shrink-0 text-xs text-gray-400 dark:text-gray-500 hover:text-red-500"
                       title="Delete"
                     >
                       ✕

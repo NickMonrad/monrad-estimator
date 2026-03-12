@@ -116,7 +116,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           </button>
           <button
             onClick={onCancel}
-            className="text-xs text-gray-600 px-3 py-1 rounded hover:bg-gray-100 transition-colors"
+            className="text-xs text-gray-600 dark:text-gray-400 px-3 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
           >
             Cancel
           </button>
@@ -219,18 +219,18 @@ export default function ProjectResourceTypesPage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* TODO: dark mode — add dark: variants throughout this page */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900 dark:text-white">Monrad Estimator</button>
             <span>/</span>
             <button onClick={() => navigate(`/projects/${id}`)} className="hover:text-lab3-navy transition-colors">{project?.name ?? '…'}</button>
             <span>/</span>
-            <span className="text-gray-700">Resource Types</span>
+            <span className="text-gray-700 dark:text-gray-300">Resource Types</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700">Sign out</button>
           </div>
         </div>
       </header>
@@ -238,8 +238,8 @@ export default function ProjectResourceTypesPage() {
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Resource Types</h1>
-            <p className="text-sm text-gray-500 mt-0.5">
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Resource Types</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
               Manage the resource types available on this project. Each type inherits defaults from the global catalog but can be overridden per project.
             </p>
           </div>
@@ -251,20 +251,20 @@ export default function ProjectResourceTypesPage() {
           </button>
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
           {isLoading ? (
-            <div className="text-center py-12 text-gray-400">Loading…</div>
+            <div className="text-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
           ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Name</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Category</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Global Link</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Hours/Day</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Day Rate</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Tasks</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Actions</th>
+                <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Name</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Category</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Global Link</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Hours/Day</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Day Rate</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Tasks</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -283,34 +283,34 @@ export default function ProjectResourceTypesPage() {
                       saving={updateType.isPending}
                     />
                   ) : (
-                    <tr key={rt.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 font-medium text-gray-900">{rt.name}</td>
+                    <tr key={rt.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                      <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">{rt.name}</td>
                       <td className="px-4 py-3">
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${CATEGORY_COLOURS[rt.category]}`}>
                           {CATEGORY_LABELS[rt.category]}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-500">
+                      <td className="px-4 py-3 text-gray-500 dark:text-gray-400">
                         {rt.globalType ? (
-                          <span className="text-xs text-gray-500">{rt.globalType.name}</span>
+                          <span className="text-xs text-gray-500 dark:text-gray-400">{rt.globalType.name}</span>
                         ) : (
-                          <span className="text-xs text-gray-400 italic">Ad-hoc</span>
+                          <span className="text-xs text-gray-400 dark:text-gray-500 italic">Ad-hoc</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-gray-700">
+                      <td className="px-4 py-3 text-gray-700 dark:text-gray-300">
                         {rt.hoursPerDay != null ? rt.hoursPerDay : '—'}
                       </td>
-                      <td className="px-4 py-3 text-gray-700">
+                      <td className="px-4 py-3 text-gray-700 dark:text-gray-300">
                         {rt.dayRate != null ? rt.dayRate.toLocaleString() : '—'}
                       </td>
-                      <td className="px-4 py-3 text-gray-500">
+                      <td className="px-4 py-3 text-gray-500 dark:text-gray-400">
                         {rt._count.tasks}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => setEditingId(rt.id)}
-                            className="text-gray-400 hover:text-gray-700 transition-colors p-1 rounded"
+                            className="text-gray-400 dark:text-gray-500 hover:text-gray-700 transition-colors p-1 rounded"
                             title="Edit"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -334,7 +334,7 @@ export default function ProjectResourceTypesPage() {
 
                 {resourceTypes.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-gray-400">No resource types on this project yet</td>
+                    <td colSpan={7} className="px-4 py-12 text-center text-gray-400 dark:text-gray-500">No resource types on this project yet</td>
                   </tr>
                 )}
               </tbody>
@@ -347,18 +347,18 @@ export default function ProjectResourceTypesPage() {
       {showAddModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-              <h2 className="font-semibold text-gray-900">Add Resource Type</h2>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+              <h2 className="font-semibold text-gray-900 dark:text-white">Add Resource Type</h2>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="text-gray-400 hover:text-gray-700 transition-colors text-xl leading-none"
+                className="text-gray-400 dark:text-gray-500 hover:text-gray-700 transition-colors text-xl leading-none"
               >
                 ×
               </button>
             </div>
 
             {/* Tabs */}
-            <div className="flex border-b border-gray-200">
+            <div className="flex border-b border-gray-200 dark:border-gray-700">
               <button
                 onClick={() => setAddTab('global')}
                 className={`px-6 py-3 text-sm font-medium transition-colors ${addTab === 'global' ? 'text-lab3-navy border-b-2 border-lab3-navy' : 'text-gray-500 hover:text-gray-700'}`}
@@ -377,7 +377,7 @@ export default function ProjectResourceTypesPage() {
               {addTab === 'global' && (
                 <>
                   {availableGlobalTypes.length === 0 ? (
-                    <p className="text-sm text-gray-500 text-center py-6">All global resource types are already on this project.</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">All global resource types are already on this project.</p>
                   ) : (
                     <div className="space-y-2 max-h-64 overflow-y-auto">
                       {availableGlobalTypes.map(gt => (
@@ -385,13 +385,13 @@ export default function ProjectResourceTypesPage() {
                           key={gt.id}
                           onClick={() => addFromGlobal.mutate(gt)}
                           disabled={addFromGlobal.isPending}
-                          className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:border-lab3-blue/30 hover:bg-blue-50 transition-all disabled:opacity-50"
+                          className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-lab3-blue/30 hover:bg-blue-50 transition-all disabled:opacity-50"
                         >
                           <div className="flex items-center justify-between">
                             <div>
-                              <span className="font-medium text-gray-900 text-sm">{gt.name}</span>
+                              <span className="font-medium text-gray-900 dark:text-white text-sm">{gt.name}</span>
                               {(gt.defaultHoursPerDay != null || gt.defaultDayRate != null) && (
-                                <span className="text-xs text-gray-400 ml-2">
+                                <span className="text-xs text-gray-400 dark:text-gray-500 ml-2">
                                   {gt.defaultHoursPerDay != null ? `${gt.defaultHoursPerDay} hrs/day` : ''}
                                   {gt.defaultHoursPerDay != null && gt.defaultDayRate != null ? ' · ' : ''}
                                   {gt.defaultDayRate != null ? `$${gt.defaultDayRate.toLocaleString()}/day` : ''}
@@ -467,7 +467,7 @@ export default function ProjectResourceTypesPage() {
                     </button>
                     <button
                       onClick={() => setShowAddModal(false)}
-                      className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+                      className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                     >
                       Cancel
                     </button>

@@ -214,9 +214,9 @@ export default function BacklogPage() {
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Backlog</h1>
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Backlog</h1>
             {epics.length > 0 && (
-              <p className="text-sm text-gray-500 mt-0.5">
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                 {epics.length} epic{epics.length !== 1 ? 's' : ''} · {grandTotal.toFixed(2)}h total ({(grandTotal / hoursPerDay).toFixed(2)} days)
               </p>
             )}
@@ -226,7 +226,7 @@ export default function BacklogPage() {
             + Add epic
           </button>
           <button onClick={() => setShowCsvImport(true)}
-            className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+            className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
             ⬆ Import CSV
           </button>
           <button
@@ -239,17 +239,17 @@ export default function BacklogPage() {
               const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
               URL.revokeObjectURL(url)
             }}
-            className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+            className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
             ⬇ Export CSV
           </button>
           <button onClick={() => setShowHistory(h => !h)}
-            className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+            className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
             🕐 History
           </button>
         </div>
 
         {isLoading ? (
-          <div className="text-center py-12 text-gray-400">Loading…</div>
+          <div className="text-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
         ) : (
           <DndContext
             sensors={sensors}
@@ -293,7 +293,7 @@ export default function BacklogPage() {
                 )}
 
                 {tree.length === 0 && !addingEpic && (
-                  <div className="text-center py-16 text-gray-400">
+                  <div className="text-center py-16 text-gray-400 dark:text-gray-500">
                     <p className="text-lg mb-1">Backlog is empty</p>
                     <p className="text-sm">Add an epic to get started, or use AI to generate a starter backlog</p>
                   </div>
@@ -311,9 +311,9 @@ export default function BacklogPage() {
         )}
 
         {showHistory && (
-          <div className="mt-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-5">
+          <div className="mt-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-gray-800">Backlog History</h2>
+              <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Backlog History</h2>
               <div className="flex gap-2">
                 <input
                   placeholder="Snapshot label (optional)"
@@ -330,11 +330,11 @@ export default function BacklogPage() {
               </div>
             </div>
             {snapshots.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-4">No snapshots yet</p>
+              <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-4">No snapshots yet</p>
             ) : (
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-gray-400 border-b border-gray-100">
+                  <tr className="text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700">
                     <th className="text-left pb-2 font-medium">Label</th>
                     <th className="text-left pb-2 font-medium">Trigger</th>
                     <th className="text-left pb-2 font-medium">Saved</th>
@@ -345,9 +345,9 @@ export default function BacklogPage() {
                   {snapshots.map(snap => (
                     <>
                       <tr key={snap.id} className="border-b border-gray-50 last:border-0">
-                        <td className="py-2 pr-4 text-gray-700">{snap.label ?? <span className="text-gray-400 italic">unlabelled</span>}</td>
-                        <td className="py-2 pr-4"><span className="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{snap.trigger}</span></td>
-                        <td className="py-2 pr-4 text-gray-500">{new Date(snap.createdAt).toLocaleString()}</td>
+                        <td className="py-2 pr-4 text-gray-700 dark:text-gray-300">{snap.label ?? <span className="text-gray-400 dark:text-gray-500 italic">unlabelled</span>}</td>
+                        <td className="py-2 pr-4"><span className="bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded">{snap.trigger}</span></td>
+                        <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">{new Date(snap.createdAt).toLocaleString()}</td>
                         <td className="py-2">
                           <div className="flex gap-2">
                             <button onClick={() => setDiffId(d => d === snap.id ? null : snap.id)} className="text-blue-500 hover:text-blue-700">
@@ -365,12 +365,12 @@ export default function BacklogPage() {
                       {diffId === snap.id && diffData && (
                         <tr key={`diff-${snap.id}`}>
                           <td colSpan={4} className="pb-3 pt-1">
-                            <div className="bg-gray-50 rounded-lg p-3 text-xs font-mono space-y-1">
-                              <p className="text-gray-500 mb-2">Comparing snapshot ({new Date(diffData.snapshotAt).toLocaleString()}) to current:</p>
+                            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-3 text-xs font-mono space-y-1">
+                              <p className="text-gray-500 dark:text-gray-400 mb-2">Comparing snapshot ({new Date(diffData.snapshotAt).toLocaleString()}) to current:</p>
                               {diffData.added.map((line, i) => <div key={i} className="text-green-700">+ {line}</div>)}
                               {diffData.removed.map((line, i) => <div key={i} className="text-red-600">- {line}</div>)}
                               {diffData.added.length === 0 && diffData.removed.length === 0 && (
-                                <div className="text-gray-400">No differences</div>
+                                <div className="text-gray-400 dark:text-gray-500">No differences</div>
                               )}
                             </div>
                           </td>
@@ -430,24 +430,24 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
         <div className={`group px-4 py-3 cursor-pointer hover:bg-gray-50 ${epicColour.light}`} onClick={onToggle}>
           <div className="flex items-center gap-2">
             <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0 px-0.5 text-base leading-none mr-1" onClick={e => e.stopPropagation()}>⠿</button>
-            <span className="text-gray-400 text-sm select-none">{expanded ? '▼' : '▶'}</span>
+            <span className="text-gray-400 dark:text-gray-500 text-sm select-none">{expanded ? '▼' : '▶'}</span>
             <span className="text-xs text-lab3-navy bg-blue-50 px-2 py-0.5 rounded font-medium">Epic</span>
             <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900'}`}>{epic.name}</span>
-            <span className="text-sm text-gray-400">
+            <span className="text-sm text-gray-400 dark:text-gray-500">
               {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h · {(epicTotalHours / hoursPerDay).toFixed(1)}d
             </span>
             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
               <button onClick={onToggleActive} title={epic.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-2 py-1 ${epic.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{epic.isActive === false ? '○' : '●'}</button>
-              <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">Edit</button>
+              <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-2 py-1">Edit</button>
               <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
             </div>
           </div>
-          {epic.description && <p className="text-sm text-gray-500 mt-1 ml-7">{epic.description}</p>}
-          {epic.assumptions && <p className="text-sm text-gray-400 mt-0.5 ml-7"><span className="font-medium text-gray-500">Assumptions:</span> {epic.assumptions}</p>}
+          {epic.description && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 ml-7">{epic.description}</p>}
+          {epic.assumptions && <p className="text-sm text-gray-400 dark:text-gray-500 mt-0.5 ml-7"><span className="font-medium text-gray-500 dark:text-gray-400">Assumptions:</span> {epic.assumptions}</p>}
         </div>
       )}
       {expanded && (
-        <div className="border-t border-gray-100 px-3 pb-3 pt-2">
+        <div className="border-t border-gray-100 dark:border-gray-700 px-3 pb-3 pt-2">
           <FeatureList epicId={epic.id} features={epic.features} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} epicColour={epicColour} />
         </div>
       )}
@@ -684,7 +684,7 @@ function EpicForm({ initial, onSave, onCancel, saving }: {
           className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save epic'}
         </button>
-        <button onClick={onCancel} className="px-4 py-1.5 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>
+        <button onClick={onCancel} className="px-4 py-1.5 rounded-lg text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
     </div>
   )

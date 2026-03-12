@@ -67,8 +67,8 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
             </button>
           )}
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-            <button onClick={onToggleActive} title={story.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${story.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{story.isActive === false ? '○' : '●'}</button>
-            <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+            <button onClick={onToggleActive} title={story.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${story.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600'}`}>{story.isActive === false ? '○' : '●'}</button>
+            <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
         </div>
@@ -83,7 +83,7 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
               {c === 'EXTRA_SMALL' ? 'XS' : c === 'EXTRA_LARGE' ? 'XL' : c[0]}
             </button>
           ))}
-          <button onClick={onCancelRefresh} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
+          <button onClick={onCancelRefresh} className="ml-auto text-gray-400 dark:text-gray-500 hover:text-gray-600">✕</button>
         </div>
       )}
       {expanded && (
@@ -178,7 +178,7 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
 
       {refreshMsg && (
         <div className="text-xs text-green-600 py-1 pl-2">{refreshMsg}
-          <button onClick={() => setRefreshMsg(null)} className="ml-2 text-gray-400">✕</button>
+          <button onClick={() => setRefreshMsg(null)} className="ml-2 text-gray-400 dark:text-gray-500">✕</button>
         </div>
       )}
 

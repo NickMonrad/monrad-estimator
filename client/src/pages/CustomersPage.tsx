@@ -198,7 +198,7 @@ export default function CustomersPage() {
       )}
 
       {customers.length === 0 ? (
-        <p className="text-gray-500">No customers yet.</p>
+        <p className="text-gray-500 dark:text-gray-400">No customers yet.</p>
       ) : (
         <div className="space-y-2">
           {customers.map(customer => (

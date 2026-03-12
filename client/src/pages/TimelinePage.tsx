@@ -56,20 +56,20 @@ function NamedResourcesPanel({
   const projectEndWeek = totalWeeks - 1
 
   return (
-    <div className="border-t border-gray-200">
+    <div className="border-t border-gray-200 dark:border-gray-700">
       {/* Section header */}
-      <div className="flex items-center px-4 py-2 bg-gray-50 border-b border-gray-100">
-        <span className="text-xs font-medium text-gray-500">Named Resources</span>
+      <div className="flex items-center px-4 py-2 bg-gray-50 dark:bg-gray-700 border-b border-gray-100 dark:border-gray-700">
+        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Named Resources</span>
       </div>
 
       <div className="flex overflow-hidden">
         {/* Left label panel */}
-        <div style={{ width: labelW, flexShrink: 0 }} className="bg-white border-r border-gray-100">
+        <div style={{ width: labelW, flexShrink: 0 }} className="bg-white dark:bg-gray-800 border-r border-gray-100 dark:border-gray-700">
           {grouped.map(([rtName, people]) => (
             <div key={rtName}>
               {/* Resource type header */}
-              <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100">
-                <span className="text-xs font-semibold text-gray-600">{rtName}</span>
+              <div className="px-3 py-1.5 bg-gray-50 dark:bg-gray-700 border-b border-gray-100 dark:border-gray-700">
+                <span className="text-xs font-semibold text-gray-600 dark:text-gray-400">{rtName}</span>
               </div>
               {/* People rows */}
               {people.map((nr, i) => {
@@ -81,8 +81,8 @@ function NamedResourcesPanel({
                     className="flex flex-col justify-center px-3 border-b border-gray-50"
                     style={{ height: 36 }}
                   >
-                    <span className="text-xs text-gray-700 truncate">{nr.name}</span>
-                    <span className="text-[10px] text-gray-400">
+                    <span className="text-xs text-gray-700 dark:text-gray-300 truncate">{nr.name}</span>
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500">
                       W{start}–W{end} · {nr.allocationPct}%
                     </span>
                   </div>
@@ -121,7 +121,7 @@ function NamedResourcesPanel({
               return grouped.map(([rtName, people]) => (
                 <div key={rtName}>
                   {/* Spacer for the resource type header row */}
-                  <div className="border-b border-gray-100" style={{ height: 30 }} />
+                  <div className="border-b border-gray-100 dark:border-gray-700" style={{ height: 30 }} />
                   {/* Person bars */}
                   {people.map((nr, i) => {
                     const start = nr.startWeek ?? 0
@@ -421,9 +421,9 @@ export default function TimelinePage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* TODO: dark mode — add dark: variants throughout this page */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500">
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
             <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
               <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center">
                 <span className="text-white text-xs font-bold">M</span>
@@ -432,25 +432,25 @@ export default function TimelinePage() {
             <span className="text-gray-300">/</span>
             <Link to={`/projects/${projectId}`} className="hover:text-gray-700">{project?.name ?? 'Project'}</Link>
             <span className="text-gray-300">/</span>
-            <span className="text-gray-700 font-medium">Timeline</span>
+            <span className="text-gray-700 dark:text-gray-300 font-medium">Timeline</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700">Sign out</button>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-gray-900">Timeline Planner</h1>
+          <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Timeline Planner</h1>
         </div>
 
         {/* Setup bar */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-4">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500">Project start date</label>
+              <label className="text-xs text-gray-500 dark:text-gray-400">Project start date</label>
               <input
                 type="date"
                 value={startDateInput}
@@ -471,7 +471,7 @@ export default function TimelinePage() {
               <button
                 onClick={handleSchedule}
                 disabled={scheduleTimeline.isPending}
-                className="border border-gray-200 px-4 py-1.5 rounded text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                className="border border-gray-200 dark:border-gray-700 px-4 py-1.5 rounded text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
                 title="Re-runs the scheduler — use this after updating tasks or resources in the backlog"
               >
                 ↺ Re-run scheduler
@@ -498,8 +498,8 @@ export default function TimelinePage() {
               Resource leveling
             </label>
             {timeline?.projectedEndDate && (
-              <div className="text-sm text-gray-600">
-                <span className="text-gray-400">Projected end:</span>{' '}
+              <div className="text-sm text-gray-600 dark:text-gray-400">
+                <span className="text-gray-400 dark:text-gray-500">Projected end:</span>{' '}
                 <span className="font-medium">{new Date(timeline.projectedEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
                 {(project?.bufferWeeks ?? 0) > 0 && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 ml-2">
@@ -509,12 +509,12 @@ export default function TimelinePage() {
               </div>
             )}
             {timeline?.startDate && (
-              <span className="text-xs text-gray-400 ml-auto">
+              <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">
                 Last scheduled: {formatDate(timeline.startDate)}
               </span>
             )}
             {!timeline?.startDate && (
-              <span className="text-xs text-gray-400 ml-auto">Not yet scheduled</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">Not yet scheduled</span>
             )}
           </div>
         </div>
@@ -542,17 +542,17 @@ export default function TimelinePage() {
         )}
 
         {/* Resource counts panel */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
           <button
             onClick={() => setResourcesOpen(o => !o)}
-            className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
           >
             <span>Resource Counts — adjust before scheduling</span>
-            <span className="text-gray-400">{resourcesOpen ? '▲' : '▼'}</span>
+            <span className="text-gray-400 dark:text-gray-500">{resourcesOpen ? '▲' : '▼'}</span>
           </button>
           {resourcesOpen && (
             <div className="px-4 pb-4">
-              <p className="text-xs text-gray-400 mb-3">Counts affect how quickly each feature can be delivered in parallel</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">Counts affect how quickly each feature can be delivered in parallel</p>
               {rtByCategory.map(([category, rts]) => (
                 <div key={category} className="mb-4">
                   <div className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded mb-2 ${CATEGORY_HEADER_BG[category]} text-gray-700`}>
@@ -560,7 +560,7 @@ export default function TimelinePage() {
                   </div>
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-xs text-gray-400">
+                      <tr className="text-xs text-gray-400 dark:text-gray-500">
                         <th className="text-left pb-1 font-normal">Resource Type</th>
                         <th className="text-right pb-1 font-normal w-20">Count</th>
                         <th className="text-right pb-1 font-normal w-24">Hrs/day</th>
@@ -569,8 +569,8 @@ export default function TimelinePage() {
                     <tbody>
                       {rts.map(rt => (
                         <tr key={rt.id} className="border-t border-gray-50">
-                          <td className="py-1.5 text-gray-700">{rt.name}</td>
-                          <td className="py-1.5 text-right text-sm text-gray-700">{rt.count}</td>
+                          <td className="py-1.5 text-gray-700 dark:text-gray-300">{rt.name}</td>
+                          <td className="py-1.5 text-right text-sm text-gray-700 dark:text-gray-300">{rt.count}</td>
                           <td className="py-1.5 text-right">
                             <input
                               key={`hours-${rt.id}-${rt.hoursPerDay ?? 'null'}`}
@@ -600,15 +600,15 @@ export default function TimelinePage() {
         </div>
 
         {/* Gantt chart */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200">
-          <div className="px-4 py-3 border-b border-gray-100">
-            <h2 className="text-sm font-medium text-gray-700">Gantt Chart</h2>
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+            <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">Gantt Chart</h2>
           </div>
 
-          {isLoading && <div className="p-8 text-center text-gray-400 text-sm">Loading…</div>}
+          {isLoading && <div className="p-8 text-center text-gray-400 dark:text-gray-500 text-sm">Loading…</div>}
 
           {!isLoading && (!timeline?.entries || timeline.entries.length === 0) && (
-            <div className="p-8 text-center text-gray-400 text-sm">
+            <div className="p-8 text-center text-gray-400 dark:text-gray-500 text-sm">
               Set a start date and click <strong>Auto-schedule</strong> to generate your timeline
             </div>
           )}
@@ -687,8 +687,8 @@ export default function TimelinePage() {
                 if (!entry) return null
                 return (
                   <div className="sticky bottom-0 z-20 border-t border-blue-200 bg-blue-50 shadow-md px-4 py-3 flex flex-wrap items-center gap-3">
-                    <span className="text-xs text-gray-600 font-medium">{entry.featureName}</span>
-                    <label className="text-xs text-gray-500">Start week:</label>
+                    <span className="text-xs text-gray-600 dark:text-gray-400 font-medium">{entry.featureName}</span>
+                    <label className="text-xs text-gray-500 dark:text-gray-400">Start week:</label>
                     <input
                       type="number"
                       min="0"
@@ -696,7 +696,7 @@ export default function TimelinePage() {
                       onChange={e => setEditForm(f => ({ ...f, startWeek: e.target.value }))}
                       className="w-16 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                     />
-                    <label className="text-xs text-gray-500">Duration weeks:</label>
+                    <label className="text-xs text-gray-500 dark:text-gray-400">Duration weeks:</label>
                     <input
                       type="number"
                       min="0.2"
@@ -717,7 +717,7 @@ export default function TimelinePage() {
                     </button>
                     <button
                       onClick={() => setEditingFeatureId(null)}
-                      className="px-3 py-0.5 rounded text-xs text-gray-500 hover:bg-gray-100"
+                      className="px-3 py-0.5 rounded text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                     >
                       Cancel
                     </button>
@@ -734,21 +734,21 @@ export default function TimelinePage() {
                     {/* Dependencies section */}
                     <div className="mt-2 w-full" data-testid="dep-section">
                       <div className="px-3 py-2 bg-blue-50 border-t border-blue-100">
-                        <p className="text-xs font-medium text-gray-600 mb-1">Depends on (must finish before this feature starts):</p>
+                        <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Depends on (must finish before this feature starts):</p>
                         <div className="flex flex-wrap gap-1 mb-2">
                           {featureDeps
                             .filter(d => d.featureId === entry.featureId)
                             .map(d => (
-                              <span key={d.dependsOnId} className="inline-flex items-center gap-1 bg-white dark:bg-gray-800 border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700">
+                              <span key={d.dependsOnId} className="inline-flex items-center gap-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded px-2 py-0.5 text-xs text-gray-700 dark:text-gray-300">
                                 {d.dependsOn.name}
                                 <button
                                   onClick={() => removeFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: d.dependsOnId })}
-                                  className="text-gray-400 hover:text-red-500 ml-1"
+                                  className="text-gray-400 dark:text-gray-500 hover:text-red-500 ml-1"
                                 >✕</button>
                               </span>
                             ))}
                           {featureDeps.filter(d => d.featureId === entry.featureId).length === 0 && (
-                            <span className="text-xs text-gray-400">None</span>
+                            <span className="text-xs text-gray-400 dark:text-gray-500">None</span>
                           )}
                         </div>
                         <div className="flex items-center gap-2">
@@ -796,7 +796,7 @@ export default function TimelinePage() {
                       )}
                       <button
                         onClick={() => setEditingStoryId(null)}
-                        className="text-xs text-gray-500 hover:text-gray-700"
+                        className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700"
                       >
                         Close ✕
                       </button>
@@ -806,7 +806,7 @@ export default function TimelinePage() {
               })()}
 
               {/* Summary footer */}
-              <div className="px-4 py-3 border-t border-gray-100 text-xs text-gray-500">
+              <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
                 {Math.ceil(totalWeeks - 1)} weeks total · {timeline.entries.length} features scheduled
                 {timeline.entries.some(e => e.isManual) && (
                   <span className="ml-2 text-blue-500">· ✏ = manually overridden</span>

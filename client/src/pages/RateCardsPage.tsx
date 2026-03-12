@@ -177,9 +177,8 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
                         <td className="px-4 py-2">
                           <button
                             onClick={() => removeEntry(idx)}
-                            className="text-gray-400 hover:text-lab3-navy transition-colors p-1 rounded"
+                            className="text-gray-400 dark:text-gray-500 hover:text-lab3-navy transition-colors p-1 rounded"
                             title="Remove"
-                          >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                               <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
                             </svg>
@@ -320,7 +319,7 @@ export default function RateCardsPage() {
 
         {/* List */}
         {isLoading ? (
-          <div className="text-center py-12 text-gray-400">Loading…</div>
+          <div className="text-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
         ) : rateCards.length === 0 ? (
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 text-center py-16">
             <p className="text-gray-400 dark:text-gray-500 mb-4">No rate cards yet</p>
@@ -346,7 +345,7 @@ export default function RateCardsPage() {
                       {/* Chevron */}
                       <svg
                         xmlns="http://www.w3.org/2000/svg"
-                        className={`h-4 w-4 text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
+                        className={`h-4 w-4 text-gray-400 dark:text-gray-500 transition-transform ${expanded ? 'rotate-90' : ''}`}
                         viewBox="0 0 20 20"
                         fill="currentColor"
                       >
@@ -386,7 +385,7 @@ export default function RateCardsPage() {
                       )}
                       <button
                         onClick={() => setEditingId(rc.id)}
-                        className="text-gray-400 hover:text-gray-700 transition-colors p-1 rounded"
+                        className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors p-1 rounded"
                         title="Edit"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -395,7 +394,7 @@ export default function RateCardsPage() {
                       </button>
                       <button
                         onClick={() => handleDelete(rc)}
-                        className="text-gray-400 hover:text-lab3-navy transition-colors p-1 rounded"
+                        className="text-gray-400 dark:text-gray-500 hover:text-lab3-navy transition-colors p-1 rounded"
                         title="Delete"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">

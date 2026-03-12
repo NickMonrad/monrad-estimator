@@ -61,7 +61,7 @@ function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDel
         {task.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 ml-0 truncate">{task.description}</p>}
       </div>
       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-        <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+        <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
         <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
       </div>
     </div>

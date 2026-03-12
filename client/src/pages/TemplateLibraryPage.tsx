@@ -178,7 +178,7 @@ export default function TemplateLibraryPage() {
         </div>
 
         {isLoading ? (
-          <div className="text-center py-12 text-gray-400">Loading…</div>
+          <div className="text-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
         ) : (
           <div className="space-y-3">
             {adding && (
@@ -207,7 +207,7 @@ export default function TemplateLibraryPage() {
                 ) : (
                   <div className="group flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
                     onClick={() => toggle(tpl.id)}>
-                    <span className="text-gray-400 text-sm select-none">{expandedIds.has(tpl.id) ? '▼' : '▶'}</span>
+                    <span className="text-gray-400 dark:text-gray-500 text-sm select-none">{expandedIds.has(tpl.id) ? '▼' : '▶'}</span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-gray-900 dark:text-white">{tpl.name}</span>
@@ -239,7 +239,7 @@ export default function TemplateLibraryPage() {
                               const a = document.createElement('a'); a.href = url; a.download = `${tpl.name.toLowerCase().replace(/\s+/g, '-')}.csv`; a.click()
                               URL.revokeObjectURL(url)
                             }}
-                            className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">⬇</button>
+                            className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-2 py-1">⬇</button>
                           <button onClick={() => deleteTemplate.mutate(tpl.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Archive</button>
                         </>
                       )}
@@ -449,7 +449,7 @@ function SortableTaskRow({ task, fmt, onEdit, onDelete }: {
       <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmt(task.hoursExtraLarge)}</td>
       <td className="py-2">
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button onClick={onEdit} className="text-xs text-gray-400 hover:text-gray-700 px-1">Edit</button>
+          <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-1">Edit</button>
           <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
         </div>
       </td>

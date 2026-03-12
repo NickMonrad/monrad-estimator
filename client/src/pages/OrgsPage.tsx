@@ -150,7 +150,7 @@ export default function OrgsPage() {
       </form>
 
       {orgs.length === 0 ? (
-        <p className="text-gray-500">No organisations yet. Create one above.</p>
+        <p className="text-gray-500 dark:text-gray-400">No organisations yet. Create one above.</p>
       ) : (
         <div className="space-y-3">
           {orgs.map(org => (
