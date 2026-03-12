@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
+import { useIsDark } from '../hooks/useIsDark'
 import ThemeToggle from '../components/layout/ThemeToggle'
 import type { Project, ResourceType, TimelineSummary, TimelineEntry, NamedResourceEntry } from '../types/backlog'
 import GanttChart from '../components/timeline/GanttChart'
@@ -44,6 +45,9 @@ function NamedResourcesPanel({
   colW: number
   labelW: number
 }) {
+  const isDark = useIsDark()
+  const gridStroke = isDark ? '#374151' : '#f3f4f6'
+
   // Group by resource type name
   const grouped = useMemo(() => {
     const map = new Map<string, NamedResourceEntry[]>()
@@ -79,7 +83,7 @@ function NamedResourcesPanel({
                 return (
                   <div
                     key={`${rtName}-${nr.name}-${i}`}
-                    className="flex flex-col justify-center px-3 border-b border-gray-50"
+                    className="flex flex-col justify-center px-3 border-b border-gray-50 dark:border-gray-700"
                     style={{ height: 36 }}
                   >
                     <span className="text-xs text-gray-700 dark:text-gray-300 truncate">{nr.name}</span>
@@ -95,7 +99,7 @@ function NamedResourcesPanel({
 
         {/* Right bar area */}
         <div className="overflow-x-auto flex-1">
-          <div style={{ width: totalWeeks * colW, minHeight: '100%' }} className="relative bg-gray-50/50">
+          <div style={{ width: totalWeeks * colW, minHeight: '100%' }} className="relative bg-gray-50/50 dark:bg-gray-900/50">
             {/* Vertical grid lines */}
             <svg
               width={totalWeeks * colW}
@@ -110,7 +114,7 @@ function NamedResourcesPanel({
                   y1={0}
                   x2={i * colW}
                   y2="100%"
-                  stroke="#f3f4f6"
+                  stroke={gridStroke}
                   strokeWidth={1}
                 />
               ))}
@@ -133,7 +137,7 @@ function NamedResourcesPanel({
                     return (
                       <div
                         key={`${rtName}-${nr.name}-${i}`}
-                        className="relative border-b border-gray-50"
+                        className="relative border-b border-gray-50 dark:border-gray-700"
                         style={{ height: 36 }}
                       >
                         <div
@@ -569,7 +573,7 @@ export default function TimelinePage() {
                     </thead>
                     <tbody>
                       {rts.map(rt => (
-                        <tr key={rt.id} className="border-t border-gray-50">
+                        <tr key={rt.id} className="border-t border-gray-700">
                           <td className="py-1.5 text-gray-700 dark:text-gray-300">{rt.name}</td>
                           <td className="py-1.5 text-right text-sm text-gray-700 dark:text-gray-300">{rt.count}</td>
                           <td className="py-1.5 text-right">
