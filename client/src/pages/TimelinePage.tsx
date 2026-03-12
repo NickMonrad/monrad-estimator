@@ -425,7 +425,10 @@ export default function TimelinePage() {
       <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-            <button onClick={() => navigate('/')} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors font-semibold text-gray-900 dark:text-white">Monrad Estimator</button>
+            <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
+              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center"><span className="text-white text-xs font-bold">M</span></div>
+              <span className="font-semibold text-gray-900 dark:text-white group-hover:text-lab3-navy dark:group-hover:text-lab3-blue transition-colors">Monrad Estimator</span>
+            </button>
             <span>/</span>
             <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">{project?.name ?? '…'}</button>
             <span>/</span>
