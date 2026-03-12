@@ -280,7 +280,9 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 
 // Create project
 router.post('/', async (req: AuthRequest, res: Response) => {
-  const { name, description, customerId, orgId } = req.body
+  const { name, description, status, hoursPerDay, bufferWeeks } = req.body
+  const customerId = req.body.customerId || null
+  const orgId = req.body.orgId || null
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
 
   // Validate org membership if orgId provided
@@ -305,10 +307,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     data: {
       name,
       description,
+      status: status ?? 'DRAFT',
+      hoursPerDay: hoursPerDay ?? 7.6,
+      bufferWeeks: bufferWeeks ?? 0,
       customerId,
       orgId,
       ownerId: req.userId!,
-      // Seed default resource types
       resourceTypes: { create: seedTypes },
     },
     include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
@@ -318,13 +322,14 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
 // Update project
 router.put('/:id', async (req: AuthRequest, res: Response) => {
-  const { name, description, customerId, status, hoursPerDay, taxRate, taxLabel } = req.body
+  const { name, description, status, hoursPerDay, taxRate, taxLabel } = req.body
+  const customerId = req.body.customerId !== undefined ? (req.body.customerId || null) : undefined
   const bufferWeeks = req.body.bufferWeeks !== undefined ? (parseInt(req.body.bufferWeeks) ?? 0) : undefined
   const existing = await ownedProject(req.params.id as string, req.userId!)
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   const project = await prisma.project.update({
     where: { id: req.params.id as string },
-    data: { name, description, customerId, status, hoursPerDay, taxRate, taxLabel, ...(bufferWeeks !== undefined && { bufferWeeks }) },
+    data: { name, description, ...(customerId !== undefined && { customerId }), status, hoursPerDay, taxRate, taxLabel, ...(bufferWeeks !== undefined && { bufferWeeks }) },
   })
   res.json(project)
 })
