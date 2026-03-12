@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { PDFViewer, pdf } from '@react-pdf/renderer'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
+import ThemeToggle from '../components/layout/ThemeToggle'
 import ScopeDocument from '../components/documents/ScopeDocument'
 import type { ScopeDocumentProps } from '../components/documents/ScopeDocument'
 
@@ -28,7 +29,7 @@ export default function DocumentsPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { user } = useAuth()
+  const { user, logout } = useAuth()
 
   const [sections, setSections] = useState({
     cover: true,
@@ -174,17 +175,21 @@ export default function DocumentsPage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Header */}
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
-        <nav className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1 mb-1">
-          <button onClick={() => navigate('/')} className="hover:text-gray-700 dark:hover:text-gray-200">Monrad Estimator</button>
-          <span>/</span>
-          <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-gray-700 dark:hover:text-gray-200">
-            {project?.name ?? '…'}
-          </button>
-          <span>/</span>
-          <span className="text-gray-900 dark:text-white font-medium">Documents</span>
-        </nav>
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Documents</h1>
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors font-semibold text-gray-900 dark:text-white">Monrad Estimator</button>
+            <span>/</span>
+            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">{project?.name ?? '…'}</button>
+            <span>/</span>
+            <span className="text-gray-700 dark:text-gray-300">Documents</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
+          </div>
+        </div>
       </header>
 
       <div className="max-w-screen-xl mx-auto px-6 py-6 flex gap-6">

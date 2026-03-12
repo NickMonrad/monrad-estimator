@@ -9,6 +9,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } 
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
+import ThemeToggle from '../components/layout/ThemeToggle'
 import { useReorderEpics, useReorderFeatures, useReorderStories, useReorderTasks } from '../hooks/useReorder'
 import type { Epic, Feature, UserStory, Task, ResourceType, Project } from '../types/backlog'
 import FeatureList from '../components/backlog/FeatureList'
@@ -205,6 +206,7 @@ export default function BacklogPage() {
             <span className="text-gray-700 dark:text-gray-300">Backlog</span>
           </div>
           <div className="flex items-center gap-3">
+            <ThemeToggle />
             <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
             <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
