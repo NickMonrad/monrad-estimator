@@ -203,7 +203,7 @@ export default function CustomersPage() {
         <div className="space-y-2">
           {customers.map(customer => (
             <div key={customer.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-3">
-              <div>
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-gray-900">{customer.name}</span>
                   {customer.accountCode && <span className="text-xs text-gray-500">({customer.accountCode})</span>}
