@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import ThemeToggle from '../components/ThemeToggle'
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer, getOrgs } from '../lib/api'
 
 interface Customer {
@@ -96,17 +97,18 @@ export default function CustomersPage() {
       <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+            <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center">
               <span className="text-white text-xs font-bold">M</span>
             </div>
             <Link to="/" className="font-semibold text-gray-900 dark:text-white">Monrad Estimator</Link>
-            <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-red-600 transition-colors ml-2">Resource Types</Link>
-            <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-red-600 transition-colors ml-2">Templates</Link>
-            <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-red-600 transition-colors ml-2">Rate Cards</Link>
-            <Link to="/orgs" className="text-sm text-gray-500 dark:text-gray-400 hover:text-red-600 transition-colors ml-2">Team</Link>
-            <Link to="/customers" className="text-sm text-gray-500 dark:text-gray-400 hover:text-red-600 transition-colors ml-2">Customers</Link>
+            <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Resource Types</Link>
+            <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Templates</Link>
+            <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Rate Cards</Link>
+            <Link to="/orgs" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Team</Link>
+            <Link to="/customers" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Customers</Link>
           </div>
           <div className="flex items-center gap-3">
+            <ThemeToggle />
             <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
             <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
