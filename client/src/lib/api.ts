@@ -32,6 +32,9 @@ export const removeOrgMember = (orgId: string, userId: string) => api.delete(`/o
 export const updateOrgMemberRole = (orgId: string, userId: string, role: string) => api.put(`/orgs/${orgId}/members/${userId}`, { role }).then(r => r.data)
 export const inviteToOrg = (orgId: string, data: { email: string; role?: string }) => api.post(`/orgs/${orgId}/invites`, data).then(r => r.data)
 export const acceptOrgInvite = (token: string) => api.post('/orgs/accept-invite', { token }).then(r => r.data)
+export const getOrgInvites = (orgId: string) => api.get(`/orgs/${orgId}/invites`).then(r => r.data)
+export const cancelOrgInvite = (orgId: string, inviteId: string) => api.delete(`/orgs/${orgId}/invites/${inviteId}`).then(r => r.data)
+export const resendOrgInvite = (orgId: string, inviteId: string) => api.post(`/orgs/${orgId}/invites/${inviteId}/resend`).then(r => r.data)
 export const moveProjectToOrg = (projectId: string, orgId: string) => api.post(`/projects/${projectId}/move-to-org`, { orgId }).then(r => r.data)
 
 // Customers

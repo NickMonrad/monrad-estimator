@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
-import { getOrgs, createOrg, getOrgMembers, removeOrgMember, inviteToOrg } from '../lib/api'
+import { getOrgs, createOrg, getOrgMembers, removeOrgMember, inviteToOrg, getOrgInvites, cancelOrgInvite, resendOrgInvite } from '../lib/api'
 
 interface OrgMember {
   id: string
@@ -9,6 +9,14 @@ interface OrgMember {
   role: 'OWNER' | 'ADMIN' | 'MEMBER'
   joinedAt: string
   user: { id: string; name: string; email: string }
+}
+
+interface PendingInvite {
+  id: string
+  email: string
+  role: 'OWNER' | 'ADMIN' | 'MEMBER'
+  expiresAt: string
+  createdAt: string
 }
 
 interface Org {
@@ -24,6 +32,8 @@ export default function OrgsPage() {
   const [newOrgName, setNewOrgName] = useState('')
   const [expandedOrgId, setExpandedOrgId] = useState<string | null>(null)
   const [members, setMembers] = useState<Record<string, OrgMember[]>>({})
+  const [invites, setInvites] = useState<Record<string, PendingInvite[]>>({})
+  const [resendStatus, setResendStatus] = useState<Record<string, string>>({})
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER')
   const [inviteStatus, setInviteStatus] = useState<Record<string, string>>({})
@@ -61,14 +71,29 @@ export default function OrgsPage() {
     if (expandedOrgId === orgId) { setExpandedOrgId(null); return }
     setExpandedOrgId(orgId)
     if (!members[orgId]) {
-      const data = await getOrgMembers(orgId)
-      setMembers(prev => ({ ...prev, [orgId]: data }))
+      const [membersData, invitesData] = await Promise.all([
+        getOrgMembers(orgId),
+        getOrgInvites(orgId),
+      ])
+      setMembers(prev => ({ ...prev, [orgId]: membersData }))
+      setInvites(prev => ({ ...prev, [orgId]: invitesData }))
     }
   }
 
   async function handleRemoveMember(orgId: string, userId: string) {
     await removeOrgMember(orgId, userId)
     setMembers(prev => ({ ...prev, [orgId]: prev[orgId].filter(m => m.userId !== userId) }))
+  }
+
+  async function handleCancelInvite(orgId: string, inviteId: string) {
+    await cancelOrgInvite(orgId, inviteId)
+    setInvites(prev => ({ ...prev, [orgId]: prev[orgId].filter(i => i.id !== inviteId) }))
+  }
+
+  async function handleResendInvite(orgId: string, inviteId: string) {
+    await resendOrgInvite(orgId, inviteId)
+    setResendStatus(prev => ({ ...prev, [inviteId]: 'Sent!' }))
+    setTimeout(() => setResendStatus(prev => { const n = { ...prev }; delete n[inviteId]; return n }), 3000)
   }
 
   async function handleInvite(e: React.FormEvent, orgId: string) {
@@ -165,6 +190,42 @@ export default function OrgsPage() {
                       </div>
                     ))}
                   </div>
+
+                  {/* Pending Invites */}
+                  {['OWNER', 'ADMIN'].includes(org.role) && (invites[org.id] ?? []).length > 0 && (
+                    <div className="mb-4">
+                      <h3 className="text-sm font-medium text-gray-700 mb-2">Pending Invites</h3>
+                      <div className="space-y-2">
+                        {(invites[org.id] ?? []).map(invite => (
+                          <div key={invite.id} className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200">
+                            <div>
+                              <span className="text-sm font-medium text-gray-900">{invite.email}</span>
+                              <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-700">{invite.role}</span>
+                              <span className="ml-2 text-xs text-gray-400">expires {new Date(invite.expiresAt).toLocaleDateString()}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {resendStatus[invite.id] ? (
+                                <span className="text-xs text-green-600">{resendStatus[invite.id]}</span>
+                              ) : (
+                                <button
+                                  onClick={() => handleResendInvite(org.id, invite.id)}
+                                  className="text-sm text-gray-600 hover:text-gray-900"
+                                >
+                                  Resend
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleCancelInvite(org.id, invite.id)}
+                                className="text-sm text-red-600 hover:text-red-800"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Invite form */}
                   {['OWNER', 'ADMIN'].includes(org.role) && (

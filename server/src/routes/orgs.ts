@@ -103,6 +103,88 @@ router.delete('/:id/members/:userId', async (req: AuthRequest, res: Response) =>
   res.json({ message: 'Member removed' })
 })
 
+// POST /api/orgs/:id/invites/:inviteId/resend — resend a pending invite (BEFORE /:id/invites and /:id/invites/:inviteId)
+router.post('/:id/invites/:inviteId/resend', async (req: AuthRequest, res: Response) => {
+  try {
+    const id = req.params.id as string
+    const inviteId = req.params.inviteId as string
+    const requesterMembership = await prisma.organisationMember.findUnique({
+      where: { orgId_userId: { orgId: id, userId: req.userId! } },
+    })
+    if (!requesterMembership || !['OWNER', 'ADMIN'].includes(requesterMembership.role)) {
+      res.status(403).json({ error: 'Forbidden' }); return
+    }
+    const invite = await prisma.organisationInvite.findFirst({
+      where: { id: inviteId, orgId: id, acceptedAt: null },
+    })
+    if (!invite) { res.status(404).json({ error: 'Invite not found' }); return }
+
+    const newToken = randomBytes(32).toString('hex')
+    const newTokenHash = createHash('sha256').update(newToken).digest('hex')
+    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+
+    const org = await prisma.organisation.findUnique({ where: { id } })
+    if (!org) { res.status(404).json({ error: 'Org not found' }); return }
+
+    const updated = await prisma.organisationInvite.update({
+      where: { id: inviteId },
+      data: { tokenHash: newTokenHash, expiresAt: newExpiresAt },
+    })
+
+    const clientUrl = process.env.CLIENT_URL ?? 'http://localhost:5173'
+    await sendEmail({
+      to: invite.email,
+      subject: `You've been invited to join ${org.name} on Monrad Estimator`,
+      html: `<p>You've been invited to join <strong>${org.name}</strong>.</p><p><a href="${clientUrl}/accept-invite?token=${newToken}">Accept invitation</a></p><p>This link expires in 7 days.</p>`,
+    })
+
+    res.json(updated)
+  } catch {
+    res.status(500).json({ error: 'Failed to resend invite' })
+  }
+})
+
+// DELETE /api/orgs/:id/invites/:inviteId — cancel a pending invite
+router.delete('/:id/invites/:inviteId', async (req: AuthRequest, res: Response) => {
+  try {
+    const id = req.params.id as string
+    const inviteId = req.params.inviteId as string
+    const requesterMembership = await prisma.organisationMember.findUnique({
+      where: { orgId_userId: { orgId: id, userId: req.userId! } },
+    })
+    if (!requesterMembership || !['OWNER', 'ADMIN'].includes(requesterMembership.role)) {
+      res.status(403).json({ error: 'Forbidden' }); return
+    }
+    const invite = await prisma.organisationInvite.findFirst({
+      where: { id: inviteId, orgId: id, acceptedAt: null },
+    })
+    if (!invite) { res.status(404).json({ error: 'Invite not found' }); return }
+    await prisma.organisationInvite.delete({ where: { id: inviteId } })
+    res.json({ message: 'Invite cancelled' })
+  } catch {
+    res.status(500).json({ error: 'Failed to cancel invite' })
+  }
+})
+
+// GET /api/orgs/:id/invites — list pending invites
+router.get('/:id/invites', async (req: AuthRequest, res: Response) => {
+  try {
+    const id = req.params.id as string
+    const membership = await prisma.organisationMember.findUnique({
+      where: { orgId_userId: { orgId: id, userId: req.userId! } },
+    })
+    if (!membership) { res.status(403).json({ error: 'Forbidden' }); return }
+    const invites = await prisma.organisationInvite.findMany({
+      where: { orgId: id, acceptedAt: null },
+      select: { id: true, email: true, role: true, expiresAt: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    })
+    res.json(invites)
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch invites' })
+  }
+})
+
 // POST /api/orgs/:id/invites — invite by email
 router.post('/:id/invites', async (req: AuthRequest, res: Response) => {
   const id = req.params.id as string
