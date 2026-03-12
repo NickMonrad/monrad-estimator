@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { Link } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
@@ -145,7 +145,6 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
 
 export default function GlobalResourceTypesPage() {
   const { user, logout } = useAuth()
-  const navigate = useNavigate()
   const qc = useQueryClient()
 
   const [editingId, setEditingId] = useState<string | null>(null)

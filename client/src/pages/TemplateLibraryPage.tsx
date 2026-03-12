@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { Link } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import type { DragEndEvent } from '@dnd-kit/core'
@@ -42,7 +42,6 @@ interface FeatureTemplate {
 }
 
 export default function TemplateLibraryPage() {
-  const navigate = useNavigate()
   const { user, logout } = useAuth()
   const qc = useQueryClient()
 
