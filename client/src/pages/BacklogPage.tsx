@@ -282,7 +282,7 @@ export default function BacklogPage() {
                 ))}
 
                 {addingEpic && (
-                  <div className="bg-white rounded-xl border border-blue-200 p-4">
+                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 p-4">
                     <EpicForm
                       initial={epicForm}
                       onSave={(data) => createEpic.mutate(data)}
@@ -302,7 +302,7 @@ export default function BacklogPage() {
             </SortableContext>
             <DragOverlay>
               {activeItem && (
-                <div className="bg-white border-2 border-blue-400 rounded-lg px-3 py-2 shadow-lg text-sm font-medium opacity-90">
+                <div className="bg-white dark:bg-gray-800 border-2 border-blue-400 rounded-lg px-3 py-2 shadow-lg text-sm font-medium opacity-90">
                   {activeItem.name}
                 </div>
               )}
@@ -311,7 +311,7 @@ export default function BacklogPage() {
         )}
 
         {showHistory && (
-          <div className="mt-6 bg-white rounded-xl border border-gray-200 p-5">
+          <div className="mt-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-gray-800">Backlog History</h2>
               <div className="flex gap-2">
@@ -319,7 +319,7 @@ export default function BacklogPage() {
                   placeholder="Snapshot label (optional)"
                   value={snapshotLabel}
                   onChange={e => setSnapshotLabel(e.target.value)}
-                  className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-lab3-blue w-48"
+                  className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-48"
                 />
                 <button
                   onClick={() => saveSnapshot.mutate(snapshotLabel)}
@@ -674,11 +674,11 @@ function EpicForm({ initial, onSave, onCancel, saving }: {
   return (
     <div className="space-y-2">
       <input placeholder="Epic name *" value={form.name} onChange={f('name')}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={2}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       <textarea placeholder="Assumptions (optional)" value={form.assumptions} onChange={f('assumptions')} rows={2}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
           className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">

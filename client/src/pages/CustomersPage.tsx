@@ -127,55 +127,55 @@ export default function CustomersPage() {
       {error && <div className="mb-4 p-3 bg-red-50 text-red-600 rounded">{error}</div>}
 
       {showForm && (
-        <div className="mb-6 bg-white border border-gray-200 rounded-lg p-4">
+        <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 rounded-lg p-4">
           <h2 className="text-lg font-medium text-gray-900 mb-4">{editId ? 'Edit Customer' : 'New Customer'}</h2>
           <form onSubmit={handleSave} className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name *</label>
               <input
                 type="text"
                 value={form.name}
                 onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
                 required
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-600"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
               <input
                 type="text"
                 value={form.description}
                 onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-600"
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Account Code</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Account Code</label>
                 <input
                   type="text"
                   value={form.accountCode}
                   onChange={e => setForm(p => ({ ...p, accountCode: e.target.value }))}
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-600"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">CRM Link</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">CRM Link</label>
                 <input
                   type="url"
                   value={form.crmLink}
                   onChange={e => setForm(p => ({ ...p, crmLink: e.target.value }))}
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-600"
                 />
               </div>
             </div>
             {orgs.length > 0 && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Team (Organisation)</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Team (Organisation)</label>
                 <select
                   value={form.orgId}
                   onChange={e => setForm(p => ({ ...p, orgId: e.target.value }))}
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-600"
                 >
                   <option value="">No team</option>
                   {orgs.map(o => (
@@ -202,7 +202,7 @@ export default function CustomersPage() {
       ) : (
         <div className="space-y-2">
           {customers.map(customer => (
-            <div key={customer.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-3">
+            <div key={customer.id} className="flex items-center justify-between bg-white dark:bg-gray-800 border border-gray-200 rounded-lg px-4 py-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-gray-900">{customer.name}</span>

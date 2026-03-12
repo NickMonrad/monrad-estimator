@@ -153,7 +153,7 @@ function NamedResourcesPanel({
                       if (val && val !== r.name)
                         updateResource.mutate({ id: r.id, name: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -166,7 +166,7 @@ function NamedResourcesPanel({
                       if (val !== r.startWeek)
                         updateResource.mutate({ id: r.id, startWeek: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -179,7 +179,7 @@ function NamedResourcesPanel({
                       if (val !== r.endWeek)
                         updateResource.mutate({ id: r.id, endWeek: val })
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <input
                     type="number"
@@ -197,7 +197,7 @@ function NamedResourcesPanel({
                         updateResource.mutate({ id: r.id, allocationPct: val })
                       }
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   />
                   <select
                     defaultValue={r.pricingModel}
@@ -209,7 +209,7 @@ function NamedResourcesPanel({
                         })
                       }
                     }}
-                    className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
                   >
                     <option value="ACTUAL_DAYS">Actual Days</option>
                     <option value="PRO_RATA">Pro-rata</option>
@@ -921,7 +921,7 @@ export default function ResourceProfilePage() {
         {/* ═══════════════════════════════════════════════════════ */}
         {activeTab === 'profile' && (
         <>
-        <section className="bg-white rounded-xl border border-gray-200">
+        <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200">
           <header className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
             <div>
               <h2 className="text-base font-semibold text-gray-900">Summary</h2>
@@ -1038,7 +1038,7 @@ export default function ResourceProfilePage() {
                               if (parsed === current) return
                               if (rt) updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
                             }}
-                            className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            className="w-16 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm text-right bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                             placeholder="—"
                           /> h
                         </td>
@@ -1105,7 +1105,7 @@ export default function ResourceProfilePage() {
                               const rt = resourceTypes.find(r => r.id === row.resourceTypeId)
                               if (rt && val !== (rt.dayRate ?? null)) updateResourceType.mutate({ id: rt.id, dayRate: val })
                             }}
-                            className="w-20 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            className="w-20 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm text-right bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                             placeholder="—"
                           />
                         </td>
@@ -1214,7 +1214,7 @@ export default function ResourceProfilePage() {
           )}
         </section>
 
-        <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+        <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-6 space-y-5">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
               <h2 className="text-base font-semibold text-gray-900">Overhead configuration</h2>
@@ -1268,7 +1268,7 @@ export default function ResourceProfilePage() {
                   type="text"
                   value={form.name}
                   onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                   placeholder="e.g. Delivery management"
                 />
               </div>
@@ -1277,7 +1277,7 @@ export default function ResourceProfilePage() {
                 <select
                   value={form.resourceTypeId}
                   onChange={e => setForm(f => ({ ...f, resourceTypeId: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   <option value="">No resource type</option>
                   {resourceTypes.map(rt => (
@@ -1316,7 +1316,7 @@ export default function ResourceProfilePage() {
                   step={form.type === 'PERCENTAGE' ? 0.5 : 0.1}
                   value={form.value}
                   onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
             </div>
@@ -1349,7 +1349,7 @@ export default function ResourceProfilePage() {
           </div>
         </section>
 
-        <section className="bg-white rounded-xl border border-gray-200 p-6">
+        <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-base font-semibold text-gray-900">Capacity vs overhead</h2>
@@ -1387,7 +1387,7 @@ export default function ResourceProfilePage() {
         {activeTab === 'commercial' && (
         <>
           {/* ── Apply Rate Card ── */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-6 space-y-4">
             <div>
               <h2 className="text-base font-semibold text-gray-900">Apply Rate Card</h2>
               <p className="text-sm text-gray-500">Select a rate card to bulk-apply day rates to matching resource types.</p>
@@ -1398,7 +1398,7 @@ export default function ResourceProfilePage() {
                 <select
                   value={selectedRateCardId}
                   onChange={e => { setSelectedRateCardId(e.target.value); setRateCardResult(null) }}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   <option value="">Select a rate card…</option>
                   {rateCards.map(rc => (
@@ -1423,7 +1423,7 @@ export default function ResourceProfilePage() {
           </section>
 
           {/* ── Cost Summary Table ── */}
-          <section className="bg-white rounded-xl border border-gray-200">
+          <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200">
             <header className="px-6 py-4 border-b border-gray-100">
               <h2 className="text-base font-semibold text-gray-900">Cost Summary</h2>
               <p className="text-sm text-gray-500">Breakdown by resource type with day rates and discounts</p>
@@ -1501,11 +1501,11 @@ export default function ResourceProfilePage() {
                             <td colSpan={8} className="px-6 py-4">
                               <div className="flex flex-wrap items-end gap-4">
                                 <div>
-                                  <label className="block text-xs font-medium text-gray-600 mb-1">Allocation Mode</label>
+                                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Allocation Mode</label>
                                   <select
                                     value={allocationDraft.allocationMode}
                                     onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
-                                    className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                   >
                                     <option value="EFFORT">T&amp;M (effort only)</option>
                                     <option value="TIMELINE">Timeline window</option>
@@ -1513,7 +1513,7 @@ export default function ResourceProfilePage() {
                                   </select>
                                 </div>
                                 <div>
-                                  <label className="block text-xs font-medium text-gray-600 mb-1">FTE %</label>
+                                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">FTE %</label>
                                   <input
                                     type="number"
                                     min={1}
@@ -1521,13 +1521,13 @@ export default function ResourceProfilePage() {
                                     step={5}
                                     value={allocationDraft.allocationPercent}
                                     onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
-                                    className="w-20 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                   />
                                 </div>
                                 {allocationDraft.allocationMode === 'TIMELINE' && (
                                   <>
                                     <div>
-                                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                         Start Week override
                                         {row.derivedStartWeek != null && <span className="text-gray-400 ml-1">(auto: Wk {Math.round(row.derivedStartWeek)})</span>}
                                       </label>
@@ -1538,11 +1538,11 @@ export default function ResourceProfilePage() {
                                         value={allocationDraft.allocationStartWeek ?? ''}
                                         onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
                                         placeholder="auto"
-                                        className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                       />
                                     </div>
                                     <div>
-                                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                         End Week override
                                         {row.derivedEndWeek != null && <span className="text-gray-400 ml-1">(auto: Wk {Math.round(row.derivedEndWeek)})</span>}
                                       </label>
@@ -1553,7 +1553,7 @@ export default function ResourceProfilePage() {
                                         value={allocationDraft.allocationEndWeek ?? ''}
                                         onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
                                         placeholder="auto"
-                                        className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                       />
                                     </div>
                                   </>
@@ -1633,7 +1633,7 @@ export default function ResourceProfilePage() {
           </section>
 
           {/* ── Project Discounts ── */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-6 space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-base font-semibold text-gray-900">Project Discounts</h2>
@@ -1694,7 +1694,7 @@ export default function ResourceProfilePage() {
                       value={discountForm.label}
                       onChange={e => setDiscountForm(f => ({ ...f, label: e.target.value }))}
                       placeholder="e.g. Early bird"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     />
                   </div>
                   <div>
@@ -1702,7 +1702,7 @@ export default function ResourceProfilePage() {
                     <select
                       value={discountForm.type}
                       onChange={e => setDiscountForm(f => ({ ...f, type: e.target.value as 'PERCENTAGE' | 'FIXED_AMOUNT' }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     >
                       <option value="PERCENTAGE">Percentage</option>
                       <option value="FIXED_AMOUNT">Fixed Amount</option>
@@ -1718,7 +1718,7 @@ export default function ResourceProfilePage() {
                       step={discountForm.type === 'PERCENTAGE' ? 0.5 : 1}
                       value={discountForm.value}
                       onChange={e => setDiscountForm(f => ({ ...f, value: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                     />
                   </div>
                 </div>
@@ -1750,7 +1750,7 @@ export default function ResourceProfilePage() {
           </section>
 
           {/* ── Tax ── */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-6 space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-base font-semibold text-gray-900">Tax</h2>
@@ -1767,7 +1767,7 @@ export default function ResourceProfilePage() {
                       updateTax.mutate({ taxRate: null })
                     }
                   }}
-                  className="h-4 w-4 rounded border-gray-300 text-lab3-navy focus:ring-lab3-blue"
+                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-lab3-navy focus:ring-lab3-blue dark:bg-gray-700 dark:text-white"
                 />
                 <span className="text-sm text-gray-600">Enable tax</span>
               </label>
@@ -1789,7 +1789,7 @@ export default function ResourceProfilePage() {
                             setEditingTaxLabel(false)
                           }
                         }}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm w-24 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+                        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm w-24 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
                         autoFocus
                       />
                       <button
@@ -1833,7 +1833,7 @@ export default function ResourceProfilePage() {
                             }
                           }
                         }}
-                        className="border border-gray-300 rounded px-2 py-1 text-sm w-20 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+                        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm w-20 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
                         autoFocus
                       />
                       <span className="text-sm text-gray-500">%</span>

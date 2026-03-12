@@ -95,22 +95,22 @@ export default function ProjectSettingsPage() {
       <main className="max-w-2xl mx-auto px-6 py-8">
         <h1 className="text-xl font-semibold text-gray-900 mb-6">Project Settings</h1>
 
-        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Project name *</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Project name *</label>
             <input
               type="text" value={form.name} onChange={f('name')}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Organisation</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Organisation</label>
             <div className="flex gap-2 items-center">
               <select
                 value={selectedOrgId}
                 onChange={e => { setSelectedOrgId(e.target.value); setOrgSaved(false) }}
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-500"
               >
                 <option value="">Personal project</option>
                 {orgs.map(o => (
@@ -134,10 +134,10 @@ export default function ProjectSettingsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Customer</label>
             <select
               value={form.customerId} onChange={f('customerId')}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-500"
             >
               <option value="">No customer</option>
               {customers.map(c => (
@@ -147,40 +147,40 @@ export default function ProjectSettingsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
             <textarea
               value={form.description} onChange={f('description')} rows={3}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
             <select
               value={form.status} onChange={f('status')}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             >
               {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Buffer weeks at end</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Buffer weeks at end</label>
             <input
               type="number" value={form.bufferWeeks}
               onChange={e => setForm(v => ({ ...v, bufferWeeks: parseInt(e.target.value) || 0 }))}
               min={0} max={52} step={1}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
             <p className="text-xs text-gray-400 mt-1">Adds extra weeks to the end of the project (e.g. for handover). Affects FULL_PROJECT allocation and timeline display.</p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Hours per day</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Hours per day</label>
             <input
               type="number" value={form.hoursPerDay} onChange={f('hoursPerDay')}
               min={1} max={24} step={0.1}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
             <p className="text-xs text-gray-400 mt-1">Used to convert hours to days in estimates. Default is 7.6h.</p>
           </div>

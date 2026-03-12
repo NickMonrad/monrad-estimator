@@ -142,7 +142,7 @@ export default function OrgsPage() {
           value={newOrgName}
           onChange={e => setNewOrgName(e.target.value)}
           placeholder="New organisation name"
-          className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+          className="flex-1 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-600"
         />
         <button type="submit" className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700">
           Create Organisation
@@ -173,7 +173,7 @@ export default function OrgsPage() {
                   <h3 className="text-sm font-medium text-gray-700 mb-3">Members</h3>
                   <div className="space-y-2 mb-4">
                     {(members[org.id] ?? []).map(member => (
-                      <div key={member.id} className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200">
+                      <div key={member.id} className="flex items-center justify-between bg-white dark:bg-gray-800 rounded px-3 py-2 border border-gray-200">
                         <div>
                           <span className="text-sm font-medium text-gray-900">{member.user.name}</span>
                           <span className="text-sm text-gray-500 ml-2">{member.user.email}</span>
@@ -197,7 +197,7 @@ export default function OrgsPage() {
                       <h3 className="text-sm font-medium text-gray-700 mb-2">Pending Invites</h3>
                       <div className="space-y-2">
                         {(invites[org.id] ?? []).map(invite => (
-                          <div key={invite.id} className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200">
+                          <div key={invite.id} className="flex items-center justify-between bg-white dark:bg-gray-800 rounded px-3 py-2 border border-gray-200">
                             <div>
                               <span className="text-sm font-medium text-gray-900">{invite.email}</span>
                               <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-700">{invite.role}</span>
@@ -237,12 +237,12 @@ export default function OrgsPage() {
                           value={inviteEmail}
                           onChange={e => setInviteEmail(e.target.value)}
                           placeholder="Email address"
-                          className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                          className="flex-1 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-600"
                         />
                         <select
                           value={inviteRole}
                           onChange={e => setInviteRole(e.target.value as 'MEMBER' | 'ADMIN')}
-                          className="border border-gray-300 rounded px-3 py-2 text-sm"
+                          className="border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                         >
                           <option value="MEMBER">Member</option>
                           <option value="ADMIN">Admin</option>

@@ -183,7 +183,7 @@ export default function TemplateLibraryPage() {
         ) : (
           <div className="space-y-3">
             {adding && (
-              <div className="bg-white rounded-xl border border-blue-200 p-4">
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 p-4">
                 <h3 className="text-sm font-medium text-gray-700 mb-3">New template</h3>
                 <TemplateForm
                   initial={templateForm}
@@ -195,7 +195,7 @@ export default function TemplateLibraryPage() {
             )}
 
             {templates.map(tpl => (
-              <div key={tpl.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div key={tpl.id} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 overflow-hidden">
                 {editingId === tpl.id ? (
                   <div className="p-4">
                     <TemplateForm
@@ -358,12 +358,12 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-2">
         <input placeholder="Template name *" value={form.name} onChange={f('name')}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
+          className="border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
         <input placeholder="Category (e.g. Security, Auth)" value={form.category} onChange={f('category')}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
+          className="border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       </div>
       <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={2}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
+        className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
           className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
@@ -392,16 +392,16 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
     <div className="bg-gray-50 rounded-lg px-3 py-2 space-y-2">
       <div className="grid grid-cols-2 gap-2">
         <input placeholder="Task name *" value={form.name} onChange={fText('name')}
-          className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+          className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
         {globalResourceTypes.length > 0 ? (
           <select value={form.resourceTypeName} onChange={e => setForm(v => ({ ...v, resourceTypeName: e.target.value }))}
-            className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400">
+            className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400">
             <option value="">Resource type *</option>
             {globalResourceTypes.map(gt => <option key={gt.id} value={gt.name}>{gt.name}</option>)}
           </select>
         ) : (
           <input placeholder="Resource type name *" value={form.resourceTypeName} onChange={e => setForm(v => ({ ...v, resourceTypeName: e.target.value }))}
-            className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+            className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
         )}
       </div>
       <div className="grid grid-cols-5 gap-2">
@@ -409,7 +409,7 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
           <div key={field}>
             <label className="text-xs text-gray-400 block mb-1">{['XS', 'S', 'M', 'L', 'XL'][i]} hours</label>
             <input type="number" min="0" step="0.5" value={form[field]} onChange={fNum(field)}
-              className="w-full border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+              className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
           </div>
         ))}
       </div>

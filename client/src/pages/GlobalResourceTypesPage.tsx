@@ -76,7 +76,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           type="text"
           value={form.name}
           onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="Name *"
         />
       </td>
@@ -84,7 +84,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
         <select
           value={form.category}
           onChange={e => setForm(f => ({ ...f, category: e.target.value as GlobalResourceType['category'] }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
         >
           {CATEGORIES.map(c => (
             <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -96,7 +96,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           type="text"
           value={form.description}
           onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="Description"
         />
       </td>
@@ -106,7 +106,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           step="0.1"
           value={form.defaultHoursPerDay}
           onChange={e => setForm(f => ({ ...f, defaultHoursPerDay: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="7.6"
         />
       </td>
@@ -116,7 +116,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           step="50"
           value={form.defaultDayRate}
           onChange={e => setForm(f => ({ ...f, defaultDayRate: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="1200"
         />
       </td>
@@ -227,7 +227,7 @@ export default function GlobalResourceTypesPage() {
           </button>
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 overflow-hidden">
           {isLoading ? (
             <div className="text-center py-12 text-gray-400">Loading…</div>
           ) : (
@@ -318,24 +318,24 @@ export default function GlobalResourceTypesPage() {
 
         {/* Add form */}
         {showAddForm && (
-          <div className="bg-white rounded-xl border border-blue-200 p-6 mt-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 p-6 mt-4">
             <h2 className="font-medium text-gray-900 mb-4">New resource type</h2>
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name *</label>
                 <input
                   type="text"
                   value={addForm.name}
                   onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Category *</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category *</label>
                 <select
                   value={addForm.category}
                   onChange={e => setAddForm(f => ({ ...f, category: e.target.value as GlobalResourceType['category'] }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   {CATEGORIES.map(c => (
                     <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -343,33 +343,33 @@ export default function GlobalResourceTypesPage() {
                 </select>
               </div>
               <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
                 <input
                   type="text"
                   value={addForm.description}
                   onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Default hrs/day</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Default hrs/day</label>
                 <input
                   type="number"
                   step="0.1"
                   value={addForm.defaultHoursPerDay}
                   onChange={e => setAddForm(f => ({ ...f, defaultHoursPerDay: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                   placeholder="7.6"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Default day rate</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Default day rate</label>
                 <input
                   type="number"
                   step="50"
                   value={addForm.defaultDayRate}
                   onChange={e => setAddForm(f => ({ ...f, defaultDayRate: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                   placeholder="1200"
                 />
               </div>

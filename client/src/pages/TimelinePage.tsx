@@ -447,7 +447,7 @@ export default function TimelinePage() {
         </div>
 
         {/* Setup bar */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-4">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs text-gray-500">Project start date</label>
@@ -456,7 +456,7 @@ export default function TimelinePage() {
                 value={startDateInput}
                 onChange={e => setStartDateInput(e.target.value)}
                 onBlur={handleStartDateBlur}
-                className="border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+                className="border border-gray-200 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
               />
             </div>
             <div className="w-px h-7 bg-gray-200" />
@@ -488,7 +488,7 @@ export default function TimelinePage() {
               </button>
             )}
             <div className="w-px h-7 bg-gray-200" />
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer">
               <input
                 type="checkbox"
                 checked={resourceLevel}
@@ -542,7 +542,7 @@ export default function TimelinePage() {
         )}
 
         {/* Resource counts panel */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 overflow-hidden">
           <button
             onClick={() => setResourcesOpen(o => !o)}
             className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
@@ -586,7 +586,7 @@ export default function TimelinePage() {
                                 if (parsed === current) return
                                 updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
                               }}
-                              className="w-20 border border-gray-200 rounded px-2 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                              className="w-20 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm text-right bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                             />
                           </td>
                         </tr>
@@ -600,7 +600,7 @@ export default function TimelinePage() {
         </div>
 
         {/* Gantt chart */}
-        <div className="bg-white rounded-xl border border-gray-200">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200">
           <div className="px-4 py-3 border-b border-gray-100">
             <h2 className="text-sm font-medium text-gray-700">Gantt Chart</h2>
           </div>
@@ -694,7 +694,7 @@ export default function TimelinePage() {
                       min="0"
                       value={editForm.startWeek}
                       onChange={e => setEditForm(f => ({ ...f, startWeek: e.target.value }))}
-                      className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      className="w-16 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                     />
                     <label className="text-xs text-gray-500">Duration weeks:</label>
                     <input
@@ -702,7 +702,7 @@ export default function TimelinePage() {
                       min="0.2"
                       value={editForm.durationWeeks}
                       onChange={e => setEditForm(f => ({ ...f, durationWeeks: e.target.value }))}
-                      className="w-16 border border-gray-200 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      className="w-16 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                     />
                     <button
                       onClick={() => updateEntry.mutate({
@@ -739,7 +739,7 @@ export default function TimelinePage() {
                           {featureDeps
                             .filter(d => d.featureId === entry.featureId)
                             .map(d => (
-                              <span key={d.dependsOnId} className="inline-flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700">
+                              <span key={d.dependsOnId} className="inline-flex items-center gap-1 bg-white dark:bg-gray-800 border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700">
                                 {d.dependsOn.name}
                                 <button
                                   onClick={() => removeFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: d.dependsOnId })}
@@ -753,7 +753,7 @@ export default function TimelinePage() {
                         </div>
                         <div className="flex items-center gap-2">
                           <select
-                            className="border border-gray-200 rounded px-2 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            className="border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-xs text-gray-700 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                             value=""
                             onChange={e => {
                               if (e.target.value) {

@@ -92,7 +92,7 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
 
       {/* Panel */}
-      <div className="relative bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto mx-4">
+      <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto mx-4">
         <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -105,12 +105,12 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
         <div className="px-6 py-5 space-y-5">
           {/* Name */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name *</label>
             <input
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
               placeholder="e.g. Standard 2025 Rates"
             />
           </div>
@@ -121,7 +121,7 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
               type="checkbox"
               checked={isDefault}
               onChange={e => setIsDefault(e.target.checked)}
-              className="rounded border-gray-300 text-lab3-navy focus:ring-lab3-blue"
+              className="rounded border-gray-300 dark:border-gray-600 text-lab3-navy focus:ring-lab3-blue dark:bg-gray-700 dark:text-white"
             />
             <span className="text-sm text-gray-700">Set as default rate card</span>
           </label>
@@ -129,12 +129,12 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
           {/* Entries */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-sm font-medium text-gray-700">Rate Entries</label>
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Rate Entries</label>
               {availableTypes.length > 0 && (
                 <select
                   value=""
                   onChange={e => { if (e.target.value) addEntry(e.target.value) }}
-                  className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                  className="border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   <option value="">+ Add resource type…</option>
                   {availableTypes.map(t => (
@@ -170,7 +170,7 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
                             min="0"
                             value={entry.dayRate}
                             onChange={e => updateRate(idx, e.target.value)}
-                            className="w-32 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                            className="w-32 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                             placeholder="1200"
                           />
                         </td>
@@ -323,7 +323,7 @@ export default function RateCardsPage() {
         {isLoading ? (
           <div className="text-center py-12 text-gray-400">Loading…</div>
         ) : rateCards.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 text-center py-16">
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 text-center py-16">
             <p className="text-gray-400 mb-4">No rate cards yet</p>
             <button
               onClick={() => setShowCreate(true)}
@@ -337,7 +337,7 @@ export default function RateCardsPage() {
             {rateCards.map(rc => {
               const expanded = expandedIds.has(rc.id)
               return (
-                <div key={rc.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <div key={rc.id} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 overflow-hidden">
                   {/* Card header */}
                   <div
                     className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"

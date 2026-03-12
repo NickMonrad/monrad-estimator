@@ -68,7 +68,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           type="text"
           value={form.name}
           onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="Name *"
         />
       </td>
@@ -76,7 +76,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
         <select
           value={form.category}
           onChange={e => setForm(f => ({ ...f, category: e.target.value as ResourceCategory }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
         >
           {CATEGORIES.map(c => (
             <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -90,7 +90,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           step="0.1"
           value={form.hoursPerDay}
           onChange={e => setForm(f => ({ ...f, hoursPerDay: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="7.6"
         />
       </td>
@@ -100,7 +100,7 @@ function EditRow({ initial, onSave, onCancel, saving }: EditRowProps) {
           step="50"
           value={form.dayRate}
           onChange={e => setForm(f => ({ ...f, dayRate: e.target.value }))}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
           placeholder="1200"
         />
       </td>
@@ -251,7 +251,7 @@ export default function ProjectResourceTypesPage() {
           </button>
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           {isLoading ? (
             <div className="text-center py-12 text-gray-400">Loading…</div>
           ) : (
@@ -346,7 +346,7 @@ export default function ProjectResourceTypesPage() {
       {/* Add Resource Type Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
               <h2 className="font-semibold text-gray-900">Add Resource Type</h2>
               <button
@@ -413,21 +413,21 @@ export default function ProjectResourceTypesPage() {
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="col-span-2">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name *</label>
                       <input
                         type="text"
                         value={newForm.name}
                         onChange={e => setNewForm(f => ({ ...f, name: e.target.value }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                        className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                         placeholder="e.g. Data Engineer"
                       />
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Category *</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category *</label>
                       <select
                         value={newForm.category}
                         onChange={e => setNewForm(f => ({ ...f, category: e.target.value as ResourceCategory }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                        className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                       >
                         {CATEGORIES.map(c => (
                           <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -435,24 +435,24 @@ export default function ProjectResourceTypesPage() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Hours/Day</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Hours/Day</label>
                       <input
                         type="number"
                         step="0.1"
                         value={newForm.hoursPerDay}
                         onChange={e => setNewForm(f => ({ ...f, hoursPerDay: e.target.value }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                        className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                         placeholder="7.6"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Day Rate</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Day Rate</label>
                       <input
                         type="number"
                         step="50"
                         value={newForm.dayRate}
                         onChange={e => setNewForm(f => ({ ...f, dayRate: e.target.value }))}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+                        className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                         placeholder="1200"
                       />
                     </div>
