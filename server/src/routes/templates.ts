@@ -37,8 +37,11 @@ async function captureSnapshot(templateId: string, label: string | null, trigger
 }
 
 // GET /api/templates — no auth required
-router.get('/', async (_req, res: Response) => {
+// ?archived=true → only soft-deleted templates; default → only live templates
+router.get('/', async (req, res: Response) => {
+  const archived = req.query.archived === 'true'
   const templates = await prisma.featureTemplate.findMany({
+    where: { deletedAt: archived ? { not: null } : null },
     orderBy: { name: 'asc' },
     include: templateInclude,
   })
@@ -216,6 +219,18 @@ router.post('/import-csv', authenticate, async (req: AuthRequest, res: Response)
   res.status(201).json({ message: 'Import successful', templatesCreated: created, templatesUpdated: updated, tasksCreated })
 })
 
+// POST /api/templates/:id/restore — auth required (clears soft delete)
+router.post('/:id/restore', authenticate, async (req: AuthRequest, res: Response) => {
+  const template = await prisma.featureTemplate.findUnique({ where: { id: req.params.id as string } })
+  if (!template || !template.deletedAt) { res.status(404).json({ error: 'Template not found or not archived' }); return }
+  const restored = await prisma.featureTemplate.update({
+    where: { id: req.params.id as string },
+    data: { deletedAt: null },
+    include: templateInclude,
+  })
+  res.json(restored)
+})
+
 // GET /api/templates/:id/export-csv — no auth required (before /:id to avoid conflict)
 router.get('/:id/export-csv', async (req, res: Response) => {
   const template = await prisma.featureTemplate.findUnique({
@@ -268,10 +283,10 @@ router.put('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   res.json(template)
 })
 
-// DELETE /api/templates/:id — auth required
+// DELETE /api/templates/:id — auth required (soft delete)
 router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
-  await prisma.featureTemplate.delete({ where: { id: req.params.id as string } })
-  res.json({ message: 'Deleted' })
+  await prisma.featureTemplate.update({ where: { id: req.params.id as string }, data: { deletedAt: new Date() } })
+  res.json({ message: 'Archived' })
 })
 
 // POST /api/templates/:id/tasks — auth required
