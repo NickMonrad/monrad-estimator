@@ -72,6 +72,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     if (!canEdit) { res.status(403).json({ error: 'Forbidden' }); return }
 
     const { name, description, accountCode, crmLink, orgId } = req.body
+    const newOrgId = orgId !== undefined ? (orgId || null) : undefined
     const updated = await prisma.customer.update({
       where: { id },
       data: {
@@ -79,43 +80,23 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
         ...(description !== undefined && { description }),
         ...(accountCode !== undefined && { accountCode }),
         ...(crmLink !== undefined && { crmLink }),
-        ...(orgId !== undefined && { orgId }),
+        ...(newOrgId !== undefined && { orgId: newOrgId }),
       },
       include: { org: { select: { id: true, name: true } } },
     })
+
+    // If org changed, move all unassigned projects for this customer into the new org
+    if (newOrgId !== undefined) {
+      await prisma.project.updateMany({
+        where: { customerId: id, orgId: null },
+        data: { orgId: newOrgId },
+      })
+    }
+
     res.json(updated)
   } catch (err) {
     console.error('PUT /customers/:id error:', err)
     res.status(500).json({ error: 'Failed to update customer' })
-  }
-})
-
-// POST /api/customers/:id/move-projects-to-org
-router.post('/:id/move-projects-to-org', async (req: AuthRequest, res: Response) => {
-  try {
-    const id = req.params.id as string
-    const { orgId } = req.body
-    if (!orgId) { res.status(400).json({ error: 'orgId is required' }); return }
-
-    const customer = await prisma.customer.findUnique({ where: { id } })
-    if (!customer) { res.status(404).json({ error: 'Customer not found' }); return }
-    if (customer.ownerId !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return }
-
-    // Validate requester is a member of the target org
-    const membership = await prisma.organisationMember.findUnique({
-      where: { orgId_userId: { orgId, userId: req.userId! } },
-    })
-    if (!membership) { res.status(403).json({ error: 'Not a member of that org' }); return }
-
-    const result = await prisma.project.updateMany({
-      where: { customerId: id, ownerId: req.userId! },
-      data: { orgId },
-    })
-
-    res.json({ count: result.count })
-  } catch (err) {
-    console.error('POST /customers/:id/move-projects-to-org error:', err)
-    res.status(500).json({ error: 'Failed to move projects' })
   }
 })
 

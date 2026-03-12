@@ -37,8 +37,6 @@ export const cancelOrgInvite = (orgId: string, inviteId: string) => api.delete(`
 export const resendOrgInvite = (orgId: string, inviteId: string) => api.post(`/orgs/${orgId}/invites/${inviteId}/resend`).then(r => r.data)
 export const moveProjectToOrg = (projectId: string, orgId: string) => api.post(`/projects/${projectId}/move-to-org`, { orgId }).then(r => r.data)
 
-export const moveCustomerProjectsToOrg = (customerId: string, orgId: string) =>
-  api.post(`/customers/${customerId}/move-projects-to-org`, { orgId }).then(r => r.data)
 
 // Customers
 export const getCustomers = () => api.get('/customers').then(r => r.data)

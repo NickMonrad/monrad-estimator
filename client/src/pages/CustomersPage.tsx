@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer, getOrgs, moveCustomerProjectsToOrg } from '../lib/api'
+import { getCustomers, createCustomer, updateCustomer, deleteCustomer, getOrgs } from '../lib/api'
 
 interface Customer {
   id: string
@@ -37,13 +37,6 @@ export default function CustomersPage() {
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState<CustomerForm>(emptyForm)
-  // Move all projects to org modal
-  const [moveProjectsCustomer, setMoveProjectsCustomer] = useState<Customer | null>(null)
-  const [moveOrgId, setMoveOrgId] = useState('')
-  const [moveSuccess, setMoveSuccess] = useState('')
-  const [moveError, setMoveError] = useState('')
-  const [moveLoading, setMoveLoading] = useState(false)
-
   useEffect(() => { loadCustomers(); loadOrgs() }, [])
 
   async function loadCustomers() {
@@ -94,22 +87,6 @@ export default function CustomersPage() {
     setEditId(customer.id)
     setForm({ name: customer.name, description: customer.description ?? '', accountCode: customer.accountCode ?? '', crmLink: customer.crmLink ?? '', orgId: customer.orgId ?? '' })
     setShowForm(true)
-  }
-
-  async function handleMoveProjects() {
-    if (!moveProjectsCustomer || !moveOrgId) return
-    setMoveLoading(true)
-    setMoveError('')
-    setMoveSuccess('')
-    try {
-      const result = await moveCustomerProjectsToOrg(moveProjectsCustomer.id, moveOrgId)
-      const orgName = orgs.find(o => o.id === moveOrgId)?.name ?? moveOrgId
-      setMoveSuccess(`${result.count} project${result.count !== 1 ? 's' : ''} moved to ${orgName}`)
-    } catch {
-      setMoveError('Failed to move projects')
-    } finally {
-      setMoveLoading(false)
-    }
   }
 
   if (loading) return <div className="p-6">Loading...</div>
@@ -205,6 +182,7 @@ export default function CustomersPage() {
                     <option key={o.id} value={o.id}>{o.name}</option>
                   ))}
                 </select>
+                <p className="text-xs text-gray-500 mt-1">Changing the team will also move all unassigned projects for this customer.</p>
               </div>
             )}
             <div className="flex gap-3 pt-2">
@@ -243,14 +221,6 @@ export default function CustomersPage() {
                 )}
               </div>
               <div className="flex gap-2">
-                {orgs.length > 0 && (
-                  <button
-                    onClick={() => { setMoveProjectsCustomer(customer); setMoveOrgId(''); setMoveSuccess(''); setMoveError('') }}
-                    className="text-blue-600 text-sm hover:text-blue-800"
-                  >
-                    Move projects to org
-                  </button>
-                )}
                 <button onClick={() => handleEdit(customer)} className="text-gray-500 text-sm hover:text-gray-700">Edit</button>
                 <button onClick={() => handleDelete(customer.id)} className="text-red-600 text-sm hover:text-red-800">Delete</button>
               </div>
@@ -260,54 +230,6 @@ export default function CustomersPage() {
       )}
       </main>
 
-      {/* Move all projects to org modal */}
-      {moveProjectsCustomer && (
-        <div
-          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-          onClick={() => { setMoveProjectsCustomer(null); setMoveSuccess(''); setMoveError('') }}
-        >
-          <div className="bg-white rounded-xl p-6 w-full max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
-            <h2 className="text-base font-semibold text-gray-900 mb-1">Move all projects to org</h2>
-            <p className="text-sm text-gray-500 mb-4">
-              Move all projects for <span className="font-medium text-gray-700">{moveProjectsCustomer.name}</span> into an org.
-            </p>
-            {moveSuccess ? (
-              <p className="text-sm text-green-600 mb-4">{moveSuccess}</p>
-            ) : (
-              <>
-                {moveError && <p className="text-sm text-red-600 mb-2">{moveError}</p>}
-                <select
-                  value={moveOrgId}
-                  onChange={e => setMoveOrgId(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-500"
-                >
-                  <option value="">Select org…</option>
-                  {orgs.map(org => (
-                    <option key={org.id} value={org.id}>{org.name}</option>
-                  ))}
-                </select>
-              </>
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => { setMoveProjectsCustomer(null); setMoveSuccess(''); setMoveError('') }}
-                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                {moveSuccess ? 'Close' : 'Cancel'}
-              </button>
-              {!moveSuccess && (
-                <button
-                  onClick={handleMoveProjects}
-                  disabled={!moveOrgId || moveLoading}
-                  className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
-                >
-                  {moveLoading ? 'Moving…' : 'Move projects'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
