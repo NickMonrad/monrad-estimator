@@ -193,19 +193,20 @@ export default function BacklogPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants to cards, panels, and modals in this file */}
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-red-600 transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors font-semibold text-gray-900 dark:text-white">Monrad Estimator</button>
             <span>/</span>
-            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-red-600 transition-colors">{project?.name ?? '…'}</button>
+            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">{project?.name ?? '…'}</button>
             <span>/</span>
-            <span className="text-gray-700">Backlog</span>
+            <span className="text-gray-700 dark:text-gray-300">Backlog</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
+            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
           </div>
         </div>
       </header>
@@ -221,7 +222,7 @@ export default function BacklogPage() {
             )}
           </div>
           <button onClick={() => setAddingEpic(true)}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors">
+            className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors">
             + Add epic
           </button>
           <button onClick={() => setShowCsvImport(true)}
@@ -318,12 +319,12 @@ export default function BacklogPage() {
                   placeholder="Snapshot label (optional)"
                   value={snapshotLabel}
                   onChange={e => setSnapshotLabel(e.target.value)}
-                  className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-red-400 w-48"
+                  className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-lab3-blue w-48"
                 />
                 <button
                   onClick={() => saveSnapshot.mutate(snapshotLabel)}
                   disabled={saveSnapshot.isPending}
-                  className="bg-red-600 text-white px-3 py-1 rounded text-xs font-medium hover:bg-red-700 disabled:opacity-50">
+                  className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">
                   {saveSnapshot.isPending ? 'Saving…' : 'Save snapshot'}
                 </button>
               </div>
@@ -430,7 +431,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
           <div className="flex items-center gap-2">
             <button {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0 px-0.5 text-base leading-none mr-1" onClick={e => e.stopPropagation()}>⠿</button>
             <span className="text-gray-400 text-sm select-none">{expanded ? '▼' : '▶'}</span>
-            <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded font-medium">Epic</span>
+            <span className="text-xs text-lab3-navy bg-blue-50 px-2 py-0.5 rounded font-medium">Epic</span>
             <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900'}`}>{epic.name}</span>
             <span className="text-sm text-gray-400">
               {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h · {(epicTotalHours / hoursPerDay).toFixed(1)}d
@@ -673,14 +674,14 @@ function EpicForm({ initial, onSave, onCancel, saving }: {
   return (
     <div className="space-y-2">
       <input placeholder="Epic name *" value={form.name} onChange={f('name')}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
+        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={2}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
+        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       <textarea placeholder="Assumptions (optional)" value={form.assumptions} onChange={f('assumptions')} rows={2}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
+        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
-          className="bg-red-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50">
+          className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save epic'}
         </button>
         <button onClick={onCancel} className="px-4 py-1.5 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>

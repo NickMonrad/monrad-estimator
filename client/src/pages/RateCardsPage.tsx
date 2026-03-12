@@ -110,7 +110,7 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
               placeholder="e.g. Standard 2025 Rates"
             />
           </div>
@@ -121,7 +121,7 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
               type="checkbox"
               checked={isDefault}
               onChange={e => setIsDefault(e.target.checked)}
-              className="rounded border-gray-300 text-red-600 focus:ring-red-500"
+              className="rounded border-gray-300 text-lab3-navy focus:ring-lab3-blue"
             />
             <span className="text-sm text-gray-700">Set as default rate card</span>
           </label>
@@ -134,7 +134,7 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
                 <select
                   value=""
                   onChange={e => { if (e.target.value) addEntry(e.target.value) }}
-                  className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                 >
                   <option value="">+ Add resource type…</option>
                   {availableTypes.map(t => (
@@ -170,14 +170,14 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
                             min="0"
                             value={entry.dayRate}
                             onChange={e => updateRate(idx, e.target.value)}
-                            className="w-32 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                            className="w-32 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-lab3-blue"
                             placeholder="1200"
                           />
                         </td>
                         <td className="px-4 py-2">
                           <button
                             onClick={() => removeEntry(idx)}
-                            className="text-gray-400 hover:text-red-600 transition-colors p-1 rounded"
+                            className="text-gray-400 hover:text-lab3-navy transition-colors p-1 rounded"
                             title="Remove"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -205,7 +205,7 @@ function RateCardModal({ title, initial, globalResourceTypes, saving, onSave, on
           <button
             onClick={handleSave}
             disabled={!canSave || saving}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+            className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -287,12 +287,13 @@ export default function RateCardsPage() {
   /* ── Render ──────────────────────────────────────────── */
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* TODO: dark mode — add dark: variants throughout this page */}
       {/* Header */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <button onClick={() => navigate('/')} className="hover:text-red-600 transition-colors font-semibold text-gray-900">Monrad Estimator</button>
+            <button onClick={() => navigate('/')} className="hover:text-lab3-navy transition-colors font-semibold text-gray-900">Monrad Estimator</button>
             <span>/</span>
             <span className="text-gray-700">Rate Cards</span>
           </div>
@@ -312,7 +313,7 @@ export default function RateCardsPage() {
           </div>
           <button
             onClick={() => setShowCreate(true)}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+            className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors"
           >
             + Create Rate Card
           </button>
@@ -326,7 +327,7 @@ export default function RateCardsPage() {
             <p className="text-gray-400 mb-4">No rate cards yet</p>
             <button
               onClick={() => setShowCreate(true)}
-              className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+              className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors"
             >
               + Create your first rate card
             </button>
@@ -395,7 +396,7 @@ export default function RateCardsPage() {
                       </button>
                       <button
                         onClick={() => handleDelete(rc)}
-                        className="text-gray-400 hover:text-red-600 transition-colors p-1 rounded"
+                        className="text-gray-400 hover:text-lab3-navy transition-colors p-1 rounded"
                         title="Delete"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
