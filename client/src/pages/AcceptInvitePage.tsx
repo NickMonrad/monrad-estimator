@@ -24,7 +24,7 @@ export default function AcceptInvitePage() {
     }
 
     acceptOrgInvite(token)
-      .then((data: { orgId: string }) => {
+      .then(() => {
         setStatus('success')
         setMessage('You have joined the organisation!')
         setTimeout(() => navigate('/orgs'), 2000)
