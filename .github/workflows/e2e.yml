@@ -44,6 +44,29 @@ jobs:
       - name: Install all dependencies
         run: npm ci
 
+      # ── TypeScript type-checking ──────────────────────────────────
+      - name: TypeScript check (client)
+        working-directory: client
+        run: npm run typecheck
+
+      - name: TypeScript check (server)
+        working-directory: server
+        run: npm run typecheck
+
+      # ── ESLint ──────────────────────────────────────────────────
+      - name: Lint (client)
+        working-directory: client
+        run: npm run lint
+
+      - name: Lint (server)
+        working-directory: server
+        run: npm run lint
+
+      # ── Server unit tests ────────────────────────────────────────
+      - name: Server unit tests
+        working-directory: server
+        run: npm test
+
       # ── Server ──────────────────────────────────────────────────
       - name: Run database migrations
         working-directory: server

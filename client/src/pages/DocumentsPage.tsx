@@ -163,7 +163,7 @@ export default function DocumentsPage() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
-    } catch (err: any) {
+    } catch {
       alert('Download failed')
     }
   }, [projectId])
