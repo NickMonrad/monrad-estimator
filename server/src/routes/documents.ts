@@ -2,7 +2,7 @@ import { Router, Response } from 'express'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { prisma } from '../lib/prisma.js'
 import { ownedProject } from '../lib/ownership.js'
-import { ALLOWED_DOC_FORMATS, MAX_UPLOAD_SIZE_BYTES } from '../lib/constants.js'
+import { isAllowedDocFormat, MAX_UPLOAD_SIZE_BYTES } from '../lib/constants.js'
 import path from 'path'
 import { promises as fs } from 'fs'
 import { existsSync } from 'fs'
@@ -28,11 +28,12 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'type, format, label and pdfBase64 are required' }); return
   }
 
-  if (!(ALLOWED_DOC_FORMATS as readonly string[]).includes(format)) {
-    res.status(400).json({ error: `format must be one of: ${ALLOWED_DOC_FORMATS.join(', ')}` }); return
+  if (!isAllowedDocFormat(format)) {
+    res.status(400).json({ error: 'format must be one of: pdf, docx, pptx' }); return
   }
 
-  // Validate file size before decoding
+  // Validate file size before decoding.
+  // Base64 encodes 3 bytes as 4 chars, so decoded size ≈ encoded length × 0.75.
   const estimatedSize = Math.ceil(pdfBase64.length * 0.75)
   if (estimatedSize > MAX_UPLOAD_SIZE_BYTES) {
     res.status(400).json({ error: 'File too large (max 50 MB)' }); return

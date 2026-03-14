@@ -3,7 +3,7 @@ import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
-import { VALID_PRICING_MODELS } from '../lib/constants.js'
+import { isValidPricingModel } from '../lib/constants.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -52,8 +52,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'allocationPct must be between 0 and 100' }); return
   }
 
-  if (pricingModel !== undefined && !(VALID_PRICING_MODELS as readonly string[]).includes(pricingModel)) {
-    res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
+  if (pricingModel !== undefined && !isValidPricingModel(pricingModel)) {
+    res.status(400).json({ error: 'pricingModel must be one of: ACTUAL_DAYS, PRO_RATA' }); return
   }
 
   // If RT's allocationMode is not EFFORT, copy the RT's allocation settings as defaults for the new NR
@@ -103,8 +103,8 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'allocationPct must be between 0 and 100' }); return
   }
 
-  if (pricingModel !== undefined && !(VALID_PRICING_MODELS as readonly string[]).includes(pricingModel)) {
-    res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
+  if (pricingModel !== undefined && !isValidPricingModel(pricingModel)) {
+    res.status(400).json({ error: 'pricingModel must be one of: ACTUAL_DAYS, PRO_RATA' }); return
   }
 
   const data: Record<string, unknown> = { name, startWeek, endWeek, allocationPct, pricingModel, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }

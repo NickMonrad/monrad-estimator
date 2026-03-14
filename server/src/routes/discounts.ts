@@ -2,7 +2,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
-import { VALID_DISCOUNT_TYPES } from '../lib/constants.js'
+import { isValidDiscountType } from '../lib/constants.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -26,7 +26,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
   const { type, value, label, resourceTypeId, order } = req.body
   if (!label) { res.status(400).json({ error: 'label is required' }); return }
-  if (!(VALID_DISCOUNT_TYPES as readonly string[]).includes(type)) {
+  if (!isValidDiscountType(type)) {
     res.status(400).json({ error: 'type must be PERCENTAGE or FIXED_AMOUNT' }); return
   }
   if (typeof value !== 'number' || value <= 0) {
@@ -68,7 +68,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 
   const { type, value, label, resourceTypeId, order } = req.body
 
-  if (type !== undefined && !(VALID_DISCOUNT_TYPES as readonly string[]).includes(type)) {
+  if (type !== undefined && !isValidDiscountType(type)) {
     res.status(400).json({ error: 'type must be PERCENTAGE or FIXED_AMOUNT' }); return
   }
   if (value !== undefined && (typeof value !== 'number' || value <= 0)) {

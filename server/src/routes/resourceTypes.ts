@@ -2,7 +2,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
-import { VALID_ALLOCATION_MODES } from '../lib/constants.js'
+import { isValidAllocationMode } from '../lib/constants.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -56,7 +56,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   const { name, category, count, proposedName, hoursPerDay, dayRate, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
 
   // Validate new allocation fields
-  if (allocationMode !== undefined && !(VALID_ALLOCATION_MODES as readonly string[]).includes(allocationMode)) {
+  if (allocationMode !== undefined && !isValidAllocationMode(allocationMode)) {
     res.status(400).json({ error: 'Invalid allocationMode' }); return
   }
   if (allocationPercent !== undefined && (allocationPercent < 1 || allocationPercent > 100)) {

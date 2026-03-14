@@ -29,3 +29,22 @@ export const VALID_DISCOUNT_TYPES = ['PERCENTAGE', 'FIXED_AMOUNT'] as const
 
 /** Valid pricing models for named resources. */
 export const VALID_PRICING_MODELS = ['ACTUAL_DAYS', 'PRO_RATA'] as const
+
+// ── Type guard helpers ───────────────────────────────────────
+// Eliminates repetitive `(X as readonly string[]).includes(val)` casts in routes.
+
+export function isValidAllocationMode(value: unknown): value is (typeof VALID_ALLOCATION_MODES)[number] {
+  return typeof value === 'string' && (VALID_ALLOCATION_MODES as readonly string[]).includes(value)
+}
+
+export function isValidDiscountType(value: unknown): value is (typeof VALID_DISCOUNT_TYPES)[number] {
+  return typeof value === 'string' && (VALID_DISCOUNT_TYPES as readonly string[]).includes(value)
+}
+
+export function isValidPricingModel(value: unknown): value is (typeof VALID_PRICING_MODELS)[number] {
+  return typeof value === 'string' && (VALID_PRICING_MODELS as readonly string[]).includes(value)
+}
+
+export function isAllowedDocFormat(value: unknown): value is (typeof ALLOWED_DOC_FORMATS)[number] {
+  return typeof value === 'string' && (ALLOWED_DOC_FORMATS as readonly string[]).includes(value)
+}
