@@ -1,13 +1,10 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { ownedProject } from '../lib/ownership.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
-
-async function ownedProject(projectId: string, userId: string) {
-  return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
-}
 
 // GET /projects/:projectId/resource-types
 router.get('/', async (req: AuthRequest, res: Response) => {

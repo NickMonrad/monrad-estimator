@@ -363,9 +363,9 @@ router.post('/:id/move-to-org', async (req: AuthRequest, res: Response) => {
     const project = await prisma.project.update({
       where: { id },
       data: { orgId: orgId || null },
-    include: { org: { select: { id: true, name: true } } },
-  })
-  res.json(project)
+      include: { org: { select: { id: true, name: true } } },
+    })
+    res.json(project)
   } catch (err) {
     console.error('POST /projects/:id/move-to-org error:', err)
     res.status(500).json({ error: 'Failed to update project org' })

@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { round2 } from '../utils/round.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -70,9 +71,9 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 
         for (const task of story.tasks) {
           const taskHoursPerDay = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-          const daysEffort = Math.round((task.hoursEffort / taskHoursPerDay) * 100) / 100
+          const daysEffort = round2(task.hoursEffort / taskHoursPerDay)
           const dayRate = task.resourceTypeId != null ? (dayRateByRtId.get(task.resourceTypeId) ?? null) : null
-          const estimatedCost = dayRate !== null ? Math.round(daysEffort * dayRate * 100) / 100 : null
+          const estimatedCost = dayRate !== null ? round2(daysEffort * dayRate) : null
           allTasks.push({
             taskId: task.id,
             taskName: task.name,
@@ -123,10 +124,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         const tasks = tasksByRt.get(rt.id) ?? []
         const totalHours = tasks.reduce((s, t) => s + t.hoursEffort, 0)
         const hoursPerDay = rt.hoursPerDay ?? fallbackHoursPerDay
-        const totalDays = Math.round((totalHours / hoursPerDay) * 100) / 100
+        const totalDays = round2(totalHours / hoursPerDay)
         const dayRate: number | null = rt.dayRate ?? rt.globalType?.defaultDayRate ?? null
         const estimatedCost: number | null = dayRate !== null
-          ? Math.round(totalDays * dayRate * 100) / 100
+          ? round2(totalDays * dayRate)
           : null
 
         // byEpic breakdown
@@ -135,14 +136,14 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           const existing = epicMap.get(t.epicName) ?? { totalHours: 0, totalDays: 0 }
           epicMap.set(t.epicName, {
             totalHours: existing.totalHours + t.hoursEffort,
-            totalDays: Math.round((existing.totalDays + t.daysEffort) * 100) / 100,
+            totalDays: round2(existing.totalDays + t.daysEffort),
           })
         }
         const byEpic = Array.from(epicMap.entries()).map(([epicName, vals]) => ({
           epicName,
           totalHours: vals.totalHours,
           totalDays: vals.totalDays,
-          estimatedCost: dayRate !== null ? Math.round(vals.totalDays * dayRate * 100) / 100 : null,
+          estimatedCost: dayRate !== null ? round2(vals.totalDays * dayRate) : null,
         }))
 
         return {
@@ -163,20 +164,20 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       })
 
       const totalHours = resourceTypes.reduce((s, rt) => s + rt.totalHours, 0)
-      const totalDays = Math.round((resourceTypes.reduce((s, rt) => s + rt.totalDays, 0)) * 100) / 100
+      const totalDays = round2(resourceTypes.reduce((s, rt) => s + rt.totalDays, 0))
       const costsAll = resourceTypes.map(rt => rt.estimatedCost)
       const totalCost: number | null = costsAll.some(c => c !== null)
-        ? Math.round(costsAll.reduce<number>((s, c) => s + (c ?? 0), 0) * 100) / 100
+        ? round2(costsAll.reduce<number>((s, c) => s + (c ?? 0), 0))
         : null
 
       return { category: cat, totalHours, totalDays, totalCost, resourceTypes }
     })
 
   const totalHours = byCategory.reduce((s, c) => s + c.totalHours, 0)
-  const totalDays = Math.round((byCategory.reduce((s, c) => s + c.totalDays, 0)) * 100) / 100
+  const totalDays = round2(byCategory.reduce((s, c) => s + c.totalDays, 0))
   const categoryCosts = byCategory.map(c => c.totalCost)
   const totalCost: number | null = categoryCosts.some(c => c !== null)
-    ? Math.round(categoryCosts.reduce<number>((s, c) => s + (c ?? 0), 0) * 100) / 100
+    ? round2(categoryCosts.reduce<number>((s, c) => s + (c ?? 0), 0))
     : null
 
   res.json({ projectId, hoursPerDay: fallbackHoursPerDay, totalHours, totalDays, totalCost, hasCost, byCategory })

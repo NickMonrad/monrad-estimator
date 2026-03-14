@@ -1,19 +1,10 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { ownedProject, ownedFeature } from '../lib/ownership.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
-
-async function ownedFeature(featureId: string, userId: string) {
-  return prisma.feature.findFirst({
-    where: { id: featureId, epic: { project: { ownerId: userId } } },
-  })
-}
-
-async function ownedProject(projectId: string, userId: string) {
-  return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
-}
 
 // POST /api/projects/:projectId/stories/:storyId/dependencies
 router.post('/:storyId/dependencies', async (req: AuthRequest, res: Response) => {
@@ -74,9 +65,9 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
   const { name, description, assumptions } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
-  const count = await prisma.userStory.findMany({ where: { featureId: req.params.featureId as string } })
+  const count = await prisma.userStory.count({ where: { featureId: req.params.featureId as string } })
   const story = await prisma.userStory.create({
-    data: { name, description, assumptions, featureId: req.params.featureId as string, order: count.length },
+    data: { name, description, assumptions, featureId: req.params.featureId as string, order: count },
   })
   res.status(201).json(story)
 })

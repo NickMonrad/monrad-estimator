@@ -1,14 +1,10 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { ownedProject } from '../lib/ownership.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
-
-// Verify project ownership helper
-async function ownedProject(projectId: string, userId: string) {
-  return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
-}
 
 // GET /projects/:projectId/epics
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -38,9 +34,9 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const { name, description } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
-  const count = await prisma.epic.findMany({ where: { projectId: req.params.projectId as string } })
+  const count = await prisma.epic.count({ where: { projectId: req.params.projectId as string } })
   const epic = await prisma.epic.create({
-    data: { name, description, projectId: req.params.projectId as string, order: count.length },
+    data: { name, description, projectId: req.params.projectId as string, order: count },
   })
   res.status(201).json(epic)
 })
