@@ -486,7 +486,7 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
     const resourceTypeId = resourceType?.id ?? null
     const hoursPerDay = resourceType?.hoursPerDay ?? fallbackHoursPerDay
 
-    let task = await prisma.task.findFirst({ where: { userStoryId: storyId, name: row.task } })
+    const task = await prisma.task.findFirst({ where: { userStoryId: storyId, name: row.task } })
     if (!task) {
       const taskCount = await prisma.task.count({ where: { userStoryId: storyId } })
       await prisma.task.create({

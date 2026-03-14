@@ -8,6 +8,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "e2e:cleanup": "tsx scripts/e2e-cleanup.ts",
     "postinstall": "prisma generate"
@@ -37,6 +39,7 @@
     "prisma": "^7.4.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -44,9 +47,12 @@
     "@types/node": "^24.10.15",
     "@types/nodemailer": "^7.0.11",
     "@types/supertest": "^7.2.0",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
     "supertest": "^7.2.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.0",
     "vitest": "^4.0.18"
   }
 }
