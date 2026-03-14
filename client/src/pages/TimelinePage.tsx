@@ -203,6 +203,16 @@ export default function TimelinePage() {
     queryFn: () => api.get(`/projects/${projectId}`).then(r => r.data),
   })
 
+  const { data: timeline, isLoading } = useQuery<TimelineSummary>({
+    queryKey: ['timeline', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/timeline`).then(r => r.data),
+  })
+
+  const { data: resourceTypes } = useQuery<ResourceType[]>({
+    queryKey: ['resource-types', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/resource-types`).then(r => r.data),
+  })
+
   useEffect(() => {
     if (project?.startDate && !startDateInput) {
       setStartDateInput(project.startDate.slice(0, 10))
@@ -216,16 +226,6 @@ export default function TimelinePage() {
       if (entry) setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
     }
   }, [editingFeatureId])
-
-  const { data: timeline, isLoading } = useQuery<TimelineSummary>({
-    queryKey: ['timeline', projectId],
-    queryFn: () => api.get(`/projects/${projectId}/timeline`).then(r => r.data),
-  })
-
-  const { data: resourceTypes } = useQuery<ResourceType[]>({
-    queryKey: ['resource-types', projectId],
-    queryFn: () => api.get(`/projects/${projectId}/resource-types`).then(r => r.data),
-  })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['timeline', projectId] })
 
