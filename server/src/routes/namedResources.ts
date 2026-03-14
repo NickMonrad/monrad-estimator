@@ -53,7 +53,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   }
 
   if (pricingModel !== undefined && !(VALID_PRICING_MODELS as readonly string[]).includes(pricingModel)) {
-    res.status(400).json({ error: `pricingModel must be one of: ${(VALID_PRICING_MODELS as readonly string[]).join(', ')}` }); return
+    res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
   }
 
   // If RT's allocationMode is not EFFORT, copy the RT's allocation settings as defaults for the new NR
@@ -104,7 +104,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   }
 
   if (pricingModel !== undefined && !(VALID_PRICING_MODELS as readonly string[]).includes(pricingModel)) {
-    res.status(400).json({ error: `pricingModel must be one of: ${(VALID_PRICING_MODELS as readonly string[]).join(', ')}` }); return
+    res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
   }
 
   const data: Record<string, unknown> = { name, startWeek, endWeek, allocationPct, pricingModel, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }
