@@ -151,6 +151,27 @@ describe('count() ordering — stories', () => {
   })
 })
 
+describe('count() ordering — tasks', () => {
+  it('POST task uses prisma.task.count for ordering', async () => {
+    const mockTask = { id: 'task-1', userStoryId: 'story-1', name: 'New Task', order: 4 }
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue({
+      ...mockStory,
+      feature: { epic: { project: { ownerId: userId, hoursPerDay: 7.6 } } },
+    } as any)
+    vi.mocked(prisma.task.count).mockResolvedValue(4)
+    vi.mocked(prisma.task.create).mockResolvedValue(mockTask as any)
+
+    const res = await request(app)
+      .post('/api/stories/story-1/tasks')
+      .set('Authorization', authHeader)
+      .send({ name: 'New Task', resourceTypeId: 'rt-1' })
+
+    expect(res.status).toBe(201)
+    expect(prisma.task.count).toHaveBeenCalledTimes(1)
+    expect(res.body.order).toBe(4)
+  })
+})
+
 // ─── 3. round2 utility ───────────────────────────────────────────────────────
 
 describe('round2 utility', () => {
