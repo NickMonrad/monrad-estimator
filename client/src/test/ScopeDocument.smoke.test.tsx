@@ -99,6 +99,67 @@ const minimalProps: ScopeDocumentProps = {
   documentLabel: 'v1.0-test',
 }
 
+const longText = (label: string, repeat = 18) =>
+  Array.from({ length: repeat }, (_, index) => `${label} segment ${index + 1} with extended narrative for wrapping coverage.`).join(' ')
+
+const longScopeProps: ScopeDocumentProps = {
+  ...minimalProps,
+  sections: {
+    cover: false,
+    scope: true,
+    effort: false,
+    timeline: false,
+    resourceProfile: false,
+    assumptions: false,
+  },
+  epics: [
+    {
+      id: 'long-epic-1',
+      name: 'Large Scope Epic',
+      description: longText('Epic description', 20),
+      assumptions: longText('Epic assumption', 16),
+      isActive: true,
+      features: Array.from({ length: 5 }, (_, featureIndex) => ({
+        id: `long-feature-${featureIndex + 1}`,
+        name: `Feature ${featureIndex + 1}`,
+        description: longText(`Feature ${featureIndex + 1} description`, 22),
+        assumptions: longText(`Feature ${featureIndex + 1} assumption`, 18),
+        isActive: true,
+        userStories: Array.from({ length: 6 }, (_, storyIndex) => ({
+          id: `long-story-${featureIndex + 1}-${storyIndex + 1}`,
+          name: longText(`Feature ${featureIndex + 1} story ${storyIndex + 1}`, 8),
+          description: null,
+          assumptions: null,
+          isActive: true,
+        })),
+      })),
+    },
+    {
+      id: 'long-epic-2',
+      name: 'Deferred Scope Epic',
+      description: longText('Deferred epic description', 18),
+      assumptions: null,
+      isActive: false,
+      features: [
+        {
+          id: 'deferred-feature-1',
+          name: 'Deferred Feature',
+          description: longText('Deferred feature description', 20),
+          assumptions: longText('Deferred feature assumption', 18),
+          isActive: false,
+          userStories: Array.from({ length: 4 }, (_, storyIndex) => ({
+            id: `deferred-story-${storyIndex + 1}`,
+            name: longText(`Deferred story ${storyIndex + 1}`, 7),
+            description: null,
+            assumptions: null,
+            isActive: false,
+          })),
+        },
+      ],
+    },
+  ],
+}
+
 describe('ScopeDocument PDF smoke test', () => {
   it(
     'renders to a non-empty PDF buffer without throwing (all sections enabled)',
@@ -136,6 +197,16 @@ describe('ScopeDocument PDF smoke test', () => {
         resourceProfileData: { resourceRows: [], overheadRows: [], summary: { hasCost: false, totalHours: 0, totalDays: 0, totalCost: null } },
       }
       const instance = pdf(React.createElement(ScopeDocument, props))
+      const blob = await instance.toBlob()
+      expect(blob.size).toBeGreaterThan(1000)
+    },
+    30_000,
+  )
+
+  it(
+    'renders scope-only document with very long wrapped scope content without throwing',
+    async () => {
+      const instance = pdf(React.createElement(ScopeDocument, longScopeProps))
       const blob = await instance.toBlob()
       expect(blob.size).toBeGreaterThan(1000)
     },

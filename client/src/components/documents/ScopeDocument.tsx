@@ -28,6 +28,16 @@ const styles = StyleSheet.create({
   col3: { flex: 1, textAlign: 'right' },
   col4: { flex: 1, textAlign: 'right' },
   col5: { flex: 1, textAlign: 'right' },
+  scopeEpicBlock: { marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#e0e0e0' },
+  scopeFeatureCard: { marginTop: 8, padding: 10, borderWidth: 1, borderColor: '#e0e0e0' },
+  scopeFeatureCardAlt: { backgroundColor: '#f5f5f5' },
+  scopeFeatureTitle: { fontSize: 10, fontFamily: 'Helvetica-Bold', color: '#333333', marginBottom: 2 },
+  scopeMetaText: { fontSize: 9, color: '#666666', marginBottom: 4 },
+  scopeDetailBlock: { marginTop: 6 },
+  scopeDetailLabel: { fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 2 },
+  scopeDetailText: { fontSize: 9, color: '#333333', lineHeight: 1.4 },
+  scopeBullet: { fontSize: 9, color: '#333333', marginLeft: 10, marginBottom: 2, lineHeight: 1.4 },
+  scopeEmptyState: { fontSize: 9, color: '#666666', marginTop: 6 },
   pageNumber: { position: 'absolute', bottom: 24, right: 48, fontSize: 9, color: '#666666' },
   footer: { position: 'absolute', bottom: 24, left: 48, fontSize: 9, color: '#666666' },
   storyItem: { fontSize: 9, color: '#666666', marginLeft: 16, marginBottom: 2 },
@@ -78,6 +88,10 @@ export interface ScopeDocumentProps {
   documentLabel: string
 }
 
+type ScopeEpic = ScopeDocumentProps['epics'][number]
+type ScopeFeature = ScopeEpic['features'][number]
+type ScopeStory = NonNullable<ScopeFeature['userStories']>[number]
+
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
   try {
@@ -114,6 +128,99 @@ export default function ScopeDocument({
   const partiallyOutOfScope = inScopeEpics
     .map(e => ({ ...e, features: e.features.filter(f => !f.isActive) }))
     .filter(e => e.features.length > 0)
+
+  const renderScopeFeature = (
+    feature: ScopeFeature,
+    stories: ScopeStory[],
+    muted = false,
+    alternate = false,
+  ) => (
+    <View
+      key={feature.id}
+      style={[
+        styles.scopeFeatureCard,
+        alternate ? styles.scopeFeatureCardAlt : null,
+      ]}
+    >
+      <Text style={[styles.scopeFeatureTitle, muted ? styles.inactiveText : null]}>{feature.name}</Text>
+      <Text style={[styles.scopeMetaText, muted ? styles.inactiveText : null]}>
+        {stories.length} {stories.length === 1 ? 'story' : 'stories'}
+      </Text>
+
+      {feature.description ? (
+        <View style={styles.scopeDetailBlock}>
+          <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Description</Text>
+          <Text style={[styles.scopeDetailText, muted ? styles.inactiveText : null]}>{feature.description}</Text>
+        </View>
+      ) : null}
+
+      {feature.assumptions ? (
+        <View style={styles.scopeDetailBlock}>
+          <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Assumptions</Text>
+          <Text style={[styles.scopeDetailText, muted ? styles.inactiveText : null]}>{feature.assumptions}</Text>
+        </View>
+      ) : null}
+
+      {stories.length > 0 ? (
+        <View style={styles.scopeDetailBlock}>
+          <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Stories</Text>
+          {stories.map((story) => (
+            <Text key={story.id} style={[styles.scopeBullet, muted ? styles.inactiveText : null]}>
+              • {story.name}
+            </Text>
+          ))}
+        </View>
+      ) : (
+        <Text style={[styles.scopeEmptyState, muted ? styles.inactiveText : null]}>No stories listed.</Text>
+      )}
+    </View>
+  )
+
+  const renderScopeEpic = (
+    epic: ScopeEpic,
+    features: ScopeFeature[],
+    options?: { muted?: boolean; emptyLabel?: string; titleSuffix?: string },
+  ) => {
+    const muted = options?.muted ?? false
+
+    return (
+      <View key={epic.id} style={styles.scopeEpicBlock}>
+        <Text style={[styles.subheading, muted ? styles.inactiveText : null]}>
+          {epic.name}
+          {options?.titleSuffix ? ` ${options.titleSuffix}` : ''}
+        </Text>
+
+        {epic.description ? (
+          <View style={styles.scopeDetailBlock}>
+            <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Epic Description</Text>
+            <Text style={[styles.scopeDetailText, muted ? styles.inactiveText : null]}>{epic.description}</Text>
+          </View>
+        ) : null}
+
+        {epic.assumptions ? (
+          <View style={styles.scopeDetailBlock}>
+            <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Epic Assumptions</Text>
+            <Text style={[styles.scopeDetailText, muted ? styles.inactiveText : null]}>{epic.assumptions}</Text>
+          </View>
+        ) : null}
+
+        {features.length > 0 ? (
+          features.map((feature, index) =>
+            renderScopeFeature(
+              feature,
+              muted ? (feature.userStories ?? []) : (feature.userStories ?? []).filter(story => story.isActive),
+              muted,
+              index % 2 === 1,
+            ),
+          )
+        ) : (
+          <Text style={[styles.scopeEmptyState, muted ? styles.inactiveText : null]}>
+            {options?.emptyLabel ?? 'No features listed.'}
+          </Text>
+        )}
+      </View>
+    )
+  }
 
   return (
     <Document>
@@ -166,48 +273,7 @@ export default function ScopeDocument({
           {inScopeEpics.length === 0 && (
             <Text style={styles.bodyText}>No active epics.</Text>
           )}
-          {inScopeEpics.map((epic) => {
-            const activeFeatures = epic.features.filter(f => f.isActive)
-            return (
-              <View key={epic.id}>
-                <Text style={styles.subheading}>{epic.name}</Text>
-                {epic.description ? <Text style={styles.bodyText}>{epic.description}</Text> : null}
-                {activeFeatures.length > 0 && (
-                  <View style={styles.table}>
-                    <View style={styles.tableHeader}>
-                      <Text style={[styles.th, styles.col1]}>Feature</Text>
-                      <Text style={[styles.th, styles.col2]}>Description</Text>
-                      <Text style={[styles.th, styles.col3]}>Stories</Text>
-                    </View>
-                    {activeFeatures.map((feature, fi) => {
-                      const activeStories = (feature.userStories ?? []).filter(s => s.isActive)
-                      return (
-                        <View key={feature.id}>
-                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                            <Text style={[styles.td, styles.col1]}>{feature.name}</Text>
-                            <Text style={[styles.td, styles.col2]}>{feature.description ?? '—'}</Text>
-                            <Text style={[styles.td, styles.col3]}>{activeStories.length}</Text>
-                          </View>
-                          {feature.assumptions ? (
-                            <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                              <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
-                                Assumptions: {feature.assumptions}
-                              </Text>
-                            </View>
-                          ) : null}
-                          {activeStories.map(story => (
-                            <View key={story.id} style={styles.tableRow}>
-                              <Text style={[styles.storyItem, { flex: 6 }]}>• {story.name}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      )
-                    })}
-                  </View>
-                )}
-              </View>
-            )
-          })}
+          {inScopeEpics.map((epic) => renderScopeEpic(epic, epic.features.filter(feature => feature.isActive)))}
 
           {/* ── Out of Scope ── */}
           {(outOfScopeFullEpics.length > 0 || partiallyOutOfScope.length > 0) && (
@@ -215,82 +281,12 @@ export default function ScopeDocument({
               <Text style={styles.sectionLabelMuted}>Out of Scope</Text>
 
               {/* Fully inactive epics */}
-              {outOfScopeFullEpics.map((epic) => (
-                <View key={epic.id}>
-                  <Text style={[styles.subheading, styles.inactiveText]}>{epic.name}</Text>
-                  {epic.description ? (
-                    <Text style={[styles.bodyText, styles.inactiveText]}>{epic.description}</Text>
-                  ) : null}
-                  {epic.features.length > 0 && (
-                    <View style={styles.table}>
-                      <View style={styles.tableHeader}>
-                        <Text style={[styles.th, styles.col1]}>Feature</Text>
-                        <Text style={[styles.th, styles.col2]}>Description</Text>
-                        <Text style={[styles.th, styles.col3]}>Stories</Text>
-                      </View>
-                      {epic.features.map((feature, fi) => (
-                        <View key={feature.id}>
-                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                            <Text style={[styles.td, styles.col1, styles.inactiveText]}>{feature.name}</Text>
-                            <Text style={[styles.td, styles.col2, styles.inactiveText]}>{feature.description ?? '—'}</Text>
-                            <Text style={[styles.td, styles.col3, styles.inactiveText]}>{(feature.userStories ?? []).length}</Text>
-                          </View>
-                          {feature.assumptions ? (
-                            <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                              <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
-                                Assumptions: {feature.assumptions}
-                              </Text>
-                            </View>
-                          ) : null}
-                          {(feature.userStories ?? []).map(story => (
-                            <View key={story.id} style={styles.tableRow}>
-                              <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>• {story.name}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              ))}
+              {outOfScopeFullEpics.map((epic) => renderScopeEpic(epic, epic.features, { muted: true }))}
 
               {/* Active epics that have inactive features */}
-              {partiallyOutOfScope.map((epic) => (
-                <View key={`partial-${epic.id}`}>
-                  <Text style={[styles.subheading, styles.inactiveText]}>{epic.name} (inactive features)</Text>
-                  {epic.description ? (
-                    <Text style={[styles.bodyText, styles.inactiveText]}>{epic.description}</Text>
-                  ) : null}
-                  <View style={styles.table}>
-                    <View style={styles.tableHeader}>
-                      <Text style={[styles.th, styles.col1]}>Feature</Text>
-                      <Text style={[styles.th, styles.col2]}>Description</Text>
-                      <Text style={[styles.th, styles.col3]}>Stories</Text>
-                    </View>
-                    {epic.features.map((feature, fi) => (
-                      <View key={feature.id}>
-                        <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                          <Text style={[styles.td, styles.col1, styles.inactiveText]}>{feature.name}</Text>
-                          <Text style={[styles.td, styles.col2, styles.inactiveText]}>{feature.description ?? '—'}</Text>
-                          <Text style={[styles.td, styles.col3, styles.inactiveText]}>{(feature.userStories ?? []).length}</Text>
-                        </View>
-                        {feature.assumptions ? (
-                          <View style={fi % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-                            <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>
-                              Assumptions: {feature.assumptions}
-                            </Text>
-                          </View>
-                        ) : null}
-                        {(feature.userStories ?? []).map(story => (
-                          <View key={story.id} style={styles.tableRow}>
-                            <Text style={[styles.storyItem, { flex: 6, color: '#666666' }]}>• {story.name}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              ))}
+              {partiallyOutOfScope.map((epic) =>
+                renderScopeEpic(epic, epic.features, { muted: true, titleSuffix: '(inactive features)' }),
+              )}
             </View>
           )}
 
