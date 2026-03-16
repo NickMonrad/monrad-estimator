@@ -10,7 +10,7 @@ const userId = 'user-1'
 const token = jwt.sign({ userId }, 'test-secret')
 const authHeader = `Bearer ${token}`
 
-const mockStory = { id: 'story-1', featureId: 'feat-1', name: 'Story 1', order: 0 }
+const mockStory = { id: 'story-1', featureId: 'feat-1', name: 'Story 1', order: 0, feature: { epic: { project: { hoursPerDay: 8 } } } }
 const mockTask = { id: 'task-1', userStoryId: 'story-1', name: 'Task 1', hoursEffort: 4, resourceTypeId: 'rt-1', order: 0 }
 
 beforeEach(() => vi.clearAllMocks())
