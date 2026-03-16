@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { ownedProject } from '../lib/ownership.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -29,15 +30,10 @@ async function buildSnapshot(projectId: string) {
   })
 }
 
-// Helper to verify project ownership
-async function getProject(projectId: string, userId: string) {
-  return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
-}
-
 // GET /api/projects/:projectId/snapshots
 router.get('/', async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
-  const project = await getProject(projectId, req.userId!)
+  const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
   const snapshots = await prisma.backlogSnapshot.findMany({
@@ -51,7 +47,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 // POST /api/projects/:projectId/snapshots — manual snapshot
 router.post('/', async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
-  const project = await getProject(projectId, req.userId!)
+  const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
   const { label } = req.body as { label?: string }
@@ -72,7 +68,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 // GET /api/projects/:projectId/snapshots/:snapshotId
 router.get('/:snapshotId', async (req: AuthRequest, res: Response) => {
   const { projectId, snapshotId } = req.params as { projectId: string; snapshotId: string }
-  const project = await getProject(projectId, req.userId!)
+  const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
   const snap = await prisma.backlogSnapshot.findFirst({ where: { id: snapshotId, projectId } })
@@ -83,7 +79,7 @@ router.get('/:snapshotId', async (req: AuthRequest, res: Response) => {
 // GET /api/projects/:projectId/snapshots/:snapshotId/diff
 router.get('/:snapshotId/diff', async (req: AuthRequest, res: Response) => {
   const { projectId, snapshotId } = req.params as { projectId: string; snapshotId: string }
-  const project = await getProject(projectId, req.userId!)
+  const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
   const snap = await prisma.backlogSnapshot.findFirst({ where: { id: snapshotId, projectId } })
@@ -124,7 +120,7 @@ router.get('/:snapshotId/diff', async (req: AuthRequest, res: Response) => {
 // POST /api/projects/:projectId/snapshots/:snapshotId/rollback
 router.post('/:snapshotId/rollback', async (req: AuthRequest, res: Response) => {
   const { projectId, snapshotId } = req.params as { projectId: string; snapshotId: string }
-  const project = await getProject(projectId, req.userId!)
+  const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
   const snap = await prisma.backlogSnapshot.findFirst({ where: { id: snapshotId, projectId } })

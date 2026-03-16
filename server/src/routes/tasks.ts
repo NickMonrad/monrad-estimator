@@ -2,16 +2,10 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { calcDurationDays } from '../utils/round.js'
+import { ownedStory } from '../lib/ownership.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
-
-async function ownedStory(storyId: string, userId: string) {
-  return prisma.userStory.findFirst({
-    where: { id: storyId, feature: { epic: { project: { ownerId: userId } } } },
-    include: { feature: { include: { epic: { include: { project: { select: { hoursPerDay: true } } } } } } },
-  })
-}
 
 // GET /stories/:storyId/tasks
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -32,7 +26,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   const { name, description, assumptions, hoursEffort, resourceTypeId } = req.body
   if (!name || !resourceTypeId) { res.status(400).json({ error: 'name and resourceTypeId are required' }); return }
   const hoursPerDay = story.feature.epic.project.hoursPerDay ?? 7.6
-  const count = await prisma.task.findMany({ where: { userStoryId: req.params.storyId as string } })
+  const count = await prisma.task.count({ where: { userStoryId: req.params.storyId as string } })
   const task = await prisma.task.create({
     data: {
       name, description, assumptions,
@@ -40,7 +34,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       durationDays: calcDurationDays(hoursEffort ?? 0, hoursPerDay),
       resourceTypeId,
       userStoryId: req.params.storyId as string,
-      order: count.length,
+      order: count,
     },
     include: { resourceType: true },
   })

@@ -1,15 +1,10 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { ownedEpic } from '../lib/ownership.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
-
-async function ownedEpic(epicId: string, userId: string) {
-  return prisma.epic.findFirst({
-    where: { id: epicId, project: { ownerId: userId } },
-  })
-}
 
 // GET /epics/:epicId/features
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -34,9 +29,9 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   if (!epic) { res.status(404).json({ error: 'Epic not found' }); return }
   const { name, description, assumptions } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
-  const count = await prisma.feature.findMany({ where: { epicId: req.params.epicId as string } })
+  const count = await prisma.feature.count({ where: { epicId: req.params.epicId as string } })
   const feature = await prisma.feature.create({
-    data: { name, description, assumptions, epicId: req.params.epicId as string, order: count.length },
+    data: { name, description, assumptions, epicId: req.params.epicId as string, order: count },
   })
   res.status(201).json(feature)
 })
