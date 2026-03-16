@@ -2,7 +2,10 @@ import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 
 const styles = StyleSheet.create({
   page: { padding: 48, fontFamily: 'Helvetica', fontSize: 10, color: '#333333', lineHeight: 1.5 },
-  coverPage: { padding: 48, display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' },
+  // height: '100%' removed — causes yoga layout to overflow to extreme coordinates
+  // (pdfkit.browser.js: "unsupported number: -1.6412...e+21") when combined with
+  // justifyContent: 'center' inside a padded Page. Use explicit paddingTop instead.
+  coverPage: { paddingTop: 160, flexDirection: 'column' },
   coverTitle: { fontSize: 28, fontFamily: 'Helvetica-Bold', color: '#1d245b', marginBottom: 12, lineHeight: 1.4 },
   coverSubtitle: { fontSize: 16, color: '#2c60f6', marginBottom: 8, lineHeight: 1.4 },
   coverMeta: { fontSize: 10, color: '#666666', marginTop: 40 },
