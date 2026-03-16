@@ -72,11 +72,16 @@ export interface Epic {
   features: Feature[]
 }
 
+export interface ProjectCustomer {
+  id: string
+  name: string
+}
+
 export interface Project {
   id: string
   name: string
   description?: string
-  customer?: string
+  customer?: string | ProjectCustomer | null
   status: string
   hoursPerDay: number
   bufferWeeks?: number

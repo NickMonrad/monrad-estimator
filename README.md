@@ -203,6 +203,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Resource period start/end dates, buffer weeks indicators, commercial double-count fix, allocation label fix, CSV epic/feature descriptions + assumptions, Epic.assumptions field, document assumptions section, LAB3 colour scheme, PDF heading fixes | #132 |
 | PDF cover page: generated-by username, generation time, document label, projected end date; backlog CSV fix for epic/feature descriptions; commercial tab removes aggregate row; auto-create person on resource type creation; assumptions exclude out-of-scope items | #135 |
 | Comprehensive dark mode theming across all pages and components; standardised headers with M icon, ThemeToggle, and breadcrumb nav on all global and project pages; SVG dark mode (Gantt, histogram, named resources) via `useIsDark` hook; epic/feature/story colour hierarchy in dark mode | #143 |
+| Document generator: normalise customer data for PDF rendering, harden cover-page layout, and replace fragile scope summary table layout with long-content-safe rendering | #155 |
 
 ---
 

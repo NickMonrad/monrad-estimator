@@ -3,10 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { PDFViewer, pdf } from '@react-pdf/renderer'
 import { api } from '../lib/api'
+import { getProjectCustomerName } from '../lib/projectCustomer'
 import { useAuth } from '../hooks/useAuth'
 import ThemeToggle from '../components/layout/ThemeToggle'
 import ScopeDocument from '../components/documents/ScopeDocument'
 import type { ScopeDocumentProps } from '../components/documents/ScopeDocument'
+import type { Project } from '../types/backlog'
 
 interface GeneratedDoc {
   id: string
@@ -44,7 +46,7 @@ export default function DocumentsPage() {
   const [generateError, setGenerateError] = useState<string | null>(null)
 
   // ── Data fetching ──────────────────────────────────────────────
-  const { data: project } = useQuery({
+  const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
     queryFn: () => api.get(`/projects/${projectId}`).then(r => r.data),
     enabled: !!projectId,
@@ -87,7 +89,7 @@ export default function DocumentsPage() {
   const scopeDocProps: ScopeDocumentProps = {
     project: {
       name: project?.name ?? '',
-      customer: project?.customer ?? null,
+      customer: getProjectCustomerName(project?.customer),
       description: project?.description ?? null,
       startDate: project?.startDate ?? null,
       endDate: timelineData?.projectedEndDate ?? null,
