@@ -139,39 +139,39 @@ export default function ScopeDocument({
       key={feature.id}
       style={[
         styles.scopeFeatureCard,
-        alternate ? styles.scopeFeatureCardAlt : null,
+        ...(alternate ? [styles.scopeFeatureCardAlt] : []),
       ]}
     >
-      <Text style={[styles.scopeFeatureTitle, muted ? styles.inactiveText : null]}>{feature.name}</Text>
-      <Text style={[styles.scopeMetaText, muted ? styles.inactiveText : null]}>
+      <Text style={[styles.scopeFeatureTitle, ...(muted ? [styles.inactiveText] : [])]}>{feature.name}</Text>
+      <Text style={[styles.scopeMetaText, ...(muted ? [styles.inactiveText] : [])]}>
         {stories.length} {stories.length === 1 ? 'story' : 'stories'}
       </Text>
 
       {feature.description ? (
         <View style={styles.scopeDetailBlock}>
-          <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Description</Text>
-          <Text style={[styles.scopeDetailText, muted ? styles.inactiveText : null]}>{feature.description}</Text>
+          <Text style={[styles.scopeDetailLabel, ...(muted ? [styles.inactiveText] : [])]}>Description</Text>
+          <Text style={[styles.scopeDetailText, ...(muted ? [styles.inactiveText] : [])]}>{feature.description}</Text>
         </View>
       ) : null}
 
       {feature.assumptions ? (
         <View style={styles.scopeDetailBlock}>
-          <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Assumptions</Text>
-          <Text style={[styles.scopeDetailText, muted ? styles.inactiveText : null]}>{feature.assumptions}</Text>
+          <Text style={[styles.scopeDetailLabel, ...(muted ? [styles.inactiveText] : [])]}>Assumptions</Text>
+          <Text style={[styles.scopeDetailText, ...(muted ? [styles.inactiveText] : [])]}>{feature.assumptions}</Text>
         </View>
       ) : null}
 
       {stories.length > 0 ? (
         <View style={styles.scopeDetailBlock}>
-          <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Stories</Text>
+          <Text style={[styles.scopeDetailLabel, ...(muted ? [styles.inactiveText] : [])]}>Stories</Text>
           {stories.map((story) => (
-            <Text key={story.id} style={[styles.scopeBullet, muted ? styles.inactiveText : null]}>
+            <Text key={story.id} style={[styles.scopeBullet, ...(muted ? [styles.inactiveText] : [])]}>
               • {story.name}
             </Text>
           ))}
         </View>
       ) : (
-        <Text style={[styles.scopeEmptyState, muted ? styles.inactiveText : null]}>No stories listed.</Text>
+        <Text style={[styles.scopeEmptyState, ...(muted ? [styles.inactiveText] : [])]}>No stories listed.</Text>
       )}
     </View>
   )
@@ -185,22 +185,22 @@ export default function ScopeDocument({
 
     return (
       <View key={epic.id} style={styles.scopeEpicBlock}>
-        <Text style={[styles.subheading, muted ? styles.inactiveText : null]}>
+        <Text style={[styles.subheading, ...(muted ? [styles.inactiveText] : [])]}>
           {epic.name}
           {options?.titleSuffix ? ` ${options.titleSuffix}` : ''}
         </Text>
 
         {epic.description ? (
           <View style={styles.scopeDetailBlock}>
-            <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Epic Description</Text>
-            <Text style={[styles.scopeDetailText, muted ? styles.inactiveText : null]}>{epic.description}</Text>
+            <Text style={[styles.scopeDetailLabel, ...(muted ? [styles.inactiveText] : [])]}>Epic Description</Text>
+            <Text style={[styles.scopeDetailText, ...(muted ? [styles.inactiveText] : [])]}>{epic.description}</Text>
           </View>
         ) : null}
 
         {epic.assumptions ? (
           <View style={styles.scopeDetailBlock}>
-            <Text style={[styles.scopeDetailLabel, muted ? styles.inactiveText : null]}>Epic Assumptions</Text>
-            <Text style={[styles.scopeDetailText, muted ? styles.inactiveText : null]}>{epic.assumptions}</Text>
+            <Text style={[styles.scopeDetailLabel, ...(muted ? [styles.inactiveText] : [])]}>Epic Assumptions</Text>
+            <Text style={[styles.scopeDetailText, ...(muted ? [styles.inactiveText] : [])]}>{epic.assumptions}</Text>
           </View>
         ) : null}
 
@@ -214,7 +214,7 @@ export default function ScopeDocument({
             ),
           )
         ) : (
-          <Text style={[styles.scopeEmptyState, muted ? styles.inactiveText : null]}>
+          <Text style={[styles.scopeEmptyState, ...(muted ? [styles.inactiveText] : [])]}>
             {options?.emptyLabel ?? 'No features listed.'}
           </Text>
         )}

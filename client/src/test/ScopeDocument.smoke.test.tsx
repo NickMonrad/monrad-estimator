@@ -6,8 +6,7 @@
  * engine as the browser build, so coordinate-overflow bugs surface here too.
  */
 import { describe, it, expect } from 'vitest'
-import React from 'react'
-import { pdf } from '@react-pdf/renderer'
+import { pdf, type DocumentProps } from '@react-pdf/renderer'
 import ScopeDocument, { type ScopeDocumentProps } from '@/components/documents/ScopeDocument'
 
 const minimalProps: ScopeDocumentProps = {
@@ -160,11 +159,13 @@ const longScopeProps: ScopeDocumentProps = {
   ],
 }
 
+const renderScopeDocument = (props: ScopeDocumentProps): React.ReactElement<DocumentProps> => ScopeDocument(props)
+
 describe('ScopeDocument PDF smoke test', () => {
   it(
     'renders to a non-empty PDF buffer without throwing (all sections enabled)',
     async () => {
-      const instance = pdf(React.createElement(ScopeDocument, minimalProps))
+      const instance = pdf(renderScopeDocument(minimalProps))
       const blob = await instance.toBlob()
       // A minimal single-page PDF is at least a few KB
       expect(blob.size).toBeGreaterThan(1000)
@@ -179,7 +180,7 @@ describe('ScopeDocument PDF smoke test', () => {
         ...minimalProps,
         sections: { cover: true, scope: false, effort: false, timeline: false, resourceProfile: false, assumptions: false },
       }
-      const instance = pdf(React.createElement(ScopeDocument, props))
+      const instance = pdf(renderScopeDocument(props))
       const blob = await instance.toBlob()
       expect(blob.size).toBeGreaterThan(1000)
     },
@@ -196,7 +197,7 @@ describe('ScopeDocument PDF smoke test', () => {
         timelineData: { startDate: null, projectedEndDate: null, entries: [] },
         resourceProfileData: { resourceRows: [], overheadRows: [], summary: { hasCost: false, totalHours: 0, totalDays: 0, totalCost: null } },
       }
-      const instance = pdf(React.createElement(ScopeDocument, props))
+      const instance = pdf(renderScopeDocument(props))
       const blob = await instance.toBlob()
       expect(blob.size).toBeGreaterThan(1000)
     },
@@ -206,7 +207,7 @@ describe('ScopeDocument PDF smoke test', () => {
   it(
     'renders scope-only document with very long wrapped scope content without throwing',
     async () => {
-      const instance = pdf(React.createElement(ScopeDocument, longScopeProps))
+      const instance = pdf(renderScopeDocument(longScopeProps))
       const blob = await instance.toBlob()
       expect(blob.size).toBeGreaterThan(1000)
     },
