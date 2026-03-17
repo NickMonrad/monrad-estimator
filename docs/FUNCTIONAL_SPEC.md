@@ -141,7 +141,7 @@ All levels support full CRUD (create, read, update, delete) and drag-and-drop re
 | Name | Required |
 | Description | Optional free text |
 | Assumptions | Optional free text |
-| Feature mode | `sequential` or `parallel` — controls how features are scheduled relative to each other |
+| Feature mode | `sequential` or `parallel` — controls how features are scheduled relative to each other (not visible in Backlog, but can be modified in Timeline) |
 | isActive | Toggle in/out of scope |
 
 ### Feature Fields
