@@ -573,6 +573,17 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       : currEpic.features       // parallel: all features need explicit constraint
 
     for (const prevFeature of prevEpic.features) {
+      // Bug fix: if this prevFeature has an explicit FeatureDependency on a feature in
+      // currEpic, adding the inter-epic chain edge would create a cycle
+      // (prevFeature → currEpic.first → ... → depTarget → prevFeature).
+      // Skip the chain edge for prevFeature in that case so it can float freely
+      // based only on its explicit deps.
+      const hasCrossEpicDep = (prevFeature.dependencies ?? []).some(dep => {
+        const target = featureMap.get(dep.dependsOnId)
+        return target !== undefined && target.epic.id === currEpic.id
+      })
+      if (hasCrossEpicDep) continue
+
       for (const currFeature of currTargets) {
         addEdge(prevFeature.id, currFeature.id)
       }
@@ -1030,6 +1041,100 @@ router.delete('/stories/:storyId', async (req: AuthRequest, res: Response) => {
     where: { storyId: req.params.storyId as string, projectId: project.id },
   })
   res.status(204).end()
+})
+
+// GET /api/projects/:projectId/timeline/export/csv
+router.get('/export/csv', async (req: AuthRequest, res: Response) => {
+  const project = await prisma.project.findFirst({
+    where: { id: req.params.projectId as string, ownerId: req.userId },
+    include: {
+      resourceTypes: { include: { namedResources: true } },
+    },
+  })
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const projectId = project.id
+  const hpd = project.hoursPerDay
+
+  // Section 1 — Gantt
+  const timelineEntries = await prisma.timelineEntry.findMany({
+    where: { projectId },
+    include: {
+      feature: {
+        include: { epic: true },
+      },
+    },
+    orderBy: { startWeek: 'asc' },
+  })
+
+  function toDateStr(startDate: Date | null, offsetWeeks: number): string {
+    if (!startDate) return ''
+    const d = new Date(startDate)
+    d.setDate(d.getDate() + offsetWeeks * 7)
+    return d.toISOString().slice(0, 10)
+  }
+
+  const ganttRows: string[] = ['Feature,Epic,StartWeek,DurationWeeks,StartDate,EndDate']
+  for (const e of timelineEntries) {
+    const featureName = e.feature.name.replace(/,/g, ' ')
+    const epicName = e.feature.epic.name.replace(/,/g, ' ')
+    const startDate = toDateStr(project.startDate, e.startWeek)
+    const endDate = toDateStr(project.startDate, e.startWeek + e.durationWeeks)
+    ganttRows.push(`${featureName},${epicName},${e.startWeek},${e.durationWeeks},${startDate},${endDate}`)
+  }
+
+  // Section 2 — Resource Demand
+  const demandRows: string[] = ['ResourceType,Week,DemandDays,CapacityDays,Status']
+  if (project.weeklyDemandCache) {
+    const cacheMap = project.weeklyDemandCache as Record<string, number>
+    const rtByName = new Map(project.resourceTypes.map(rt => [rt.name, rt as ResourceTypeWithNamed]))
+    // Sort entries by (week, rtName) for deterministic output
+    const cacheEntries = Object.entries(cacheMap).map(([key, demandDays]) => {
+      const pipeIdx = key.lastIndexOf('|')
+      const rtName = key.slice(0, pipeIdx)
+      const week = Number(key.slice(pipeIdx + 1))
+      return { rtName, week, demandDays }
+    }).sort((a, b) => a.week - b.week || a.rtName.localeCompare(b.rtName))
+
+    for (const { rtName, week, demandDays } of cacheEntries) {
+      const rt = rtByName.get(rtName)
+      const capacityHours = rt ? getWeeklyCapacity(rt, week, hpd) : hpd * 5
+      const capacityDays = capacityHours / hpd
+      const d = Math.round(demandDays * 100) / 100
+      const c = Math.round(capacityDays * 100) / 100
+      const status = d > c ? 'Over' : d === c ? 'At capacity' : 'Under'
+      demandRows.push(`${rtName.replace(/,/g, ' ')},${week},${d},${c},${status}`)
+    }
+  }
+
+  // Section 3 — Named Resources
+  const namedResources = await prisma.namedResource.findMany({
+    where: { resourceType: { projectId } },
+    include: { resourceType: true },
+    orderBy: [{ resourceType: { name: 'asc' } }, { name: 'asc' }],
+  })
+  const nrRows: string[] = ['Name,ResourceType,StartWeek,EndWeek,AllocationPct']
+  for (const nr of namedResources) {
+    const name = nr.name.replace(/,/g, ' ')
+    const rtName = nr.resourceType.name.replace(/,/g, ' ')
+    nrRows.push(`${name},${rtName},${nr.startWeek ?? ''},${nr.endWeek ?? ''},${nr.allocationPct}`)
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  const projectName = project.name.replace(/[/\\?%*:|"<>]/g, '-')
+  const filename = `${projectName} - Timeline - ${today}.csv`
+
+  const csv = [
+    ganttRows.join('\n'),
+    '',
+    demandRows.join('\n'),
+    '',
+    nrRows.join('\n'),
+  ].join('\n')
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+  res.send(csv)
 })
 
 // PUT /api/projects/:projectId/timeline/:featureId

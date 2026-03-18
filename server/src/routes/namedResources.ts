@@ -164,9 +164,9 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
 
   await prisma.namedResource.delete({ where: { id } })
 
-  // Sync resource type count (minimum 1 — always need at least one resource)
+  // Sync resource type count (can reach 0 when all named resources are deleted)
   const total = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
-  await prisma.resourceType.update({ where: { id: rtId }, data: { count: Math.max(1, total) } })
+  await prisma.resourceType.update({ where: { id: rtId }, data: { count: total } })
 
   res.status(204).send()
 })
