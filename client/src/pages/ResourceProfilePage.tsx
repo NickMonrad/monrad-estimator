@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import JSZip from 'jszip'
@@ -279,6 +279,17 @@ export default function ResourceProfilePage() {
     type: 'PERCENTAGE' as OverheadType,
     value: '',
   })
+
+  // ── Buffer / onboarding weeks ──
+  const [bufferWeeks, setBufferWeeks] = useState(0)
+  const [onboardingWeeks, setOnboardingWeeks] = useState(0)
+
+  useEffect(() => {
+    if (profile != null) {
+      setBufferWeeks(profile.bufferWeeks ?? 0)
+      setOnboardingWeeks(profile.onboardingWeeks ?? 0)
+    }
+  }, [profile?.bufferWeeks, profile?.onboardingWeeks])
 
   // ── Tab state ──
   type TabKey = 'profile' | 'commercial'
@@ -1352,6 +1363,37 @@ export default function ResourceProfilePage() {
           </div>
         </section>
 
+        {/* ── Project Duration panel (profile tab) ── */}
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Project Duration</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Buffer Weeks</label>
+              <input
+                type="number"
+                min={0}
+                value={bufferWeeks}
+                onChange={e => setBufferWeeks(Number(e.target.value))}
+                onBlur={() => api.patch(`/projects/${projectId}`, { bufferWeeks }).then(() => qc.invalidateQueries({ queryKey: ['resource-profile', projectId] }))}
+                className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Extra weeks added to project end date for contingency</p>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Onboarding Weeks</label>
+              <input
+                type="number"
+                min={0}
+                value={onboardingWeeks}
+                onChange={e => setOnboardingWeeks(Number(e.target.value))}
+                onBlur={() => api.patch(`/projects/${projectId}`, { onboardingWeeks }).then(() => qc.invalidateQueries({ queryKey: ['resource-profile', projectId] }))}
+                className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Weeks at project start for team onboarding (added to period)</p>
+            </div>
+          </div>
+        </div>
+
         <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -1424,6 +1466,37 @@ export default function ResourceProfilePage() {
               </p>
             )}
           </section>
+
+          {/* ── Project Duration panel (commercial tab) ── */}
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Project Duration</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Buffer Weeks</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={bufferWeeks}
+                  onChange={e => setBufferWeeks(Number(e.target.value))}
+                  onBlur={() => api.patch(`/projects/${projectId}`, { bufferWeeks }).then(() => qc.invalidateQueries({ queryKey: ['resource-profile', projectId] }))}
+                  className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                />
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Extra weeks added to project end date for contingency</p>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Onboarding Weeks</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={onboardingWeeks}
+                  onChange={e => setOnboardingWeeks(Number(e.target.value))}
+                  onBlur={() => api.patch(`/projects/${projectId}`, { onboardingWeeks }).then(() => qc.invalidateQueries({ queryKey: ['resource-profile', projectId] }))}
+                  className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                />
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Weeks at project start for team onboarding (added to period)</p>
+              </div>
+            </div>
+          </div>
 
           {/* ── Cost Summary Table ── */}
           <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">

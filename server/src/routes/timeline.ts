@@ -79,7 +79,7 @@ function buildResponse(
   project: { id: string; startDate: Date | null; hoursPerDay: number; bufferWeeks?: number | null },
   entries: Array<{
     featureId: string
-    feature: { name: string; order: number; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
+    feature: { name: string; order: number; timelineColour?: string | null; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
     startWeek: number
     durationWeeks: number
     isManual: boolean
@@ -210,6 +210,8 @@ function buildResponse(
         if (!rtNamesWithHours.has(rt.name)) return []
         const derivedRt = rtDerivedWeeks.get(rt.name)
         return rt.namedResources.map(nr => ({
+          id: nr.id,
+          resourceTypeId: rt.id,
           resourceTypeName: rt.name,
           name: nr.name,
           // Bug #8: use derived start/end for display, but keep allocationPct from actual NR
@@ -264,6 +266,7 @@ function buildResponse(
         epicScheduleMode: e.feature.epic.scheduleMode,
         epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
         featureOrder: e.feature.order,
+        timelineColour: e.feature.timelineColour ?? null,
         startWeek: e.startWeek,
         durationWeeks: e.durationWeeks,
         isManual: e.isManual,

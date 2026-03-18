@@ -10,6 +10,7 @@ import type { Project, ResourceType, TimelineSummary, TimelineEntry, NamedResour
 import GanttChart from '../components/timeline/GanttChart'
 import ResourceHistogram from '../components/timeline/ResourceHistogram'
 import TimelineTooltip from '../components/timeline/TimelineTooltip'
+import { getEpicColour } from '../lib/epicColours'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -188,6 +189,7 @@ export default function TimelinePage() {
   const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null)
   const [editingStoryId, setEditingStoryId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
+  const [editColour, setEditColour] = useState<string | null>(null)
   const [scheduleStale, setScheduleStale] = useState(false)
   const rlKey = `timeline.resourceLevel.${projectId}`
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
@@ -263,7 +265,10 @@ export default function TimelinePage() {
   useEffect(() => {
     if (editingFeatureId && timeline?.entries) {
       const entry = timeline.entries.find(e => e.featureId === editingFeatureId)
-      if (entry) setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
+      if (entry) {
+        setEditForm({ startWeek: String(entry.startWeek), durationWeeks: String(entry.durationWeeks) })
+        setEditColour(entry.timelineColour ?? null)
+      }
     }
   }, [editingFeatureId])
 
@@ -291,6 +296,12 @@ export default function TimelinePage() {
   const updateEntry = useMutation({
     mutationFn: ({ featureId, startWeek, durationWeeks }: { featureId: string; startWeek: number; durationWeeks: number }) =>
       api.put(`/projects/${projectId}/timeline/${featureId}`, { startWeek, durationWeeks }).then(r => r.data),
+    onSuccess: () => { invalidate() },
+  })
+
+  const updateFeatureColour = useMutation({
+    mutationFn: ({ epicId, featureId, timelineColour }: { epicId: string; featureId: string; timelineColour: string | null }) =>
+      api.put(`/epics/${epicId}/features/${featureId}`, { timelineColour }).then(r => r.data),
     onSuccess: () => { invalidate() },
   })
 
@@ -365,6 +376,36 @@ export default function TimelinePage() {
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['resource-types', projectId] }),
   })
+
+  const addNamedResource = useMutation({
+    mutationFn: ({ rtId, name }: { rtId: string; name: string }) =>
+      api.post(`/projects/${projectId}/resource-types/${rtId}/named-resources`, {
+        name,
+        allocationPct: 100,
+      }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    },
+  })
+
+  const removeNamedResource = useMutation({
+    mutationFn: ({ rtId, nrId }: { rtId: string; nrId: string }) =>
+      api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    },
+  })
+
+  function handleAddNamedResource(rtId: string, rtName: string) {
+    const existingCount = (timeline?.namedResources ?? []).filter(nr => nr.resourceTypeId === rtId).length
+    const name = `${rtName} ${existingCount + 1}`
+    addNamedResource.mutate({ rtId, name })
+  }
+
+  function handleRemoveNamedResource(rtId: string, nrId: string) {
+    if (!window.confirm('Remove this person?')) return
+    removeNamedResource.mutate({ rtId, nrId })
+  }
 
   const resetManual = useMutation({
     mutationFn: (featureId: string) => api.delete(`/projects/${projectId}/timeline/${featureId}`),
@@ -471,6 +512,17 @@ export default function TimelinePage() {
     }
     return Array.from(map.entries())
   }, [resourceTypes, timeline])
+
+  // Map named resources from timeline by resourceTypeId (for the Resource Counts panel)
+  const rtNRMap = useMemo(() => {
+    const map = new Map<string, typeof timeline.namedResources>()
+    for (const nr of timeline?.namedResources ?? []) {
+      if (!nr.resourceTypeId) continue
+      if (!map.has(nr.resourceTypeId)) map.set(nr.resourceTypeId, [])
+      map.get(nr.resourceTypeId)!.push(nr)
+    }
+    return map
+  }, [timeline?.namedResources])
 
   const projectStartDate = timeline?.startDate ? new Date(timeline.startDate) : null
 
@@ -643,30 +695,60 @@ export default function TimelinePage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {rts.map(rt => (
-                        <tr key={rt.id} className="border-t border-gray-700">
-                          <td className="py-1.5 text-gray-700 dark:text-gray-300">{rt.name}</td>
-                          <td className="py-1.5 text-right text-sm text-gray-700 dark:text-gray-300">{rt.count}</td>
-                          <td className="py-1.5 text-right">
-                            <input
-                              key={`hours-${rt.id}-${rt.hoursPerDay ?? 'null'}`}
-                              type="number"
-                              step="0.1"
-                              defaultValue={rt.hoursPerDay ?? ''}
-                              placeholder={project?.hoursPerDay ? String(project.hoursPerDay) : ''}
-                              onBlur={e => {
-                                const value = e.target.value.trim()
-                                const parsed = value === '' ? null : parseFloat(value)
-                                if (parsed !== null && !Number.isFinite(parsed)) return
-                                const current = rt.hoursPerDay ?? null
-                                if (parsed === current) return
-                                updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
-                              }}
-                              className="w-20 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm text-right bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                            />
-                          </td>
-                        </tr>
-                      ))}
+                      {rts.map(rt => {
+                        const nrs = rtNRMap.get(rt.id) ?? []
+                        return (
+                          <tr key={rt.id} className="border-t border-gray-700">
+                            <td className="py-1.5 text-gray-700 dark:text-gray-300">
+                              <div className="flex items-center gap-1">
+                                <span>{rt.name}</span>
+                                <button
+                                  onClick={() => handleAddNamedResource(rt.id, rt.name)}
+                                  className="text-xs text-lab3-navy dark:text-lab3-blue hover:underline ml-auto"
+                                  title="Add person"
+                                >+ Add</button>
+                              </div>
+                              {nrs.length > 0 && (
+                                <div className="mt-1 space-y-0.5 pl-2">
+                                  {nrs.map((nr, i) => (
+                                    <div key={nr.id ?? `${rt.id}-${i}`} className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                                      <span className="flex-1 truncate">{nr.name}</span>
+                                      {nr.startWeek != null && <span className="text-gray-400">W{nr.startWeek}–{nr.endWeek ?? '∞'}</span>}
+                                      <span className="text-gray-400">{nr.allocationPct}%</span>
+                                      {nr.id && (
+                                        <button
+                                          onClick={() => handleRemoveNamedResource(rt.id, nr.id!)}
+                                          className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400 ml-1"
+                                          title="Remove person"
+                                        >×</button>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-1.5 text-right text-sm text-gray-700 dark:text-gray-300 align-top">{rt.count}</td>
+                            <td className="py-1.5 text-right align-top">
+                              <input
+                                key={`hours-${rt.id}-${rt.hoursPerDay ?? 'null'}`}
+                                type="number"
+                                step="0.1"
+                                defaultValue={rt.hoursPerDay ?? ''}
+                                placeholder={project?.hoursPerDay ? String(project.hoursPerDay) : ''}
+                                onBlur={e => {
+                                  const value = e.target.value.trim()
+                                  const parsed = value === '' ? null : parseFloat(value)
+                                  if (parsed !== null && !Number.isFinite(parsed)) return
+                                  const current = rt.hoursPerDay ?? null
+                                  if (parsed === current) return
+                                  updateResourceType.mutate({ id: rt.id, hoursPerDay: parsed })
+                                }}
+                                className="w-20 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm text-right bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                              />
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -732,6 +814,7 @@ export default function TimelinePage() {
                 }
                 rightPanelRef={ganttScrollRef}
                 onRightPanelScroll={handleGanttScroll}
+                weeklyDemand={timeline.weeklyDemand}
               />
 
               {/* Resource allocation histogram */}
@@ -761,6 +844,13 @@ export default function TimelinePage() {
               {editingFeatureId && (() => {
                 const entry = timeline.entries.find(e => e.featureId === editingFeatureId)
                 if (!entry) return null
+                const epicIdx = Array.from(new Map(
+                  timeline.entries.map(e => [e.epicId, e.epicOrder ?? 0])
+                ).entries())
+                  .sort((a, b) => a[1] - b[1])
+                  .map(([id]) => id)
+                  .indexOf(entry.epicId)
+                const epicColour = getEpicColour(epicIdx < 0 ? 0 : epicIdx).hex
                 return (
                   <div className="sticky bottom-0 z-20 border-t border-blue-200 bg-blue-50 shadow-md px-4 py-3 flex flex-wrap items-center gap-3">
                     <span className="text-xs text-gray-600 dark:text-gray-400 font-medium">{entry.featureName}</span>
@@ -780,16 +870,39 @@ export default function TimelinePage() {
                       onChange={e => setEditForm(f => ({ ...f, durationWeeks: e.target.value }))}
                       className="w-16 border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                     />
+                    {/* Bar colour picker */}
+                    <label className="text-xs text-gray-500 dark:text-gray-400">Bar colour:</label>
+                    <input
+                      type="color"
+                      value={editColour ?? epicColour}
+                      onChange={e => setEditColour(e.target.value)}
+                      className="w-8 h-8 rounded cursor-pointer border border-gray-200 dark:border-gray-600"
+                    />
+                    {editColour && (
+                      <button
+                        onClick={() => setEditColour(null)}
+                        className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                      >
+                        Reset to epic colour
+                      </button>
+                    )}
                     <button
-                      onClick={() => updateEntry.mutate({
-                        featureId: entry.featureId,
-                        startWeek: parseFloat(editForm.startWeek),
-                        durationWeeks: parseFloat(editForm.durationWeeks),
-                      })}
-                      disabled={updateEntry.isPending}
+                      onClick={() => {
+                        updateEntry.mutate({
+                          featureId: entry.featureId,
+                          startWeek: parseFloat(editForm.startWeek),
+                          durationWeeks: parseFloat(editForm.durationWeeks),
+                        })
+                        updateFeatureColour.mutate({
+                          epicId: entry.epicId,
+                          featureId: entry.featureId,
+                          timelineColour: editColour,
+                        })
+                      }}
+                      disabled={updateEntry.isPending || updateFeatureColour.isPending}
                       className="bg-blue-600 text-white px-3 py-0.5 rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
                     >
-                      {updateEntry.isPending ? 'Saving…' : 'Save'}
+                      {(updateEntry.isPending || updateFeatureColour.isPending) ? 'Saving…' : 'Save'}
                     </button>
                     <button
                       onClick={() => setEditingFeatureId(null)}

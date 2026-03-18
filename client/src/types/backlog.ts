@@ -85,6 +85,7 @@ export interface Project {
   status: string
   hoursPerDay: number
   bufferWeeks?: number
+  onboardingWeeks?: number
   startDate?: string
   updatedAt: string
   taxRate?: number | null
@@ -138,6 +139,7 @@ export interface TimelineEntry {
   endDate: string | null
   resourceBreakdown?: { name: string; days: number }[]
   effectiveEngineers?: { name: string; engineerEquivalent: number; totalEngineers: number }[]
+  timelineColour?: string | null
 }
 
 export interface ParallelWarning {
@@ -168,6 +170,8 @@ export interface StoryDependency {
 }
 
 export interface NamedResourceEntry {
+  id?: string
+  resourceTypeId?: string
   resourceTypeName: string
   name: string
   startWeek: number | null
@@ -273,6 +277,8 @@ export interface ResourceProfile {
   projectId: string
   hoursPerDay: number
   projectDurationWeeks: number
+  bufferWeeks: number
+  onboardingWeeks: number
   resourceRows: ResourceProfileRow[]
   overheadRows: OverheadProfileRow[]
   summary: {
