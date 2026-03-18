@@ -475,7 +475,7 @@ describe('getWeeklyCapacity', () => {
     name: 'Developer',
     count: 1,
     hoursPerDay: null as number | null,
-    namedResources: [] as Array<{ name: string; startWeek: number | null; endWeek: number | null; allocationPct: number }>,
+    namedResources: [] as Array<{ id: string; name: string; startWeek: number | null; endWeek: number | null; allocationPct: number }>,
     ...overrides,
   })
 
@@ -489,8 +489,8 @@ describe('getWeeklyCapacity', () => {
   it('named resources — all active (null start/end)', () => {
     const rt = makeRT({
       namedResources: [
-        { name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 100 },
-        { name: 'Dev 2', startWeek: null, endWeek: null, allocationPct: 100 },
+        { id: 'nr1', name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 100 },
+        { id: 'nr2', name: 'Dev 2', startWeek: null, endWeek: null, allocationPct: 100 },
       ],
     })
     // 2 people * 8 h/day * 5 days = 80
@@ -501,8 +501,8 @@ describe('getWeeklyCapacity', () => {
   it('named resources — staggered start', () => {
     const rt = makeRT({
       namedResources: [
-        { name: 'Dev 1', startWeek: 0, endWeek: null, allocationPct: 100 },
-        { name: 'Dev 2', startWeek: 4, endWeek: null, allocationPct: 100 },
+        { id: 'nr1', name: 'Dev 1', startWeek: 0, endWeek: null, allocationPct: 100 },
+        { id: 'nr2', name: 'Dev 2', startWeek: 4, endWeek: null, allocationPct: 100 },
       ],
     })
     // Week 0: only NR1 → 1 * 7.6 * 5 = 38
@@ -514,7 +514,7 @@ describe('getWeeklyCapacity', () => {
   it('named resources — partial allocation', () => {
     const rt = makeRT({
       namedResources: [
-        { name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 50 },
+        { id: 'nr1', name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 50 },
       ],
     })
     // 0.5 * 8 * 5 = 20
@@ -524,8 +524,8 @@ describe('getWeeklyCapacity', () => {
   it('named resources — person leaves early', () => {
     const rt = makeRT({
       namedResources: [
-        { name: 'Dev 1', startWeek: 0, endWeek: 3, allocationPct: 100 },
-        { name: 'Dev 2', startWeek: 0, endWeek: null, allocationPct: 100 },
+        { id: 'nr1', name: 'Dev 1', startWeek: 0, endWeek: 3, allocationPct: 100 },
+        { id: 'nr2', name: 'Dev 2', startWeek: 0, endWeek: null, allocationPct: 100 },
       ],
     })
     // Week 2: both active → 2 * 8 * 5 = 80
@@ -538,8 +538,8 @@ describe('getWeeklyCapacity', () => {
     const rt = makeRT({
       count: 5,
       namedResources: [
-        { name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 100 },
-        { name: 'Dev 2', startWeek: null, endWeek: null, allocationPct: 100 },
+        { id: 'nr1', name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 100 },
+        { id: 'nr2', name: 'Dev 2', startWeek: null, endWeek: null, allocationPct: 100 },
       ],
     })
     // Should use 2 named resources, not count=5 → 2 * 8 * 5 = 80

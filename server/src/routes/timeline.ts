@@ -26,6 +26,7 @@ type ResourceTypeWithNamed = {
   count: number
   hoursPerDay: number | null
   namedResources: Array<{
+    id: string
     name: string
     startWeek: number | null
     endWeek: number | null
