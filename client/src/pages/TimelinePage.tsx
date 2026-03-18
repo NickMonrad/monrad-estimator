@@ -261,14 +261,25 @@ export default function TimelinePage() {
 
   const addFeatureDep = useMutation({
     mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
+      // Only POST the dependency — must NOT set isManual on the feature's timeline entry
       api.post(`/projects/${projectId}/feature-dependencies`, { featureId, dependsOnId }).then(r => r.data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }); setScheduleStale(true) },
+    onSuccess: () => {
+      // Refresh both the dep list (sidebar badges) and the timeline (Gantt arrows).
+      // Do NOT call updateEntry here — that would set isManual=true as a side effect.
+      qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      setScheduleStale(true)
+    },
   })
 
   const removeFeatureDep = useMutation({
     mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
       api.delete(`/projects/${projectId}/feature-dependencies/${featureId}/${dependsOnId}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }); setScheduleStale(true) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      setScheduleStale(true)
+    },
   })
 
   const updateStoryTimeline = useMutation({
