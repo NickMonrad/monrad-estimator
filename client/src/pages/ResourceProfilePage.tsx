@@ -1454,7 +1454,7 @@ export default function ResourceProfilePage() {
                   <tbody>
                     {commercialData.rows.map(row => (
                       <Fragment key={row.id}>
-                        <tr className={`border-b border-gray-100 ${row.kind === 'named-resource' ? 'bg-gray-50' : ''}`}>
+                        <tr className={`border-b border-gray-100 dark:border-gray-700 ${row.kind === 'named-resource' ? 'bg-gray-50 dark:bg-gray-900' : ''}`}>
                           <td className="px-6 py-3 text-gray-900 dark:text-white font-medium">
                             {row.name}
                             {row.kind === 'overhead' && <span className="text-xs text-amber-600 ml-2">(overhead)</span>}
@@ -1500,7 +1500,7 @@ export default function ResourceProfilePage() {
                         </tr>
                         {/* Inline allocation editor */}
                         {editingAllocation === row.id && allocationDraft && (row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' && (
-                          <tr className="border-b border-blue-100 bg-blue-50">
+                          <tr className="border-b border-blue-100 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30">
                             <td colSpan={8} className="px-6 py-4">
                               <div className="flex flex-wrap items-end gap-4">
                                 <div>
