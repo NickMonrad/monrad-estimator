@@ -52,6 +52,7 @@ interface GanttChartProps {
   onUpdateEpicScheduleMode?: (epicId: string, scheduleMode: 'sequential' | 'parallel') => void
   rightPanelRef?: React.RefObject<HTMLDivElement | null>
   onRightPanelScroll?: React.UIEventHandler<HTMLDivElement>
+  weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +140,7 @@ export default function GanttChart({
   setEditingStoryId,
   rightPanelRef,
   onRightPanelScroll,
+  weeklyDemand = [],
 }: GanttChartProps) {
   // Expanded state
   const [expandedFeatures, setExpandedFeatures] = useState<Set<string>>(new Set())
@@ -642,17 +644,24 @@ export default function GanttChart({
             if (row.type === 'feature') {
               const entry = row.entry
               const colour = getEpicColour(row.epicIdx)
+              const barColour = entry.timelineColour ?? colour.hex
               const isDragging =
                 dragging !== null && dragging.type === 'feature' && dragging.id === entry.featureId
               const effectiveStart = isDragging ? dragging!.currentStart : entry.startWeek
+              const barW = Math.max(entry.durationWeeks * COL_W, 4)
+              const isOverAllocated = weeklyDemand.some(d =>
+                d.week >= entry.startWeek &&
+                d.week < entry.startWeek + entry.durationWeeks &&
+                d.demandDays > d.capacityDays + 0.01
+              )
               return (
                 <g key={row.key}>
                   <rect
                     x={effectiveStart * COL_W}
                     y={y + 4}
-                    width={Math.max(entry.durationWeeks * COL_W, 4)}
+                    width={barW}
                     height={FEAT_ROW_H - 8}
-                    fill={colour.hex}
+                    fill={barColour}
                     rx={3}
                     style={{
                       cursor: isDragging ? 'grabbing' : 'grab',
@@ -682,6 +691,15 @@ export default function GanttChart({
                       setTooltip({ x: e.clientX, y: e.clientY, content: `${entry.featureName}\n${totalDays.toFixed(1)} engineering days${breakdown}${engineersSection}\n\nClick to edit · Drag to move` })
                     }}
                   />
+                  {isOverAllocated && (
+                    <circle
+                      cx={effectiveStart * COL_W + barW - 8}
+                      cy={y + FEAT_ROW_H / 2}
+                      r={4}
+                      fill="#ef4444"
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
                   {entry.isManual && (
                     <text
                       x={effectiveStart * COL_W + 6}
@@ -708,6 +726,8 @@ export default function GanttChart({
             // story
             const storyEntry = row.entry
             const colour = getEpicColour(row.epicIdx)
+            const parentFeature = featureById.get(storyEntry.featureId)
+            const storyBarColour = parentFeature?.timelineColour ?? colour.hex
             const isDragging =
               dragging !== null && dragging.type === 'story' && dragging.id === storyEntry.storyId
             const effectiveStart = isDragging ? dragging!.currentStart : storyEntry.startWeek
@@ -718,8 +738,8 @@ export default function GanttChart({
                   y={y + 3}
                   width={Math.max(storyEntry.durationWeeks * COL_W, 4)}
                   height={STORY_ROW_H - 6}
-                  fill={colour.hex}
-                  fillOpacity={0.6}
+                  fill={storyBarColour}
+                  fillOpacity={0.4}
                   rx={3}
                   style={{
                     cursor: isDragging ? 'grabbing' : 'grab',
