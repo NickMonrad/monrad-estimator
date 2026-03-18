@@ -1,5 +1,6 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState, useRef } from 'react'
 import { useIsDark } from '../../hooks/useIsDark'
+import TimelineTooltip from './TimelineTooltip'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -59,6 +60,11 @@ export default function ResourceHistogram({
 }: Props) {
 
   const isDark = useIsDark()
+
+  // Tooltip state
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null)
+  const svgContainerRef = useRef<HTMLDivElement>(null)
+
   const svgColors = {
     bg:       isDark ? '#111827' : '#fafafa',
     gridLine: isDark ? '#374151' : '#f3f4f6',
@@ -161,6 +167,9 @@ export default function ResourceHistogram({
       {/* Right SVG area — shares scroll with Gantt via ref */}
       <div
         className="overflow-x-auto flex-1"
+        ref={svgContainerRef}
+        onMouseLeave={() => setTooltip(null)}
+        style={{ position: 'relative' }}
         ref={scrollContainerRef}
         onScroll={onScroll}
       >
@@ -255,7 +264,6 @@ export default function ResourceHistogram({
 
                   return (
                     <g key={w}>
-                      <title>{`W${w}: ${demand.toFixed(1)}d demand / ${cap.toFixed(1)}d capacity`}</title>
                       <rect
                         x={barX}
                         y={barY}
@@ -264,6 +272,19 @@ export default function ResourceHistogram({
                         fill={fill}
                         rx={2}
                         opacity={0.8}
+                        style={{ cursor: 'default' }}
+                        onMouseEnter={(e) => {
+                          const pct = cap > 0 ? ` (${Math.round((demand / cap) * 100)}%)` : ''
+                          setTooltip({
+                            x: e.clientX,
+                            y: e.clientY,
+                            content: `Week ${w} · ${rt.name}: ${demand.toFixed(1)} / ${cap.toFixed(1)} days${pct}`,
+                          })
+                        }}
+                        onMouseMove={(e) => {
+                          setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)
+                        }}
+                        onMouseLeave={() => setTooltip(null)}
                       />
                     </g>
                   )
@@ -273,6 +294,12 @@ export default function ResourceHistogram({
           })}
         </svg>
       </div>
+      <TimelineTooltip
+        x={tooltip?.x ?? 0}
+        y={tooltip?.y ?? 0}
+        visible={tooltip !== null}
+        content={tooltip?.content ?? ''}
+      />
     </div>
   )
 }

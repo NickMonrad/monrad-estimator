@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { toPng } from 'html-to-image'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useIsDark } from '../hooks/useIsDark'
@@ -8,6 +9,7 @@ import ThemeToggle from '../components/layout/ThemeToggle'
 import type { Project, ResourceType, TimelineSummary, TimelineEntry, NamedResourceEntry } from '../types/backlog'
 import GanttChart from '../components/timeline/GanttChart'
 import ResourceHistogram from '../components/timeline/ResourceHistogram'
+import TimelineTooltip from '../components/timeline/TimelineTooltip'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -47,6 +49,9 @@ function NamedResourcesPanel({
 }) {
   const isDark = useIsDark()
   const gridStroke = isDark ? '#374151' : '#f3f4f6'
+
+  // Tooltip state
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null)
 
   // Group by resource type name
   const grouped = useMemo(() => {
@@ -141,9 +146,15 @@ function NamedResourcesPanel({
                         style={{ height: 36 }}
                       >
                         <div
-                          className={`absolute top-1 ${colour} rounded h-[28px] flex items-center px-2 text-[10px] font-medium text-gray-700 truncate`}
+                          className={`absolute top-1 ${colour} rounded h-[28px] flex items-center px-2 text-[10px] font-medium text-gray-700 truncate cursor-default`}
                           style={{ left: barLeft + 2, width: barWidth }}
-                          title={`${nr.name}: W${start}–W${end}, ${nr.allocationPct}% allocation`}
+                          onMouseEnter={(e) => setTooltip({
+                            x: e.clientX,
+                            y: e.clientY,
+                            content: `${nr.name} · Week ${start}–${end} · ${nr.allocationPct}%`,
+                          })}
+                          onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
+                          onMouseLeave={() => setTooltip(null)}
                         >
                           {nr.name} — {nr.allocationPct}%
                         </div>
@@ -156,6 +167,12 @@ function NamedResourcesPanel({
           </div>
         </div>
       </div>
+      <TimelineTooltip
+        x={tooltip?.x ?? 0}
+        y={tooltip?.y ?? 0}
+        visible={tooltip !== null}
+        content={tooltip?.content ?? ''}
+      />
     </div>
   )
 }
@@ -180,6 +197,9 @@ export default function TimelinePage() {
   const histScrollRef = useRef<HTMLDivElement>(null)
   const isSyncingScroll = useRef(false)
 
+  // Ref for PNG export — wraps the entire Gantt+histogram area
+  const ganttRef = useRef<HTMLDivElement>(null)
+
   const handleGanttScroll = useCallback(() => {
     if (isSyncingScroll.current) return
     isSyncingScroll.current = true
@@ -197,6 +217,26 @@ export default function TimelinePage() {
     }
     isSyncingScroll.current = false
   }, [])
+
+  // Export handlers
+  const handleExportCsv = async () => {
+    const resp = await api.get(`/projects/${projectId}/timeline/export/csv`, { responseType: 'blob' })
+    const url = URL.createObjectURL(resp.data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${project?.name ?? 'Timeline'} - Timeline - ${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleExportPng = async () => {
+    if (!ganttRef.current) return
+    const dataUrl = await toPng(ganttRef.current, { backgroundColor: '#ffffff' })
+    const a = document.createElement('a')
+    a.href = dataUrl
+    a.download = `${project?.name ?? 'Timeline'} - Gantt - ${new Date().toISOString().slice(0, 10)}.png`
+    a.click()
+  }
 
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
@@ -504,6 +544,26 @@ export default function TimelinePage() {
               </button>
             )}
             <div className="w-px h-7 bg-gray-200" />
+            {/* Export buttons */}
+            {timeline?.entries && timeline.entries.length > 0 && (
+              <>
+                <button
+                  onClick={handleExportCsv}
+                  className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
+                  title="Export timeline data as CSV"
+                >
+                  ↓ CSV
+                </button>
+                <button
+                  onClick={handleExportPng}
+                  className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
+                  title="Export Gantt chart as PNG image"
+                >
+                  ↓ PNG
+                </button>
+                <div className="w-px h-7 bg-gray-200" />
+              </>
+            )}
             <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer">
               <input
                 type="checkbox"
@@ -630,7 +690,7 @@ export default function TimelinePage() {
           )}
 
           {!isLoading && timeline?.entries && timeline.entries.length > 0 && (
-            <>
+            <div ref={ganttRef}>
               <GanttChart
                 entries={timeline.entries}
                 storyEntries={timeline.storyEntries}
@@ -828,7 +888,7 @@ export default function TimelinePage() {
                   <span className="ml-2 text-blue-500">· ✏ = manually overridden</span>
                 )}
               </div>
-            </>
+            </div>
           )}
         </div>
       </main>
