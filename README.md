@@ -204,6 +204,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | PDF cover page: generated-by username, generation time, document label, projected end date; backlog CSV fix for epic/feature descriptions; commercial tab removes aggregate row; auto-create person on resource type creation; assumptions exclude out-of-scope items | #135 |
 | Comprehensive dark mode theming across all pages and components; standardised headers with M icon, ThemeToggle, and breadcrumb nav on all global and project pages; SVG dark mode (Gantt, histogram, named resources) via `useIsDark` hook; epic/feature/story colour hierarchy in dark mode | #143 |
 | Document generator: normalise customer data for PDF rendering, harden cover-page layout, and replace fragile scope summary table layout with long-content-safe rendering | #155 |
+| Timeline & Resource enhancements: person-first resource model (+/- named people on Timeline), custom feature colours in Gantt, over-allocation indicators, unified tooltips on Resource Demand and Named Resources panels, timeline CSV + PNG export, cross-epic dependency scheduling fix, isManual side-effect removed from dependency set, buffer + onboarding weeks panel on Resource Profile & Commercial tabs, Cost Summary dark mode fix | #164 |
 
 ---
 
@@ -228,15 +229,12 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | [#46](https://github.com/NickMonrad/monrad-estimator/issues/46) | Soft-delete templates with restore |
 | [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
 | [#19](https://github.com/NickMonrad/monrad-estimator/issues/19) | Apply template button — improve discoverability |
-| [#97](https://github.com/NickMonrad/monrad-estimator/issues/97) | Timeline: show resource utilisation tooltip on feature bars |
 | [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST configurable rate per project via Project Settings (ex-GST/inc-GST totals already ship in Resource Profile; rate UI missing) |
 
 ### 🚀 Feature ideas
 | # | Title |
 |---|---|
-| [#149](https://github.com/NickMonrad/monrad-estimator/issues/149) | Timeline: consistent tooltips on Resource Demand + Named Resources; custom feature colours in Gantt; export timeline to image + CSV |
 | [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — diff UI and compare view (snapshots + rollback already shipped) |
-| [#68](https://github.com/NickMonrad/monrad-estimator/issues/68) | Timeline resource levelling + story dependencies |
 | [#70](https://github.com/NickMonrad/monrad-estimator/issues/70) | Locale and currency settings (default AU/AUD) |
 | [#71](https://github.com/NickMonrad/monrad-estimator/issues/71) | Public holiday calendars for resource/cost modelling by locale |
 | [#72](https://github.com/NickMonrad/monrad-estimator/issues/72) | Timezone setting per account (default AEST) |
