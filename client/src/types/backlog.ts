@@ -185,6 +185,8 @@ export interface TimelineSummary {
   startDate: string | null
   hoursPerDay: number
   projectedEndDate?: string | null
+  bufferWeeks?: number
+  onboardingWeeks?: number
   parallelWarnings?: ParallelWarning[]
   entries: TimelineEntry[]
   storyEntries?: StoryTimelineEntry[]

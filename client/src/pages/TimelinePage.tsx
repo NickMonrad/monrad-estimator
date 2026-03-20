@@ -570,7 +570,8 @@ export default function TimelinePage() {
     const storyMax = timeline.storyEntries?.length
       ? Math.max(...timeline.storyEntries.map(e => e.startWeek + e.durationWeeks))
       : 0
-    return Math.ceil(Math.max(featureMax, storyMax)) + 1
+    const deliveryWeeks = Math.ceil(Math.max(featureMax, storyMax)) + 1
+    return deliveryWeeks + (timeline.bufferWeeks ?? 0) + (timeline.onboardingWeeks ?? 0)
   }, [timeline])
 
   // Group entries by epicId, sorted by epicOrder then featureOrder
@@ -908,6 +909,7 @@ export default function TimelinePage() {
                 rightPanelRef={ganttScrollRef}
                 onRightPanelScroll={handleGanttScroll}
                 weeklyDemand={timeline.weeklyDemand}
+                extendedWeeks={(timeline.bufferWeeks ?? 0) + (timeline.onboardingWeeks ?? 0)}
               />
 
               {/* Resource allocation histogram */}
