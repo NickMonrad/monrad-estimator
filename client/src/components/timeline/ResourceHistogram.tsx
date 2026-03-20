@@ -24,6 +24,7 @@ interface Props {
   totalWeeks: number
   colW: number
   labelW: number
+  weekOffset?: number
   scrollContainerRef?: React.RefObject<HTMLDivElement | null>
   onScroll?: React.UIEventHandler<HTMLDivElement>
 }
@@ -55,6 +56,7 @@ export default function ResourceHistogram({
   totalWeeks,
   colW,
   labelW,
+  weekOffset = 0,
   scrollContainerRef,
   onScroll,
 }: Props) {
@@ -238,9 +240,9 @@ export default function ResourceHistogram({
                   return (
                     <line
                       key={`cap-${w}`}
-                      x1={w * colW}
+                      x1={(w + weekOffset) * colW}
                       y1={capY}
-                      x2={(w + 1) * colW}
+                      x2={(w + weekOffset + 1) * colW}
                       y2={capY}
                       stroke={svgColors.capLine}
                       strokeWidth={1}
@@ -257,7 +259,7 @@ export default function ResourceHistogram({
 
                   const cap = capacityLookup.get(`${w}|${rt.name}`) ?? 0
                   const barH = Math.min(demand * scale, BAR_MAX_H + 6)
-                  const barX = w * colW + 4
+                  const barX = (w + weekOffset) * colW + 4
                   const barW = colW - 8
                   const barY = rowY + ROW_H - 6 - barH
                   const fill = barColour(demand, cap)

@@ -53,7 +53,8 @@ interface GanttChartProps {
   rightPanelRef?: React.RefObject<HTMLDivElement | null>
   onRightPanelScroll?: React.UIEventHandler<HTMLDivElement>
   weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
-  extendedWeeks?: number  // buffer + onboarding weeks shown as shaded zone at end
+  weekOffset?: number   // = onboardingWeeks — shifts all bars right by this many columns
+  bufferWeeks?: number  // = bufferWeeks — for the buffer zone at the end
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +143,8 @@ export default function GanttChart({
   rightPanelRef,
   onRightPanelScroll,
   weeklyDemand = [],
-  extendedWeeks = 0,
+  weekOffset = 0,
+  bufferWeeks = 0,
 }: GanttChartProps) {
   // Expanded state
   const [expandedFeatures, setExpandedFeatures] = useState<Set<string>>(new Set())
@@ -556,25 +558,33 @@ export default function GanttChart({
           {/* Background fill */}
           <rect x={0} y={0} width={totalWeeks * COL_W} height={totalHeight} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
 
-          {/* Extended period shading (buffer + onboarding weeks) */}
-          {extendedWeeks > 0 && (
+          {/* Onboarding zone — columns 0..weekOffset-1 */}
+          {weekOffset > 0 && (
             <g style={{ pointerEvents: 'none' }}>
-              <rect
-                x={(totalWeeks - extendedWeeks) * COL_W}
-                y={0}
-                width={extendedWeeks * COL_W}
-                height={totalHeight}
-                fill={isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}
-              />
-              <text
-                x={(totalWeeks - extendedWeeks) * COL_W + 6}
-                y={HEADER_H / 2 + 4}
-                fontSize={10}
-                fill={svgColors.headerText}
-                opacity={0.6}
-              >
-                ← buffer / onboarding period ({extendedWeeks}w)
+              <rect x={0} y={0} width={weekOffset * COL_W} height={totalHeight}
+                fill={isDark ? 'rgba(251,191,36,0.08)' : 'rgba(251,191,36,0.12)'} />
+              <text x={6} y={HEADER_H / 2 + 4} fontSize={10} fill={svgColors.headerText} opacity={0.8}>
+                Onboarding ({weekOffset}w)
               </text>
+              {/* Dashed right boundary */}
+              <line x1={weekOffset * COL_W} y1={0} x2={weekOffset * COL_W} y2={totalHeight}
+                stroke={isDark ? '#92400e' : '#d97706'} strokeWidth={1} strokeDasharray="4,3" />
+            </g>
+          )}
+
+          {/* Buffer zone — last bufferWeeks columns */}
+          {bufferWeeks > 0 && (
+            <g style={{ pointerEvents: 'none' }}>
+              <rect x={(totalWeeks - bufferWeeks) * COL_W} y={0}
+                width={bufferWeeks * COL_W} height={totalHeight}
+                fill={isDark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.10)'} />
+              <text x={(totalWeeks - bufferWeeks) * COL_W + 6} y={HEADER_H / 2 + 4}
+                fontSize={10} fill={svgColors.headerText} opacity={0.8}>
+                Buffer ({bufferWeeks}w)
+              </text>
+              <line x1={(totalWeeks - bufferWeeks) * COL_W} y1={0}
+                x2={(totalWeeks - bufferWeeks) * COL_W} y2={totalHeight}
+                stroke={isDark ? '#4338ca' : '#6366f1'} strokeWidth={1} strokeDasharray="4,3" />
             </g>
           )}
 
@@ -634,7 +644,7 @@ export default function GanttChart({
               return (
                 <g key={row.key}>
                   <rect
-                    x={row.minWeek * COL_W}
+                    x={(row.minWeek + weekOffset) * COL_W}
                     y={y + 4}
                     width={barW}
                     height={EPIC_ROW_H - 8}
@@ -643,7 +653,7 @@ export default function GanttChart({
                     rx={3}
                   />
                   <rect
-                    x={row.minWeek * COL_W}
+                    x={(row.minWeek + weekOffset) * COL_W}
                     y={y + 4}
                     width={barW}
                     height={EPIC_ROW_H - 8}
@@ -681,7 +691,7 @@ export default function GanttChart({
               return (
                 <g key={row.key}>
                   <rect
-                    x={effectiveStart * COL_W}
+                    x={(effectiveStart + weekOffset) * COL_W}
                     y={y + 4}
                     width={barW}
                     height={FEAT_ROW_H - 8}
@@ -717,7 +727,7 @@ export default function GanttChart({
                   />
                   {isOverAllocated && (
                     <circle
-                      cx={effectiveStart * COL_W + barW - 8}
+                      cx={(effectiveStart + weekOffset) * COL_W + barW - 8}
                       cy={y + FEAT_ROW_H / 2}
                       r={4}
                       fill="#ef4444"
@@ -726,7 +736,7 @@ export default function GanttChart({
                   )}
                   {entry.isManual && (
                     <text
-                      x={effectiveStart * COL_W + 6}
+                      x={(effectiveStart + weekOffset) * COL_W + 6}
                       y={y + FEAT_ROW_H / 2 + 4}
                       fontSize={10}
                       style={{ pointerEvents: 'none' }}
@@ -758,7 +768,7 @@ export default function GanttChart({
             return (
               <g key={row.key}>
                 <rect
-                  x={effectiveStart * COL_W}
+                  x={(effectiveStart + weekOffset) * COL_W}
                   y={y + 3}
                   width={Math.max(storyEntry.durationWeeks * COL_W, 4)}
                   height={STORY_ROW_H - 6}
@@ -777,7 +787,7 @@ export default function GanttChart({
                 />
                 {storyEntry.isManual && (
                   <text
-                    x={effectiveStart * COL_W + 6}
+                    x={(effectiveStart + weekOffset) * COL_W + 6}
                     y={y + STORY_ROW_H / 2 + 4}
                     fontSize={9}
                     style={{ pointerEvents: 'none' }}
@@ -818,9 +828,9 @@ export default function GanttChart({
             const predStart = predDragging ? (dragging?.currentStart ?? predEntry.startWeek) : predEntry.startWeek
             const succStart = succDragging ? (dragging?.currentStart ?? succEntry.startWeek) : succEntry.startWeek
 
-            const x1 = (predStart + predEntry.durationWeeks) * COL_W
+            const x1 = (predStart + weekOffset + predEntry.durationWeeks) * COL_W
             const y1 = predY + FEAT_ROW_H / 2
-            const x2 = succStart * COL_W
+            const x2 = (succStart + weekOffset) * COL_W
             const y2 = succY + FEAT_ROW_H / 2
 
             return (
@@ -856,9 +866,9 @@ export default function GanttChart({
             const predStart = predDragging ? (dragging?.currentStart ?? predEntry.startWeek) : predEntry.startWeek
             const succStart = succDragging ? (dragging?.currentStart ?? succEntry.startWeek) : succEntry.startWeek
 
-            const x1 = (predStart + predEntry.durationWeeks) * COL_W
+            const x1 = (predStart + weekOffset + predEntry.durationWeeks) * COL_W
             const y1 = predY + STORY_ROW_H / 2
-            const x2 = succStart * COL_W
+            const x2 = (succStart + weekOffset) * COL_W
             const y2 = succY + STORY_ROW_H / 2
 
             return (

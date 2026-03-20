@@ -43,12 +43,14 @@ function NamedResourcesPanel({
   colW,
   labelW,
   weeklyDemand = [],
+  weekOffset = 0,
 }: {
   namedResources: NamedResourceEntry[]
   totalWeeks: number
   colW: number
   labelW: number
   weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
+  weekOffset?: number
 }) {
   const isDark = useIsDark()
   const gridStroke = isDark ? '#374151' : '#f3f4f6'
@@ -180,7 +182,7 @@ function NamedResourcesPanel({
                               return (
                                 <g key={w}>
                                   <rect
-                                    x={w * colW + 2}
+                                    x={(w + weekOffset) * colW + 2}
                                     y={36 - barH - 4}
                                     width={colW - 4}
                                     height={barH}
@@ -205,7 +207,7 @@ function NamedResourcesPanel({
                     }
 
                     // Fixed allocation (FULL_PROJECT or TIMELINE): flat bar
-                    const barLeft = start * colW
+                    const barLeft = (start + weekOffset) * colW
                     const barWidth = Math.max((end - start + 1) * colW - 4, 8)
                     return (
                       <div
@@ -909,7 +911,8 @@ export default function TimelinePage() {
                 rightPanelRef={ganttScrollRef}
                 onRightPanelScroll={handleGanttScroll}
                 weeklyDemand={timeline.weeklyDemand}
-                extendedWeeks={(timeline.bufferWeeks ?? 0) + (timeline.onboardingWeeks ?? 0)}
+                weekOffset={timeline.onboardingWeeks ?? 0}
+                bufferWeeks={timeline.bufferWeeks ?? 0}
               />
 
               {/* Resource allocation histogram */}
@@ -920,6 +923,7 @@ export default function TimelinePage() {
                   totalWeeks={totalWeeks}
                   colW={64}
                   labelW={300}
+                  weekOffset={timeline.onboardingWeeks ?? 0}
                   scrollContainerRef={histScrollRef}
                   onScroll={handleHistScroll}
                 />
@@ -933,6 +937,7 @@ export default function TimelinePage() {
                   colW={64}
                   labelW={300}
                   weeklyDemand={timeline.weeklyDemand}
+                  weekOffset={timeline.onboardingWeeks ?? 0}
                 />
               )}
 
