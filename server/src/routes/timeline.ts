@@ -1135,6 +1135,43 @@ router.get('/export/csv', async (req: AuthRequest, res: Response) => {
   }
 
   // Section 3 — Named Resources
+  // Compute derivedStartWeek/derivedEndWeek per resource type from timeline entries
+  // (same logic as resourceProfile route)
+  const [storyTimelineEntries, tasksForRt] = await Promise.all([
+    prisma.storyTimelineEntry.findMany({
+      where: { projectId },
+      select: { storyId: true, startWeek: true, durationWeeks: true },
+    }),
+    prisma.task.findMany({
+      where: { userStory: { feature: { epic: { projectId } } }, resourceTypeId: { not: null } },
+      select: {
+        resourceTypeId: true,
+        userStoryId: true,
+        userStory: { select: { featureId: true } },
+      },
+    }),
+  ])
+
+  // featureId → { startWeek, endWeek } from the already-fetched gantt entries
+  const featureWeekMap = new Map(
+    timelineEntries.map(e => [e.featureId, { startWeek: e.startWeek, endWeek: e.startWeek + e.durationWeeks }])
+  )
+  const storyEntryMap2 = new Map(storyTimelineEntries.map(e => [e.storyId, e]))
+
+  const rtWeeks = new Map<string, { starts: number[]; ends: number[] }>()
+  for (const task of tasksForRt) {
+    if (!task.resourceTypeId) continue
+    const storyEntry = task.userStoryId ? storyEntryMap2.get(task.userStoryId) : null
+    const featureEntry = task.userStory?.featureId ? featureWeekMap.get(task.userStory.featureId) : null
+    const entry = storyEntry
+      ? { startWeek: storyEntry.startWeek, endWeek: storyEntry.startWeek + storyEntry.durationWeeks }
+      : featureEntry ?? null
+    if (!entry) continue
+    if (!rtWeeks.has(task.resourceTypeId)) rtWeeks.set(task.resourceTypeId, { starts: [], ends: [] })
+    rtWeeks.get(task.resourceTypeId)!.starts.push(entry.startWeek)
+    rtWeeks.get(task.resourceTypeId)!.ends.push(entry.endWeek)
+  }
+
   const namedResources = await prisma.namedResource.findMany({
     where: { resourceType: { projectId } },
     include: { resourceType: true },
@@ -1153,8 +1190,16 @@ router.get('/export/csv', async (req: AuthRequest, res: Response) => {
     const rtName = nr.resourceType.name.replace(/,/g, ' ')
     const modeLabel = allocationModeLabel(nr.allocationMode)
     const pct = nr.allocationPercent
-    const startW = nr.allocationMode === 'TIMELINE' ? (nr.allocationStartWeek ?? '') : ''
-    const endW = nr.allocationMode === 'TIMELINE' ? (nr.allocationEndWeek ?? '') : ''
+
+    let startW: number | string = ''
+    let endW: number | string = ''
+    if (nr.allocationMode === 'TIMELINE') {
+      const weeks = rtWeeks.get(nr.resourceTypeId)
+      const derivedStart = weeks && weeks.starts.length > 0 ? Math.min(...weeks.starts) : null
+      const derivedEnd = weeks && weeks.ends.length > 0 ? Math.max(...weeks.ends) : null
+      startW = nr.allocationStartWeek ?? derivedStart ?? ''
+      endW = nr.allocationEndWeek ?? derivedEnd ?? ''
+    }
     nrRows.push(`${name},${rtName},${modeLabel},${pct},${startW},${endW}`)
   }
 
