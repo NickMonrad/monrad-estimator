@@ -310,8 +310,8 @@ export default function TimelinePage() {
     const fullWidth = EXPORT_LABEL_W + totalWeeks * EXPORT_COL_W
     const fullHeight = container.scrollHeight
 
-    // Dark-mode aware background colour
-    const bgColor = isDark ? '#111827' : '#ffffff'
+    // Dark-mode aware background colour — read from DOM since handler is outside hook scope
+    const bgColor = document.documentElement.classList.contains('dark') ? '#111827' : '#ffffff'
 
     // Collect all scrollable right-panels and expand them
     const scrollEls = Array.from(
