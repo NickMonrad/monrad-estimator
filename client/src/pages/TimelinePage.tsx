@@ -982,16 +982,13 @@ export default function TimelinePage() {
                     )}
                     <button
                       onClick={() => {
-                        updateEntry.mutate({
-                          featureId: entry.featureId,
-                          startWeek: parseFloat(editForm.startWeek),
-                          durationWeeks: parseFloat(editForm.durationWeeks),
-                        })
-                        updateFeatureColour.mutate({
-                          epicId: entry.epicId,
-                          featureId: entry.featureId,
-                          timelineColour: editColour,
-                        })
+                        const newStart = parseFloat(editForm.startWeek)
+                        const newDuration = parseFloat(editForm.durationWeeks)
+                        const timelineChanged = newStart !== entry.startWeek || newDuration !== entry.durationWeeks
+                        if (timelineChanged) {
+                          updateEntry.mutate({ featureId: entry.featureId, startWeek: newStart, durationWeeks: newDuration })
+                        }
+                        updateFeatureColour.mutate({ epicId: entry.epicId, featureId: entry.featureId, timelineColour: editColour })
                       }}
                       disabled={updateEntry.isPending || updateFeatureColour.isPending}
                       className="bg-blue-600 text-white px-3 py-0.5 rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
