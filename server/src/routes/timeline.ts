@@ -237,8 +237,8 @@ function buildResponse(
           name: nr.name,
           startWeek: nr.startWeek ?? (derivedRt?.start ?? null),
           endWeek: nr.endWeek ?? (derivedRt?.end ?? null),
-          // Display the effective allocation % based on mode, not the legacy allocationPct field
           allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
+          allocationMode: nr.allocationMode,
         }))
       }
       // Auto-generate synthetic named resources when RT has count > 0 and demand
@@ -249,6 +249,7 @@ function buildResponse(
           startWeek: null as number | null,
           endWeek: null as number | null,
           allocationPct: 100,
+          allocationMode: 'EFFORT' as string,
         }))
       }
       return []

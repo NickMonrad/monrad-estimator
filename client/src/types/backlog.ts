@@ -177,6 +177,7 @@ export interface NamedResourceEntry {
   startWeek: number | null
   endWeek: number | null
   allocationPct: number
+  allocationMode?: string
 }
 
 export interface TimelineSummary {

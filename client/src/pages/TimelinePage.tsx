@@ -42,14 +42,26 @@ function NamedResourcesPanel({
   totalWeeks,
   colW,
   labelW,
+  weeklyDemand = [],
 }: {
   namedResources: NamedResourceEntry[]
   totalWeeks: number
   colW: number
   labelW: number
+  weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
 }) {
   const isDark = useIsDark()
   const gridStroke = isDark ? '#374151' : '#f3f4f6'
+
+  // Pre-index demand by resourceTypeName → week → demandDays/capacityDays
+  const demandByRt = useMemo(() => {
+    const map = new Map<string, Map<number, { demand: number; capacity: number }>>()
+    for (const d of weeklyDemand) {
+      if (!map.has(d.resourceTypeName)) map.set(d.resourceTypeName, new Map())
+      map.get(d.resourceTypeName)!.set(d.week, { demand: d.demandDays, capacity: d.capacityDays })
+    }
+    return map
+  }, [weeklyDemand])
 
   // Tooltip state
   const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null)
@@ -86,6 +98,10 @@ function NamedResourcesPanel({
               {people.map((nr, i) => {
                 const start = nr.startWeek ?? 0
                 const end = nr.endWeek ?? projectEndWeek
+                const mode = nr.allocationMode ?? 'EFFORT'
+                const modeLabel = mode === 'EFFORT' ? 'T&M'
+                  : mode === 'FULL_PROJECT' ? `Full Project · ${nr.allocationPct}%`
+                  : `Timeline · ${nr.allocationPct}%`
                 return (
                   <div
                     key={`${rtName}-${nr.name}-${i}`}
@@ -94,7 +110,7 @@ function NamedResourcesPanel({
                   >
                     <span className="text-xs text-gray-700 dark:text-gray-300 truncate">{nr.name}</span>
                     <span className="text-[10px] text-gray-400 dark:text-gray-500">
-                      W{start}–W{end} · {nr.allocationPct}%
+                      {modeLabel}
                     </span>
                   </div>
                 )
@@ -137,9 +153,60 @@ function NamedResourcesPanel({
                   {people.map((nr, i) => {
                     const start = nr.startWeek ?? 0
                     const end = nr.endWeek ?? projectEndWeek
+                    const colour = RESOURCE_COLOURS[(colourIdx++) % RESOURCE_COLOURS.length]
+                    const isEffort = (nr.allocationMode ?? 'EFFORT') === 'EFFORT'
+                    const rtDemand = demandByRt.get(rtName)
+
+                    if (isEffort && rtDemand) {
+                      // T&M: render a demand-following mini histogram
+                      const ROW_H = 28
+                      const maxCap = Math.max(...Array.from(rtDemand.values()).map(d => d.capacity), 1)
+                      return (
+                        <div
+                          key={`${rtName}-${nr.name}-${i}`}
+                          className="relative border-b border-gray-50 dark:border-gray-700"
+                          style={{ height: 36 }}
+                        >
+                          <svg
+                            width={totalWeeks * colW}
+                            height={36}
+                            className="absolute inset-0"
+                          >
+                            {Array.from({ length: totalWeeks }, (_, w) => {
+                              const d = rtDemand.get(w)
+                              if (!d || d.demand <= 0) return null
+                              const pct = Math.min(d.demand / maxCap, 1)
+                              const barH = Math.max(Math.round(pct * ROW_H), 2)
+                              return (
+                                <g key={w}>
+                                  <rect
+                                    x={w * colW + 2}
+                                    y={36 - barH - 4}
+                                    width={colW - 4}
+                                    height={barH}
+                                    rx={2}
+                                    fill="#6366f1"
+                                    opacity={0.55}
+                                    onMouseEnter={(e) => setTooltip({
+                                      x: e.clientX,
+                                      y: e.clientY,
+                                      content: `${nr.name} · T&M\nWk ${w}: ${d.demand.toFixed(1)} / ${d.capacity.toFixed(1)} days (${Math.round(d.demand / d.capacity * 100)}%)`,
+                                    })}
+                                    onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
+                                    onMouseLeave={() => setTooltip(null)}
+                                    style={{ cursor: 'default' }}
+                                  />
+                                </g>
+                              )
+                            })}
+                          </svg>
+                        </div>
+                      )
+                    }
+
+                    // Fixed allocation (FULL_PROJECT or TIMELINE): flat bar
                     const barLeft = start * colW
                     const barWidth = Math.max((end - start + 1) * colW - 4, 8)
-                    const colour = RESOURCE_COLOURS[(colourIdx++) % RESOURCE_COLOURS.length]
                     return (
                       <div
                         key={`${rtName}-${nr.name}-${i}`}
@@ -152,7 +219,7 @@ function NamedResourcesPanel({
                           onMouseEnter={(e) => setTooltip({
                             x: e.clientX,
                             y: e.clientY,
-                            content: `${nr.name} · Week ${start}–${end} · ${nr.allocationPct}%`,
+                            content: `${nr.name} · W${start}–W${end} · ${nr.allocationPct}%`,
                           })}
                           onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
                           onMouseLeave={() => setTooltip(null)}
@@ -863,6 +930,7 @@ export default function TimelinePage() {
                   totalWeeks={totalWeeks}
                   colW={64}
                   labelW={300}
+                  weeklyDemand={timeline.weeklyDemand}
                 />
               )}
 
