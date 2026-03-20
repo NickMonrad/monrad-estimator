@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { toPng } from 'html-to-image'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useIsDark } from '../hooks/useIsDark'
@@ -198,8 +199,8 @@ export default function TimelinePage() {
   const histScrollRef = useRef<HTMLDivElement>(null)
   const isSyncingScroll = useRef(false)
 
-  // Ref for PNG export — points directly at the Gantt SVG element
-  const ganttSvgRef = useRef<SVGSVGElement | null>(null)
+  // Ref for PNG export — wraps the entire Gantt+histogram+named resources section
+  const ganttContainerRef = useRef<HTMLDivElement | null>(null)
 
   const handleGanttScroll = useCallback(() => {
     if (isSyncingScroll.current) return
@@ -231,35 +232,38 @@ export default function TimelinePage() {
   }
 
   const handleExportPng = async () => {
-    const svg = ganttSvgRef.current
-    if (!svg) return
+    const container = ganttContainerRef.current
+    if (!container) return
 
-    const svgWidth = svg.width.baseVal.value
-    const svgHeight = svg.height.baseVal.value
+    // Temporarily expand all overflow-x scroll containers so the full width renders
+    const scrollEls = Array.from(
+      container.querySelectorAll<HTMLElement>('.overflow-x-auto')
+    )
+    const saved = scrollEls.map(el => ({
+      el,
+      overflowX: el.style.overflowX,
+      minWidth: el.style.minWidth,
+    }))
+    scrollEls.forEach(el => {
+      el.style.overflowX = 'visible'
+      el.style.minWidth = el.scrollWidth + 'px'
+    })
 
-    // Serialise the full SVG — captures all weeks regardless of scroll position
-    const serializer = new XMLSerializer()
-    const svgStr = serializer.serializeToString(svg)
-    const svgBlob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' })
-    const url = URL.createObjectURL(svgBlob)
+    // Wait one frame for the browser to reflow
+    await new Promise(r => requestAnimationFrame(r))
 
-    const img = new Image()
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      canvas.width = svgWidth
-      canvas.height = svgHeight
-      const ctx = canvas.getContext('2d')!
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, svgWidth, svgHeight)
-      ctx.drawImage(img, 0, 0)
-      URL.revokeObjectURL(url)
-
+    try {
+      const dataUrl = await toPng(container, { backgroundColor: '#ffffff' })
       const a = document.createElement('a')
-      a.href = canvas.toDataURL('image/png')
+      a.href = dataUrl
       a.download = `${project?.name ?? 'Timeline'} - Gantt - ${new Date().toISOString().slice(0, 10)}.png`
       a.click()
+    } finally {
+      saved.forEach(({ el, overflowX, minWidth }) => {
+        el.style.overflowX = overflowX
+        el.style.minWidth = minWidth
+      })
     }
-    img.src = url
   }
 
   const { data: project } = useQuery<Project>({
@@ -794,7 +798,7 @@ export default function TimelinePage() {
           )}
 
           {!isLoading && timeline?.entries && timeline.entries.length > 0 && (
-            <div>
+            <div ref={ganttContainerRef}>
               <GanttChart
                 entries={timeline.entries}
                 storyEntries={timeline.storyEntries}
@@ -837,7 +841,6 @@ export default function TimelinePage() {
                 rightPanelRef={ganttScrollRef}
                 onRightPanelScroll={handleGanttScroll}
                 weeklyDemand={timeline.weeklyDemand}
-                svgRef={ganttSvgRef}
               />
 
               {/* Resource allocation histogram */}
