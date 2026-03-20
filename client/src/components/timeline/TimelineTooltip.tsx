@@ -16,7 +16,7 @@ export default function TimelineTooltip({ x, y, visible, content }: TimelineTool
   if (!visible) return null
   return (
     <div
-      className="fixed z-50 pointer-events-none bg-gray-900 dark:bg-gray-700 text-white rounded-lg shadow-xl px-3 py-2 text-sm whitespace-pre max-w-xs"
+      className="fixed z-50 pointer-events-none bg-gray-900 dark:bg-gray-700 text-white rounded-lg shadow-xl px-3 py-2 text-sm whitespace-pre-wrap break-words max-w-xs"
       style={{ left: x + 12, top: y + 12 }}
     >
       {content}

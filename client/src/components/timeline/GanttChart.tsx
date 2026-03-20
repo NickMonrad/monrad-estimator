@@ -853,7 +853,7 @@ export default function GanttChart({
       </div>
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none bg-gray-900 text-white rounded-lg shadow-xl px-3 py-2 text-sm whitespace-pre max-w-xs"
+          className="fixed z-50 pointer-events-none bg-gray-900 text-white rounded-lg shadow-xl px-3 py-2 text-sm whitespace-pre-wrap break-words max-w-xs"
           style={{ left: tooltip.x + 12, top: tooltip.y + 12 }}
         >
           {tooltip.content}
