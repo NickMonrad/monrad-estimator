@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import type { TimelineEntry } from '../../types/backlog'
 import { getEpicColour } from '../../lib/epicColours'
 import { useIsDark } from '../../hooks/useIsDark'
@@ -53,6 +53,7 @@ interface GanttChartProps {
   rightPanelRef?: React.RefObject<HTMLDivElement | null>
   onRightPanelScroll?: React.UIEventHandler<HTMLDivElement>
   weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
+  svgRef?: React.RefObject<SVGSVGElement | null>
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +142,7 @@ export default function GanttChart({
   rightPanelRef,
   onRightPanelScroll,
   weeklyDemand = [],
+  svgRef,
 }: GanttChartProps) {
   // Expanded state
   const [expandedFeatures, setExpandedFeatures] = useState<Set<string>>(new Set())
@@ -540,6 +542,7 @@ export default function GanttChart({
       {/* Right SVG area — horizontally scrollable */}
       <div className="overflow-x-auto flex-1" ref={rightPanelRef} onScroll={onRightPanelScroll}>
         <svg
+          ref={svgRef}
           width={totalWeeks * COL_W}
           height={totalHeight}
           style={{ display: 'block' }}
