@@ -600,7 +600,7 @@ export default function TimelinePage() {
     const storyMax = timeline.storyEntries?.length
       ? Math.max(...timeline.storyEntries.map(e => e.startWeek + e.durationWeeks))
       : 0
-    const deliveryWeeks = Math.ceil(Math.max(featureMax, storyMax)) + 1
+    const deliveryWeeks = Math.ceil(Math.max(featureMax, storyMax))
     return deliveryWeeks + (timeline.bufferWeeks ?? 0) + (timeline.onboardingWeeks ?? 0)
   }, [timeline])
 
