@@ -829,7 +829,7 @@ export default function ResourceProfilePage() {
       return { label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }
     } else if (row.allocationMode === 'TIMELINE') {
       const sub = effectiveStart != null && effectiveEnd != null
-        ? `Wk ${Math.round(effectiveStart)} → Wk ${Math.round(effectiveEnd)}`
+        ? `Wk ${Math.floor(effectiveStart)} → Wk ${Math.floor(effectiveEnd)}`
         : null
       return {
         label: `Timeline · ${row.allocationPercent}%`,
@@ -1084,7 +1084,7 @@ export default function ResourceProfilePage() {
                                     Timeline · {row.allocationPercent ?? 100}%
                                   </span>
                                   {effectiveStart != null && effectiveEnd != null && (
-                                    <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.round(effectiveStart)} → Wk {Math.round(effectiveEnd)}</div>
+                                    <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.floor(effectiveStart)} → Wk {Math.floor(effectiveEnd)}</div>
                                   )}
                                 </div>
                               )
@@ -1100,7 +1100,7 @@ export default function ResourceProfilePage() {
                             const start = weekToDate(startWk)
                             const end = weekToDate(endWk)
                             if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                            if (startWk != null && endWk != null) return `Wk ${Math.round(startWk)} – Wk ${Math.round(endWk)}`
+                            if (startWk != null && endWk != null) return `Wk ${Math.floor(startWk)} – Wk ${Math.floor(endWk)}`
                             return '—'
                           })()}
                         </td>
@@ -1581,7 +1581,7 @@ export default function ResourceProfilePage() {
                               const start = weekToDate(startWk)
                               const end = weekToDate(endWk)
                               if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                              if (startWk != null && endWk != null) return `Wk ${Math.round(startWk)} – Wk ${Math.round(endWk)}`
+                              if (startWk != null && endWk != null) return `Wk ${Math.floor(startWk)} – Wk ${Math.floor(endWk)}`
                               return '—'
                             })() : '—'}
                           </td>
@@ -1623,7 +1623,7 @@ export default function ResourceProfilePage() {
                                     <div>
                                       <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                         Start Week override
-                                        {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.round(row.derivedStartWeek)})</span>}
+                                        {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
                                       </label>
                                       <input
                                         type="number"
@@ -1638,7 +1638,7 @@ export default function ResourceProfilePage() {
                                     <div>
                                       <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                         End Week override
-                                        {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.round(row.derivedEndWeek)})</span>}
+                                        {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
                                       </label>
                                       <input
                                         type="number"

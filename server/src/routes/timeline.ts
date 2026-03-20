@@ -1197,8 +1197,10 @@ router.get('/export/csv', async (req: AuthRequest, res: Response) => {
       const weeks = rtWeeks.get(nr.resourceTypeId)
       const derivedStart = weeks && weeks.starts.length > 0 ? Math.min(...weeks.starts) : null
       const derivedEnd = weeks && weeks.ends.length > 0 ? Math.max(...weeks.ends) : null
-      startW = nr.allocationStartWeek ?? derivedStart ?? ''
-      endW = nr.allocationEndWeek ?? derivedEnd ?? ''
+      const rawStart = nr.allocationStartWeek ?? derivedStart ?? null
+      const rawEnd = nr.allocationEndWeek ?? derivedEnd ?? null
+      startW = rawStart != null ? Math.floor(rawStart) : ''
+      endW = rawEnd != null ? Math.floor(rawEnd) : ''
     }
     nrRows.push(`${name},${rtName},${modeLabel},${pct},${startW},${endW}`)
   }
