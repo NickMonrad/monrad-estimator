@@ -31,7 +31,26 @@ type ResourceTypeWithNamed = {
     startWeek: number | null
     endWeek: number | null
     allocationPct: number
+    allocationMode: string
+    allocationPercent: number
+    allocationStartWeek: number | null
+    allocationEndWeek: number | null
   }>
+}
+
+/** Compute the effective allocation percentage for a named resource in a given week. */
+function effectiveAllocationPct(
+  nr: ResourceTypeWithNamed['namedResources'][number],
+  week: number,
+): number {
+  if (nr.allocationMode === 'FULL_PROJECT') return nr.allocationPercent
+  if (nr.allocationMode === 'TIMELINE') {
+    const wStart = nr.allocationStartWeek ?? nr.startWeek ?? 0
+    const wEnd = nr.allocationEndWeek ?? nr.endWeek ?? Infinity
+    return week >= wStart && week <= wEnd ? nr.allocationPercent : 0
+  }
+  // EFFORT (T&M) — no fixed allocation; full capacity available
+  return 100
 }
 
 /** Compute weekly capacity (hours) for a resource type, accounting for named resource availability. */
@@ -51,7 +70,8 @@ export function getWeeklyCapacity(
     const start = nr.startWeek ?? 0       // null = project start (week 0)
     const end = nr.endWeek ?? Infinity     // null = project end
     if (week >= start && week <= end) {
-      totalHours += (nr.allocationPct / 100) * hoursPerDay * 5
+      const pct = effectiveAllocationPct(nr, week)
+      totalHours += (pct / 100) * hoursPerDay * 5
     }
   }
   return totalHours
@@ -215,10 +235,10 @@ function buildResponse(
           resourceTypeId: rt.id,
           resourceTypeName: rt.name,
           name: nr.name,
-          // Bug #8: use derived start/end for display, but keep allocationPct from actual NR
           startWeek: nr.startWeek ?? (derivedRt?.start ?? null),
           endWeek: nr.endWeek ?? (derivedRt?.end ?? null),
-          allocationPct: nr.allocationPct,
+          // Display the effective allocation % based on mode, not the legacy allocationPct field
+          allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
         }))
       }
       // Auto-generate synthetic named resources when RT has count > 0 and demand

@@ -470,12 +470,24 @@ describe('POST /schedule — DAG algorithm', () => {
 })
 
 describe('getWeeklyCapacity', () => {
+  const makeNR = (overrides: Record<string, any> = {}) => ({
+    id: 'nr-1',
+    name: 'Dev 1',
+    startWeek: null as number | null,
+    endWeek: null as number | null,
+    allocationPct: 100,
+    allocationMode: 'EFFORT',
+    allocationPercent: 100,
+    allocationStartWeek: null as number | null,
+    allocationEndWeek: null as number | null,
+    ...overrides,
+  })
   const makeRT = (overrides: Record<string, any> = {}) => ({
     id: 'rt-1',
     name: 'Developer',
     count: 1,
     hoursPerDay: null as number | null,
-    namedResources: [] as Array<{ id: string; name: string; startWeek: number | null; endWeek: number | null; allocationPct: number }>,
+    namedResources: [] as ReturnType<typeof makeNR>[],
     ...overrides,
   })
 
@@ -489,8 +501,8 @@ describe('getWeeklyCapacity', () => {
   it('named resources — all active (null start/end)', () => {
     const rt = makeRT({
       namedResources: [
-        { id: 'nr1', name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 100 },
-        { id: 'nr2', name: 'Dev 2', startWeek: null, endWeek: null, allocationPct: 100 },
+        makeNR({ id: 'nr1', name: 'Dev 1' }),
+        makeNR({ id: 'nr2', name: 'Dev 2' }),
       ],
     })
     // 2 people * 8 h/day * 5 days = 80
@@ -501,8 +513,8 @@ describe('getWeeklyCapacity', () => {
   it('named resources — staggered start', () => {
     const rt = makeRT({
       namedResources: [
-        { id: 'nr1', name: 'Dev 1', startWeek: 0, endWeek: null, allocationPct: 100 },
-        { id: 'nr2', name: 'Dev 2', startWeek: 4, endWeek: null, allocationPct: 100 },
+        makeNR({ id: 'nr1', name: 'Dev 1', startWeek: 0 }),
+        makeNR({ id: 'nr2', name: 'Dev 2', startWeek: 4 }),
       ],
     })
     // Week 0: only NR1 → 1 * 7.6 * 5 = 38
@@ -511,21 +523,45 @@ describe('getWeeklyCapacity', () => {
     expect(getWeeklyCapacity(rt, 4, 7.6)).toBe(76)
   })
 
-  it('named resources — partial allocation', () => {
+  it('named resources — partial allocation (FULL_PROJECT mode)', () => {
     const rt = makeRT({
       namedResources: [
-        { id: 'nr1', name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 50 },
+        makeNR({ id: 'nr1', name: 'Dev 1', allocationMode: 'FULL_PROJECT', allocationPercent: 50 }),
       ],
     })
     // 0.5 * 8 * 5 = 20
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(20)
   })
 
+  it('named resources — TIMELINE mode respects allocationPercent', () => {
+    const rt = makeRT({
+      namedResources: [
+        makeNR({ id: 'nr1', name: 'Dev 1', allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 6 }),
+      ],
+    })
+    // Week 1: outside window → 0
+    expect(getWeeklyCapacity(rt, 1, 8)).toBe(0)
+    // Week 4: inside window at 80% → 0.8 * 8 * 5 = 32
+    expect(getWeeklyCapacity(rt, 4, 8)).toBe(32)
+    // Week 7: outside window → 0
+    expect(getWeeklyCapacity(rt, 7, 8)).toBe(0)
+  })
+
+  it('named resources — EFFORT (T&M) mode always 100% capacity', () => {
+    const rt = makeRT({
+      namedResources: [
+        makeNR({ id: 'nr1', name: 'Dev 1', allocationMode: 'EFFORT', allocationPercent: 50 }),
+      ],
+    })
+    // EFFORT ignores allocationPercent for capacity → 1 * 8 * 5 = 40
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(40)
+  })
+
   it('named resources — person leaves early', () => {
     const rt = makeRT({
       namedResources: [
-        { id: 'nr1', name: 'Dev 1', startWeek: 0, endWeek: 3, allocationPct: 100 },
-        { id: 'nr2', name: 'Dev 2', startWeek: 0, endWeek: null, allocationPct: 100 },
+        makeNR({ id: 'nr1', name: 'Dev 1', startWeek: 0, endWeek: 3 }),
+        makeNR({ id: 'nr2', name: 'Dev 2', startWeek: 0 }),
       ],
     })
     // Week 2: both active → 2 * 8 * 5 = 80
@@ -538,8 +574,8 @@ describe('getWeeklyCapacity', () => {
     const rt = makeRT({
       count: 5,
       namedResources: [
-        { id: 'nr1', name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 100 },
-        { id: 'nr2', name: 'Dev 2', startWeek: null, endWeek: null, allocationPct: 100 },
+        makeNR({ id: 'nr1', name: 'Dev 1' }),
+        makeNR({ id: 'nr2', name: 'Dev 2' }),
       ],
     })
     // Should use 2 named resources, not count=5 → 2 * 8 * 5 = 80
