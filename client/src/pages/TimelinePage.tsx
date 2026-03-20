@@ -304,15 +304,15 @@ export default function TimelinePage() {
     const container = ganttContainerRef.current
     if (!container) return
 
-    // Collect all scrollable children and the container itself
+    // Collect all scrollable right-panels
     const scrollEls = Array.from(
       container.querySelectorAll<HTMLElement>('.overflow-x-auto')
     )
 
-    // Determine the full content width (max of all inner scrollWidths)
+    // Full row width = left-panel width (offsetLeft) + right-panel scroll content width
     const fullWidth = Math.max(
-      container.scrollWidth,
-      ...scrollEls.map(el => el.scrollWidth)
+      ...scrollEls.map(el => el.offsetLeft + el.scrollWidth),
+      container.scrollWidth
     )
     const fullHeight = container.scrollHeight
 
