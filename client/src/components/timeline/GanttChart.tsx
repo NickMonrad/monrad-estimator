@@ -53,6 +53,7 @@ interface GanttChartProps {
   rightPanelRef?: React.RefObject<HTMLDivElement | null>
   onRightPanelScroll?: React.UIEventHandler<HTMLDivElement>
   weeklyDemand?: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
+  extendedWeeks?: number  // buffer + onboarding weeks shown as shaded zone at end
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +142,7 @@ export default function GanttChart({
   rightPanelRef,
   onRightPanelScroll,
   weeklyDemand = [],
+  extendedWeeks = 0,
 }: GanttChartProps) {
   // Expanded state
   const [expandedFeatures, setExpandedFeatures] = useState<Set<string>>(new Set())
@@ -553,6 +555,28 @@ export default function GanttChart({
 
           {/* Background fill */}
           <rect x={0} y={0} width={totalWeeks * COL_W} height={totalHeight} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
+
+          {/* Extended period shading (buffer + onboarding weeks) */}
+          {extendedWeeks > 0 && (
+            <g style={{ pointerEvents: 'none' }}>
+              <rect
+                x={(totalWeeks - extendedWeeks) * COL_W}
+                y={0}
+                width={extendedWeeks * COL_W}
+                height={totalHeight}
+                fill={isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}
+              />
+              <text
+                x={(totalWeeks - extendedWeeks) * COL_W + 6}
+                y={HEADER_H / 2 + 4}
+                fontSize={10}
+                fill={svgColors.headerText}
+                opacity={0.6}
+              >
+                ← buffer / onboarding period ({extendedWeeks}w)
+              </text>
+            </g>
+          )}
 
           {/* Week header + vertical grid lines */}
           {Array.from({ length: totalWeeks }, (_, i) => (

@@ -97,7 +97,7 @@ function computeResourceBreakdown(
 }
 
 function buildResponse(
-  project: { id: string; startDate: Date | null; hoursPerDay: number; bufferWeeks?: number | null },
+  project: { id: string; startDate: Date | null; hoursPerDay: number; bufferWeeks?: number | null; onboardingWeeks?: number | null },
   entries: Array<{
     featureId: string
     feature: { name: string; order: number; timelineColour?: string | null; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
@@ -122,7 +122,7 @@ function buildResponse(
   const rawMaxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
     : null
-  const maxWeek = rawMaxWeek != null ? rawMaxWeek + (project.bufferWeeks ?? 0) : null
+  const maxWeek = rawMaxWeek != null ? rawMaxWeek + (project.bufferWeeks ?? 0) + (project.onboardingWeeks ?? 0) : null
   const projectedEndDate = (project.startDate && maxWeek != null)
     ? (() => { const d = new Date(project.startDate); d.setDate(d.getDate() + maxWeek * 7); return d.toISOString() })()
     : null
@@ -260,6 +260,8 @@ function buildResponse(
     startDate: project.startDate?.toISOString() ?? null,
     hoursPerDay: project.hoursPerDay,
     projectedEndDate,
+    bufferWeeks: project.bufferWeeks ?? 0,
+    onboardingWeeks: project.onboardingWeeks ?? 0,
     parallelWarnings,
     storyEntries,
     featureDependencies: featureDeps,
