@@ -304,17 +304,19 @@ export default function TimelinePage() {
     const container = ganttContainerRef.current
     if (!container) return
 
-    // Collect all scrollable right-panels
+    // Exact dimensions: all panels share labelW=300 and colW=64
+    const EXPORT_LABEL_W = 300
+    const EXPORT_COL_W = 64
+    const fullWidth = EXPORT_LABEL_W + totalWeeks * EXPORT_COL_W
+    const fullHeight = container.scrollHeight
+
+    // Dark-mode aware background colour
+    const bgColor = isDark ? '#111827' : '#ffffff'
+
+    // Collect all scrollable right-panels and expand them
     const scrollEls = Array.from(
       container.querySelectorAll<HTMLElement>('.overflow-x-auto')
     )
-
-    // Full row width = left-panel width (offsetLeft) + right-panel scroll content width
-    const fullWidth = Math.max(
-      ...scrollEls.map(el => el.offsetLeft + el.scrollWidth),
-      container.scrollWidth
-    )
-    const fullHeight = container.scrollHeight
 
     // Save and expand every scroll container + the outer container
     const savedContainer = {
@@ -342,7 +344,7 @@ export default function TimelinePage() {
 
     try {
       const dataUrl = await toPng(container, {
-        backgroundColor: '#ffffff',
+        backgroundColor: bgColor,
         width: fullWidth,
         height: fullHeight,
       })
