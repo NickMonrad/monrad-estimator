@@ -304,31 +304,57 @@ export default function TimelinePage() {
     const container = ganttContainerRef.current
     if (!container) return
 
-    // Temporarily expand all overflow-x scroll containers so the full width renders
+    // Collect all scrollable children and the container itself
     const scrollEls = Array.from(
       container.querySelectorAll<HTMLElement>('.overflow-x-auto')
     )
-    const saved = scrollEls.map(el => ({
+
+    // Determine the full content width (max of all inner scrollWidths)
+    const fullWidth = Math.max(
+      container.scrollWidth,
+      ...scrollEls.map(el => el.scrollWidth)
+    )
+    const fullHeight = container.scrollHeight
+
+    // Save and expand every scroll container + the outer container
+    const savedContainer = {
+      overflowX: container.style.overflowX,
+      minWidth: container.style.minWidth,
+      width: container.style.width,
+    }
+    const savedChildren = scrollEls.map(el => ({
       el,
       overflowX: el.style.overflowX,
       minWidth: el.style.minWidth,
     }))
+
+    container.style.overflowX = 'visible'
+    container.style.minWidth = fullWidth + 'px'
+    container.style.width = fullWidth + 'px'
     scrollEls.forEach(el => {
       el.style.overflowX = 'visible'
       el.style.minWidth = el.scrollWidth + 'px'
     })
 
-    // Wait one frame for the browser to reflow
+    // Two rAF frames to ensure full reflow before capture
+    await new Promise(r => requestAnimationFrame(r))
     await new Promise(r => requestAnimationFrame(r))
 
     try {
-      const dataUrl = await toPng(container, { backgroundColor: '#ffffff' })
+      const dataUrl = await toPng(container, {
+        backgroundColor: '#ffffff',
+        width: fullWidth,
+        height: fullHeight,
+      })
       const a = document.createElement('a')
       a.href = dataUrl
       a.download = `${project?.name ?? 'Timeline'} - Gantt - ${new Date().toISOString().slice(0, 10)}.png`
       a.click()
     } finally {
-      saved.forEach(({ el, overflowX, minWidth }) => {
+      container.style.overflowX = savedContainer.overflowX
+      container.style.minWidth = savedContainer.minWidth
+      container.style.width = savedContainer.width
+      savedChildren.forEach(({ el, overflowX, minWidth }) => {
         el.style.overflowX = overflowX
         el.style.minWidth = minWidth
       })
