@@ -563,7 +563,10 @@ export default function GanttChart({
             <g style={{ pointerEvents: 'none' }}>
               <rect x={0} y={0} width={weekOffset * COL_W} height={totalHeight}
                 fill={isDark ? 'rgba(251,191,36,0.08)' : 'rgba(251,191,36,0.12)'} />
-              <text x={6} y={HEADER_H / 2 + 4} fontSize={10} fill={svgColors.headerText} opacity={0.8}>
+              {/* Label pill just below header */}
+              <rect x={4} y={HEADER_H + 4} width={Math.min(weekOffset * COL_W - 8, 110)} height={16}
+                rx={3} fill={isDark ? 'rgba(251,191,36,0.18)' : 'rgba(251,191,36,0.25)'} />
+              <text x={8} y={HEADER_H + 15} fontSize={9} fill={isDark ? '#fbbf24' : '#b45309'} fontWeight={500}>
                 Onboarding ({weekOffset}w)
               </text>
               {/* Dashed right boundary */}
@@ -578,8 +581,12 @@ export default function GanttChart({
               <rect x={(totalWeeks - bufferWeeks) * COL_W} y={0}
                 width={bufferWeeks * COL_W} height={totalHeight}
                 fill={isDark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.10)'} />
-              <text x={(totalWeeks - bufferWeeks) * COL_W + 6} y={HEADER_H / 2 + 4}
-                fontSize={10} fill={svgColors.headerText} opacity={0.8}>
+              {/* Label pill just below header */}
+              <rect x={(totalWeeks - bufferWeeks) * COL_W + 4} y={HEADER_H + 4}
+                width={Math.min(bufferWeeks * COL_W - 8, 80)} height={16}
+                rx={3} fill={isDark ? 'rgba(99,102,241,0.20)' : 'rgba(99,102,241,0.18)'} />
+              <text x={(totalWeeks - bufferWeeks) * COL_W + 8} y={HEADER_H + 15}
+                fontSize={9} fill={isDark ? '#818cf8' : '#4338ca'} fontWeight={500}>
                 Buffer ({bufferWeeks}w)
               </text>
               <line x1={(totalWeeks - bufferWeeks) * COL_W} y1={0}
