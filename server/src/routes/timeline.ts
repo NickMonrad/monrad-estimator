@@ -1140,11 +1140,22 @@ router.get('/export/csv', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
     orderBy: [{ resourceType: { name: 'asc' } }, { name: 'asc' }],
   })
-  const nrRows: string[] = ['Name,ResourceType,StartWeek,EndWeek,AllocationPct']
+
+  function allocationModeLabel(mode: string): string {
+    if (mode === 'EFFORT') return 'T&M'
+    if (mode === 'TIMELINE') return 'Timeline'
+    return 'Full Project'
+  }
+
+  const nrRows: string[] = ['Name,ResourceType,AllocationType,AllocationPct,StartWeek,EndWeek']
   for (const nr of namedResources) {
     const name = nr.name.replace(/,/g, ' ')
     const rtName = nr.resourceType.name.replace(/,/g, ' ')
-    nrRows.push(`${name},${rtName},${nr.startWeek ?? ''},${nr.endWeek ?? ''},${nr.allocationPct}`)
+    const modeLabel = allocationModeLabel(nr.allocationMode)
+    const pct = nr.allocationPercent
+    const startW = nr.allocationMode === 'TIMELINE' ? (nr.allocationStartWeek ?? '') : ''
+    const endW = nr.allocationMode === 'TIMELINE' ? (nr.allocationEndWeek ?? '') : ''
+    nrRows.push(`${name},${rtName},${modeLabel},${pct},${startW},${endW}`)
   }
 
   const today = new Date().toISOString().slice(0, 10)
