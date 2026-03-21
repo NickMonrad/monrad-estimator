@@ -79,6 +79,57 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   res.json(rt)
 })
 
+// PATCH /projects/:projectId/resource-types/:id — update count and sync named resources
+router.patch('/:id', async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const { count } = req.body
+  if (count === undefined || typeof count !== 'number' || count < 0) {
+    res.status(400).json({ error: 'count must be a non-negative number' }); return
+  }
+
+  const rt = await prisma.resourceType.findFirst({ where: { id: req.params.id as string, projectId: req.params.projectId as string } })
+  if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
+
+  const currentNRs = await prisma.namedResource.findMany({
+    where: { resourceTypeId: rt.id },
+    orderBy: { createdAt: 'asc' },
+  })
+  const currentCount = currentNRs.length
+  const warnings: string[] = []
+
+  if (count > currentCount) {
+    // Add new anonymous named resources for each new slot
+    for (let n = currentCount + 1; n <= count; n++) {
+      await prisma.namedResource.create({
+        data: { name: `${rt.name} ${n}`, resourceTypeId: rt.id, allocationPct: 100 },
+      })
+    }
+  } else if (count < currentCount) {
+    // Remove last N named resources (highest createdAt) if they have no custom settings
+    const toConsider = [...currentNRs].reverse().slice(0, currentCount - count)
+    let removed = 0
+    for (const nr of toConsider) {
+      if (nr.startWeek !== null || nr.endWeek !== null || nr.allocationPct !== 100) {
+        warnings.push(`Skipped removal of "${nr.name}" — has custom settings`)
+        continue
+      }
+      await prisma.namedResource.delete({ where: { id: nr.id } })
+      removed++
+    }
+    // Recompute actual count after removals
+    const actualCount = currentCount - removed
+    await prisma.resourceType.update({ where: { id: rt.id }, data: { count: actualCount } })
+    const updated = await prisma.resourceType.findUnique({ where: { id: rt.id } })
+    res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })
+    return
+  }
+
+  const updated = await prisma.resourceType.update({ where: { id: rt.id }, data: { count } })
+  res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })
+})
+
 // DELETE /projects/:projectId/resource-types/:id
 router.delete('/:id', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)

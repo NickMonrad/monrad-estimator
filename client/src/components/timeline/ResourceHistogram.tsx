@@ -1,5 +1,6 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useIsDark } from '../../hooks/useIsDark'
+import TimelineTooltip from './TimelineTooltip'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -23,6 +24,7 @@ interface Props {
   totalWeeks: number
   colW: number
   labelW: number
+  weekOffset?: number
   scrollContainerRef?: React.RefObject<HTMLDivElement | null>
   onScroll?: React.UIEventHandler<HTMLDivElement>
 }
@@ -54,11 +56,17 @@ export default function ResourceHistogram({
   totalWeeks,
   colW,
   labelW,
+  weekOffset = 0,
   scrollContainerRef,
   onScroll,
 }: Props) {
 
   const isDark = useIsDark()
+
+  // Tooltip state
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null)
+  
+
   const svgColors = {
     bg:       isDark ? '#111827' : '#fafafa',
     gridLine: isDark ? '#374151' : '#f3f4f6',
@@ -162,6 +170,8 @@ export default function ResourceHistogram({
       <div
         className="overflow-x-auto flex-1"
         ref={scrollContainerRef}
+        onMouseLeave={() => setTooltip(null)}
+        style={{ position: 'relative' }}
         onScroll={onScroll}
       >
         <svg
@@ -197,7 +207,7 @@ export default function ResourceHistogram({
                 fontSize={9}
                 fill={svgColors.text}
               >
-                W{i}
+                W{i + 1}
               </text>
             )
           })}
@@ -229,9 +239,9 @@ export default function ResourceHistogram({
                   return (
                     <line
                       key={`cap-${w}`}
-                      x1={w * colW}
+                      x1={(w + weekOffset) * colW}
                       y1={capY}
-                      x2={(w + 1) * colW}
+                      x2={(w + weekOffset + 1) * colW}
                       y2={capY}
                       stroke={svgColors.capLine}
                       strokeWidth={1}
@@ -248,14 +258,13 @@ export default function ResourceHistogram({
 
                   const cap = capacityLookup.get(`${w}|${rt.name}`) ?? 0
                   const barH = Math.min(demand * scale, BAR_MAX_H + 6)
-                  const barX = w * colW + 4
+                  const barX = (w + weekOffset) * colW + 4
                   const barW = colW - 8
                   const barY = rowY + ROW_H - 6 - barH
                   const fill = barColour(demand, cap)
 
                   return (
                     <g key={w}>
-                      <title>{`W${w}: ${demand.toFixed(1)}d demand / ${cap.toFixed(1)}d capacity`}</title>
                       <rect
                         x={barX}
                         y={barY}
@@ -264,6 +273,19 @@ export default function ResourceHistogram({
                         fill={fill}
                         rx={2}
                         opacity={0.8}
+                        style={{ cursor: 'default' }}
+                        onMouseEnter={(e) => {
+                          const pct = cap > 0 ? ` (${Math.round((demand / cap) * 100)}%)` : ''
+                          setTooltip({
+                            x: e.clientX,
+                            y: e.clientY,
+                            content: `Week ${w} · ${rt.name}: ${demand.toFixed(1)} / ${cap.toFixed(1)} days${pct}`,
+                          })
+                        }}
+                        onMouseMove={(e) => {
+                          setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)
+                        }}
+                        onMouseLeave={() => setTooltip(null)}
                       />
                     </g>
                   )
@@ -273,6 +295,12 @@ export default function ResourceHistogram({
           })}
         </svg>
       </div>
+      <TimelineTooltip
+        x={tooltip?.x ?? 0}
+        y={tooltip?.y ?? 0}
+        visible={tooltip !== null}
+        content={tooltip?.content ?? ''}
+      />
     </div>
   )
 }

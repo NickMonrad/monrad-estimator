@@ -58,11 +58,11 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
 
-  // Project duration in weeks from the latest timeline entry end point + buffer weeks
+  // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
   const projectDurationWeeks =
     (project.timelineEntries.length > 0
       ? Math.max(...project.timelineEntries.map(te => te.startWeek + te.durationWeeks))
-      : 0) + (project.bufferWeeks ?? 0)
+      : 0) + (project.bufferWeeks ?? 0) + (project.onboardingWeeks ?? 0)
 
   // Build lookup maps for timeline entries
   const featureEntryMap = new Map(project.timelineEntries.map(e => [e.featureId, e]))
@@ -372,6 +372,8 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     projectId,
     hoursPerDay: fallbackHoursPerDay,
     projectDurationWeeks,
+    bufferWeeks: project.bufferWeeks ?? 0,
+    onboardingWeeks: project.onboardingWeeks ?? 0,
     resourceRows,
     overheadRows,
     summary: {
