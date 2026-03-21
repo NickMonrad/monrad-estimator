@@ -1,7 +1,7 @@
 # Monrad Estimator — Functional Specification
 
 > **Status:** Living document. Update alongside feature releases.  
-> **Last updated:** March 2026 (reflects all features shipped through PR #155)
+> **Last updated:** March 2026 (reflects all features shipped through PR #164)
 
 ---
 
@@ -434,7 +434,40 @@ Each project-scoped resource type can have one or more named resources assigned 
 | `TIMELINE` | Cost calculated from the span of the project timeline × allocation % |
 | `FULL_PROJECT` | Cost calculated as full project duration regardless of individual start/end |
 
-### Overhead Items
+### Project Duration Panel
+
+The Resource Profile and Commercial tabs include a **Project Duration** panel with the following fields:
+
+| Field | Notes |
+|---|---|
+| Buffer weeks | Weeks appended after the last scheduled feature; displayed as an indigo zone at chart end |
+| Onboarding weeks | Weeks BEFORE delivery begins (`Project.onboardingWeeks Int @default(0)`); displayed as an amber zone at chart start. Allocated to `FULL_PROJECT` and Overhead resources but NOT to `T&M` or `TIMELINE` resources |
+
+Feature and story bars on the Gantt are shifted right by `onboardingWeeks` columns so week 1 of delivery aligns with the correct calendar date.
+
+### Named Resource Allocation Modes (Timeline display)
+
+Named resource allocation bars on the Timeline page are mode-aware:
+
+| Mode | Timeline bar behaviour |
+|---|---|
+| `FULL_PROJECT` | Bar spans the full project duration (including onboarding weeks) |
+| `TIMELINE` | Bar uses the derived demand start/end week, or the manual start/end if set |
+| `T&M` (Effort) | Bar reflects actual weekly demand from the resource histogram |
+
+The allocation badge shows a **week range sub-label** for all non-`EFFORT` modes.
+
+### Cost Summary Period Column
+
+The Period column in the Cost Summary table shows mode-correct date ranges:
+
+| Mode | Period shown |
+|---|---|
+| `FULL_PROJECT` | Wk 0 → Wk N (full project duration) |
+| `TIMELINE` | Derived or manual start week → end week |
+| `T&M` / `EFFORT` | — (not applicable) |
+
+
 
 Overhead items add non-task cost to a project.
 
@@ -559,6 +592,63 @@ Opens when clicking a feature bar. Shows:
 - Resource breakdown: days by resource type for this feature
 - Estimated cost (if day rates configured)
 - Feature dependencies selector (choose which other features must complete first)
+- **Colour picker** — sets `Feature.timelineColour`; epic palette used as fallback when unset
+
+### Custom Feature Colours
+
+Each feature bar in the Gantt can have its own colour, set via a colour picker in the Inline Edit Panel. The chosen colour is saved to `Feature.timelineColour`. If unset, the bar inherits the parent epic's colour from the epic palette.
+
+### Over-Allocation Indicator
+
+A **red 8 px circle** is overlaid on a Gantt feature bar in any week where the resource demand for that feature's resource type exceeds the available capacity (named resources × allocation %). This makes over-allocation visible directly on the bar without needing to scroll to the histogram.
+
+### Onboarding & Buffer Zones
+
+- **Onboarding zone** (amber, dashed boundary): rendered at the left edge of the Gantt for the number of `onboardingWeeks` configured on the project. All feature and story bars are shifted right by `onboardingWeeks` columns so week 1 of delivery aligns with the correct calendar week.
+- **Buffer zone** (indigo, dashed boundary): rendered at the right edge of the Gantt for the number of `bufferWeeks` configured on the project.
+
+Both zones are set in the **Project Duration** panel on the Resource Profile / Commercial tabs.
+
+### Timeline CSV Export
+
+**Endpoint:** `GET /api/projects/:id/timeline/export/csv`  
+**Client:** Export CSV button on the Timeline page.
+
+The CSV contains three sections:
+
+1. **Gantt section** — one row per feature: name, epic, start week, duration weeks, end week, resource types
+2. **Resource demand section** — weekly demand by resource type
+3. **Named resources section** — one row per named resource with the following columns:
+
+| Column | Notes |
+|---|---|
+| Name | Person / role name |
+| ResourceType | Resource type label |
+| AllocationType | `EFFORT` / `TIMELINE` / `FULL_PROJECT` |
+| AllocationPct | Allocation percentage (0–100) |
+| StartWeek | Start week of the allocation (derived from demand data for `TIMELINE` mode) |
+| EndWeek | End week of the allocation (derived from demand data for `TIMELINE` mode) |
+
+### Timeline PNG Export
+
+- **Export PNG** button on the Timeline page
+- Captures the full-width Timeline view (Gantt + resource histogram + named resources panel) using `html-to-image`
+- Dark-mode aware: rendered in the current theme
+- Filename: `{ProjectName} - Timeline - {YYYY-MM-DD}.png`
+
+### Named Resources Panel (Timeline)
+
+The Resource Counts panel on the Timeline page lists all named resources for the project. Resources can be added or removed directly with **+/−** buttons; adding/removing a person automatically syncs the `count` field on the parent resource type.
+
+Named resource allocation bars show mode-aware week ranges with **1-indexed week labels**:
+
+| Mode | Bar behaviour |
+|---|---|
+| `FULL_PROJECT` | Spans full project duration (including onboarding weeks) |
+| `TIMELINE` | Uses derived demand start/end, or manual start/end if set |
+| `T&M` / `EFFORT` | Reflects actual weekly demand from histogram |
+
+
 
 ### Start Date
 

@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import JSZip from 'jszip'
@@ -279,6 +279,17 @@ export default function ResourceProfilePage() {
     type: 'PERCENTAGE' as OverheadType,
     value: '',
   })
+
+  // ── Buffer / onboarding weeks ──
+  const [bufferWeeks, setBufferWeeks] = useState(0)
+  const [onboardingWeeks, setOnboardingWeeks] = useState(0)
+
+  useEffect(() => {
+    if (profile != null) {
+      setBufferWeeks(profile.bufferWeeks ?? 0)
+      setOnboardingWeeks(profile.onboardingWeeks ?? 0)
+    }
+  }, [profile?.bufferWeeks, profile?.onboardingWeeks])
 
   // ── Tab state ──
   type TabKey = 'profile' | 'commercial'
@@ -810,15 +821,15 @@ export default function ResourceProfilePage() {
   }
 
   const getAllocationBadge = (row: CommercialRow) => {
-    const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek
-    const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek
     if (row.allocationMode === 'AGGREGATE') {
       return { label: 'Aggregate', color: 'bg-gray-100 text-gray-400', sub: null }
     } else if (row.allocationMode === 'EFFORT') {
       return { label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }
     } else if (row.allocationMode === 'TIMELINE') {
+      const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek
+      const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek
       const sub = effectiveStart != null && effectiveEnd != null
-        ? `Wk ${Math.round(effectiveStart)} → Wk ${Math.round(effectiveEnd)}`
+        ? `Wk ${Math.floor(effectiveStart)} → Wk ${Math.floor(effectiveEnd)}`
         : null
       return {
         label: `Timeline · ${row.allocationPercent}%`,
@@ -826,10 +837,12 @@ export default function ResourceProfilePage() {
         sub,
       }
     } else {
+      const dur = profile?.projectDurationWeeks
+      const sub = dur != null ? `Wk 0 → Wk ${Math.floor(dur)}` : null
       return {
         label: `Full Project · ${row.allocationPercent}%`,
         color: 'bg-purple-100 text-purple-700',
-        sub: null,
+        sub,
       }
     }
   }
@@ -1073,7 +1086,7 @@ export default function ResourceProfilePage() {
                                     Timeline · {row.allocationPercent ?? 100}%
                                   </span>
                                   {effectiveStart != null && effectiveEnd != null && (
-                                    <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.round(effectiveStart)} → Wk {Math.round(effectiveEnd)}</div>
+                                    <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.floor(effectiveStart)} → Wk {Math.floor(effectiveEnd)}</div>
                                   )}
                                 </div>
                               )
@@ -1089,7 +1102,7 @@ export default function ResourceProfilePage() {
                             const start = weekToDate(startWk)
                             const end = weekToDate(endWk)
                             if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                            if (startWk != null && endWk != null) return `Wk ${Math.round(startWk)} – Wk ${Math.round(endWk)}`
+                            if (startWk != null && endWk != null) return `Wk ${Math.floor(startWk)} – Wk ${Math.floor(endWk)}`
                             return '—'
                           })()}
                         </td>
@@ -1352,6 +1365,46 @@ export default function ResourceProfilePage() {
           </div>
         </section>
 
+        {/* ── Project Duration panel (profile tab) ── */}
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Project Duration</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Onboarding Weeks</label>
+              <input
+                type="number"
+                min={0}
+                value={onboardingWeeks}
+                onChange={e => setOnboardingWeeks(Number(e.target.value))}
+                className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Weeks at project start for team onboarding (added to period)</p>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Buffer Weeks</label>
+              <input
+                type="number"
+                min={0}
+                value={bufferWeeks}
+                onChange={e => setBufferWeeks(Number(e.target.value))}
+                className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Extra weeks added to project end date for contingency</p>
+            </div>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <button
+              onClick={() =>
+                api.patch(`/projects/${projectId}`, { bufferWeeks, onboardingWeeks })
+                  .then(() => qc.invalidateQueries({ queryKey: ['resource-profile', projectId] }))
+              }
+              className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+
         <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -1425,6 +1478,46 @@ export default function ResourceProfilePage() {
             )}
           </section>
 
+          {/* ── Project Duration panel (commercial tab) ── */}
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Project Duration</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Onboarding Weeks</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={onboardingWeeks}
+                  onChange={e => setOnboardingWeeks(Number(e.target.value))}
+                  className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                />
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Weeks at project start for team onboarding (added to period)</p>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Buffer Weeks</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={bufferWeeks}
+                  onChange={e => setBufferWeeks(Number(e.target.value))}
+                  className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                />
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Extra weeks added to project end date for contingency</p>
+              </div>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={() =>
+                  api.patch(`/projects/${projectId}`, { bufferWeeks, onboardingWeeks })
+                    .then(() => qc.invalidateQueries({ queryKey: ['resource-profile', projectId] }))
+                }
+                className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+
           {/* ── Cost Summary Table ── */}
           <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
             <header className="px-6 py-4 border-b border-gray-100 dark:border-gray-700">
@@ -1454,7 +1547,7 @@ export default function ResourceProfilePage() {
                   <tbody>
                     {commercialData.rows.map(row => (
                       <Fragment key={row.id}>
-                        <tr className={`border-b border-gray-100 ${row.kind === 'named-resource' ? 'bg-gray-50' : ''}`}>
+                        <tr className={`border-b border-gray-100 dark:border-gray-700 ${row.kind === 'named-resource' ? 'bg-gray-50 dark:bg-gray-900' : ''}`}>
                           <td className="px-6 py-3 text-gray-900 dark:text-white font-medium">
                             {row.name}
                             {row.kind === 'overhead' && <span className="text-xs text-amber-600 ml-2">(overhead)</span>}
@@ -1485,12 +1578,19 @@ export default function ResourceProfilePage() {
                           </td>
                           <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                             {(row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' ? (() => {
-                              const startWk = row.allocationStartWeek ?? row.derivedStartWeek
-                              const endWk = row.allocationEndWeek ?? row.derivedEndWeek
+                              let startWk: number | null
+                              let endWk: number | null
+                              if (row.allocationMode === 'FULL_PROJECT') {
+                                startWk = 0
+                                endWk = profile?.projectDurationWeeks ?? null
+                              } else {
+                                startWk = row.allocationStartWeek ?? row.derivedStartWeek
+                                endWk = row.allocationEndWeek ?? row.derivedEndWeek
+                              }
                               const start = weekToDate(startWk)
                               const end = weekToDate(endWk)
                               if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                              if (startWk != null && endWk != null) return `Wk ${Math.round(startWk)} – Wk ${Math.round(endWk)}`
+                              if (startWk != null && endWk != null) return `Wk ${Math.floor(startWk)} – Wk ${Math.floor(endWk)}`
                               return '—'
                             })() : '—'}
                           </td>
@@ -1500,7 +1600,7 @@ export default function ResourceProfilePage() {
                         </tr>
                         {/* Inline allocation editor */}
                         {editingAllocation === row.id && allocationDraft && (row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' && (
-                          <tr className="border-b border-blue-100 bg-blue-50">
+                          <tr className="border-b border-blue-100 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30">
                             <td colSpan={8} className="px-6 py-4">
                               <div className="flex flex-wrap items-end gap-4">
                                 <div>
@@ -1532,7 +1632,7 @@ export default function ResourceProfilePage() {
                                     <div>
                                       <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                         Start Week override
-                                        {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.round(row.derivedStartWeek)})</span>}
+                                        {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
                                       </label>
                                       <input
                                         type="number"
@@ -1547,7 +1647,7 @@ export default function ResourceProfilePage() {
                                     <div>
                                       <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                         End Week override
-                                        {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.round(row.derivedEndWeek)})</span>}
+                                        {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
                                       </label>
                                       <input
                                         type="number"
@@ -1589,12 +1689,14 @@ export default function ResourceProfilePage() {
                                     }}
                                     disabled={updateAllocationMutation.isPending || updateNrAllocationMutation.isPending}
                                     className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                                    data-testid="allocation-save"
                                   >
                                     {(updateAllocationMutation.isPending || updateNrAllocationMutation.isPending) ? 'Saving…' : 'Save'}
                                   </button>
                                   <button
                                     onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
                                     className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                    data-testid="allocation-cancel"
                                   >
                                     Cancel
                                   </button>

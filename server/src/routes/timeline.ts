@@ -26,11 +26,31 @@ type ResourceTypeWithNamed = {
   count: number
   hoursPerDay: number | null
   namedResources: Array<{
+    id: string
     name: string
     startWeek: number | null
     endWeek: number | null
     allocationPct: number
+    allocationMode: string
+    allocationPercent: number
+    allocationStartWeek: number | null
+    allocationEndWeek: number | null
   }>
+}
+
+/** Compute the effective allocation percentage for a named resource in a given week. */
+function effectiveAllocationPct(
+  nr: ResourceTypeWithNamed['namedResources'][number],
+  week: number,
+): number {
+  if (nr.allocationMode === 'FULL_PROJECT') return nr.allocationPercent
+  if (nr.allocationMode === 'TIMELINE') {
+    const wStart = nr.allocationStartWeek ?? nr.startWeek ?? 0
+    const wEnd = nr.allocationEndWeek ?? nr.endWeek ?? Infinity
+    return week >= wStart && week <= wEnd ? nr.allocationPercent : 0
+  }
+  // EFFORT (T&M) — no fixed allocation; full capacity available
+  return 100
 }
 
 /** Compute weekly capacity (hours) for a resource type, accounting for named resource availability. */
@@ -50,7 +70,8 @@ export function getWeeklyCapacity(
     const start = nr.startWeek ?? 0       // null = project start (week 0)
     const end = nr.endWeek ?? Infinity     // null = project end
     if (week >= start && week <= end) {
-      totalHours += (nr.allocationPct / 100) * hoursPerDay * 5
+      const pct = effectiveAllocationPct(nr, week)
+      totalHours += (pct / 100) * hoursPerDay * 5
     }
   }
   return totalHours
@@ -76,10 +97,10 @@ function computeResourceBreakdown(
 }
 
 function buildResponse(
-  project: { id: string; startDate: Date | null; hoursPerDay: number; bufferWeeks?: number | null },
+  project: { id: string; startDate: Date | null; hoursPerDay: number; bufferWeeks?: number | null; onboardingWeeks?: number | null },
   entries: Array<{
     featureId: string
-    feature: { name: string; order: number; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
+    feature: { name: string; order: number; timelineColour?: string | null; epic: { id: string; name: string; order: number; featureMode: string; scheduleMode: string; timelineStartWeek: number | null }; userStories: { isActive: boolean | null; tasks: { resourceTypeId: string | null, hoursEffort: number, durationDays: number | null, resourceType: { name: string, hoursPerDay: number | null } | null }[] }[] }
     startWeek: number
     durationWeeks: number
     isManual: boolean
@@ -101,7 +122,7 @@ function buildResponse(
   const rawMaxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
     : null
-  const maxWeek = rawMaxWeek != null ? rawMaxWeek + (project.bufferWeeks ?? 0) : null
+  const maxWeek = rawMaxWeek != null ? rawMaxWeek + (project.bufferWeeks ?? 0) + (project.onboardingWeeks ?? 0) : null
   const projectedEndDate = (project.startDate && maxWeek != null)
     ? (() => { const d = new Date(project.startDate); d.setDate(d.getDate() + maxWeek * 7); return d.toISOString() })()
     : null
@@ -209,14 +230,22 @@ function buildResponse(
         // Bug #7: only include if RT has demand
         if (!rtNamesWithHours.has(rt.name)) return []
         const derivedRt = rtDerivedWeeks.get(rt.name)
-        return rt.namedResources.map(nr => ({
-          resourceTypeName: rt.name,
-          name: nr.name,
-          // Bug #8: use derived start/end for display, but keep allocationPct from actual NR
-          startWeek: nr.startWeek ?? (derivedRt?.start ?? null),
-          endWeek: nr.endWeek ?? (derivedRt?.end ?? null),
-          allocationPct: nr.allocationPct,
-        }))
+        return rt.namedResources.map(nr => {
+          const isFullProject = nr.allocationMode === 'FULL_PROJECT'
+          return {
+            id: nr.id,
+            resourceTypeId: rt.id,
+            resourceTypeName: rt.name,
+            name: nr.name,
+            // Full Project: leave null so client falls back to projectEndWeek (full span incl. buffer)
+            // Timeline: use manual override first, then demand-derived min/max
+            // Effort (T&M): bar uses demand histogram, so start/end are ignored
+            startWeek: isFullProject ? null : (nr.allocationStartWeek ?? (derivedRt?.start ?? null)),
+            endWeek: isFullProject ? null : (nr.allocationEndWeek ?? (derivedRt?.end ?? null)),
+            allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
+            allocationMode: nr.allocationMode,
+          }
+        })
       }
       // Auto-generate synthetic named resources when RT has count > 0 and demand
       if (rt.count > 0 && rtNamesWithHours.has(rt.name)) {
@@ -226,6 +255,7 @@ function buildResponse(
           startWeek: null as number | null,
           endWeek: null as number | null,
           allocationPct: 100,
+          allocationMode: 'EFFORT' as string,
         }))
       }
       return []
@@ -236,6 +266,8 @@ function buildResponse(
     startDate: project.startDate?.toISOString() ?? null,
     hoursPerDay: project.hoursPerDay,
     projectedEndDate,
+    bufferWeeks: project.bufferWeeks ?? 0,
+    onboardingWeeks: project.onboardingWeeks ?? 0,
     parallelWarnings,
     storyEntries,
     featureDependencies: featureDeps,
@@ -264,6 +296,7 @@ function buildResponse(
         epicScheduleMode: e.feature.epic.scheduleMode,
         epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
         featureOrder: e.feature.order,
+        timelineColour: e.feature.timelineColour ?? null,
         startWeek: e.startWeek,
         durationWeeks: e.durationWeeks,
         isManual: e.isManual,
@@ -573,6 +606,17 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       : currEpic.features       // parallel: all features need explicit constraint
 
     for (const prevFeature of prevEpic.features) {
+      // Bug fix: if this prevFeature has an explicit FeatureDependency on a feature in
+      // currEpic, adding the inter-epic chain edge would create a cycle
+      // (prevFeature → currEpic.first → ... → depTarget → prevFeature).
+      // Skip the chain edge for prevFeature in that case so it can float freely
+      // based only on its explicit deps.
+      const hasCrossEpicDep = (prevFeature.dependencies ?? []).some(dep => {
+        const target = featureMap.get(dep.dependsOnId)
+        return target !== undefined && target.epic.id === currEpic.id
+      })
+      if (hasCrossEpicDep) continue
+
       for (const currFeature of currTargets) {
         addEdge(prevFeature.id, currFeature.id)
       }
@@ -1030,6 +1074,158 @@ router.delete('/stories/:storyId', async (req: AuthRequest, res: Response) => {
     where: { storyId: req.params.storyId as string, projectId: project.id },
   })
   res.status(204).end()
+})
+
+// GET /api/projects/:projectId/timeline/export/csv
+router.get('/export/csv', async (req: AuthRequest, res: Response) => {
+  const project = await prisma.project.findFirst({
+    where: { id: req.params.projectId as string, ownerId: req.userId },
+    include: {
+      resourceTypes: { include: { namedResources: true } },
+    },
+  })
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const projectId = project.id
+  const hpd = project.hoursPerDay
+
+  // Section 1 — Gantt
+  const timelineEntries = await prisma.timelineEntry.findMany({
+    where: { projectId },
+    include: {
+      feature: {
+        include: { epic: true },
+      },
+    },
+    orderBy: { startWeek: 'asc' },
+  })
+
+  function toDateStr(startDate: Date | null, offsetWeeks: number): string {
+    if (!startDate) return ''
+    const d = new Date(startDate)
+    d.setDate(d.getDate() + offsetWeeks * 7)
+    return d.toISOString().slice(0, 10)
+  }
+
+  const ganttRows: string[] = ['Feature,Epic,StartWeek,DurationWeeks,StartDate,EndDate']
+  for (const e of timelineEntries) {
+    const featureName = e.feature.name.replace(/,/g, ' ')
+    const epicName = e.feature.epic.name.replace(/,/g, ' ')
+    const startDate = toDateStr(project.startDate, e.startWeek)
+    const endDate = toDateStr(project.startDate, e.startWeek + e.durationWeeks)
+    ganttRows.push(`${featureName},${epicName},${e.startWeek},${e.durationWeeks},${startDate},${endDate}`)
+  }
+
+  // Section 2 — Resource Demand
+  const demandRows: string[] = ['ResourceType,Week,DemandDays,CapacityDays,Status']
+  if (project.weeklyDemandCache) {
+    const cacheMap = project.weeklyDemandCache as Record<string, number>
+    const rtByName = new Map(project.resourceTypes.map(rt => [rt.name, rt as ResourceTypeWithNamed]))
+    // Sort entries by (week, rtName) for deterministic output
+    const cacheEntries = Object.entries(cacheMap).map(([key, demandDays]) => {
+      const pipeIdx = key.lastIndexOf('|')
+      const rtName = key.slice(0, pipeIdx)
+      const week = Number(key.slice(pipeIdx + 1))
+      return { rtName, week, demandDays }
+    }).sort((a, b) => a.week - b.week || a.rtName.localeCompare(b.rtName))
+
+    for (const { rtName, week, demandDays } of cacheEntries) {
+      const rt = rtByName.get(rtName)
+      const capacityHours = rt ? getWeeklyCapacity(rt, week, hpd) : hpd * 5
+      const capacityDays = capacityHours / hpd
+      const d = Math.round(demandDays * 100) / 100
+      const c = Math.round(capacityDays * 100) / 100
+      const status = d > c ? 'Over' : d === c ? 'At capacity' : 'Under'
+      demandRows.push(`${rtName.replace(/,/g, ' ')},${week},${d},${c},${status}`)
+    }
+  }
+
+  // Section 3 — Named Resources
+  // Compute derivedStartWeek/derivedEndWeek per resource type from timeline entries
+  // (same logic as resourceProfile route)
+  const [storyTimelineEntries, tasksForRt] = await Promise.all([
+    prisma.storyTimelineEntry.findMany({
+      where: { projectId },
+      select: { storyId: true, startWeek: true, durationWeeks: true },
+    }),
+    prisma.task.findMany({
+      where: { userStory: { feature: { epic: { projectId } } }, resourceTypeId: { not: null } },
+      select: {
+        resourceTypeId: true,
+        userStoryId: true,
+        userStory: { select: { featureId: true } },
+      },
+    }),
+  ])
+
+  // featureId → { startWeek, endWeek } from the already-fetched gantt entries
+  const featureWeekMap = new Map(
+    timelineEntries.map(e => [e.featureId, { startWeek: e.startWeek, endWeek: e.startWeek + e.durationWeeks }])
+  )
+  const storyEntryMap2 = new Map(storyTimelineEntries.map(e => [e.storyId, e]))
+
+  const rtWeeks = new Map<string, { starts: number[]; ends: number[] }>()
+  for (const task of tasksForRt) {
+    if (!task.resourceTypeId) continue
+    const storyEntry = task.userStoryId ? storyEntryMap2.get(task.userStoryId) : null
+    const featureEntry = task.userStory?.featureId ? featureWeekMap.get(task.userStory.featureId) : null
+    const entry = storyEntry
+      ? { startWeek: storyEntry.startWeek, endWeek: storyEntry.startWeek + storyEntry.durationWeeks }
+      : featureEntry ?? null
+    if (!entry) continue
+    if (!rtWeeks.has(task.resourceTypeId)) rtWeeks.set(task.resourceTypeId, { starts: [], ends: [] })
+    rtWeeks.get(task.resourceTypeId)!.starts.push(entry.startWeek)
+    rtWeeks.get(task.resourceTypeId)!.ends.push(entry.endWeek)
+  }
+
+  const namedResources = await prisma.namedResource.findMany({
+    where: { resourceType: { projectId } },
+    include: { resourceType: true },
+    orderBy: [{ resourceType: { name: 'asc' } }, { name: 'asc' }],
+  })
+
+  function allocationModeLabel(mode: string): string {
+    if (mode === 'EFFORT') return 'T&M'
+    if (mode === 'TIMELINE') return 'Timeline'
+    return 'Full Project'
+  }
+
+  const nrRows: string[] = ['Name,ResourceType,AllocationType,AllocationPct,StartWeek,EndWeek']
+  for (const nr of namedResources) {
+    const name = nr.name.replace(/,/g, ' ')
+    const rtName = nr.resourceType.name.replace(/,/g, ' ')
+    const modeLabel = allocationModeLabel(nr.allocationMode)
+    const pct = nr.allocationPercent
+
+    let startW: number | string = ''
+    let endW: number | string = ''
+    if (nr.allocationMode === 'TIMELINE') {
+      const weeks = rtWeeks.get(nr.resourceTypeId)
+      const derivedStart = weeks && weeks.starts.length > 0 ? Math.min(...weeks.starts) : null
+      const derivedEnd = weeks && weeks.ends.length > 0 ? Math.max(...weeks.ends) : null
+      const rawStart = nr.allocationStartWeek ?? derivedStart ?? null
+      const rawEnd = nr.allocationEndWeek ?? derivedEnd ?? null
+      startW = rawStart != null ? Math.floor(rawStart) : ''
+      endW = rawEnd != null ? Math.floor(rawEnd) : ''
+    }
+    nrRows.push(`${name},${rtName},${modeLabel},${pct},${startW},${endW}`)
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  const projectName = project.name.replace(/[/\\?%*:|"<>]/g, '-')
+  const filename = `${projectName} - Timeline - ${today}.csv`
+
+  const csv = [
+    ganttRows.join('\n'),
+    '',
+    demandRows.join('\n'),
+    '',
+    nrRows.join('\n'),
+  ].join('\n')
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+  res.send(csv)
 })
 
 // PUT /api/projects/:projectId/timeline/:featureId

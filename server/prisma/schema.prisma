@@ -57,7 +57,8 @@ model Project {
   customer   Customer?     @relation(fields: [customerId], references: [id])
   status      ProjectStatus @default(DRAFT)
   hoursPerDay Float         @default(7.6)
-  bufferWeeks Int           @default(0)
+  bufferWeeks     Int           @default(0)
+  onboardingWeeks Int           @default(0)
   startDate   DateTime?
   taxRate      Float?    @default(10)
   taxLabel     String    @default("GST")
@@ -163,15 +164,16 @@ model Feature {
   description    String?
   assumptions    String?
   order          Int                  @default(0)
-  isActive       Boolean              @default(true)
-  epic           Epic                 @relation(fields: [epicId], references: [id], onDelete: Cascade)
-  epicId         String
-  userStories    UserStory[]
-  timelineEntry  TimelineEntry?
-  dependencies   FeatureDependency[]  @relation("FeatureDeps")
-  dependents     FeatureDependency[]  @relation("FeatureDepsOn")
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  isActive         Boolean              @default(true)
+  timelineColour   String?
+  epic             Epic                 @relation(fields: [epicId], references: [id], onDelete: Cascade)
+  epicId           String
+  userStories      UserStory[]
+  timelineEntry    TimelineEntry?
+  dependencies     FeatureDependency[]  @relation("FeatureDeps")
+  dependents       FeatureDependency[]  @relation("FeatureDepsOn")
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
 }
 
 model FeatureDependency {

@@ -134,10 +134,10 @@ Feature Template data model + API, Template Library UI, template-based backlog g
 Effort summary API grouped by resource type and epic. Summary view with expandable epic sub-rows, cost columns (day rate + estimated cost, conditional on rate data), and category subtotals. Detail view with Excel-like column filters (Epic, Feature, Story, Resource Type dropdowns + task name text search), cascading filter dropdowns, cost per task, and totals rows. Active-scope toggle to focus on in-scope items only.
 
 ### ✅ Phase 5 — Timeline Planner
-Timeline data model + API with dependency-aware auto-scheduler, proportional pool resource levelling, and fractional-week durations. SVG Gantt chart with feature and story bars, drag-and-drop manual scheduling with override indicators, inter-feature dependency arrows, sequential/parallel epic mode toggle, and resource demand histogram. Inline edit panel for start week, duration, and feature dependencies.
+Timeline data model + API with dependency-aware auto-scheduler, proportional pool resource levelling, and fractional-week durations. SVG Gantt chart with feature and story bars, drag-and-drop manual scheduling with override indicators, inter-feature dependency arrows, sequential/parallel epic mode toggle, resource demand histogram, custom feature colours (colour picker saved to `Feature.timelineColour`), over-allocation indicators (red dot on Gantt bars in over-allocated weeks), and onboarding/buffer zone visualisation (amber onboarding zone at chart start, indigo buffer zone at chart end). Inline edit panel for start week, duration, and feature dependencies. CSV export (Gantt + resource demand + named resources) and full-width PNG export (dark-mode aware).
 
 ### ✅ Phase 6 — Resource Profile
-Per-resource hours/days/cost aggregation with epic → feature → story drill-down, configurable overhead items (% of task days, fixed total days, days per week × project duration), stacked bar chart, FTE calculation, dual CSV exports (resource profile + full project zip). Per-resource `hoursPerDay` and `dayRate` overrides support multi-locale teams (e.g. AU 7.6h vs NZ 8h). See [#6](https://github.com/NickMonrad/monrad-estimator/issues/6).
+Per-resource hours/days/cost aggregation with epic → feature → story drill-down, configurable overhead items (% of task days, fixed total days, days per week × project duration), stacked bar chart, FTE calculation, dual CSV exports (resource profile + full project zip). Per-resource `hoursPerDay` and `dayRate` overrides support multi-locale teams (e.g. AU 7.6h vs NZ 8h). Onboarding/buffer weeks panel: onboarding weeks allocated to Full Project and Overhead resources before delivery begins; buffer weeks appended at project end. Allocation mode-aware named resource bars on Timeline (FULL_PROJECT spans full project; TIMELINE uses derived or manual range; T&M shows demand bars). Cost Summary Period column shows mode-correct date ranges. See [#6](https://github.com/NickMonrad/monrad-estimator/issues/6).
 
 ### 🚧 Phase 7 — Document Generation *(in progress)*
 Scope document and Statement of Work as PDF + Word (.docx), configurable branding and section toggles. Phase 7a (programmatic PDF scope document) shipped in [#129](https://github.com/NickMonrad/monrad-estimator/pull/129). See [#7](https://github.com/NickMonrad/monrad-estimator/issues/7).
@@ -204,6 +204,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | PDF cover page: generated-by username, generation time, document label, projected end date; backlog CSV fix for epic/feature descriptions; commercial tab removes aggregate row; auto-create person on resource type creation; assumptions exclude out-of-scope items | #135 |
 | Comprehensive dark mode theming across all pages and components; standardised headers with M icon, ThemeToggle, and breadcrumb nav on all global and project pages; SVG dark mode (Gantt, histogram, named resources) via `useIsDark` hook; epic/feature/story colour hierarchy in dark mode | #143 |
 | Document generator: normalise customer data for PDF rendering, harden cover-page layout, and replace fragile scope summary table layout with long-content-safe rendering | #155 |
+| Timeline & Resource Profile enhancements — person-first model, over-allocation indicators, custom feature colours, onboarding/buffer zones, PNG/CSV export, allocation mode-aware named resources | #164 |
 
 ---
 
@@ -228,15 +229,12 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | [#46](https://github.com/NickMonrad/monrad-estimator/issues/46) | Soft-delete templates with restore |
 | [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
 | [#19](https://github.com/NickMonrad/monrad-estimator/issues/19) | Apply template button — improve discoverability |
-| [#97](https://github.com/NickMonrad/monrad-estimator/issues/97) | Timeline: show resource utilisation tooltip on feature bars |
 | [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST configurable rate per project via Project Settings (ex-GST/inc-GST totals already ship in Resource Profile; rate UI missing) |
 
 ### 🚀 Feature ideas
 | # | Title |
 |---|---|
-| [#149](https://github.com/NickMonrad/monrad-estimator/issues/149) | Timeline: consistent tooltips on Resource Demand + Named Resources; custom feature colours in Gantt; export timeline to image + CSV |
 | [#35](https://github.com/NickMonrad/monrad-estimator/issues/35) | Backlog version history — diff UI and compare view (snapshots + rollback already shipped) |
-| [#68](https://github.com/NickMonrad/monrad-estimator/issues/68) | Timeline resource levelling + story dependencies |
 | [#70](https://github.com/NickMonrad/monrad-estimator/issues/70) | Locale and currency settings (default AU/AUD) |
 | [#71](https://github.com/NickMonrad/monrad-estimator/issues/71) | Public holiday calendars for resource/cost modelling by locale |
 | [#72](https://github.com/NickMonrad/monrad-estimator/issues/72) | Timezone setting per account (default AEST) |

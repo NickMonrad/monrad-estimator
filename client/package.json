@@ -19,6 +19,7 @@
     "@react-pdf/renderer": "^4.3.2",
     "@tanstack/react-query": "^5.90.21",
     "axios": "^1.13.5",
+    "html-to-image": "^1.11.13",
     "jszip": "^3.10.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
