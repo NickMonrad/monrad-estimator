@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useIsDark } from '../../hooks/useIsDark'
 import TimelineTooltip from './TimelineTooltip'
 
@@ -65,7 +65,7 @@ export default function ResourceHistogram({
 
   // Tooltip state
   const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null)
-  const svgContainerRef = useRef<HTMLDivElement>(null)
+  
 
   const svgColors = {
     bg:       isDark ? '#111827' : '#fafafa',
@@ -169,10 +169,9 @@ export default function ResourceHistogram({
       {/* Right SVG area — shares scroll with Gantt via ref */}
       <div
         className="overflow-x-auto flex-1"
-        ref={svgContainerRef}
+        ref={scrollContainerRef}
         onMouseLeave={() => setTooltip(null)}
         style={{ position: 'relative' }}
-        ref={scrollContainerRef}
         onScroll={onScroll}
       >
         <svg
