@@ -98,8 +98,6 @@ function NamedResourcesPanel({
               </div>
               {/* People rows */}
               {people.map((nr, i) => {
-                const start = nr.startWeek ?? 0
-                const end = nr.endWeek ?? projectEndWeek
                 const mode = nr.allocationMode ?? 'EFFORT'
                 const modeLabel = mode === 'EFFORT' ? 'T&M'
                   : mode === 'FULL_PROJECT' ? `Full Project · ${nr.allocationPct}%`
@@ -639,7 +637,7 @@ export default function TimelinePage() {
 
   // Map named resources from timeline by resourceTypeId (for the Resource Counts panel)
   const rtNRMap = useMemo(() => {
-    const map = new Map<string, typeof timeline.namedResources>()
+    const map = new Map<string, NamedResourceEntry[]>()
     for (const nr of timeline?.namedResources ?? []) {
       if (!nr.resourceTypeId) continue
       if (!map.has(nr.resourceTypeId)) map.set(nr.resourceTypeId, [])
