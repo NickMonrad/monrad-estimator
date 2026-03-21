@@ -821,13 +821,13 @@ export default function ResourceProfilePage() {
   }
 
   const getAllocationBadge = (row: CommercialRow) => {
-    const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek
-    const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek
     if (row.allocationMode === 'AGGREGATE') {
       return { label: 'Aggregate', color: 'bg-gray-100 text-gray-400', sub: null }
     } else if (row.allocationMode === 'EFFORT') {
       return { label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }
     } else if (row.allocationMode === 'TIMELINE') {
+      const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek
+      const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek
       const sub = effectiveStart != null && effectiveEnd != null
         ? `Wk ${Math.floor(effectiveStart)} → Wk ${Math.floor(effectiveEnd)}`
         : null
@@ -837,10 +837,12 @@ export default function ResourceProfilePage() {
         sub,
       }
     } else {
+      const dur = profile?.projectDurationWeeks
+      const sub = dur != null ? `Wk 0 → Wk ${Math.floor(dur)}` : null
       return {
         label: `Full Project · ${row.allocationPercent}%`,
         color: 'bg-purple-100 text-purple-700',
-        sub: null,
+        sub,
       }
     }
   }
@@ -1576,8 +1578,15 @@ export default function ResourceProfilePage() {
                           </td>
                           <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                             {(row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' ? (() => {
-                              const startWk = row.allocationStartWeek ?? row.derivedStartWeek
-                              const endWk = row.allocationEndWeek ?? row.derivedEndWeek
+                              let startWk: number | null
+                              let endWk: number | null
+                              if (row.allocationMode === 'FULL_PROJECT') {
+                                startWk = 0
+                                endWk = profile?.projectDurationWeeks ?? null
+                              } else {
+                                startWk = row.allocationStartWeek ?? row.derivedStartWeek
+                                endWk = row.allocationEndWeek ?? row.derivedEndWeek
+                              }
                               const start = weekToDate(startWk)
                               const end = weekToDate(endWk)
                               if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
