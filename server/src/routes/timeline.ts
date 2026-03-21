@@ -230,16 +230,22 @@ function buildResponse(
         // Bug #7: only include if RT has demand
         if (!rtNamesWithHours.has(rt.name)) return []
         const derivedRt = rtDerivedWeeks.get(rt.name)
-        return rt.namedResources.map(nr => ({
-          id: nr.id,
-          resourceTypeId: rt.id,
-          resourceTypeName: rt.name,
-          name: nr.name,
-          startWeek: nr.allocationStartWeek ?? (derivedRt?.start ?? null),
-          endWeek: nr.allocationEndWeek ?? (derivedRt?.end ?? null),
-          allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
-          allocationMode: nr.allocationMode,
-        }))
+        return rt.namedResources.map(nr => {
+          const isFullProject = nr.allocationMode === 'FULL_PROJECT'
+          return {
+            id: nr.id,
+            resourceTypeId: rt.id,
+            resourceTypeName: rt.name,
+            name: nr.name,
+            // Full Project: leave null so client falls back to projectEndWeek (full span incl. buffer)
+            // Timeline: use manual override first, then demand-derived min/max
+            // Effort (T&M): bar uses demand histogram, so start/end are ignored
+            startWeek: isFullProject ? null : (nr.allocationStartWeek ?? (derivedRt?.start ?? null)),
+            endWeek: isFullProject ? null : (nr.allocationEndWeek ?? (derivedRt?.end ?? null)),
+            allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
+            allocationMode: nr.allocationMode,
+          }
+        })
       }
       // Auto-generate synthetic named resources when RT has count > 0 and demand
       if (rt.count > 0 && rtNamesWithHours.has(rt.name)) {
