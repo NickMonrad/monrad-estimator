@@ -208,7 +208,7 @@ export default function ResourceHistogram({
                 fontSize={9}
                 fill={svgColors.text}
               >
-                W{i}
+                W{i + 1}
               </text>
             )
           })}

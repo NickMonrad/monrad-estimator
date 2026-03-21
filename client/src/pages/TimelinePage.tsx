@@ -221,7 +221,7 @@ function NamedResourcesPanel({
                           onMouseEnter={(e) => setTooltip({
                             x: e.clientX,
                             y: e.clientY,
-                            content: `${nr.name} · W${start}–W${end} · ${nr.allocationPct}%`,
+                            content: `${nr.name} · W${Math.floor(start + weekOffset) + 1}–W${Math.floor(end + weekOffset) + 1} · ${nr.allocationPct}%`,
                           })}
                           onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
                           onMouseLeave={() => setTooltip(null)}

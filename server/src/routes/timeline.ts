@@ -235,8 +235,8 @@ function buildResponse(
           resourceTypeId: rt.id,
           resourceTypeName: rt.name,
           name: nr.name,
-          startWeek: nr.startWeek ?? (derivedRt?.start ?? null),
-          endWeek: nr.endWeek ?? (derivedRt?.end ?? null),
+          startWeek: nr.allocationStartWeek ?? (derivedRt?.start ?? null),
+          endWeek: nr.allocationEndWeek ?? (derivedRt?.end ?? null),
           allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
           allocationMode: nr.allocationMode,
         }))
