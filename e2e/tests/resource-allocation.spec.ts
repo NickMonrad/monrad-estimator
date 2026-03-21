@@ -144,8 +144,8 @@ test.describe('Resource Allocation', () => {
     await expect(fteInput).toBeVisible({ timeout: 5_000 })
 
     // Save and Cancel buttons
-    await expect(page.getByRole('button', { name: /^Save$/ })).toBeVisible()
-    await expect(page.getByRole('button', { name: /^Cancel$/ })).toBeVisible()
+    await expect(page.locator('[data-testid="allocation-save"]')).toBeVisible()
+    await expect(page.locator('[data-testid="allocation-cancel"]')).toBeVisible()
   })
 
   test('changing FTE % updates allocated days', async ({ page }) => {
@@ -164,7 +164,7 @@ test.describe('Resource Allocation', () => {
     await fteInput.fill('50')
 
     // Save
-    await page.getByRole('button', { name: /^Save$/ }).click()
+    await page.locator('[data-testid="allocation-save"]').click()
 
     // Editor should close
     await expect(page.getByText(/Allocation Mode/i)).not.toBeVisible({ timeout: 8_000 })

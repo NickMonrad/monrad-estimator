@@ -1689,12 +1689,14 @@ export default function ResourceProfilePage() {
                                     }}
                                     disabled={updateAllocationMutation.isPending || updateNrAllocationMutation.isPending}
                                     className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                                    data-testid="allocation-save"
                                   >
                                     {(updateAllocationMutation.isPending || updateNrAllocationMutation.isPending) ? 'Saving…' : 'Save'}
                                   </button>
                                   <button
                                     onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
                                     className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                    data-testid="allocation-cancel"
                                   >
                                     Cancel
                                   </button>
