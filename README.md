@@ -205,6 +205,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Comprehensive dark mode theming across all pages and components; standardised headers with M icon, ThemeToggle, and breadcrumb nav on all global and project pages; SVG dark mode (Gantt, histogram, named resources) via `useIsDark` hook; epic/feature/story colour hierarchy in dark mode | #143 |
 | Document generator: normalise customer data for PDF rendering, harden cover-page layout, and replace fragile scope summary table layout with long-content-safe rendering | #155 |
 | Timeline & Resource Profile enhancements — person-first model, over-allocation indicators, custom feature colours, onboarding/buffer zones, PNG/CSV export, allocation mode-aware named resources | #164 |
+| Doc Generator v2 — Puppeteer server-side PDF, TipTap rich text editor (all description/assumptions fields), Overview section in scope doc, timezone-aware timestamps on document label and filename | #166 |
 
 ---
 
@@ -246,8 +247,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | [#22](https://github.com/NickMonrad/monrad-estimator/issues/22) | Project sharing / multi-user collaboration |
 | [#10](https://github.com/NickMonrad/monrad-estimator/issues/10) | Password reset flow |
 | [#114](https://github.com/NickMonrad/monrad-estimator/issues/114) | Cross-project dashboard with summary analytics |
-| [#133](https://github.com/NickMonrad/monrad-estimator/issues/133) | Rich text editor for multi-line text fields (descriptions, assumptions) with PDF formatting |
-| [#136](https://github.com/NickMonrad/monrad-estimator/issues/136) | Replace @react-pdf/renderer — wrap={false} crashes Yoga layout engine (rows split across page breaks) |
+
 
 ### 🏭 Productionisation
 | # | Title |
