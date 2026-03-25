@@ -1,6 +1,8 @@
 import { Router, Response } from 'express'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { prisma } from '../lib/prisma.js'
+import { renderScopeDocumentHtml } from '../lib/scopeDocumentRenderer.js'
+import { generatePdfFromHtml } from '../lib/pdfRenderer.js'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
@@ -15,26 +17,44 @@ async function ownedProject(projectId: string, userId: string) {
   return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
 }
 
+function formatExportTimestamp(tz?: string): string {
+  const now = new Date()
+  try {
+    const parts = new Intl.DateTimeFormat('en-AU', {
+      timeZone: tz || 'UTC',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(now)
+    const get = (type: string) => parts.find(p => p.type === type)?.value ?? '00'
+    return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}-${get('minute')}`
+  } catch {
+    return now.toISOString().slice(0, 16).replace('T', ' ').replace(':', '-').replace(':', '-')
+  }
+}
+
 // POST /api/projects/:projectId/documents/generate
-// Body: { type: 'SCOPE_DOC', format: 'pdf', label: string, sections: string[], pdfBase64: string }
-// The client renders the PDF via @react-pdf/renderer and sends the base64-encoded PDF bytes.
-// Server saves to disk and records in DB.
+// Body: { type: string, format: string, label: string, tz?: string, documentData: ScopeDocumentProps }
+// Server renders HTML via React renderToStaticMarkup, then generates PDF via Puppeteer.
 router.post('/generate', async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
-  const { type, format, label, pdfBase64 } = req.body
-  if (!type || !format || !label || !pdfBase64) {
-    res.status(400).json({ error: 'type, format, label and pdfBase64 are required' }); return
+  const { type, format, label, tz, documentData } = req.body
+  if (!type || !format || !label || !documentData) {
+    res.status(400).json({ error: 'type, format, label and documentData are required' }); return
   }
+
+  // Render HTML and generate PDF
+  const html = renderScopeDocumentHtml({ ...documentData, tz })
+  const buffer = await generatePdfFromHtml(html)
 
   // Ensure output directory exists
   fs.mkdirSync(GENERATED_DIR, { recursive: true })
 
-  const filename = `${projectId}-${Date.now()}.${format}`
+  const ts = formatExportTimestamp(tz)
+  const filename = `${projectId}-${ts}.${format}`
   const filePath = path.join(GENERATED_DIR, filename)
-  const buffer = Buffer.from(pdfBase64, 'base64')
   fs.writeFileSync(filePath, buffer)
 
   const doc = await prisma.generatedDocument.create({

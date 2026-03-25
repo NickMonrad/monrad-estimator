@@ -8,6 +8,7 @@ import type { Feature, ResourceType } from '../../types/backlog'
 import type { EpicColour } from '../../lib/epicColours'
 import StoryList from './StoryList'
 import ApplyTemplateModal from './ApplyTemplateModal'
+import RichTextEditor from '../shared/RichTextEditor'
 
 interface Props {
   epicId: string
@@ -169,17 +170,23 @@ function InlineForm({ label, initial, onSave, onCancel, saving }: {
   saving: boolean
 }) {
   const [form, setForm] = useState(initial)
-  const f = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setForm(v => ({ ...v, [field]: e.target.value }))
 
   return (
     <div className="bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 space-y-2">
-      <input placeholder={`${label} name *`} value={form.name} onChange={f('name')}
+      <input placeholder={`${label} name *`} value={form.name} onChange={e => setForm(v => ({ ...v, name: e.target.value }))}
         className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
-      <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={1}
-        className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
-      <textarea placeholder="Assumptions" value={form.assumptions} onChange={f('assumptions')} rows={1}
-        className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+      <RichTextEditor
+        value={form.description}
+        onChange={v => setForm(prev => ({ ...prev, description: v }))}
+        placeholder="Description"
+        className="text-sm"
+      />
+      <RichTextEditor
+        value={form.assumptions}
+        onChange={v => setForm(prev => ({ ...prev, assumptions: v }))}
+        placeholder="Assumptions"
+        className="text-sm"
+      />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
           className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">

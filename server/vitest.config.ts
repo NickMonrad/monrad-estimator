@@ -6,5 +6,10 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['./src/test/setup.ts'],
     exclude: ['dist/**', 'node_modules/**'],
+    server: {
+      deps: {
+        external: ['puppeteer'],
+      },
+    },
   },
 })

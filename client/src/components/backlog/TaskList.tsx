@@ -5,6 +5,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../../lib/api'
 import type { Task, ResourceType } from '../../types/backlog'
+import RichTextEditor from '../shared/RichTextEditor'
 
 interface Props {
   storyId: string
@@ -149,7 +150,7 @@ function TaskForm({ initial, resourceTypes, hoursPerDay, onSave, onCancel, savin
       : ''
   )
 
-  const f = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+  const f = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(v => ({ ...v, [field]: e.target.value }))
 
   const onHoursChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -182,8 +183,22 @@ function TaskForm({ initial, resourceTypes, hoursPerDay, onSave, onCancel, savin
           <label className="block text-xs text-gray-500 dark:text-gray-400 mb-0.5">Days (@ {hoursPerDay}h)</label>
           <input type="number" placeholder="0" min="0" step="0.1" value={days} onChange={onDaysChange} className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-400" />
         </div>
-        <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={1} className="col-span-2 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
-        <textarea placeholder="Assumptions" value={form.assumptions} onChange={f('assumptions')} rows={1} className="col-span-2 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        <div className="col-span-2">
+          <RichTextEditor
+            value={form.description}
+            onChange={v => setForm(prev => ({ ...prev, description: v }))}
+            placeholder="Description"
+            className="text-sm"
+          />
+        </div>
+        <div className="col-span-2">
+          <RichTextEditor
+            value={form.assumptions}
+            onChange={v => setForm(prev => ({ ...prev, assumptions: v }))}
+            placeholder="Assumptions"
+            className="text-sm"
+          />
+        </div>
         <div className="col-span-2">
           <label className="block text-xs text-gray-400 dark:text-gray-500 mb-0.5">Duration override (days) — optional</label>
           <input type="number" placeholder="Leave blank to use hours/day rate" min="0" step="0.5" value={form.durationDays} onChange={f('durationDays')} className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-xs text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400" />

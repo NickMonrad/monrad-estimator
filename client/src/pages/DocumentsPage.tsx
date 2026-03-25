@@ -1,13 +1,10 @@
 import { useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { PDFViewer, pdf } from '@react-pdf/renderer'
 import { api } from '../lib/api'
 import { getProjectCustomerName } from '../lib/projectCustomer'
 import { useAuth } from '../hooks/useAuth'
 import ThemeToggle from '../components/layout/ThemeToggle'
-import ScopeDocument from '../components/documents/ScopeDocument'
-import type { ScopeDocumentProps } from '../components/documents/ScopeDocument'
 import type { Project } from '../types/backlog'
 
 interface GeneratedDoc {
@@ -20,11 +17,11 @@ interface GeneratedDoc {
 }
 
 function defaultLabel(): string {
-  return `Scope Document — ${new Date().toLocaleDateString('en-AU', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })}`
+  const now = new Date()
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const date = now.toLocaleDateString('en-AU', { year: 'numeric', month: 'long', day: 'numeric', timeZone: tz })
+  const time = now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+  return `Scope Document — ${date} ${time}`
 }
 
 export default function DocumentsPage() {
@@ -85,59 +82,43 @@ export default function DocumentsPage() {
   // ── Derived "all data loaded" flag ────────────────────────────
   const allLoaded = !!(project && effortData && timelineData && resourceProfileData)
 
-  // ── Build props for ScopeDocument ─────────────────────────────
-  const scopeDocProps: ScopeDocumentProps = {
-    project: {
-      name: project?.name ?? '',
-      customer: getProjectCustomerName(project?.customer),
-      description: project?.description ?? null,
-      startDate: project?.startDate ?? null,
-      endDate: timelineData?.projectedEndDate ?? null,
-    },
-    sections,
-    effortData: effortData ?? null,
-    timelineData: timelineData ?? null,
-    resourceProfileData: resourceProfileData ?? null,
-    epics: epics ?? [],
-    generatedBy: user?.name ?? user?.email ?? 'Monrad Estimator',
-    documentLabel: label,
-  }
-
   // ── Generate & Save ───────────────────────────────────────────
   const handleGenerate = useCallback(async () => {
     if (!allLoaded) return
     setGenerating(true)
     setGenerateError(null)
     try {
-      const blob = await pdf(<ScopeDocument {...scopeDocProps} />).toBlob()
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const result = reader.result as string
-          // strip data URL prefix: "data:application/pdf;base64,"
-          const b64 = result.split(',')[1]
-          resolve(b64)
-        }
-        reader.onerror = reject
-        reader.readAsDataURL(blob)
-      })
-
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
       await api.post(`/projects/${projectId}/documents/generate`, {
         type: 'SCOPE_DOC',
         format: 'pdf',
         label,
-        pdfBase64: base64,
+        tz,
+        documentData: {
+          project: {
+            name: project?.name ?? '',
+            customer: getProjectCustomerName(project?.customer),
+            description: project?.description ?? null,
+            startDate: project?.startDate ?? null,
+            endDate: timelineData?.projectedEndDate ?? null,
+          },
+          sections,
+          effortData: effortData ?? null,
+          timelineData: timelineData ?? null,
+          resourceProfileData: resourceProfileData ?? null,
+          epics: epics ?? [],
+          generatedBy: user?.name ?? user?.email ?? 'Monrad Estimator',
+          documentLabel: label,
+        },
       })
-
       queryClient.invalidateQueries({ queryKey: ['generated-docs', projectId] })
-      // Reset label with today's date for next generation
       setLabel(defaultLabel())
     } catch (err: any) {
       setGenerateError(err?.response?.data?.error ?? err?.message ?? 'Failed to generate document')
     } finally {
       setGenerating(false)
     }
-  }, [allLoaded, scopeDocProps, projectId, label, queryClient])
+  }, [allLoaded, project, effortData, timelineData, resourceProfileData, epics, sections, label, projectId, queryClient, user])
 
   // ── Delete document ───────────────────────────────────────────
   const handleDelete = useCallback(async (docId: string) => {
@@ -201,15 +182,9 @@ export default function DocumentsPage() {
         {/* ── Left column: PDF Viewer ── */}
         <div className="flex-1" style={{ minWidth: 0 }}>
           <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-            {allLoaded ? (
-              <PDFViewer style={{ width: '100%', height: '700px' }}>
-                <ScopeDocument {...scopeDocProps} />
-              </PDFViewer>
-            ) : (
-              <div className="flex items-center justify-center h-64 text-gray-400 dark:text-gray-500">
-                Loading preview…
-              </div>
-            )}
+            <div className="flex items-center justify-center h-64 text-gray-400 dark:text-gray-500 text-sm">
+              Configure sections and click "Generate &amp; Save" to create the PDF.
+            </div>
           </div>
         </div>
 
