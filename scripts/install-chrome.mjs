@@ -6,27 +6,35 @@
  * Safe to re-run: skips download if Chrome is already cached at ~/.cache/puppeteer.
  */
 
-import { install, resolveBuildId, canDownload } from '@puppeteer/browsers'
-import { existsSync } from 'fs'
+import { install } from '@puppeteer/browsers'
+import { existsSync, readdirSync } from 'fs'
 import { join } from 'path'
+import { createRequire } from 'module'
 import os from 'os'
 
+const require = createRequire(import.meta.url)
 const CACHE_DIR = join(os.homedir(), '.cache', 'puppeteer')
 const BROWSER = 'chrome'
-const PLATFORM = (() => {
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
-  if (process.platform === 'darwin') return `mac-${arch}`
-  if (process.platform === 'win32') return arch === 'arm64' ? 'win64' : 'win64'
-  return arch === 'arm64' ? 'linux' : 'linux'
-})()
+
+// Use the exact build ID that the installed puppeteer package expects
+function getPuppeteerBuildId() {
+  try {
+    const puppeteerPkg = require('puppeteer/package.json')
+    // puppeteer stores its pinned revision in the nested puppeteer.chrome config
+    if (puppeteerPkg?.puppeteer?.chrome) return puppeteerPkg.puppeteer.chrome
+    // Fallback: launch puppeteer and read executablePath to extract version
+    const p = require('puppeteer')
+    const exePath = p.executablePath()
+    const match = exePath.match(/mac_arm-([^/]+)|linux-([^/]+)|win64-([^/]+)/)
+    if (match) return match[1] || match[2] || match[3]
+  } catch {}
+  return null
+}
 
 async function main() {
-  let buildId
-  try {
-    buildId = await resolveBuildId(BROWSER, PLATFORM, 'stable')
-  } catch (e) {
-    console.warn(`[puppeteer] Could not resolve Chrome build ID (offline?): ${e.message}`)
-    console.warn('[puppeteer] Skipping Chrome download — PDF generation will not work until Chrome is available.')
+  const buildId = getPuppeteerBuildId()
+  if (!buildId) {
+    console.warn('[puppeteer] Could not determine required Chrome version — skipping download.')
     process.exit(0)
   }
 
