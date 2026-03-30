@@ -4,6 +4,8 @@
   "workspaces": ["client", "server", "e2e"],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=server\" \"npm run dev --workspace=client\"",
+  "postinstall": "mkdir -p logs && node scripts/install-chrome.mjs",
+  "install:chrome": "node scripts/install-chrome.mjs",
     "build": "npm run build --workspace=server && npm run build --workspace=client",
     "lint": "npm run lint --workspace=client && npm run lint --workspace=server",
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
