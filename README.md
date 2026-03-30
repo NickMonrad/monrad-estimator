@@ -53,8 +53,14 @@ docker run -d \
 ### 2. Install dependencies
 
 ```bash
-npm install          # installs root + all workspaces
+npm install
 ```
+
+This installs all workspace dependencies and automatically:
+- Creates the `logs/` directory
+- Downloads the Puppeteer-managed Chrome browser (~170 MB) used for server-side PDF generation
+
+> **Note:** Chrome is cached to `~/.cache/puppeteer` and only downloaded once. If you're offline or the download fails, PDF generation won't work until you run `npm run install:chrome` manually.
 
 ### 3. Configure environment
 
@@ -102,6 +108,10 @@ npx prisma generate
 ```bash
 npm run dev          # API on :3001 + Vite on :5173 (concurrently)
 ```
+
+Server logs are written to `logs/dev-servers.log` when running in the background. The `logs/` directory is created automatically by `npm install`.
+
+> **Troubleshooting:** If `npm run dev` exits immediately with no output, check that `logs/` exists (`mkdir -p logs`) and that the Puppeteer Chrome browser was downloaded successfully (`npm run install:chrome`).
 
 ### Run tests
 
