@@ -233,7 +233,7 @@ body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 10pt; color:
 .page-section { page-break-before: always; padding-top: 4px; }
 .section-heading { font-size: 14pt; font-weight: bold; color: #1d245b; margin-bottom: 10px; margin-top: 6px; border-bottom: 2px solid #1d245b; padding-bottom: 4px; page-break-after: avoid; }
 .section-label { font-size: 11pt; font-weight: bold; color: #1d245b; margin-bottom: 6px; margin-top: 14px; page-break-after: avoid; }
-.section-label-muted { font-size: 11pt; font-weight: bold; color: #888; margin-bottom: 6px; margin-top: 14px; }
+.section-label-muted { font-size: 11pt; font-weight: bold; color: #888; margin-bottom: 6px; margin-top: 14px; page-break-after: avoid; }
 .subheading { font-size: 10.5pt; font-weight: bold; color: #333; margin-bottom: 4px; margin-top: 10px; }
 .body-text { font-size: 10pt; color: #333; margin-bottom: 4px; }
 table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 9pt; }
