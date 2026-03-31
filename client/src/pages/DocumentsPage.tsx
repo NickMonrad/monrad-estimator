@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -17,12 +17,13 @@ interface GeneratedDoc {
   generatedBy: { email: string }
 }
 
-function defaultLabel(): string {
+function defaultLabel(projectName?: string): string {
   const now = new Date()
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
   const date = now.toLocaleDateString('en-AU', { year: 'numeric', month: 'long', day: 'numeric', timeZone: tz })
   const time = now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-  return `Scope Document — ${date} ${time}`
+  const suffix = `Scope Document — ${date} ${time}`
+  return projectName ? `${projectName} - ${suffix}` : suffix
 }
 
 export default function DocumentsPage() {
@@ -43,6 +44,11 @@ export default function DocumentsPage() {
   const [label, setLabel] = useState(defaultLabel)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
+
+  // Update default label once project name is known
+  useEffect(() => {
+    if (project?.name) setLabel(defaultLabel(project.name))
+  }, [project?.name])
 
   // ── Data fetching ──────────────────────────────────────────────
   const { data: project } = useQuery<Project>({
@@ -114,7 +120,7 @@ export default function DocumentsPage() {
         },
       })
       queryClient.invalidateQueries({ queryKey: ['generated-docs', projectId] })
-      setLabel(defaultLabel())
+      setLabel(defaultLabel(project?.name))
     } catch (err: any) {
       setGenerateError(err?.response?.data?.error ?? err?.message ?? 'Failed to generate document')
     } finally {
