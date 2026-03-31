@@ -38,6 +38,7 @@ export default function DocumentsPage() {
     timeline: true,
     resourceProfile: true,
     assumptions: true,
+    ganttChart: true,
   })
   const [label, setLabel] = useState(defaultLabel)
   const [generating, setGenerating] = useState(false)
@@ -215,6 +216,7 @@ export default function DocumentsPage() {
                   ['timeline', 'Timeline Summary'],
                   ['resourceProfile', 'Resource Profile'],
                   ['assumptions', 'Assumptions'],
+                  ['ganttChart', 'Gantt Chart'],
                 ] as const).map(([key, sectionLabel]) => (
                   <label key={key} className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -291,6 +293,7 @@ export default function DocumentsPage() {
                 const sectionLabels: Record<string, string> = {
                   cover: 'Cover', scope: 'Scope', effort: 'Effort',
                   timeline: 'Timeline', resourceProfile: 'Resources', assumptions: 'Assumptions',
+                  ganttChart: 'Gantt',
                 }
                 const includedSections = doc.sections
                   ? Object.entries(doc.sections).filter(([, v]) => v).map(([k]) => sectionLabels[k] ?? k)
