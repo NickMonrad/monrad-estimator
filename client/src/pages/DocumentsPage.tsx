@@ -213,10 +213,10 @@ export default function DocumentsPage() {
                   ['cover', 'Cover Page'],
                   ['scope', 'Scope Summary'],
                   ['effort', 'Effort Breakdown'],
+                  ['ganttChart', 'Gantt Chart'],
                   ['timeline', 'Timeline Summary'],
                   ['resourceProfile', 'Resource Profile'],
                   ['assumptions', 'Assumptions'],
-                  ['ganttChart', 'Gantt Chart'],
                 ] as const).map(([key, sectionLabel]) => (
                   <label key={key} className="flex items-center gap-2 cursor-pointer">
                     <input
