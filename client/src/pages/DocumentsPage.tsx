@@ -1,13 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { PDFViewer, pdf } from '@react-pdf/renderer'
 import { api } from '../lib/api'
 import { getProjectCustomerName } from '../lib/projectCustomer'
 import { useAuth } from '../hooks/useAuth'
 import ThemeToggle from '../components/layout/ThemeToggle'
-import ScopeDocument from '../components/documents/ScopeDocument'
-import type { ScopeDocumentProps } from '../components/documents/ScopeDocument'
 import type { Project } from '../types/backlog'
 
 interface GeneratedDoc {
@@ -16,15 +13,17 @@ interface GeneratedDoc {
   format: string
   type: string
   createdAt: string
+  sections?: Record<string, boolean> | null
   generatedBy: { email: string }
 }
 
-function defaultLabel(): string {
-  return `Scope Document — ${new Date().toLocaleDateString('en-AU', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })}`
+function defaultLabel(projectName?: string): string {
+  const now = new Date()
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const date = now.toLocaleDateString('en-AU', { year: 'numeric', month: 'long', day: 'numeric', timeZone: tz })
+  const time = now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+  const suffix = `Scope Document — ${date} ${time}`
+  return projectName ? `${projectName} - ${suffix}` : suffix
 }
 
 export default function DocumentsPage() {
@@ -40,6 +39,7 @@ export default function DocumentsPage() {
     timeline: true,
     resourceProfile: true,
     assumptions: true,
+    ganttChart: true,
   })
   const [label, setLabel] = useState(defaultLabel)
   const [generating, setGenerating] = useState(false)
@@ -52,9 +52,14 @@ export default function DocumentsPage() {
     enabled: !!projectId,
   })
 
+  // Update default label once project name is known
+  useEffect(() => {
+    if (project?.name) setLabel(defaultLabel(project.name))
+  }, [project?.name])
+
   const { data: effortData } = useQuery({
-    queryKey: ['effort', projectId],
-    queryFn: () => api.get(`/projects/${projectId}/effort`).then(r => r.data),
+    queryKey: ['effort', projectId, 'active'],
+    queryFn: () => api.get(`/projects/${projectId}/effort?activeOnly=true`).then(r => r.data),
     enabled: !!projectId,
   })
 
@@ -85,59 +90,43 @@ export default function DocumentsPage() {
   // ── Derived "all data loaded" flag ────────────────────────────
   const allLoaded = !!(project && effortData && timelineData && resourceProfileData)
 
-  // ── Build props for ScopeDocument ─────────────────────────────
-  const scopeDocProps: ScopeDocumentProps = {
-    project: {
-      name: project?.name ?? '',
-      customer: getProjectCustomerName(project?.customer),
-      description: project?.description ?? null,
-      startDate: project?.startDate ?? null,
-      endDate: timelineData?.projectedEndDate ?? null,
-    },
-    sections,
-    effortData: effortData ?? null,
-    timelineData: timelineData ?? null,
-    resourceProfileData: resourceProfileData ?? null,
-    epics: epics ?? [],
-    generatedBy: user?.name ?? user?.email ?? 'Monrad Estimator',
-    documentLabel: label,
-  }
-
   // ── Generate & Save ───────────────────────────────────────────
   const handleGenerate = useCallback(async () => {
     if (!allLoaded) return
     setGenerating(true)
     setGenerateError(null)
     try {
-      const blob = await pdf(<ScopeDocument {...scopeDocProps} />).toBlob()
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const result = reader.result as string
-          // strip data URL prefix: "data:application/pdf;base64,"
-          const b64 = result.split(',')[1]
-          resolve(b64)
-        }
-        reader.onerror = reject
-        reader.readAsDataURL(blob)
-      })
-
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
       await api.post(`/projects/${projectId}/documents/generate`, {
         type: 'SCOPE_DOC',
         format: 'pdf',
         label,
-        pdfBase64: base64,
+        tz,
+        documentData: {
+          project: {
+            name: project?.name ?? '',
+            customer: getProjectCustomerName(project?.customer),
+            description: project?.description ?? null,
+            startDate: project?.startDate ?? null,
+            endDate: timelineData?.projectedEndDate ?? null,
+          },
+          sections,
+          effortData: effortData ?? null,
+          timelineData: timelineData ?? null,
+          resourceProfileData: resourceProfileData ?? null,
+          epics: epics ?? [],
+          generatedBy: user?.name ?? user?.email ?? 'Monrad Estimator',
+          documentLabel: label,
+        },
       })
-
       queryClient.invalidateQueries({ queryKey: ['generated-docs', projectId] })
-      // Reset label with today's date for next generation
-      setLabel(defaultLabel())
+      setLabel(defaultLabel(project?.name))
     } catch (err: any) {
       setGenerateError(err?.response?.data?.error ?? err?.message ?? 'Failed to generate document')
     } finally {
       setGenerating(false)
     }
-  }, [allLoaded, scopeDocProps, projectId, label, queryClient])
+  }, [allLoaded, project, effortData, timelineData, resourceProfileData, epics, sections, label, projectId, queryClient, user])
 
   // ── Delete document ───────────────────────────────────────────
   const handleDelete = useCallback(async (docId: string) => {
@@ -197,139 +186,171 @@ export default function DocumentsPage() {
         </div>
       </header>
 
-      <div className="max-w-screen-xl mx-auto px-6 py-6 flex gap-6">
-        {/* ── Left column: PDF Viewer ── */}
-        <div className="flex-1" style={{ minWidth: 0 }}>
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-            {allLoaded ? (
-              <PDFViewer style={{ width: '100%', height: '700px' }}>
-                <ScopeDocument {...scopeDocProps} />
-              </PDFViewer>
-            ) : (
-              <div className="flex items-center justify-center h-64 text-gray-400 dark:text-gray-500">
-                Loading preview…
+      <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+
+        {/* ── Generation panel ── */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+          <div className="flex items-start gap-8">
+
+            {/* Left: Document Type (~200px) */}
+            <div className="flex-shrink-0" style={{ width: '200px' }}>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Document Type</p>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="docType" defaultChecked className="accent-lab3-navy" />
+                  <span className="text-sm text-gray-800 dark:text-gray-200">Scope Document</span>
+                </label>
+                <label className="flex items-center gap-2 opacity-40 cursor-not-allowed">
+                  <input type="radio" name="docType" disabled />
+                  <span className="text-sm text-gray-800 dark:text-gray-200">SOW <span className="text-xs text-gray-400 dark:text-gray-500">(coming soon)</span></span>
+                </label>
+                <label className="flex items-center gap-2 opacity-40 cursor-not-allowed">
+                  <input type="radio" name="docType" disabled />
+                  <span className="text-sm text-gray-800 dark:text-gray-200">Proposal Deck <span className="text-xs text-gray-400 dark:text-gray-500">(coming soon)</span></span>
+                </label>
               </div>
-            )}
+            </div>
+
+            {/* Middle: Sections (flex-1) */}
+            <div className="flex-1">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Sections</p>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  ['cover', 'Cover Page'],
+                  ['scope', 'Scope Summary'],
+                  ['effort', 'Effort Breakdown'],
+                  ['ganttChart', 'Gantt Chart'],
+                  ['timeline', 'Timeline Summary'],
+                  ['resourceProfile', 'Resource Profile'],
+                  ['assumptions', 'Assumptions'],
+                ] as const).map(([key, sectionLabel]) => (
+                  <label key={key} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={sections[key]}
+                      onChange={() => toggleSection(key)}
+                      className="accent-lab3-navy"
+                    />
+                    <span className="text-sm text-gray-800 dark:text-gray-200">{sectionLabel}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: Label + Generate (~280px) */}
+            <div className="flex-shrink-0" style={{ width: '280px' }}>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Document Label</p>
+              <input
+                type="text"
+                value={label}
+                onChange={e => setLabel(e.target.value)}
+                className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:border-lab3-navy mb-3"
+                placeholder="Label for this document"
+              />
+              <button
+                onClick={handleGenerate}
+                disabled={!allLoaded || generating}
+                className="w-full bg-lab3-navy hover:bg-lab3-blue disabled:opacity-50 text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-colors"
+              >
+                {generating ? 'Generating…' : 'Generate & Save'}
+              </button>
+              {generateError && (
+                <p className="text-xs text-red-600 mt-2">{generateError}</p>
+              )}
+            </div>
+
           </div>
         </div>
 
-        {/* ── Right column: Controls ── */}
-        <div className="w-80 flex-shrink-0 space-y-4">
-
-          {/* Document type */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Document Type</h2>
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" name="docType" defaultChecked className="accent-red-600" />
-                <span className="text-sm text-gray-800 dark:text-gray-200">Scope Document</span>
-              </label>
-              <label className="flex items-center gap-2 opacity-40 cursor-not-allowed">
-                <input type="radio" name="docType" disabled />
-                <span className="text-sm text-gray-800 dark:text-gray-200">SOW <span className="text-xs text-gray-400 dark:text-gray-500">(coming soon)</span></span>
-              </label>
-              <label className="flex items-center gap-2 opacity-40 cursor-not-allowed">
-                <input type="radio" name="docType" disabled />
-                <span className="text-sm text-gray-800 dark:text-gray-200">Proposal Deck <span className="text-xs text-gray-400 dark:text-gray-500">(coming soon)</span></span>
-              </label>
-            </div>
+        {/* ── Documents grid ── */}
+        <div>
+          <div className="flex items-center gap-3 mb-4">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-white">Generated Documents</h2>
+            <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 px-2 py-0.5 rounded-full">
+              {generatedDocs.length}
+            </span>
           </div>
 
-          {/* Sections */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Sections</h2>
-            <div className="space-y-2">
-              {([
-                ['cover', 'Cover Page'],
-                ['scope', 'Scope Summary'],
-                ['effort', 'Effort Breakdown'],
-                ['timeline', 'Timeline Summary'],
-                ['resourceProfile', 'Resource Profile'],
-                ['assumptions', 'Assumptions'],
-              ] as const).map(([key, label]) => (
-                <label key={key} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={sections[key]}
-                    onChange={() => toggleSection(key)}
-                    className="accent-red-600"
-                  />
-                  <span className="text-sm text-gray-800 dark:text-gray-200">{label}</span>
-                </label>
+          {docsLoading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[0, 1, 2].map(i => (
+                <div key={i} className="bg-gray-100 dark:bg-gray-700 rounded-lg h-36 animate-pulse" />
               ))}
             </div>
-          </div>
-
-          {/* Label */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Document Label</h2>
-            <input
-              type="text"
-              value={label}
-              onChange={e => setLabel(e.target.value)}
-              className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:border-red-400"
-              placeholder="Label for this document"
-            />
-          </div>
-
-          {/* Generate button */}
-          <button
-            onClick={handleGenerate}
-            disabled={!allLoaded || generating}
-            className="w-full bg-lab3-navy hover:bg-lab3-blue disabled:opacity-50 text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-colors"
-          >
-            {generating ? 'Generating…' : 'Generate & Save'}
-          </button>
-
-          {generateError && (
-            <p className="text-xs text-red-600">{generateError}</p>
-          )}
-
-          {/* Generated documents history */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Generated Documents</h2>
-
-            {docsLoading ? (
-              <p className="text-xs text-gray-400 dark:text-gray-500">Loading…</p>
-            ) : generatedDocs.length === 0 ? (
-              <p className="text-xs text-gray-400 dark:text-gray-500">No documents generated yet.</p>
-            ) : (
-              <ul className="space-y-3">
-                {generatedDocs.map(doc => (
-                  <li key={doc.id} className="flex items-start gap-2 text-sm">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-800 dark:text-white truncate">{doc.label}</p>
-                      <p className="text-xs text-gray-400 dark:text-gray-500">
-                        {new Date(doc.createdAt).toLocaleDateString('en-AU', {
-                          year: 'numeric', month: 'short', day: 'numeric',
-                        })}
-                        {' · '}
-                        {doc.generatedBy.email}
-                      </p>
+          ) : generatedDocs.length === 0 ? (
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-10 text-center">
+              <div className="text-4xl mb-3">📄</div>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                No documents generated yet. Use the panel above to generate your first scope document.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {generatedDocs.map(doc => {
+                const typeLabel = doc.type === 'SCOPE_DOC' ? 'Scope Document' : doc.type
+                const dateStr =
+                  new Date(doc.createdAt).toLocaleDateString('en-AU', {
+                    day: 'numeric', month: 'short', year: 'numeric',
+                  }) +
+                  ', ' +
+                  new Date(doc.createdAt).toLocaleTimeString('en-AU', {
+                    hour: '2-digit', minute: '2-digit', hour12: false,
+                  })
+                const sectionLabels: Record<string, string> = {
+                  cover: 'Cover', scope: 'Scope', effort: 'Effort',
+                  timeline: 'Timeline', resourceProfile: 'Resources', assumptions: 'Assumptions',
+                  ganttChart: 'Gantt',
+                }
+                const includedSections = doc.sections
+                  ? Object.entries(doc.sections).filter(([, v]) => v).map(([k]) => sectionLabels[k] ?? k)
+                  : null
+                return (
+                  <div key={doc.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 flex flex-col gap-3">
+                    {/* Top row: PDF badge + format badge */}
+                    <div className="flex items-center justify-between">
+                      <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-1 rounded">PDF</span>
+                      <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full uppercase">
+                        {doc.format}
+                      </span>
                     </div>
-                    <span className="flex-shrink-0 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full uppercase">
-                      {doc.format}
-                    </span>
-                    <button
-                      onClick={() => handleDownload(doc)}
-                      className="flex-shrink-0 text-xs text-lab3-blue hover:text-lab3-navy font-medium"
-                      title="Download"
-                    >
-                      ↓
-                    </button>
-                    <button
-                      onClick={() => handleDelete(doc.id)}
-                      className="flex-shrink-0 text-xs text-gray-400 dark:text-gray-500 hover:text-red-500"
-                      title="Delete"
-                    >
-                      ✕
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+                    {/* Label */}
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white">{doc.label}</p>
+                    {/* Type */}
+                    <p className="text-xs text-gray-500 dark:text-gray-400">{typeLabel}</p>
+                    {/* Sections */}
+                    {includedSections && (
+                      <div className="flex flex-wrap gap-1">
+                        {includedSections.map(s => (
+                          <span key={s} className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {/* Meta */}
+                    <p className="text-xs text-gray-400">{dateStr} · {doc.generatedBy.email}</p>
+                    {/* Actions */}
+                    <div className="flex items-center mt-auto">
+                      <button
+                        onClick={() => handleDownload(doc)}
+                        className="bg-lab3-navy hover:bg-lab3-blue text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+                      >
+                        Download
+                      </button>
+                      <button
+                        onClick={() => handleDelete(doc.id)}
+                        className="text-xs text-gray-400 hover:text-red-500 ml-auto transition-colors"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
+
       </div>
     </div>
   )

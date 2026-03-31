@@ -26,6 +26,8 @@
     "@prisma/client": "^7.4.1",
     "@types/multer": "^2.1.0",
     "@types/pg": "^8.16.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "csv-parse": "^6.1.0",
@@ -36,7 +38,10 @@
     "multer": "^2.1.1",
     "nodemailer": "^8.0.2",
     "pg": "^8.19.0",
-    "prisma": "^7.4.1"
+    "prisma": "^7.4.1",
+    "puppeteer": "^24.40.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

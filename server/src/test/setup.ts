@@ -1,5 +1,15 @@
 import { vi } from 'vitest'
 
+// Mock Puppeteer-based PDF generator so tests don't need a real browser
+vi.mock('../lib/pdfRenderer.js', () => ({
+  generatePdfFromHtml: vi.fn().mockResolvedValue(Buffer.from('mock-pdf')),
+}))
+
+// Mock scope document renderer so tests don't need react-dom/server
+vi.mock('../lib/scopeDocumentRenderer.js', () => ({
+  renderScopeDocumentHtml: vi.fn().mockReturnValue('<html><body>mock</body></html>'),
+}))
+
 // Mock Prisma globally so tests don't need a real DB
 vi.mock('../lib/prisma.js', () => ({
   prisma: {

@@ -65,7 +65,12 @@ export default function ProjectDetailPage() {
             <button onClick={() => navigate(`/projects/${id}/settings`)} title="Edit project settings" className="text-gray-400 hover:text-lab3-navy transition-colors">✏️</button>
           </div>
           {project.customer && <p className="text-sm text-gray-500 dark:text-gray-400">Customer: {project.customer.name ?? project.customer}</p>}
-          {project.description && <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{project.description}</p>}
+          {project.description && (
+            <div
+              className="text-sm text-gray-600 dark:text-gray-400 mt-1 rich-text-content"
+              dangerouslySetInnerHTML={{ __html: project.description }}
+            />
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

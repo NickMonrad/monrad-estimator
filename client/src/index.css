@@ -8,3 +8,29 @@
 
 @variant dark (&:is(.dark *));
 
+/* TipTap rich text editor */
+.rich-text-editor .ProseMirror {
+  outline: none;
+  min-height: 60px;
+}
+.rich-text-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #9ca3af;
+  pointer-events: none;
+  height: 0;
+}
+.rich-text-editor .ProseMirror ul,
+.rich-text-content ul {
+  list-style-type: disc;
+  padding-left: 1.2em;
+}
+.rich-text-editor .ProseMirror ol,
+.rich-text-content ol {
+  list-style-type: decimal;
+  padding-left: 1.2em;
+}
+.rich-text-content p:empty {
+  display: none;
+}
+

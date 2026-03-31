@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, getCustomers, getOrgs, moveProjectToOrg } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import ThemeToggle from '../components/layout/ThemeToggle'
+import RichTextEditor from '../components/shared/RichTextEditor'
 
 const STATUS_OPTIONS = ['DRAFT', 'ACTIVE', 'REVIEW', 'COMPLETE', 'ARCHIVED']
 
@@ -153,9 +154,11 @@ export default function ProjectSettingsPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-            <textarea
-              value={form.description} onChange={f('description')} rows={3}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+            <RichTextEditor
+              value={form.description}
+              onChange={v => setForm(prev => ({ ...prev, description: v }))}
+              placeholder="Project description"
+              className="text-sm"
             />
           </div>
 
