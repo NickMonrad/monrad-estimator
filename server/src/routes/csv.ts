@@ -4,7 +4,6 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { parse } from 'csv-parse/sync'
 import { stringify } from 'csv-stringify/sync'
 import { calcDurationDays } from '../utils/round.js'
-import { stripHtml } from '../lib/stripHtml.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -115,7 +114,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
       rows.push([
         'Epic', epic.name, '', '', '',
         '', '', '', '',
-        stripHtml(epic.description), stripHtml(epic.assumptions),
+        epic.description ?? '', epic.assumptions ?? '',
         epic.isActive ? 'active' : 'inactive', '', '',
       ])
 
@@ -124,7 +123,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
         rows.push([
           'Feature', epic.name, feature.name, '', '',
           '', '', '', '',
-          stripHtml(feature.description), stripHtml(feature.assumptions),
+          feature.description ?? '', feature.assumptions ?? '',
           '', feature.isActive ? 'active' : 'inactive', '',
         ])
 
@@ -134,7 +133,7 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
             'Story', epic.name, feature.name, story.name, '',
             story.appliedTemplate?.name ?? '',
             '', '', '',
-            stripHtml(story.description), stripHtml(story.assumptions),
+            story.description ?? '', story.assumptions ?? '',
             '', '', story.isActive ? 'active' : 'inactive',
           ])
 
@@ -146,8 +145,8 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
               task.resourceType?.name ?? '',
               String(task.hoursEffort),
               String(task.durationDays != null ? Math.round(task.durationDays * 100) / 100 : ''),
-              stripHtml(task.description),
-              stripHtml(task.assumptions),
+              task.description ?? '',
+              task.assumptions ?? '',
               '', '', '',
             ])
           }
