@@ -662,27 +662,53 @@ Named resource allocation bars show mode-aware week ranges with **1-indexed week
 
 ### Documents Page (`/projects/:id/documents`)
 
-Generates a **PDF Scope Document** using React PDF rendered client-side.
+Generates a **PDF Scope Document** server-side using Puppeteer (headless Chrome). The client POSTs JSON document data; the server renders HTML via a template-literal renderer and converts it to PDF — no client-side PDF library required.
 
-### Sections (all toggleable)
+### Layout
+
+The Documents page has two stacked sections:
+
+1. **Generation panel** — horizontal card with Document Type (radio), Sections (3×2 grid of toggles), Document Label input, and Generate & Save button.
+2. **Document grid** — responsive 3-column grid of previously generated documents showing label, type, format badge, section pills, date, generated-by, and Download / Delete actions.
+
+### Sections (all toggleable, in document order)
 
 | Section | Contents |
 |---|---|
-| **Cover Page** | Project name, customer name, document label (optional), prepared date, start date, projected end date |
-| **Scope Summary** | In-scope epics/features with descriptions and assumptions; out-of-scope items listed separately |
-| **Effort Breakdown** | Table: epic → feature → resource type, hours and days; governance & overhead items table; total row |
+| **Cover Page** | Project name, customer name, "Scope Document" subtitle, prepared-by, generation timestamp, document label, projected start/end dates |
+| **Overview** | Project description (rich text); shown when description is set |
+| **Scope Summary** | In-scope epics/features with rich-text descriptions and assumptions; out-of-scope items listed separately |
+| **Effort Breakdown** | Table: epic → feature → resource type, hours and days (active items only); governance & overhead items table; total row |
+| **Gantt Chart** | Server-side SVG Gantt — epic group headers, feature bars coloured by timeline colour, week/month header labels derived from project start date |
 | **Timeline Summary** | Projected project dates, feature schedule table (feature name, resource types, start week, duration weeks, est. end) |
 | **Resource Profile** | Named resources, day rates, overhead items, discount items, cost summary with GST |
+| **Assumptions** | Aggregated assumptions from all active epics, features, and stories (rich text) |
 
-### Download
+### Rich Text Fields
 
-- **Download PDF** button saves the generated document to disk
-- **Document label** field (optional) is included on the cover page and appended to the filename
-- Filename format: `{ProjectName} - Scope Document - {YYYY-MM-DD}.pdf`
+All description and assumptions fields across the backlog (Epic, Feature, Story, Task) and Project Settings use the **TipTap rich text editor** with Bold, Italic, Bullet List, and Ordered List toolbar actions. Output is stored as HTML and rendered correctly in:
+- Read-only views (backlog, project detail page) using a `.rich-text-content` CSS class
+- PDF generation (rendered directly by Puppeteer)
+- CSV export (HTML preserved verbatim for lossless round-trip import)
 
-### Auto-save to Server
+### Document Label & Filename
 
-After generating, the document metadata (label, filename, sections enabled) is saved to the project via `POST /projects/:id/documents`. Previously generated documents are listed on the page.
+- Default label: `{Project Name} - Scope Document — {date} {time}` (local timezone)
+- Download filename: `{Project Name} - {label}.pdf`
+- Label is editable before generating
+
+### Storage
+
+- PDF files saved to `server/uploads/generated/`
+- Metadata (label, format, type, sections JSON) saved to `GeneratedDocument` DB record
+- `sections` field stores which sections were included — displayed as pills on the document card
+
+### Chrome / Puppeteer
+
+- Puppeteer v24.x pins a specific Chrome version internally
+- Chrome is auto-downloaded on `npm install` via `scripts/install-chrome.mjs` to `~/.cache/puppeteer`
+- If download fails, run `npm run install:chrome` manually
+- Pinned version is read directly from `puppeteer/package.json` to avoid version mismatches
 
 ---
 
