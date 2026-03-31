@@ -450,7 +450,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
           </div>
           {epic.description && (
             <div
-              className="text-sm text-gray-500 dark:text-gray-400 mt-1 ml-7 prose prose-sm dark:prose-invert max-w-none"
+              className="text-sm text-gray-500 dark:text-gray-400 mt-1 ml-7 rich-text-content"
               dangerouslySetInnerHTML={{ __html: epic.description }}
             />
           )}
@@ -458,7 +458,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
             <div className="mt-0.5 ml-7">
               <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Assumptions: </span>
               <span
-                className="text-sm text-gray-400 dark:text-gray-500 prose prose-sm dark:prose-invert max-w-none inline"
+                className="text-sm text-gray-400 dark:text-gray-500 rich-text-content inline"
                 dangerouslySetInnerHTML={{ __html: epic.assumptions }}
               />
             </div>
