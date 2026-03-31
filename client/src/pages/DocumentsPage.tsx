@@ -58,8 +58,8 @@ export default function DocumentsPage() {
   }, [project?.name])
 
   const { data: effortData } = useQuery({
-    queryKey: ['effort', projectId],
-    queryFn: () => api.get(`/projects/${projectId}/effort`).then(r => r.data),
+    queryKey: ['effort', projectId, 'active'],
+    queryFn: () => api.get(`/projects/${projectId}/effort?activeOnly=true`).then(r => r.data),
     enabled: !!projectId,
   })
 
