@@ -25,7 +25,7 @@ export default function RichTextEditor({ value, onChange, placeholder, className
   // Sync external value changes (e.g. when form is reset)
   useEffect(() => {
     if (editor && editor.getHTML() !== value) {
-      editor.commands.setContent(value, false)
+      editor.commands.setContent(value)
     }
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
 
