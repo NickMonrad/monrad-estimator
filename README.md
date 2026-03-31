@@ -149,8 +149,8 @@ Timeline data model + API with dependency-aware auto-scheduler, proportional poo
 ### ✅ Phase 6 — Resource Profile
 Per-resource hours/days/cost aggregation with epic → feature → story drill-down, configurable overhead items (% of task days, fixed total days, days per week × project duration), stacked bar chart, FTE calculation, dual CSV exports (resource profile + full project zip). Per-resource `hoursPerDay` and `dayRate` overrides support multi-locale teams (e.g. AU 7.6h vs NZ 8h). Onboarding/buffer weeks panel: onboarding weeks allocated to Full Project and Overhead resources before delivery begins; buffer weeks appended at project end. Allocation mode-aware named resource bars on Timeline (FULL_PROJECT spans full project; TIMELINE uses derived or manual range; T&M shows demand bars). Cost Summary Period column shows mode-correct date ranges. See [#6](https://github.com/NickMonrad/monrad-estimator/issues/6).
 
-### 🚧 Phase 7 — Document Generation *(in progress)*
-Scope document and Statement of Work as PDF + Word (.docx), configurable branding and section toggles. Phase 7a (programmatic PDF scope document) shipped in [#129](https://github.com/NickMonrad/monrad-estimator/pull/129). See [#7](https://github.com/NickMonrad/monrad-estimator/issues/7).
+### ✅ Phase 7 — Document Generation
+Server-side PDF scope document via Puppeteer (headless Chrome). TipTap rich text editor on all description/assumptions fields (Epic, Feature, Story, Task, Project). Sections: Cover, Overview, Scope Summary, Effort Breakdown, Gantt Chart (server-side SVG), Timeline Summary, Resource Profile, Assumptions — all toggleable. Document grid with metadata cards (label, sections pills, date, author). Timezone-aware document labels and filenames. HTML preserved in CSV export for lossless round-trip. Phase 7a shipped in [#129](https://github.com/NickMonrad/monrad-estimator/pull/129); v2 (Puppeteer + TipTap) in [#166](https://github.com/NickMonrad/monrad-estimator/pull/166). See [#7](https://github.com/NickMonrad/monrad-estimator/issues/7).
 
 ### 🚧 Phase 8 — Cost Basis & Rate Cards *(partially started)*
 Day rates per resource type (global defaults + project overrides) and cost columns in Effort Review are shipped. Remaining: per-resource-type discounts, project-level discounts (value/duration/manual), cost summary UI, cost section in SOW. See [#8](https://github.com/NickMonrad/monrad-estimator/issues/8).
@@ -216,6 +216,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Document generator: normalise customer data for PDF rendering, harden cover-page layout, and replace fragile scope summary table layout with long-content-safe rendering | #155 |
 | Timeline & Resource Profile enhancements — person-first model, over-allocation indicators, custom feature colours, onboarding/buffer zones, PNG/CSV export, allocation mode-aware named resources | #164 |
 | Doc Generator v2 — Puppeteer server-side PDF, TipTap rich text editor (all description/assumptions fields), Overview section in scope doc, timezone-aware timestamps on document label and filename | #166 |
+| Doc Generator v2 (continued) — redesigned Documents page (generation panel + document grid), Gantt chart section (server-side SVG), sections metadata on document cards, project name in label/filename, HTML preserved in CSV export for round-trip fidelity | #166 |
 
 ---
 
