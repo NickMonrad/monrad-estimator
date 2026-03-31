@@ -45,17 +45,17 @@ export default function DocumentsPage() {
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
 
-  // Update default label once project name is known
-  useEffect(() => {
-    if (project?.name) setLabel(defaultLabel(project.name))
-  }, [project?.name])
-
   // ── Data fetching ──────────────────────────────────────────────
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
     queryFn: () => api.get(`/projects/${projectId}`).then(r => r.data),
     enabled: !!projectId,
   })
+
+  // Update default label once project name is known
+  useEffect(() => {
+    if (project?.name) setLabel(defaultLabel(project.name))
+  }, [project?.name])
 
   const { data: effortData } = useQuery({
     queryKey: ['effort', projectId],
