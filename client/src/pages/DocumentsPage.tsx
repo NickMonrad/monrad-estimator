@@ -13,6 +13,7 @@ interface GeneratedDoc {
   format: string
   type: string
   createdAt: string
+  sections?: Record<string, boolean> | null
   generatedBy: { email: string }
 }
 
@@ -287,6 +288,13 @@ export default function DocumentsPage() {
                   new Date(doc.createdAt).toLocaleTimeString('en-AU', {
                     hour: '2-digit', minute: '2-digit', hour12: false,
                   })
+                const sectionLabels: Record<string, string> = {
+                  cover: 'Cover', scope: 'Scope', effort: 'Effort',
+                  timeline: 'Timeline', resourceProfile: 'Resources', assumptions: 'Assumptions',
+                }
+                const includedSections = doc.sections
+                  ? Object.entries(doc.sections).filter(([, v]) => v).map(([k]) => sectionLabels[k] ?? k)
+                  : null
                 return (
                   <div key={doc.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 flex flex-col gap-3">
                     {/* Top row: PDF badge + format badge */}
@@ -300,6 +308,16 @@ export default function DocumentsPage() {
                     <p className="text-sm font-semibold text-gray-900 dark:text-white">{doc.label}</p>
                     {/* Type */}
                     <p className="text-xs text-gray-500 dark:text-gray-400">{typeLabel}</p>
+                    {/* Sections */}
+                    {includedSections && (
+                      <div className="flex flex-wrap gap-1">
+                        {includedSections.map(s => (
+                          <span key={s} className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     {/* Meta */}
                     <p className="text-xs text-gray-400">{dateStr} · {doc.generatedBy.email}</p>
                     {/* Actions */}
