@@ -64,6 +64,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       format,
       label,
       filePath: filename, // store relative filename only
+      sections: documentData.sections ?? null,
       generatedById: req.userId!,
     },
   })

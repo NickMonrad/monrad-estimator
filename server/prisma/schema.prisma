@@ -389,6 +389,7 @@ model GeneratedDocument {
   format        String               // 'pdf' | 'docx' | 'pptx'
   label         String
   filePath      String               // relative path under uploads/generated/
+  sections      Json?                // sections included e.g. {"cover":true,"scope":true,...}
   generatedById String
   generatedBy   User                 @relation("GeneratedDocumentUser", fields: [generatedById], references: [id])
   createdAt     DateTime             @default(now())
