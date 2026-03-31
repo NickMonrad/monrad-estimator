@@ -20,12 +20,17 @@
   pointer-events: none;
   height: 0;
 }
-.rich-text-editor .ProseMirror ul {
+.rich-text-editor .ProseMirror ul,
+.rich-text-content ul {
   list-style-type: disc;
   padding-left: 1.2em;
 }
-.rich-text-editor .ProseMirror ol {
+.rich-text-editor .ProseMirror ol,
+.rich-text-content ol {
   list-style-type: decimal;
   padding-left: 1.2em;
+}
+.rich-text-content p:empty {
+  display: none;
 }
 

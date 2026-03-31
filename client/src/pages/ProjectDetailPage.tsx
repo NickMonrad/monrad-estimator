@@ -67,7 +67,7 @@ export default function ProjectDetailPage() {
           {project.customer && <p className="text-sm text-gray-500 dark:text-gray-400">Customer: {project.customer.name ?? project.customer}</p>}
           {project.description && (
             <div
-              className="text-sm text-gray-600 dark:text-gray-400 mt-1 prose prose-sm dark:prose-invert max-w-none"
+              className="text-sm text-gray-600 dark:text-gray-400 mt-1 rich-text-content"
               dangerouslySetInnerHTML={{ __html: project.description }}
             />
           )}
