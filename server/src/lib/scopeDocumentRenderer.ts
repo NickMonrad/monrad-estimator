@@ -374,7 +374,6 @@ export function renderScopeDocumentHtml(props: ScopeDocumentProps): string {
     <div class="cover-title">${esc(project.name)}</div>
     ${project.customer ? `<div class="cover-subtitle">${esc(project.customer)}</div>` : ''}
     <div class="cover-subtitle">Scope Document</div>
-    ${hasContent(project.description) ? `<div class="cover-desc rich">${richField(project.description)}</div>` : ''}
     <div style="margin-top:40px">
       <div class="cover-meta">Prepared by ${esc(generatedBy)}</div>
       <div class="cover-meta">Generated: ${today} at ${nowTime}</div>
