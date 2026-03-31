@@ -448,8 +448,21 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
               <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
             </div>
           </div>
-          {epic.description && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 ml-7">{epic.description}</p>}
-          {epic.assumptions && <p className="text-sm text-gray-400 dark:text-gray-500 mt-0.5 ml-7"><span className="font-medium text-gray-500 dark:text-gray-400">Assumptions:</span> {epic.assumptions}</p>}
+          {epic.description && (
+            <div
+              className="text-sm text-gray-500 dark:text-gray-400 mt-1 ml-7 prose prose-sm dark:prose-invert max-w-none"
+              dangerouslySetInnerHTML={{ __html: epic.description }}
+            />
+          )}
+          {epic.assumptions && (
+            <div className="mt-0.5 ml-7">
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Assumptions: </span>
+              <span
+                className="text-sm text-gray-400 dark:text-gray-500 prose prose-sm dark:prose-invert max-w-none inline"
+                dangerouslySetInnerHTML={{ __html: epic.assumptions }}
+              />
+            </div>
+          )}
         </div>
       )}
       {expanded && (

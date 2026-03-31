@@ -4,6 +4,7 @@ import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../../lib/api'
+import { stripHtml } from '../../lib/stripHtml'
 import type { Task, ResourceType } from '../../types/backlog'
 import RichTextEditor from '../shared/RichTextEditor'
 
@@ -59,7 +60,7 @@ function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDel
             {task.hoursEffort}h · {(task.hoursEffort / hoursPerDay).toFixed(1)}d{task.durationDays != null && <span className="text-gray-400 dark:text-gray-500 font-normal"> (dur: {task.durationDays}d)</span>}
           </span>
         </div>
-        {task.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 ml-0 truncate">{task.description}</p>}
+        {task.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 ml-0 truncate">{stripHtml(task.description)}</p>}
       </div>
       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
         <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
