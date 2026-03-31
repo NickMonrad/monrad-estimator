@@ -105,9 +105,11 @@ router.get('/:docId/download', async (req: AuthRequest, res: Response) => {
     docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   }
+  const safeProject = project.name.replace(/[^a-z0-9\-_\s]/gi, '').trim()
   const safeLabel = doc.label.replace(/[^a-z0-9\-_\s]/gi, '').trim() || 'document'
+  const downloadName = safeProject ? `${safeProject} - ${safeLabel}` : safeLabel
   res.setHeader('Content-Type', contentTypes[doc.format] ?? 'application/octet-stream')
-  res.setHeader('Content-Disposition', `attachment; filename="${safeLabel}.${doc.format}"`)
+  res.setHeader('Content-Disposition', `attachment; filename="${downloadName}.${doc.format}"`)
   res.sendFile(filePath)
 })
 
