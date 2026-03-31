@@ -526,9 +526,9 @@ ${coverHtml}
 ${overviewHtml}
 ${scopeHtml}
 ${effortHtml}
+${ganttHtml}
 ${timelineHtml}
 ${resourceHtml}
-${ganttHtml}
 ${assumptionsHtml}
 </body>
 </html>`
