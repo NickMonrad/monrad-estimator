@@ -13,6 +13,7 @@ export interface ScopeDocumentProps {
     timeline: boolean
     resourceProfile: boolean
     assumptions: boolean
+    ganttChart?: boolean
   }
   effortData: any
   timelineData: any
@@ -74,6 +75,151 @@ function richField(content: string | null | undefined): string {
   if (t.startsWith('<')) return t
   const escaped = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
   return `<p>${escaped}</p>`
+}
+
+// ── Gantt chart SVG renderer ──────────────────────────────────────────────────
+
+interface GanttEntry {
+  featureId: string
+  featureName: string
+  epicId: string
+  epicName: string
+  epicOrder: number
+  featureOrder: number
+  startWeek: number
+  durationWeeks: number
+  timelineColour: string | null
+}
+
+interface TimelineData {
+  startDate: string | null
+  projectedEndDate: string | null
+  entries: GanttEntry[]
+  bufferWeeks: number
+  onboardingWeeks: number
+}
+
+function renderGanttSvg(td: TimelineData): string {
+  const ROW_H = 28
+  const LABEL_W = 200
+  const COL_W = 28
+  const HEADER_H = 40
+  const EPIC_HEADER_H = 24
+  const PAD = 2
+
+  const entries = td.entries ?? []
+  if (entries.length === 0) return ''
+
+  // Compute total weeks
+  const maxEnd = Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
+  const totalWeeks = Math.max(4, Math.ceil(maxEnd) + 1)
+
+  // Group by epic (sorted by epicOrder, features by featureOrder)
+  const epicMap = new Map<string, { epicName: string; epicOrder: number; features: GanttEntry[] }>()
+  for (const e of entries) {
+    if (!epicMap.has(e.epicId)) epicMap.set(e.epicId, { epicName: e.epicName, epicOrder: e.epicOrder, features: [] })
+    epicMap.get(e.epicId)!.features.push(e)
+  }
+  const epicsArr = [...epicMap.values()].sort((a, b) => a.epicOrder - b.epicOrder)
+  for (const ep of epicsArr) ep.features.sort((a, b) => a.featureOrder - b.featureOrder)
+
+  // Compute dimensions
+  const totalRows = epicsArr.reduce((acc, ep) => acc + 1 + ep.features.length, 0)
+  const svgW = LABEL_W + totalWeeks * COL_W
+  const svgH = HEADER_H + totalRows * ROW_H
+
+  // Date helpers
+  function weekToDate(week: number): Date | null {
+    if (!td.startDate) return null
+    const d = new Date(td.startDate)
+    d.setDate(d.getDate() + week * 7)
+    return d
+  }
+
+  function monthLabel(d: Date): string {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    return `${months[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`
+  }
+
+  // Build SVG parts
+  const parts: string[] = []
+
+  // Background
+  parts.push(`<rect width="${svgW}" height="${svgH}" fill="white"/>`)
+
+  // Week grid lines (behind everything)
+  for (let w = 0; w <= totalWeeks; w++) {
+    const x = LABEL_W + w * COL_W
+    parts.push(`<line x1="${x}" y1="${HEADER_H}" x2="${x}" y2="${svgH}" stroke="#e5e7eb" stroke-width="1"/>`)
+  }
+
+  // Header row background
+  parts.push(`<rect x="0" y="0" width="${svgW}" height="${HEADER_H}" fill="#f3f4f6"/>`)
+
+  // Week/month labels in header
+  if (td.startDate) {
+    let lastMonth = -1
+    for (let w = 0; w < totalWeeks; w++) {
+      const d = weekToDate(w)
+      if (!d) break
+      const month = d.getMonth()
+      if (month !== lastMonth) {
+        lastMonth = month
+        const x = LABEL_W + w * COL_W + 3
+        parts.push(`<text x="${x}" y="${HEADER_H - 14}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">${monthLabel(d)}</text>`)
+        // tick mark at month boundary
+        const lineX = LABEL_W + w * COL_W
+        parts.push(`<line x1="${lineX}" y1="${HEADER_H - 8}" x2="${lineX}" y2="${HEADER_H}" stroke="#d1d5db" stroke-width="1"/>`)
+      }
+    }
+  } else {
+    for (let w = 0; w < totalWeeks; w += 2) {
+      const x = LABEL_W + w * COL_W + 3
+      parts.push(`<text x="${x}" y="${HEADER_H - 14}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">Wk ${w + 1}</text>`)
+    }
+  }
+
+  // Week numbers row (bottom of header)
+  for (let w = 0; w < totalWeeks; w++) {
+    const x = LABEL_W + w * COL_W
+    parts.push(`<text x="${x + COL_W / 2}" y="${HEADER_H - 3}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="8" fill="#9ca3af" text-anchor="middle">${w + 1}</text>`)
+  }
+
+  // Render epic groups and feature rows
+  let currentY = HEADER_H
+
+  for (const ep of epicsArr) {
+    // Epic header row
+    parts.push(`<rect x="0" y="${currentY}" width="${svgW}" height="${EPIC_HEADER_H}" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>`)
+    parts.push(`<text x="8" y="${currentY + EPIC_HEADER_H / 2 + 4}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#374151">${esc(ep.epicName)}</text>`)
+    currentY += EPIC_HEADER_H
+
+    // Feature rows
+    ep.features.forEach((feat, fi) => {
+      const rowBg = fi % 2 === 0 ? 'white' : '#fafafa'
+      parts.push(`<rect x="0" y="${currentY}" width="${svgW}" height="${ROW_H}" fill="${rowBg}"/>`)
+
+      // Feature name label (truncate to ~28 chars)
+      const displayName = feat.featureName.length > 28 ? feat.featureName.slice(0, 27) + '…' : feat.featureName
+      parts.push(`<text x="8" y="${currentY + ROW_H / 2 + 4}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#4b5563">${esc(displayName)}</text>`)
+
+      // Bar
+      const barX = LABEL_W + feat.startWeek * COL_W + PAD
+      const barY = currentY + PAD
+      const barW = Math.max(0, feat.durationWeeks * COL_W - PAD * 2)
+      const barH = ROW_H - PAD * 2
+      const colour = feat.timelineColour ?? '#3b82f6'
+      parts.push(`<rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="3" fill="${esc(colour)}" opacity="0.85"/>`)
+
+      currentY += ROW_H
+    })
+  }
+
+  // Left column separator line (drawn last so it sits on top)
+  parts.push(`<line x1="${LABEL_W}" y1="0" x2="${LABEL_W}" y2="${svgH}" stroke="#d1d5db" stroke-width="1"/>`)
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">${parts.join('')}</svg>`
+  return `<div style="overflow-x:auto; margin: 0 0 16px 0">${svg}</div>`
 }
 
 const CSS = `
@@ -349,6 +495,25 @@ export function renderScopeDocumentHtml(props: ScopeDocumentProps): string {
       </div>`).join('')}
   </div>` : ''
 
+  // ── Gantt chart section ───────────────────────────────────────
+  let ganttHtml = ''
+  if (sections.ganttChart && (timelineData as TimelineData | null)?.entries?.length) {
+    const td = timelineData as TimelineData
+    const maxEnd = Math.max(...td.entries.map((e: GanttEntry) => e.startWeek + e.durationWeeks))
+    const totalWeeks = Math.max(4, Math.ceil(maxEnd) + 1)
+    const startDateLabel = td.startDate
+      ? ` starting ${formatDate(td.startDate)}`
+      : ''
+    ganttHtml = `
+  <div class="page-section">
+    <div class="section-heading">Project Timeline</div>
+    <p style="font-size:12px;color:#6b7280;margin-bottom:12px;">
+      Gantt chart showing feature scheduling across ${totalWeeks} weeks${startDateLabel}.
+    </p>
+    ${renderGanttSvg(td)}
+  </div>`
+  }
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -363,6 +528,7 @@ ${scopeHtml}
 ${effortHtml}
 ${timelineHtml}
 ${resourceHtml}
+${ganttHtml}
 ${assumptionsHtml}
 </body>
 </html>`
