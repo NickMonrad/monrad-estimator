@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "CodeGraphContext": {
+      "command": "/Users/nicholasmonrad/.copilot/venv/bin/cgc",
+      "args": ["mcp", "start"],
+      "disabled": false
+    }
+  }
+}
