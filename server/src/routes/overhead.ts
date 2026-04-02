@@ -64,6 +64,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'value must be a number' })
     return
   }
+  if (numericValue < 0) {
+    res.status(400).json({ error: 'value must be non-negative' })
+    return
+  }
 
   const rtId = await validateResourceType(resourceTypeId, projectId)
   if (resourceTypeId && !rtId) {

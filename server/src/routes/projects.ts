@@ -326,8 +326,8 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
   const existing = await ownedProject(req.params.id as string, req.userId!)
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   const data: Record<string, unknown> = {}
-  if (req.body.bufferWeeks !== undefined) data.bufferWeeks = parseInt(req.body.bufferWeeks) ?? 0
-  if (req.body.onboardingWeeks !== undefined) data.onboardingWeeks = parseInt(req.body.onboardingWeeks) ?? 0
+  if (req.body.bufferWeeks !== undefined) data.bufferWeeks = parseInt(req.body.bufferWeeks) || 0
+  if (req.body.onboardingWeeks !== undefined) data.onboardingWeeks = parseInt(req.body.onboardingWeeks) || 0
   if (req.body.hoursPerDay !== undefined) data.hoursPerDay = req.body.hoursPerDay
   if (req.body.name !== undefined) data.name = req.body.name
   if (req.body.status !== undefined) data.status = req.body.status
@@ -339,8 +339,8 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const { name, description, status, hoursPerDay, taxRate, taxLabel } = req.body
   const customerId = req.body.customerId !== undefined ? (req.body.customerId || null) : undefined
-  const bufferWeeks = req.body.bufferWeeks !== undefined ? (parseInt(req.body.bufferWeeks) ?? 0) : undefined
-  const onboardingWeeks = req.body.onboardingWeeks !== undefined ? (parseInt(req.body.onboardingWeeks) ?? 0) : undefined
+  const bufferWeeks = req.body.bufferWeeks !== undefined ? (parseInt(req.body.bufferWeeks) || 0) : undefined
+  const onboardingWeeks = req.body.onboardingWeeks !== undefined ? (parseInt(req.body.onboardingWeeks) || 0) : undefined
   const existing = await ownedProject(req.params.id as string, req.userId!)
   if (!existing) { res.status(404).json({ error: 'Not found' }); return }
   const project = await prisma.project.update({

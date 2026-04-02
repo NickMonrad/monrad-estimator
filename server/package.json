@@ -34,14 +34,19 @@
     "csv-stringify": "^6.6.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "nodemailer": "^8.0.2",
     "pg": "^8.19.0",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
     "prisma": "^7.4.1",
     "puppeteer": "^24.40.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -51,6 +56,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.10.15",
     "@types/nodemailer": "^7.0.11",
+    "@types/pino-http": "^5.8.4",
     "@types/supertest": "^7.2.0",
     "eslint": "^9.39.1",
     "globals": "^16.5.0",

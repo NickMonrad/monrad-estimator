@@ -79,6 +79,14 @@ function parseStatus(val: string | undefined): boolean {
   return (val?.trim().toLowerCase() === 'inactive') ? false : true
 }
 
+/** Prevent CSV formula injection by prefixing dangerous characters with a single quote */
+export function sanitizeCsvCell(value: string): string {
+  if (/^[=+\-@\t\r]/.test(value)) {
+    return `'${value}`
+  }
+  return value
+}
+
 // GET /api/projects/:projectId/backlog/export-csv
 router.get('/export-csv', async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
@@ -112,41 +120,41 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
     for (const epic of epics) {
       // Epic row
       rows.push([
-        'Epic', epic.name, '', '', '',
+        'Epic', sanitizeCsvCell(epic.name), '', '', '',
         '', '', '', '',
-        epic.description ?? '', epic.assumptions ?? '',
+        sanitizeCsvCell(epic.description ?? ''), sanitizeCsvCell(epic.assumptions ?? ''),
         epic.isActive ? 'active' : 'inactive', '', '',
       ])
 
       for (const feature of epic.features) {
         // Feature row
         rows.push([
-          'Feature', epic.name, feature.name, '', '',
+          'Feature', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), '', '',
           '', '', '', '',
-          feature.description ?? '', feature.assumptions ?? '',
+          sanitizeCsvCell(feature.description ?? ''), sanitizeCsvCell(feature.assumptions ?? ''),
           '', feature.isActive ? 'active' : 'inactive', '',
         ])
 
         for (const story of feature.userStories) {
           // Story row
           rows.push([
-            'Story', epic.name, feature.name, story.name, '',
-            story.appliedTemplate?.name ?? '',
+            'Story', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), sanitizeCsvCell(story.name), '',
+            sanitizeCsvCell(story.appliedTemplate?.name ?? ''),
             '', '', '',
-            story.description ?? '', story.assumptions ?? '',
+            sanitizeCsvCell(story.description ?? ''), sanitizeCsvCell(story.assumptions ?? ''),
             '', '', story.isActive ? 'active' : 'inactive',
           ])
 
           // Task rows
           for (const task of story.tasks) {
             rows.push([
-              'Task', epic.name, feature.name, story.name, task.name,
+              'Task', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), sanitizeCsvCell(story.name), sanitizeCsvCell(task.name),
               '',
-              task.resourceType?.name ?? '',
+              sanitizeCsvCell(task.resourceType?.name ?? ''),
               String(task.hoursEffort),
               String(task.durationDays != null ? Math.round(task.durationDays * 100) / 100 : ''),
-              task.description ?? '',
-              task.assumptions ?? '',
+              sanitizeCsvCell(task.description ?? ''),
+              sanitizeCsvCell(task.assumptions ?? ''),
               '', '', '',
             ])
           }
@@ -250,6 +258,10 @@ router.post('/stage-csv', async (req: AuthRequest, res: Response) => {
       warnings.push(`StoryStatus is only applied on Story rows — will be ignored for this ${type} row`)
     }
 
+    // Reject negative hour values
+    const rawHoursEffort = parseNum(raw.HoursEffort)
+    if (rawHoursEffort < 0) errors.push('HoursEffort must be non-negative')
+
     return {
       rowIndex: i + 2, // 1-indexed + header
       type,
@@ -267,10 +279,10 @@ router.post('/stage-csv', async (req: AuthRequest, res: Response) => {
       hoursMedium: parseNum(raw.HoursMedium),
       hoursLarge: parseNum(raw.HoursLarge),
       hoursExtraLarge: parseNum(raw.HoursExtraLarge),
-      hoursEffort: parseNum(raw.HoursEffort),
+      hoursEffort: rawHoursEffort,
       durationDays: parseNum(raw.DurationDays),
-      description: raw.Description?.trim() ?? '',
-      assumptions: raw.Assumptions?.trim() ?? '',
+      description: sanitizeCsvCell(raw.Description?.trim() ?? ''),
+      assumptions: sanitizeCsvCell(raw.Assumptions?.trim() ?? ''),
       errors,
       warnings,
     }

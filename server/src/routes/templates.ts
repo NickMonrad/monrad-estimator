@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { parse } from 'csv-parse/sync'
 import { stringify } from 'csv-stringify/sync'
+import { sanitizeCsvCell } from './csv.js'
 
 const router = Router()
 
@@ -76,12 +77,12 @@ router.get('/export-csv', async (_req, res: Response) => {
   } else {
     for (const tpl of templates) {
       for (const task of tpl.tasks) {
-        rows.push([tpl.name, tpl.category ?? '', task.name, task.resourceTypeName,
+        rows.push([sanitizeCsvCell(tpl.name), sanitizeCsvCell(tpl.category ?? ''), sanitizeCsvCell(task.name), sanitizeCsvCell(task.resourceTypeName),
           String(task.hoursExtraSmall), String(task.hoursSmall), String(task.hoursMedium),
           String(task.hoursLarge), String(task.hoursExtraLarge)])
       }
       if (tpl.tasks.length === 0) {
-        rows.push([tpl.name, tpl.category ?? '', '', '', '', '', '', '', ''])
+        rows.push([sanitizeCsvCell(tpl.name), sanitizeCsvCell(tpl.category ?? ''), '', '', '', '', '', '', ''])
       }
     }
   }
@@ -178,8 +179,8 @@ router.post('/import-csv', authenticate, async (req: AuthRequest, res: Response)
         const row = taskRows[i]
         await prisma.templateTask.create({
           data: {
-            name: row.TaskName.trim(),
-            resourceTypeName: row.ResourceTypeName?.trim() || 'Unassigned',
+            name: sanitizeCsvCell(row.TaskName.trim()),
+            resourceTypeName: sanitizeCsvCell(row.ResourceTypeName?.trim() || 'Unassigned'),
             hoursExtraSmall: parseFloat(row.HoursExtraSmall) || 0,
             hoursSmall: parseFloat(row.HoursSmall) || 0,
             hoursMedium: parseFloat(row.HoursMedium) || 0,
@@ -199,8 +200,8 @@ router.post('/import-csv', authenticate, async (req: AuthRequest, res: Response)
         const row = taskRows[i]
         await prisma.templateTask.create({
           data: {
-            name: row.TaskName.trim(),
-            resourceTypeName: row.ResourceTypeName?.trim() || 'Unassigned',
+            name: sanitizeCsvCell(row.TaskName.trim()),
+            resourceTypeName: sanitizeCsvCell(row.ResourceTypeName?.trim() || 'Unassigned'),
             hoursExtraSmall: parseFloat(row.HoursExtraSmall) || 0,
             hoursSmall: parseFloat(row.HoursSmall) || 0,
             hoursMedium: parseFloat(row.HoursMedium) || 0,
