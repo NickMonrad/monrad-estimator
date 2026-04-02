@@ -259,6 +259,46 @@ These rules apply to every session — they exist to avoid repeated back-and-for
 - **Report sub-agent failures immediately** — if a `codex-developer` or `playwright-test-engineer` task fails, do not silently move on; surface the failure and retry or fall back before proceeding
 - **Validate Playwright specs against the live UI** before committing — run once or check selectors against actual component code to catch mismatches (wrong button text, missing elements) before they appear at runtime
 
+## Smart Memory (Cross-Session Context)
+
+A semantic vector memory system is available for storing and retrieving knowledge across sessions. Use the `memory` skill (`.github/skills/memory/SKILL.md`) for full reference.
+
+**Venv:** `~/.copilot/venv/` (Python 3.13 + sentence-transformers + sqlite-vector)
+**Script:** `~/.copilot/scripts/memory.py`
+**Database:** `~/sqlite-db/copilot-memory.db`
+
+### Session Start — ALWAYS restore context
+```bash
+source ~/.copilot/venv/bin/activate && python3 ~/.copilot/scripts/memory.py search \
+  --query "conventions, decisions, known issues for this project" \
+  --repo monrad-estimator --limit 15 --threshold 0.25
+```
+
+### Store important decisions/conventions as you work
+```bash
+source ~/.copilot/venv/bin/activate && python3 ~/.copilot/scripts/memory.py add \
+  --content "WHAT TO REMEMBER" --type convention --scope "repo:monrad-estimator" \
+  --repo monrad-estimator --tags "tag1,tag2"
+```
+
+### Memory types: `fact`, `decision`, `convention`, `bug`, `preference`
+
+## Code Graph (CodeGraphContext)
+
+CodeGraphContext is installed and the monrad-estimator codebase is indexed in FalkorDB Lite.
+
+**CLI:** `~/.copilot/venv/bin/cgc`
+**MCP config:** `.copilot/mcp.json`
+
+```bash
+source ~/.copilot/venv/bin/activate
+cgc analyze callers FUNCTION_NAME    # Who calls this function?
+cgc analyze complexity --threshold 10 # Find complex code
+cgc analyze dead-code                 # Find unused code
+cgc find pattern "Auth"               # Search code symbols
+cgc index .                           # Re-index after major changes
+```
+
 ## Known Gotchas
 
 - **DB backup before schema changes:** Always run `npm run db:backup` from the repo root before any Prisma migration. Backups are saved to `backups/` (gitignored). **Never run `prisma migrate reset` without explicit user confirmation** — it irreversibly wipes all data.
