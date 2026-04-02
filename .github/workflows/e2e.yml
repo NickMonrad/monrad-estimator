@@ -27,6 +27,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/monrad_estimator
       JWT_SECRET: ci-test-secret-for-github-actions-32chars
+      NODE_ENV: test
       PORT: 3001
       CLIENT_URL: http://localhost:5173
       TEST_EMAIL: test@example.com
