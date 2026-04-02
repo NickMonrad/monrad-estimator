@@ -16,9 +16,14 @@ import {
 
 const router = Router()
 
+// Skip rate limiting in test environments so Playwright/Vitest suites are not
+// throttled by their own repeated auth calls from the same IP (127.0.0.1).
+const skipInTest = () => process.env.NODE_ENV === 'test'
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
+  skip: skipInTest,
   message: { error: 'Too many login attempts, please try again in 15 minutes' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -27,6 +32,7 @@ const loginLimiter = rateLimit({
 const forgotPasswordLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 3,
+  skip: skipInTest,
   message: { error: 'Too many password reset requests, please try again in an hour' },
   standardHeaders: true,
   legacyHeaders: false,
