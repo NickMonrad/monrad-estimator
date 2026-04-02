@@ -25,6 +25,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   const { name, description, assumptions, hoursEffort, resourceTypeId } = req.body
   if (!name || !resourceTypeId) { res.status(400).json({ error: 'name and resourceTypeId are required' }); return }
+  if (hoursEffort !== undefined && hoursEffort < 0) { res.status(400).json({ error: 'hoursEffort must be non-negative' }); return }
   const hoursPerDay = story.feature.epic.project.hoursPerDay ?? 7.6
   const count = await prisma.task.count({ where: { userStoryId: req.params.storyId as string } })
   const task = await prisma.task.create({

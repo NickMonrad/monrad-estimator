@@ -37,6 +37,17 @@ npx playwright test --ui                   # interactive UI mode
 | can sign in with valid credentials | Valid credentials redirect to `/projects` |
 | sign out returns to login | Sign Out button clears session and shows login |
 
+#### `Security hardening` describe block (4 tests — `feature/security-sprint-1`)
+
+Tests run in `serial` mode to avoid interleaving concurrent login attempts.
+
+| Test | Description |
+|------|-------------|
+| security headers are present on API responses | POSTs a dummy request to `/api/auth/login` via the `request` fixture and asserts that Helmet's `x-frame-options`, `x-content-type-options`, and `x-dns-prefetch-control` headers are all set on the response |
+| registering with an existing email returns success (no enumeration) | Registers a unique user, signs out, then re-registers with the same email. Asserts no "already in use" error is shown and the app lands on the Projects page — confirming the server returns HTTP 200 instead of 409 |
+| GET /api/projects returns 401 when no Authorization header is provided | Direct API request (no JWT) via the `request` fixture — asserts HTTP 401 |
+| one failed login attempt followed by correct credentials still succeeds | Submits wrong password once (asserts error message), then immediately uses correct credentials — asserts successful login, confirming the rate limit (5/15 min) is not triggered by a single bad attempt |
+
 ---
 
 ### `projects.spec.ts` — Projects (4 tests)

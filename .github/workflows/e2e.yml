@@ -26,7 +26,7 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/monrad_estimator
-      JWT_SECRET: ci-test-secret
+      JWT_SECRET: ci-test-secret-for-github-actions-32chars
       PORT: 3001
       CLIENT_URL: http://localhost:5173
       TEST_EMAIL: test@example.com
@@ -39,6 +39,13 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+
+      # ── Audit dependencies ───────────────────────────────────────
+      - name: Audit dependencies
+        run: |
+          cd server && npm audit --audit-level=high
+          cd ../client && npm audit --audit-level=high
+        continue-on-error: true  # Don't fail CI on audit warnings initially
 
       # ── Install all workspace dependencies at once ──────────────
       - name: Install all dependencies
