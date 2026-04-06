@@ -40,7 +40,7 @@ export default function RegisterPage() {
         {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>}
         {success && (
           <div className="mb-4 p-3 bg-green-50 text-green-700 rounded-lg text-sm">
-            If that email is not already registered, your account has been created. Please check your inbox.
+            Your registration was received — please check your inbox to get started.
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-4">

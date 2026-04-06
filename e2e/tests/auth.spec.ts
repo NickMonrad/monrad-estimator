@@ -101,7 +101,7 @@ test.describe('Security hardening', () => {
 
     // Should show a generic success message (same UI as new registration success).
     await expect(
-      page.getByText(/if that email is not already registered|check your inbox/i),
+      page.getByText(/registration was received|check your inbox/i),
     ).toBeVisible({ timeout: 5_000 })
   })
 
