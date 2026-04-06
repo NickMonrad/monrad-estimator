@@ -6,7 +6,7 @@ interface User { id: string; email: string; name: string }
 interface AuthContextType {
   user: User | null
   login: (email: string, password: string) => Promise<void>
-  register: (email: string, name: string, password: string) => Promise<void>
+  register: (email: string, name: string, password: string) => Promise<boolean>
   logout: () => void
 }
 
@@ -25,11 +25,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user)
   }
 
-  const register = async (email: string, name: string, password: string) => {
+  const register = async (email: string, name: string, password: string): Promise<boolean> => {
     const { data } = await api.post('/auth/register', { email, name, password })
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('user', JSON.stringify(data.user))
-    setUser(data.user)
+    // Server returns no token for existing emails (enumeration prevention).
+    // Only log the user in when a real token is returned (HTTP 201).
+    if (data.token) {
+      localStorage.setItem('token', data.token)
+      localStorage.setItem('user', JSON.stringify(data.user))
+      setUser(data.user)
+      return true  // navigable — user is now logged in
+    }
+    return false  // existing email — show generic success, don't navigate
   }
 
   const logout = () => {
