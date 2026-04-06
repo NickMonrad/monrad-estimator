@@ -86,21 +86,23 @@ test.describe('Security hardening', () => {
     await expect(page.getByRole('button', { name: /sign in/i })).toBeVisible()
 
     // ── Second registration with the SAME email ──
-    // With the enumeration fix the server returns HTTP 200 and the client
-    // treats it as a successful registration (no "already in use" error shown).
+    // The server returns HTTP 200 with a generic message — the client shows a
+    // success banner and stays on the register page. No "already in use" error.
     await page.goto('/register')
     await page.getByPlaceholder('Full name').fill('Security Test User')
     await page.getByPlaceholder('you@example.com').fill(uniqueEmail)
     await page.getByPlaceholder(/password/i).fill(password)
     await page.getByRole('button', { name: /create account|register|sign up/i }).click()
 
-    // The page must NOT surface an error about the email being taken.
+    // Must NOT show an error about the email being taken (that would be enumeration).
     await expect(
       page.getByText(/already (in use|registered|exists|taken)|email.*exist/i),
     ).not.toBeVisible({ timeout: 5_000 })
 
-    // And it should show the same success state as a real registration.
-    await expect(page.getByRole('heading', { name: /projects/i })).toBeVisible({ timeout: 10_000 })
+    // Should show a generic success message (same UI as new registration success).
+    await expect(
+      page.getByText(/if that email is not already registered|check your inbox/i),
+    ).toBeVisible({ timeout: 5_000 })
   })
 
   // ── Test 3: Protected routes require a JWT ────────────────────────────────
