@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { requireAdmin } from '../middleware/requireAdmin.js'
 
 const router = Router()
 router.use(authenticate)
@@ -33,7 +34,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 })
 
 // POST /api/rate-cards
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', requireAdmin, async (req: AuthRequest, res: Response) => {
   const { name, isDefault, entries } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -67,7 +68,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 })
 
 // PUT /api/rate-cards/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', requireAdmin, async (req: AuthRequest, res: Response) => {
   const { name, isDefault, entries } = req.body
 
   const existing = await prisma.rateCard.findUnique({ where: { id: req.params.id as string } })
@@ -108,7 +109,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 })
 
 // DELETE /api/rate-cards/:id
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', requireAdmin, async (req: AuthRequest, res: Response) => {
   const existing = await prisma.rateCard.findUnique({ where: { id: req.params.id as string } })
   if (!existing) { res.status(404).json({ error: 'Rate card not found' }); return }
   await prisma.rateCard.delete({ where: { id: req.params.id as string } })

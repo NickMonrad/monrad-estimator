@@ -45,6 +45,12 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'type, format, label and documentData are required' }); return
   }
 
+  // #171: validate format against allowlist to prevent path traversal via extension
+  const ALLOWED_FORMATS = ['pdf', 'docx']
+  if (!ALLOWED_FORMATS.includes(format)) {
+    res.status(400).json({ error: 'Invalid format' }); return
+  }
+
   // Render HTML and generate PDF
   const html = renderScopeDocumentHtml({ ...documentData, tz })
   const buffer = await generatePdfFromHtml(html)
@@ -55,6 +61,11 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
   const ts = formatExportTimestamp(tz)
   const filename = `${projectId}-${ts}.${format}`
   const filePath = path.join(GENERATED_DIR, filename)
+
+  // #171: assert resolved path is within GENERATED_DIR to prevent path traversal
+  if (!path.resolve(filePath).startsWith(path.resolve(GENERATED_DIR))) {
+    res.status(400).json({ error: 'Invalid file path' }); return
+  }
   fs.writeFileSync(filePath, buffer)
 
   const doc = await prisma.generatedDocument.create({
@@ -98,6 +109,12 @@ router.get('/:docId/download', async (req: AuthRequest, res: Response) => {
   if (!doc) { res.status(404).json({ error: 'Document not found' }); return }
 
   const filePath = path.join(GENERATED_DIR, doc.filePath)
+
+  // #171: assert resolved path is within GENERATED_DIR to prevent path traversal via DB value
+  if (!path.resolve(filePath).startsWith(path.resolve(GENERATED_DIR))) {
+    res.status(400).json({ error: 'Invalid file path' }); return
+  }
+
   if (!fs.existsSync(filePath)) { res.status(404).json({ error: 'File not found on disk' }); return }
 
   const contentTypes: Record<string, string> = {
