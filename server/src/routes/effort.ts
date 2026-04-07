@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { round2 } from '../utils/round.js'
 
@@ -9,7 +10,7 @@ router.use(authenticate)
 const CATEGORY_ORDER = ['ENGINEERING', 'GOVERNANCE', 'PROJECT_MANAGEMENT'] as const
 
 // GET /api/projects/:projectId/effort
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const activeOnly = req.query.activeOnly === 'true'
 
@@ -181,6 +182,6 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     : null
 
   res.json({ projectId, hoursPerDay: fallbackHoursPerDay, totalHours, totalDays, totalCost, hasCost, byCategory })
-})
+}))
 
 export default router

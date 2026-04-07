@@ -1,11 +1,12 @@
 import { Router, Response } from 'express'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { AuthRequest } from '../middleware/auth.js'
 
 const router = Router()
 
 // GET /api/customers
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const userOrgIds = (await prisma.organisationMember.findMany({
       where: { userId: req.userId! },
@@ -27,10 +28,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     console.error('GET /customers error:', err)
     res.status(500).json({ error: 'Failed to fetch customers' })
   }
-})
+}))
 
 // POST /api/customers
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const { name, description, accountCode, crmLink, orgId } = req.body
     if (!name) { res.status(400).json({ error: 'name is required' }); return }
@@ -52,10 +53,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     console.error('POST /customers error:', err)
     res.status(500).json({ error: 'Failed to create customer' })
   }
-})
+}))
 
 // PUT /api/customers/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string
     const customer = await prisma.customer.findUnique({ where: { id } })
@@ -98,10 +99,10 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     console.error('PUT /customers/:id error:', err)
     res.status(500).json({ error: 'Failed to update customer' })
   }
-})
+}))
 
 // DELETE /api/customers/:id
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string
     const customer = await prisma.customer.findUnique({ where: { id } })
@@ -120,6 +121,6 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
     console.error('DELETE /customers/:id error:', err)
     res.status(500).json({ error: 'Failed to delete customer' })
   }
-})
+}))
 
 export default router

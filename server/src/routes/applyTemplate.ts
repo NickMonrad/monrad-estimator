@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { calcDurationDays } from '../utils/round.js'
 
@@ -17,7 +18,7 @@ const HOURS_FIELD: Record<Complexity, 'hoursExtraSmall' | 'hoursSmall' | 'hoursM
 }
 
 // POST /api/features/:featureId/apply-template
-router.post('/:featureId/apply-template', async (req: AuthRequest, res: Response) => {
+router.post('/:featureId/apply-template', asyncHandler(async (req: AuthRequest, res: Response) => {
   const featureId = req.params.featureId as string
   const { templateId, complexity, storyName } = req.body as { templateId: string; complexity: Complexity; storyName?: string }
 
@@ -81,11 +82,11 @@ router.post('/:featureId/apply-template', async (req: AuthRequest, res: Response
   })
 
   res.status(201).json(result)
-})
+}))
 
 // POST /api/features/:featureId/refresh-template/:storyId
 // Additive refresh: adds any template tasks not already present in the story
-router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, res: Response) => {
+router.post('/:featureId/refresh-template/:storyId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { featureId, storyId } = req.params as { featureId: string; storyId: string }
   const { complexity } = req.body as { complexity: Complexity }
 
@@ -162,6 +163,6 @@ router.post('/:featureId/refresh-template/:storyId', async (req: AuthRequest, re
     include: { tasks: { orderBy: { order: 'asc' }, include: { resourceType: true } } },
   })
   res.json({ added: newTasks.length, updated: existingTasks.length, story: result })
-})
+}))
 
 export default router

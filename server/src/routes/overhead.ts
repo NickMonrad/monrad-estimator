@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { OverheadType } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
 const router = Router({ mergeParams: true })
@@ -26,7 +27,7 @@ async function validateResourceType(resourceTypeId: string | null | undefined, p
 }
 
 // GET /api/projects/:projectId/overhead
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) {
     res.status(404).json({ error: 'Project not found' })
@@ -39,10 +40,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.json(overheads)
-})
+}))
 
 // POST /api/projects/:projectId/overhead
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) {
@@ -93,10 +94,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.status(201).json(overhead)
-})
+}))
 
 // PUT /api/projects/:projectId/overhead/:overheadId
-router.put('/:overheadId', async (req: AuthRequest, res: Response) => {
+router.put('/:overheadId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) {
@@ -158,10 +159,10 @@ router.put('/:overheadId', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.json(updated)
-})
+}))
 
 // DELETE /api/projects/:projectId/overhead/:overheadId
-router.delete('/:overheadId', async (req: AuthRequest, res: Response) => {
+router.delete('/:overheadId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) {
@@ -178,6 +179,6 @@ router.delete('/:overheadId', async (req: AuthRequest, res: Response) => {
 
   await prisma.projectOverhead.delete({ where: { id: overheadId } })
   res.json({ message: 'Deleted' })
-})
+}))
 
 export default router

@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
 const router = Router({ mergeParams: true })
@@ -13,7 +14,7 @@ async function ownedProject(projectId: string, userId: string) {
 const VALID_DISCOUNT_TYPES = ['PERCENTAGE', 'FIXED_AMOUNT']
 
 // GET /projects/:projectId/discounts
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const discounts = await prisma.projectDiscount.findMany({
@@ -22,10 +23,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.json(discounts)
-})
+}))
 
 // POST /projects/:projectId/discounts
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -58,10 +59,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.status(201).json(discount)
-})
+}))
 
 // PUT /projects/:projectId/discounts/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -100,10 +101,10 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.json(discount)
-})
+}))
 
 // DELETE /projects/:projectId/discounts/:id
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -115,6 +116,6 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
 
   await prisma.projectDiscount.delete({ where: { id: req.params.id as string } })
   res.status(204).send()
-})
+}))
 
 export default router

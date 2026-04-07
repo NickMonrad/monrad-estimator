@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
 
@@ -31,7 +32,7 @@ async function buildSnapshot(projectId: string) {
 }
 
 // GET /api/projects/:projectId/snapshots
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -42,10 +43,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     select: { id: true, label: true, trigger: true, createdAt: true, createdById: true },
   })
   res.json(snapshots)
-})
+}))
 
 // POST /api/projects/:projectId/snapshots — manual snapshot
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -63,10 +64,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     select: { id: true, label: true, trigger: true, createdAt: true },
   })
   res.status(201).json(snap)
-})
+}))
 
 // GET /api/projects/:projectId/snapshots/:snapshotId
-router.get('/:snapshotId', async (req: AuthRequest, res: Response) => {
+router.get('/:snapshotId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, snapshotId } = req.params as { projectId: string; snapshotId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -74,10 +75,10 @@ router.get('/:snapshotId', async (req: AuthRequest, res: Response) => {
   const snap = await prisma.backlogSnapshot.findFirst({ where: { id: snapshotId, projectId } })
   if (!snap) { res.status(404).json({ error: 'Snapshot not found' }); return }
   res.json(snap)
-})
+}))
 
 // GET /api/projects/:projectId/snapshots/:snapshotId/diff
-router.get('/:snapshotId/diff', async (req: AuthRequest, res: Response) => {
+router.get('/:snapshotId/diff', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, snapshotId } = req.params as { projectId: string; snapshotId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -115,10 +116,10 @@ router.get('/:snapshotId/diff', async (req: AuthRequest, res: Response) => {
     removed: snapItems.filter(i => !currentSet.has(i)),
     snapshotAt: snap.createdAt,
   })
-})
+}))
 
 // POST /api/projects/:projectId/snapshots/:snapshotId/rollback
-router.post('/:snapshotId/rollback', async (req: AuthRequest, res: Response) => {
+router.post('/:snapshotId/rollback', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, snapshotId } = req.params as { projectId: string; snapshotId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -185,7 +186,7 @@ router.post('/:snapshotId/rollback', async (req: AuthRequest, res: Response) => 
   })
 
   res.json({ message: 'Rollback complete' })
-})
+}))
 
 export default router
 

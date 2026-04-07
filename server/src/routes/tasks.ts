@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { calcDurationDays } from '../utils/round.js'
 import { ownedStory } from '../lib/ownership.js'
@@ -8,7 +9,7 @@ const router = Router({ mergeParams: true })
 router.use(authenticate)
 
 // GET /stories/:storyId/tasks
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   const tasks = await prisma.task.findMany({
@@ -17,10 +18,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.json(tasks)
-})
+}))
 
 // POST /stories/:storyId/tasks
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   const { name, description, assumptions, hoursEffort, resourceTypeId } = req.body
@@ -40,10 +41,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.status(201).json(task)
-})
+}))
 
 // PUT /stories/:storyId/tasks/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   const { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays } = req.body
@@ -57,14 +58,14 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     include: { resourceType: true },
   })
   res.json(task)
-})
+}))
 
 // DELETE /stories/:storyId/tasks/:id
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   await prisma.task.delete({ where: { id: req.params.id as string, userStoryId: req.params.storyId as string } })
   res.json({ message: 'Deleted' })
-})
+}))
 
 export default router

@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
 const router = Router({ mergeParams: true })
@@ -395,7 +396,7 @@ async function computeParallelWarnings(
 }
 
 // GET /api/projects/:projectId/timeline
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -452,10 +453,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     ? new Map<string, number>(Object.entries(project.weeklyDemandCache as Record<string, number>))
     : undefined
   res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes, simulatedDemand))
-})
+}))
 
 // POST /api/projects/:projectId/timeline/schedule
-router.post('/schedule', async (req: AuthRequest, res: Response) => {
+router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) => {
   let project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -698,6 +699,12 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
       return result
     }
 
+    // #178: pre-compute featureResourceHours for all features to avoid re-computing in the simulation loop
+    const featureResourceHoursCache = new Map<string, Map<string, number>>()
+    for (const fId of processed) {
+      featureResourceHoursCache.set(fId, featureResourceHours(featureMap.get(fId)!))
+    }
+
     // Variable weekly capacity: build lookup by resource type ID
     const rtById = new Map(resourceTypes.map(rt => [rt.id, rt as ResourceTypeWithNamed]))
     const allRtIds = [...resourceTypes.map(rt => rt.id), '_unassigned']
@@ -706,7 +713,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
     const remainingHours = new Map<string, Map<string, number>>()
     for (const fId of processed) {
       if (manualStartWeeks.has(fId)) continue
-      remainingHours.set(fId, featureResourceHours(featureMap.get(fId)!))
+      remainingHours.set(fId, featureResourceHoursCache.get(fId)!)
     }
 
     // Simulation state
@@ -771,7 +778,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
           const fDone = simDone.get(fId)
           if (fStart === undefined || fDone === undefined || fDone <= fStart) continue
           if (t >= fStart && t < fDone) {
-            const rtHours = featureResourceHours(featureMap.get(fId)!).get(rtId) ?? 0
+            const rtHours = featureResourceHoursCache.get(fId)!.get(rtId) ?? 0
             if (rtHours > 0) {
               const perStep = (rtHours / (fDone - fStart)) * STEP
               const consumptionKey = `${rtName}|${currentWeek}`
@@ -811,7 +818,7 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
           const fDone = simDone.get(fId)
           if (fStart === undefined || fDone === undefined || fDone <= fStart) continue
           if (t >= fStart && t < fDone) {
-            const rtHours = featureResourceHours(featureMap.get(fId)!).get(rtId) ?? 0
+            const rtHours = featureResourceHoursCache.get(fId)!.get(rtId) ?? 0
             if (rtHours > 0) {
               const perStep = (rtHours / (fDone - fStart)) * STEP
               capPerStep = Math.max(0, capPerStep - perStep)
@@ -953,17 +960,18 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
   await Promise.all(storyUpserts)
   // ── End story-level scheduling ─────────────────────────────────────────────
 
-  for (const fId of processed) {
+  // #178: run feature timeline upserts in parallel instead of sequentially
+  await Promise.all([...processed].map(fId => {
     const sw = startWeeks.get(fId)!
     const f = featureMap.get(fId)!
     const dur = (finishWeeks.get(fId) ?? (sw + featureDurationWeeks(f))) - sw
     const isManual = manualStartWeeks.has(fId)
-    await prisma.timelineEntry.upsert({
+    return prisma.timelineEntry.upsert({
       where: { featureId: fId },
       create: { projectId: project.id, featureId: fId, startWeek: sw, durationWeeks: dur, isManual },
       update: isManual ? {} : { startWeek: sw, durationWeeks: dur, isManual: false },
     })
-  }
+  }))
 
   const entries = await prisma.timelineEntry.findMany({
     where: { projectId: project.id },
@@ -1015,10 +1023,10 @@ router.post('/schedule', async (req: AuthRequest, res: Response) => {
   })
 
   res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes, weeklyConsumptionMap))
-})
+}))
 
 // PUT /api/projects/:projectId/timeline/stories/:storyId — manual story timeline override
-router.put('/stories/:storyId', async (req: AuthRequest, res: Response) => {
+router.put('/stories/:storyId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -1051,10 +1059,10 @@ router.put('/stories/:storyId', async (req: AuthRequest, res: Response) => {
     durationWeeks: entry.durationWeeks,
     isManual: entry.isManual,
   })
-})
+}))
 
 // DELETE /api/projects/:projectId/timeline — clear ALL manual overrides (features + stories)
-router.delete('/', async (req: AuthRequest, res: Response) => {
+router.delete('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -1063,10 +1071,10 @@ router.delete('/', async (req: AuthRequest, res: Response) => {
     prisma.storyTimelineEntry.deleteMany({ where: { projectId: project.id, isManual: true } }),
   ])
   res.status(204).end()
-})
+}))
 
 // DELETE /api/projects/:projectId/timeline/stories/:storyId — clear manual story override
-router.delete('/stories/:storyId', async (req: AuthRequest, res: Response) => {
+router.delete('/stories/:storyId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -1074,10 +1082,10 @@ router.delete('/stories/:storyId', async (req: AuthRequest, res: Response) => {
     where: { storyId: req.params.storyId as string, projectId: project.id },
   })
   res.status(204).end()
-})
+}))
 
 // GET /api/projects/:projectId/timeline/export/csv
-router.get('/export/csv', async (req: AuthRequest, res: Response) => {
+router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await prisma.project.findFirst({
     where: { id: req.params.projectId as string, ownerId: req.userId },
     include: {
@@ -1226,10 +1234,10 @@ router.get('/export/csv', async (req: AuthRequest, res: Response) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8')
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
   res.send(csv)
-})
+}))
 
 // PUT /api/projects/:projectId/timeline/:featureId
-router.put('/:featureId', async (req: AuthRequest, res: Response) => {
+router.put('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -1259,10 +1267,10 @@ router.put('/:featureId', async (req: AuthRequest, res: Response) => {
     isManual: entry.isManual,
     ...computeDates(project.startDate, entry.startWeek, entry.durationWeeks),
   })
-})
+}))
 
 // DELETE /api/projects/:projectId/timeline/:featureId — clear manual override
-router.delete('/:featureId', async (req: AuthRequest, res: Response) => {
+router.delete('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -1270,10 +1278,10 @@ router.delete('/:featureId', async (req: AuthRequest, res: Response) => {
     where: { featureId: req.params.featureId as string, projectId: project.id },
   })
   res.status(204).end()
-})
+}))
 
 // PATCH /api/projects/:projectId/timeline/start-date
-router.patch('/start-date', async (req: AuthRequest, res: Response) => {
+router.patch('/start-date', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -1286,6 +1294,6 @@ router.patch('/start-date', async (req: AuthRequest, res: Response) => {
   })
 
   res.json({ startDate: updated.startDate?.toISOString() ?? null })
-})
+}))
 
 export default router

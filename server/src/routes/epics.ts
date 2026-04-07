@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
 
@@ -7,7 +8,7 @@ const router = Router({ mergeParams: true })
 router.use(authenticate)
 
 // GET /projects/:projectId/epics
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const epics = await prisma.epic.findMany({
@@ -26,10 +27,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     },
   })
   res.json(epics)
-})
+}))
 
 // POST /projects/:projectId/epics
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const { name, description } = req.body
@@ -39,10 +40,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     data: { name, description, projectId: req.params.projectId as string, order: count },
   })
   res.status(201).json(epic)
-})
+}))
 
 // PUT /projects/:projectId/epics/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const { name, description, assumptions, order, featureMode, scheduleMode, timelineStartWeek, isActive } = req.body
@@ -60,14 +61,14 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     },
   })
   res.json(epic)
-})
+}))
 
 // DELETE /projects/:projectId/epics/:id
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   await prisma.epic.delete({ where: { id: req.params.id as string, projectId: project.id } })
   res.json({ message: 'Deleted' })
-})
+}))
 
 export default router

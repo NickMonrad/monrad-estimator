@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { sendEmail } from '../lib/email.js'
 import { logger } from '../lib/logger.js'
@@ -38,7 +39,7 @@ const forgotPasswordLimiter = rateLimit({
   legacyHeaders: false,
 })
 
-router.post('/register', loginLimiter, validate(registerSchema), async (req: Request, res: Response) => {
+router.post('/register', loginLimiter, validate(registerSchema), asyncHandler(async (req: Request, res: Response) => {
   const { email, name, password } = req.body
 
   const existing = await prisma.user.findUnique({ where: { email } })
@@ -67,9 +68,9 @@ router.post('/register', loginLimiter, validate(registerSchema), async (req: Req
   logger.info({ userId: user.id }, 'New user registered')
   const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '7d' })
   res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name } })
-})
+}))
 
-router.post('/login', loginLimiter, validate(loginSchema), async (req: Request, res: Response) => {
+router.post('/login', loginLimiter, validate(loginSchema), asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = req.body
   const user = await prisma.user.findUnique({ where: { email } })
   if (!user || !(await bcrypt.compare(password, user.password))) {
@@ -80,9 +81,9 @@ router.post('/login', loginLimiter, validate(loginSchema), async (req: Request, 
   logger.info({ userId: user.id }, 'User logged in')
   const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '7d' })
   res.json({ token, user: { id: user.id, email: user.email, name: user.name } })
-})
+}))
 
-router.post('/forgot-password', forgotPasswordLimiter, validate(forgotPasswordSchema), async (req: Request, res: Response) => {
+router.post('/forgot-password', forgotPasswordLimiter, validate(forgotPasswordSchema), asyncHandler(async (req: Request, res: Response) => {
   const { email } = req.body
   const successMessage = 'If that email is registered, a reset link has been sent.'
 
@@ -123,9 +124,9 @@ router.post('/forgot-password', forgotPasswordLimiter, validate(forgotPasswordSc
 
   logger.info({ userId: user.id }, 'Password reset email sent')
   res.json({ message: successMessage })
-})
+}))
 
-router.post('/reset-password', validate(resetPasswordSchema), async (req: Request, res: Response) => {
+router.post('/reset-password', validate(resetPasswordSchema), asyncHandler(async (req: Request, res: Response) => {
   const { token, password } = req.body
 
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
@@ -150,6 +151,6 @@ router.post('/reset-password', validate(resetPasswordSchema), async (req: Reques
 
   logger.info({ userId: resetToken.userId }, 'Password reset successfully')
   res.json({ message: 'Password reset successfully' })
-})
+}))
 
 export default router
