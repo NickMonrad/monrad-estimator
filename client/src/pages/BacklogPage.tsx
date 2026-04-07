@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import DOMPurify from 'dompurify'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -451,7 +452,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
           {epic.description && (
             <div
               className="text-sm text-gray-500 dark:text-gray-400 mt-1 ml-7 rich-text-content"
-              dangerouslySetInnerHTML={{ __html: epic.description }}
+              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(epic.description) }}
             />
           )}
           {epic.assumptions && (
@@ -459,7 +460,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
               <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Assumptions: </span>
               <span
                 className="text-sm text-gray-400 dark:text-gray-500 rich-text-content inline"
-                dangerouslySetInnerHTML={{ __html: epic.assumptions }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(epic.assumptions) }}
               />
             </div>
           )}

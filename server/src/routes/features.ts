@@ -45,7 +45,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   if (isActive !== undefined) data.isActive = isActive
   if (timelineColour !== undefined) data.timelineColour = timelineColour
   const feature = await prisma.feature.update({
-    where: { id: req.params.id as string },
+    where: { id: req.params.id as string, epicId: req.params.epicId as string },
     data,
   })
   res.json(feature)
@@ -55,7 +55,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 router.delete('/:id', async (req: AuthRequest, res: Response) => {
   const epic = await ownedEpic(req.params.epicId as string, req.userId!)
   if (!epic) { res.status(404).json({ error: 'Epic not found' }); return }
-  await prisma.feature.delete({ where: { id: req.params.id as string } })
+  await prisma.feature.delete({ where: { id: req.params.id as string, epicId: req.params.epicId as string } })
   res.json({ message: 'Deleted' })
 })
 

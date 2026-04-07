@@ -19,6 +19,11 @@ router.patch('/epics', async (req: AuthRequest, res: Response) => {
   const items: { id: string; order: number }[] = req.body.items
   if (!Array.isArray(items)) { res.status(400).json({ error: 'items array required' }); return }
 
+  // #169: verify all epic IDs belong to this project to prevent cross-project IDOR
+  const ids = items.map(i => i.id)
+  const owned = await prisma.epic.findMany({ where: { id: { in: ids }, projectId: project.id }, select: { id: true } })
+  if (owned.length !== ids.length) { res.status(403).json({ error: 'One or more items do not belong to this project' }); return }
+
   await prisma.$transaction(items.map(({ id, order }) =>
     prisma.epic.update({ where: { id }, data: { order } })
   ))
@@ -34,6 +39,11 @@ router.patch('/features', async (req: AuthRequest, res: Response) => {
 
   const items: { id: string; order: number; epicId: string }[] = req.body.items
   if (!Array.isArray(items)) { res.status(400).json({ error: 'items array required' }); return }
+
+  // #169: verify all feature IDs belong to this project to prevent cross-project IDOR
+  const ids = items.map(i => i.id)
+  const owned = await prisma.feature.findMany({ where: { id: { in: ids }, epic: { projectId: project.id } }, select: { id: true } })
+  if (owned.length !== ids.length) { res.status(403).json({ error: 'One or more items do not belong to this project' }); return }
 
   await prisma.$transaction(items.map(({ id, order, epicId }) =>
     prisma.feature.update({ where: { id }, data: { order, epicId } })
@@ -51,6 +61,11 @@ router.patch('/stories', async (req: AuthRequest, res: Response) => {
   const items: { id: string; order: number; featureId: string }[] = req.body.items
   if (!Array.isArray(items)) { res.status(400).json({ error: 'items array required' }); return }
 
+  // #169: verify all story IDs belong to this project to prevent cross-project IDOR
+  const ids = items.map(i => i.id)
+  const owned = await prisma.userStory.findMany({ where: { id: { in: ids }, feature: { epic: { projectId: project.id } } }, select: { id: true } })
+  if (owned.length !== ids.length) { res.status(403).json({ error: 'One or more items do not belong to this project' }); return }
+
   await prisma.$transaction(items.map(({ id, order, featureId }) =>
     prisma.userStory.update({ where: { id }, data: { order, featureId } })
   ))
@@ -66,6 +81,11 @@ router.patch('/tasks', async (req: AuthRequest, res: Response) => {
 
   const items: { id: string; order: number; storyId: string }[] = req.body.items
   if (!Array.isArray(items)) { res.status(400).json({ error: 'items array required' }); return }
+
+  // #169: verify all task IDs belong to this project to prevent cross-project IDOR
+  const ids = items.map(i => i.id)
+  const owned = await prisma.task.findMany({ where: { id: { in: ids }, userStory: { feature: { epic: { projectId: project.id } } } }, select: { id: true } })
+  if (owned.length !== ids.length) { res.status(403).json({ error: 'One or more items do not belong to this project' }); return }
 
   await prisma.$transaction(items.map(({ id, order, storyId }) =>
     prisma.task.update({ where: { id }, data: { order, userStoryId: storyId } })

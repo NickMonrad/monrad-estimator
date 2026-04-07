@@ -65,7 +65,7 @@ router.post('/register', loginLimiter, validate(registerSchema), async (req: Req
   const hashed = await bcrypt.hash(password, 10)
   const user = await prisma.user.create({ data: { email, name, password: hashed } })
   logger.info({ userId: user.id }, 'New user registered')
-  const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, { expiresIn: '7d' })
+  const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '7d' })
   res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name } })
 })
 
@@ -78,7 +78,7 @@ router.post('/login', loginLimiter, validate(loginSchema), async (req: Request, 
     return
   }
   logger.info({ userId: user.id }, 'User logged in')
-  const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, { expiresIn: '7d' })
+  const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '7d' })
   res.json({ token, user: { id: user.id, email: user.email, name: user.name } })
 })
 
