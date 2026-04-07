@@ -52,7 +52,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     : hoursEffort !== undefined ? calcDurationDays(hoursEffort, hoursPerDay)
     : undefined
   const task = await prisma.task.update({
-    where: { id: req.params.id as string },
+    where: { id: req.params.id as string, userStoryId: req.params.storyId as string },
     data: { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays: resolvedDuration },
     include: { resourceType: true },
   })
@@ -63,7 +63,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 router.delete('/:id', async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
-  await prisma.task.delete({ where: { id: req.params.id as string } })
+  await prisma.task.delete({ where: { id: req.params.id as string, userStoryId: req.params.storyId as string } })
   res.json({ message: 'Deleted' })
 })
 

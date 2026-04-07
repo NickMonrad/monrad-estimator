@@ -4,6 +4,7 @@ import { logger } from '../lib/logger.js'
 
 export interface AuthRequest extends Request {
   userId?: string
+  user?: { id: string; role: string }
 }
 
 export function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
@@ -15,8 +16,9 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
   }
   const token = header.slice(7)
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string }
+    const payload = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string; role?: string }
     req.userId = payload.userId
+    req.user = { id: payload.userId, role: payload.role ?? 'USER' }
     next()
   } catch {
     logger.info({ url: req.url, method: req.method }, '401 Unauthorized - invalid token')

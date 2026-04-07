@@ -78,7 +78,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
   const { name, description, assumptions, order, isActive } = req.body
   const story = await prisma.userStory.update({
-    where: { id: req.params.id as string },
+    where: { id: req.params.id as string, featureId: req.params.featureId as string },
     data: { name, description, assumptions, order, ...(isActive !== undefined && { isActive }) },
   })
   res.json(story)
@@ -88,7 +88,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 router.delete('/:id', async (req: AuthRequest, res: Response) => {
   const feature = await ownedFeature(req.params.featureId as string, req.userId!)
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
-  await prisma.userStory.delete({ where: { id: req.params.id as string } })
+  await prisma.userStory.delete({ where: { id: req.params.id as string, featureId: req.params.featureId as string } })
   res.json({ message: 'Deleted' })
 })
 
