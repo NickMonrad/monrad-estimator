@@ -108,6 +108,8 @@ model ResourceType {
   overheads     ProjectOverhead[]
   namedResources NamedResource[]
   discounts      ProjectDiscount[]
+
+  @@index([projectId])
 }
 
 model ProjectOverhead {
@@ -122,6 +124,8 @@ model ProjectOverhead {
   order          Int           @default(0)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+
+  @@index([projectId])
 }
 
 enum OverheadType {
@@ -157,6 +161,8 @@ model Epic {
   features          Feature[]
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
+  @@index([projectId, order])
 }
 
 model Feature {
@@ -175,6 +181,8 @@ model Feature {
   dependents       FeatureDependency[]  @relation("FeatureDepsOn")
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
+
+  @@index([epicId, order])
 }
 
 model FeatureDependency {
@@ -208,6 +216,8 @@ model StoryTimelineEntry {
   isManual      Boolean   @default(false)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  @@index([projectId])
 }
 
 model UserStory {
@@ -227,6 +237,8 @@ model UserStory {
   timelineEntry     StoryTimelineEntry?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
+  @@index([featureId, order])
 }
 
 model Task {
@@ -243,6 +255,8 @@ model Task {
   resourceTypeId String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+
+  @@index([userStoryId])
 }
 
 // Global feature templates (shared across all projects)
@@ -286,6 +300,8 @@ model TimelineEntry {
   isManual      Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@index([projectId])
 }
 
 model BacklogSnapshot {
@@ -298,6 +314,8 @@ model BacklogSnapshot {
   createdAt   DateTime @default(now())
   createdBy   User     @relation(fields: [createdById], references: [id])
   createdById String
+
+  @@index([projectId, createdAt])
 }
 
 model TemplateSnapshot {
@@ -325,6 +343,8 @@ model NamedResource {
   pricingModel   String       @default("ACTUAL_DAYS")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+
+  @@index([resourceTypeId])
 }
 
 model RateCard {
@@ -357,6 +377,8 @@ model ProjectDiscount {
   label          String
   order          Int           @default(0)
   createdAt      DateTime      @default(now())
+
+  @@index([projectId])
 }
 
 enum DocumentTemplateType {
@@ -422,6 +444,7 @@ model OrganisationMember {
   role      OrgRole      @default(MEMBER)
   joinedAt  DateTime     @default(now())
   @@unique([orgId, userId])
+  @@index([userId])
 }
 
 model OrganisationInvite {

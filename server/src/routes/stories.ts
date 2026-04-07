@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject, ownedFeature } from '../lib/ownership.js'
 
@@ -7,7 +8,7 @@ const router = Router({ mergeParams: true })
 router.use(authenticate)
 
 // POST /api/projects/:projectId/stories/:storyId/dependencies
-router.post('/:storyId/dependencies', async (req: AuthRequest, res: Response) => {
+router.post('/:storyId/dependencies', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -32,10 +33,10 @@ router.post('/:storyId/dependencies', async (req: AuthRequest, res: Response) =>
     update: {},
   })
   res.status(201).json(dep)
-})
+}))
 
 // DELETE /api/projects/:projectId/stories/:storyId/dependencies/:dependsOnId
-router.delete('/:storyId/dependencies/:dependsOnId', async (req: AuthRequest, res: Response) => {
+router.delete('/:storyId/dependencies/:dependsOnId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -45,10 +46,10 @@ router.delete('/:storyId/dependencies/:dependsOnId', async (req: AuthRequest, re
     where: { storyId, dependsOnId },
   })
   res.status(204).end()
-})
+}))
 
 // GET /features/:featureId/stories
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const feature = await ownedFeature(req.params.featureId as string, req.userId!)
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
   const stories = await prisma.userStory.findMany({
@@ -57,10 +58,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     include: { tasks: { orderBy: { order: 'asc' }, include: { resourceType: true } } },
   })
   res.json(stories)
-})
+}))
 
 // POST /features/:featureId/stories
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const feature = await ownedFeature(req.params.featureId as string, req.userId!)
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
   const { name, description, assumptions } = req.body
@@ -70,10 +71,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     data: { name, description, assumptions, featureId: req.params.featureId as string, order: count },
   })
   res.status(201).json(story)
-})
+}))
 
 // PUT /features/:featureId/stories/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const feature = await ownedFeature(req.params.featureId as string, req.userId!)
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
   const { name, description, assumptions, order, isActive } = req.body
@@ -82,14 +83,14 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     data: { name, description, assumptions, order, ...(isActive !== undefined && { isActive }) },
   })
   res.json(story)
-})
+}))
 
 // DELETE /features/:featureId/stories/:id
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const feature = await ownedFeature(req.params.featureId as string, req.userId!)
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
   await prisma.userStory.delete({ where: { id: req.params.id as string, featureId: req.params.featureId as string } })
   res.json({ message: 'Deleted' })
-})
+}))
 
 export default router

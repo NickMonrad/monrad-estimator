@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedEpic } from '../lib/ownership.js'
 
@@ -7,7 +8,7 @@ const router = Router({ mergeParams: true })
 router.use(authenticate)
 
 // GET /epics/:epicId/features
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const epic = await ownedEpic(req.params.epicId as string, req.userId!)
   if (!epic) { res.status(404).json({ error: 'Epic not found' }); return }
   const features = await prisma.feature.findMany({
@@ -21,10 +22,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     },
   })
   res.json(features)
-})
+}))
 
 // POST /epics/:epicId/features
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const epic = await ownedEpic(req.params.epicId as string, req.userId!)
   if (!epic) { res.status(404).json({ error: 'Epic not found' }); return }
   const { name, description, assumptions } = req.body
@@ -34,10 +35,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     data: { name, description, assumptions, epicId: req.params.epicId as string, order: count },
   })
   res.status(201).json(feature)
-})
+}))
 
 // PUT /epics/:epicId/features/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const epic = await ownedEpic(req.params.epicId as string, req.userId!)
   if (!epic) { res.status(404).json({ error: 'Epic not found' }); return }
   const { name, description, assumptions, order, isActive, timelineColour } = req.body
@@ -49,14 +50,14 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     data,
   })
   res.json(feature)
-})
+}))
 
 // DELETE /epics/:epicId/features/:id
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const epic = await ownedEpic(req.params.epicId as string, req.userId!)
   if (!epic) { res.status(404).json({ error: 'Epic not found' }); return }
   await prisma.feature.delete({ where: { id: req.params.id as string, epicId: req.params.epicId as string } })
   res.json({ message: 'Deleted' })
-})
+}))
 
 export default router

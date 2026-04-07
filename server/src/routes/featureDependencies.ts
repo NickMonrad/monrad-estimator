@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
 const router = Router({ mergeParams: true })
@@ -10,7 +11,7 @@ async function ownedProject(projectId: string, userId: string) {
 }
 
 // GET /api/projects/:projectId/feature-dependencies
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -24,10 +25,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     },
   })
   res.json(deps)
-})
+}))
 
 // POST /api/projects/:projectId/feature-dependencies
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -54,10 +55,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     }
     throw e
   }
-})
+}))
 
 // DELETE /api/projects/:projectId/feature-dependencies/:featureId/:dependsOnId
-router.delete('/:featureId/:dependsOnId', async (req: AuthRequest, res: Response) => {
+router.delete('/:featureId/:dependsOnId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -70,6 +71,6 @@ router.delete('/:featureId/:dependsOnId', async (req: AuthRequest, res: Response
     },
   })
   res.json({ message: 'Deleted' })
-})
+}))
 
 export default router

@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { parse } from 'csv-parse/sync'
 import { stringify } from 'csv-stringify/sync'
@@ -88,7 +89,7 @@ export function sanitizeCsvCell(value: string): string {
 }
 
 // GET /api/projects/:projectId/backlog/export-csv
-router.get('/export-csv', async (req: AuthRequest, res: Response) => {
+router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -171,11 +172,11 @@ router.get('/export-csv', async (req: AuthRequest, res: Response) => {
   const filename = `${clientPart}${safeName(project.name)} - ${datestamp}.csv`
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
   res.send(csv)
-})
+}))
 
 // POST /api/projects/:projectId/backlog/stage-csv
 // Body: { csv: string }
-router.post('/stage-csv', async (req: AuthRequest, res: Response) => {
+router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
@@ -292,11 +293,11 @@ router.post('/stage-csv', async (req: AuthRequest, res: Response) => {
   const warningCount = staged.filter(r => r.warnings.length > 0).length
 
   res.json({ staged, summary: { total: staged.length, errorCount, warningCount } })
-})
+}))
 
 // POST /api/projects/:projectId/backlog/import-csv
 // Body: { rows: StagedRow[] }
-router.post('/import-csv', async (req: AuthRequest, res: Response) => {
+router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -353,193 +354,191 @@ router.post('/import-csv', async (req: AuthRequest, res: Response) => {
     })
   }
 
-  // Build hierarchy maps to group rows (upsert by name within parent)
-  const epicMap = new Map<string, string>() // epic name → epic id
-  const featureMap = new Map<string, string>() // "epic||feature" → feature id
-  const storyMap = new Map<string, string>() // "epic||feature||story" → story id
+  // #176: wrap all DB writes in a transaction for atomicity
+  const result = await prisma.$transaction(async (tx) => {
+    // Build hierarchy maps to group rows (upsert by name within parent)
+    const epicMap = new Map<string, string>() // epic name → epic id
+    const featureMap = new Map<string, string>() // "epic||feature" → feature id
+    const storyMap = new Map<string, string>() // "epic||feature||story" → story id
 
-  let epicOrder = await prisma.epic.count({ where: { projectId } })
+    let epicOrder = await tx.epic.count({ where: { projectId } })
 
-  // Counters for response
-  let epicsCreated = 0, epicsUpdated = 0
-  let featuresCreated = 0, featuresUpdated = 0
-  let storiesCreated = 0, storiesUpdated = 0
-  let tasksCreated = 0, tasksUpdated = 0
+    // Counters for response
+    let epicsCreated = 0, epicsUpdated = 0
+    let featuresCreated = 0, featuresUpdated = 0
+    let storiesCreated = 0, storiesUpdated = 0
+    let tasksCreated = 0, tasksUpdated = 0
 
-  for (const row of rows) {
-    const epicKey = row.epic
-    const featureKey = `${row.epic}||${row.feature}`
-    const storyKey = `${row.epic}||${row.feature}||${row.story}`
+    for (const row of rows) {
+      const epicKey = row.epic
+      const featureKey = `${row.epic}||${row.feature}`
+      const storyKey = `${row.epic}||${row.feature}||${row.story}`
 
-    // ── Epic ───────────────────────────────────────────────────────────────
-    if (!epicMap.has(epicKey)) {
-      let epic = await prisma.epic.findFirst({ where: { projectId, name: row.epic } })
-      if (!epic) {
-        epic = await prisma.epic.create({
-          data: {
-            name: row.epic,
-            projectId,
-            order: epicOrder++,
-            isActive: row.type === 'Epic' ? row.epicStatus : true,
-            description: row.type === 'Epic' ? (row.description || null) : null,
-            assumptions: row.type === 'Epic' ? (row.assumptions || null) : null,
-          },
-        })
-        epicsCreated++
-      } else if (row.type === 'Epic') {
-        // Only update status when this is a canonical Epic row
-        await prisma.epic.update({
-          where: { id: epic.id },
-          data: {
-            isActive: row.epicStatus,
-            ...(row.type === 'Epic' ? {
-              description: row.description || null,
-              assumptions: row.assumptions || null,
-            } : {}),
-          },
-        })
-        epicsUpdated++
+      // ── Epic ───────────────────────────────────────────────────────────────
+      if (!epicMap.has(epicKey)) {
+        let epic = await tx.epic.findFirst({ where: { projectId, name: row.epic } })
+        if (!epic) {
+          epic = await tx.epic.create({
+            data: {
+              name: row.epic,
+              projectId,
+              order: epicOrder++,
+              isActive: row.type === 'Epic' ? row.epicStatus : true,
+              description: row.type === 'Epic' ? (row.description || null) : null,
+              assumptions: row.type === 'Epic' ? (row.assumptions || null) : null,
+            },
+          })
+          epicsCreated++
+        } else if (row.type === 'Epic') {
+          // Only update status when this is a canonical Epic row
+          await tx.epic.update({
+            where: { id: epic.id },
+            data: {
+              isActive: row.epicStatus,
+              ...(row.type === 'Epic' ? {
+                description: row.description || null,
+                assumptions: row.assumptions || null,
+              } : {}),
+            },
+          })
+          epicsUpdated++
+        }
+        epicMap.set(epicKey, epic.id)
       }
-      epicMap.set(epicKey, epic.id)
-    }
-    const epicId = epicMap.get(epicKey)!
+      const epicId = epicMap.get(epicKey)!
 
-    // Epic-only rows — stop here
-    if (row.type === 'Epic') continue
+      // Epic-only rows — stop here
+      if (row.type === 'Epic') continue
 
-    // ── Feature ────────────────────────────────────────────────────────────
-    if (!featureMap.has(featureKey)) {
-      let feature = await prisma.feature.findFirst({ where: { epicId, name: row.feature } })
-      if (!feature) {
-        const featCount = await prisma.feature.count({ where: { epicId } })
-        feature = await prisma.feature.create({
-          data: {
-            name: row.feature,
-            epicId,
-            order: featCount,
-            isActive: row.type === 'Feature' ? row.featureStatus : true,
-            description: row.type === 'Feature' ? (row.description || null) : null,
-            assumptions: row.type === 'Feature' ? (row.assumptions || null) : null,
-          },
-        })
-        featuresCreated++
-      } else if (row.type === 'Feature') {
-        await prisma.feature.update({
-          where: { id: feature.id },
-          data: {
-            isActive: row.featureStatus,
-            ...(row.type === 'Feature' ? {
-              description: row.description || null,
-              assumptions: row.assumptions || null,
-            } : {}),
-          },
-        })
-        featuresUpdated++
+      // ── Feature ────────────────────────────────────────────────────────────
+      if (!featureMap.has(featureKey)) {
+        let feature = await tx.feature.findFirst({ where: { epicId, name: row.feature } })
+        if (!feature) {
+          const featCount = await tx.feature.count({ where: { epicId } })
+          feature = await tx.feature.create({
+            data: {
+              name: row.feature,
+              epicId,
+              order: featCount,
+              isActive: row.type === 'Feature' ? row.featureStatus : true,
+              description: row.type === 'Feature' ? (row.description || null) : null,
+              assumptions: row.type === 'Feature' ? (row.assumptions || null) : null,
+            },
+          })
+          featuresCreated++
+        } else if (row.type === 'Feature') {
+          await tx.feature.update({
+            where: { id: feature.id },
+            data: {
+              isActive: row.featureStatus,
+              ...(row.type === 'Feature' ? {
+                description: row.description || null,
+                assumptions: row.assumptions || null,
+              } : {}),
+            },
+          })
+          featuresUpdated++
+        }
+        featureMap.set(featureKey, feature.id)
       }
-      featureMap.set(featureKey, feature.id)
-    }
-    const featureId = featureMap.get(featureKey)!
+      const featureId = featureMap.get(featureKey)!
 
-    // Feature-only rows — stop here
-    if (row.type === 'Feature') continue
+      // Feature-only rows — stop here
+      if (row.type === 'Feature') continue
 
-    // ── Story ──────────────────────────────────────────────────────────────
-    if (!storyMap.has(storyKey)) {
-      // Template and status are only applied from canonical Story rows
-      const isStoryRow = row.type === 'Story'
-      const templateRecord = isStoryRow && row.template
-        ? await prisma.featureTemplate.findUnique({ where: { name: row.template } })
-        : null
-      const appliedTemplateId = templateRecord?.id ?? null
+      // ── Story ──────────────────────────────────────────────────────────────
+      if (!storyMap.has(storyKey)) {
+        // Template and status are only applied from canonical Story rows
+        const isStoryRow = row.type === 'Story'
+        const templateRecord = isStoryRow && row.template
+          ? await tx.featureTemplate.findUnique({ where: { name: row.template } })
+          : null
+        const appliedTemplateId = templateRecord?.id ?? null
 
-      let story = await prisma.userStory.findFirst({ where: { featureId, name: row.story } })
-      if (!story) {
-        const storyCount = await prisma.userStory.count({ where: { featureId } })
-        story = await prisma.userStory.create({
-          data: {
-            name: row.story,
-            featureId,
-            order: storyCount,
-            isActive: isStoryRow ? row.storyStatus : true,
-            appliedTemplateId,
-            description: isStoryRow ? (row.description || null) : null,
-            assumptions: isStoryRow ? (row.assumptions || null) : null,
-          },
-        })
-        storiesCreated++
-      } else if (isStoryRow) {
-        // Only update story-level fields from a canonical Story row
-        await prisma.userStory.update({
-          where: { id: story.id },
-          data: {
-            isActive: row.storyStatus,
-            ...(appliedTemplateId !== null ? { appliedTemplateId } : {}),
-            ...(row.type === 'Story' ? {
-              description: row.description || null,
-              assumptions: row.assumptions || null,
-            } : {}),
-          },
-        })
-        storiesUpdated++
+        let story = await tx.userStory.findFirst({ where: { featureId, name: row.story } })
+        if (!story) {
+          const storyCount = await tx.userStory.count({ where: { featureId } })
+          story = await tx.userStory.create({
+            data: {
+              name: row.story,
+              featureId,
+              order: storyCount,
+              isActive: isStoryRow ? row.storyStatus : true,
+              appliedTemplateId,
+              description: isStoryRow ? (row.description || null) : null,
+              assumptions: isStoryRow ? (row.assumptions || null) : null,
+            },
+          })
+          storiesCreated++
+        } else if (isStoryRow) {
+          // Only update story-level fields from a canonical Story row
+          await tx.userStory.update({
+            where: { id: story.id },
+            data: {
+              isActive: row.storyStatus,
+              ...(appliedTemplateId !== null ? { appliedTemplateId } : {}),
+              ...(row.type === 'Story' ? {
+                description: row.description || null,
+                assumptions: row.assumptions || null,
+              } : {}),
+            },
+          })
+          storiesUpdated++
+        }
+        storyMap.set(storyKey, story.id)
       }
-      storyMap.set(storyKey, story.id)
+      const storyId = storyMap.get(storyKey)!
+
+      // Story-only rows — stop here
+      if (row.type === 'Story') continue
+
+      // ── Task ───────────────────────────────────────────────────────────────
+      if (!row.task) continue
+
+      const resourceType = row.resourceType
+        ? rtByName.get(row.resourceType.toLowerCase())
+        : undefined
+      const resourceTypeId = resourceType?.id ?? null
+      const hoursPerDay = resourceType?.hoursPerDay ?? fallbackHoursPerDay
+
+      const task = await tx.task.findFirst({ where: { userStoryId: storyId, name: row.task } })
+      if (!task) {
+        const taskCount = await tx.task.count({ where: { userStoryId: storyId } })
+        await tx.task.create({
+          data: {
+            name: row.task,
+            userStoryId: storyId,
+            order: taskCount,
+            resourceTypeId,
+            hoursEffort: row.hoursEffort,
+            durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
+            description: row.description || null,
+            assumptions: row.assumptions || null,
+          },
+        })
+        tasksCreated++
+      } else {
+        await tx.task.update({
+          where: { id: task.id },
+          data: {
+            resourceTypeId,
+            hoursEffort: row.hoursEffort,
+            durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
+            description: row.description || null,
+            assumptions: row.assumptions || null,
+          },
+        })
+        tasksUpdated++
+      }
     }
-    const storyId = storyMap.get(storyKey)!
 
-    // Story-only rows — stop here
-    if (row.type === 'Story') continue
-
-    // ── Task ───────────────────────────────────────────────────────────────
-    if (!row.task) continue
-
-    const resourceType = row.resourceType
-      ? rtByName.get(row.resourceType.toLowerCase())
-      : undefined
-    const resourceTypeId = resourceType?.id ?? null
-    const hoursPerDay = resourceType?.hoursPerDay ?? fallbackHoursPerDay
-
-    const task = await prisma.task.findFirst({ where: { userStoryId: storyId, name: row.task } })
-    if (!task) {
-      const taskCount = await prisma.task.count({ where: { userStoryId: storyId } })
-      await prisma.task.create({
-        data: {
-          name: row.task,
-          userStoryId: storyId,
-          order: taskCount,
-          resourceTypeId,
-          hoursEffort: row.hoursEffort,
-          durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
-          description: row.description || null,
-          assumptions: row.assumptions || null,
-        },
-      })
-      tasksCreated++
-    } else {
-      await prisma.task.update({
-        where: { id: task.id },
-        data: {
-          resourceTypeId,
-          hoursEffort: row.hoursEffort,
-          durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
-          description: row.description || null,
-          assumptions: row.assumptions || null,
-        },
-      })
-      tasksUpdated++
-    }
-  }
+    return { epicsCreated, epicsUpdated, featuresCreated, featuresUpdated, storiesCreated, storiesUpdated, tasksCreated, tasksUpdated }
+  }, { timeout: 60000 })
 
   res.json({
     message: 'Import successful',
-    epicsCreated,
-    epicsUpdated,
-    featuresCreated,
-    featuresUpdated,
-    storiesCreated,
-    storiesUpdated,
-    tasksCreated,
-    tasksUpdated,
+    ...result,
   })
-})
+}))
 
 export default router

@@ -1,4 +1,5 @@
 import { Router, Response } from 'express'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { AuthRequest } from '../middleware/auth.js'
 import { createHash, randomBytes } from 'crypto'
@@ -10,7 +11,7 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const router = Router()
 
 // GET /api/orgs — list orgs for current user
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const memberships = await prisma.organisationMember.findMany({
     where: { userId: req.userId! },
     include: {
@@ -22,10 +23,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     },
   })
   res.json(memberships.map(m => ({ ...m.org, role: m.role })))
-})
+}))
 
 // POST /api/orgs — create org
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { name } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
   const org = await prisma.organisation.create({
@@ -36,11 +37,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     include: { _count: { select: { members: true } } },
   })
   res.status(201).json({ ...org, role: 'OWNER' })
-})
+}))
 
 // POST /api/orgs/accept-invite — accept an invite (authenticated)
 // MUST be before /:id routes
-router.post('/accept-invite', async (req: AuthRequest, res: Response) => {
+router.post('/accept-invite', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { token } = req.body
   if (!token) { res.status(400).json({ error: 'token is required' }); return }
 
@@ -63,10 +64,10 @@ router.post('/accept-invite', async (req: AuthRequest, res: Response) => {
   })
 
   res.json({ message: 'Joined organisation', orgId: invite.orgId })
-})
+}))
 
 // GET /api/orgs/:id/members — list members
-router.get('/:id/members', async (req: AuthRequest, res: Response) => {
+router.get('/:id/members', asyncHandler(async (req: AuthRequest, res: Response) => {
   const id = req.params.id as string
   const membership = await prisma.organisationMember.findUnique({
     where: { orgId_userId: { orgId: id, userId: req.userId! } },
@@ -77,10 +78,10 @@ router.get('/:id/members', async (req: AuthRequest, res: Response) => {
     include: { user: { select: { id: true, name: true, email: true } } },
   })
   res.json(members)
-})
+}))
 
 // DELETE /api/orgs/:id/members/:userId — remove member
-router.delete('/:id/members/:userId', async (req: AuthRequest, res: Response) => {
+router.delete('/:id/members/:userId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const id = req.params.id as string
   const targetUserId = req.params.userId as string
   const requesterMembership = await prisma.organisationMember.findUnique({
@@ -104,10 +105,10 @@ router.delete('/:id/members/:userId', async (req: AuthRequest, res: Response) =>
     where: { orgId_userId: { orgId: id, userId: targetUserId } },
   })
   res.json({ message: 'Member removed' })
-})
+}))
 
 // POST /api/orgs/:id/invites/:inviteId/resend — resend a pending invite (BEFORE /:id/invites and /:id/invites/:inviteId)
-router.post('/:id/invites/:inviteId/resend', async (req: AuthRequest, res: Response) => {
+router.post('/:id/invites/:inviteId/resend', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string
     const inviteId = req.params.inviteId as string
@@ -145,10 +146,10 @@ router.post('/:id/invites/:inviteId/resend', async (req: AuthRequest, res: Respo
   } catch {
     res.status(500).json({ error: 'Failed to resend invite' })
   }
-})
+}))
 
 // DELETE /api/orgs/:id/invites/:inviteId — cancel a pending invite
-router.delete('/:id/invites/:inviteId', async (req: AuthRequest, res: Response) => {
+router.delete('/:id/invites/:inviteId', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string
     const inviteId = req.params.inviteId as string
@@ -167,10 +168,10 @@ router.delete('/:id/invites/:inviteId', async (req: AuthRequest, res: Response) 
   } catch {
     res.status(500).json({ error: 'Failed to cancel invite' })
   }
-})
+}))
 
 // GET /api/orgs/:id/invites — list pending invites
-router.get('/:id/invites', async (req: AuthRequest, res: Response) => {
+router.get('/:id/invites', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string
     const membership = await prisma.organisationMember.findUnique({
@@ -186,10 +187,10 @@ router.get('/:id/invites', async (req: AuthRequest, res: Response) => {
   } catch {
     res.status(500).json({ error: 'Failed to fetch invites' })
   }
-})
+}))
 
 // POST /api/orgs/:id/invites — invite by email
-router.post('/:id/invites', async (req: AuthRequest, res: Response) => {
+router.post('/:id/invites', asyncHandler(async (req: AuthRequest, res: Response) => {
   const id = req.params.id as string
   const requesterMembership = await prisma.organisationMember.findUnique({
     where: { orgId_userId: { orgId: id, userId: req.userId! } },
@@ -219,10 +220,10 @@ router.post('/:id/invites', async (req: AuthRequest, res: Response) => {
   })
 
   res.status(201).json({ message: 'Invite sent' })
-})
+}))
 
 // PUT /api/orgs/:id/members/:userId — update member role
-router.put('/:id/members/:userId', async (req: AuthRequest, res: Response) => {
+router.put('/:id/members/:userId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const id = req.params.id as string
   const targetUserId = req.params.userId as string
   const requesterMembership = await prisma.organisationMember.findUnique({
@@ -240,6 +241,6 @@ router.put('/:id/members/:userId', async (req: AuthRequest, res: Response) => {
     data: { role },
   })
   res.json(updated)
-})
+}))
 
 export default router

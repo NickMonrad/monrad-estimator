@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { ResourceCategory } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT'
@@ -11,7 +12,7 @@ router.use(authenticate)
 const CATEGORY_ORDER: ResourceCategory[] = ['ENGINEERING', 'GOVERNANCE', 'PROJECT_MANAGEMENT']
 const round2 = (value: number) => Math.round(value * 100) / 100
 
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await prisma.project.findFirst({
     where: { id: projectId, ownerId: req.userId },
@@ -383,6 +384,6 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       hasCost,
     },
   })
-})
+}))
 
 export default router

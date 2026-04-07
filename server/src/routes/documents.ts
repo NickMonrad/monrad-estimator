@@ -1,4 +1,5 @@
 import { Router, Response } from 'express'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { prisma } from '../lib/prisma.js'
 import { renderScopeDocumentHtml } from '../lib/scopeDocumentRenderer.js'
@@ -35,7 +36,7 @@ function formatExportTimestamp(tz?: string): string {
 // POST /api/projects/:projectId/documents/generate
 // Body: { type: string, format: string, label: string, tz?: string, documentData: ScopeDocumentProps }
 // Server renders HTML via React renderToStaticMarkup, then generates PDF via Puppeteer.
-router.post('/generate', async (req: AuthRequest, res: Response) => {
+router.post('/generate', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -66,25 +67,37 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
   if (!path.resolve(filePath).startsWith(path.resolve(GENERATED_DIR))) {
     res.status(400).json({ error: 'Invalid file path' }); return
   }
-  fs.writeFileSync(filePath, buffer)
 
-  const doc = await prisma.generatedDocument.create({
-    data: {
-      projectId,
-      type,
-      format,
-      label,
-      filePath: filename, // store relative filename only
-      sections: documentData.sections ?? null,
-      generatedById: req.userId!,
-    },
-  })
+  // #176: wrap file write + DB insert so orphaned files are cleaned up on failure
+  let writtenFilePath: string | null = null
+  try {
+    fs.writeFileSync(filePath, buffer)
+    writtenFilePath = filePath
 
-  res.status(201).json(doc)
-})
+    const doc = await prisma.generatedDocument.create({
+      data: {
+        projectId,
+        type,
+        format,
+        label,
+        filePath: filename, // store relative filename only
+        sections: documentData.sections ?? null,
+        generatedById: req.userId!,
+      },
+    })
+
+    res.status(201).json(doc)
+  } catch (err) {
+    // Clean up orphaned file if DB insert failed after write
+    if (writtenFilePath && fs.existsSync(writtenFilePath)) {
+      fs.unlinkSync(writtenFilePath)
+    }
+    throw err  // re-throw so asyncHandler/errorHandler catches it
+  }
+}))
 
 // GET /api/projects/:projectId/documents
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -95,10 +108,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     include: { generatedBy: { select: { email: true } } },
   })
   res.json(docs)
-})
+}))
 
 // GET /api/projects/:projectId/documents/:docId/download
-router.get('/:docId/download', async (req: AuthRequest, res: Response) => {
+router.get('/:docId/download', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -128,10 +141,10 @@ router.get('/:docId/download', async (req: AuthRequest, res: Response) => {
   res.setHeader('Content-Type', contentTypes[doc.format] ?? 'application/octet-stream')
   res.setHeader('Content-Disposition', `attachment; filename="${downloadName}.${doc.format}"`)
   res.sendFile(filePath)
-})
+}))
 
 // DELETE /api/projects/:projectId/documents/:docId
-router.delete('/:docId', async (req: AuthRequest, res: Response) => {
+router.delete('/:docId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -145,6 +158,6 @@ router.delete('/:docId', async (req: AuthRequest, res: Response) => {
 
   await prisma.generatedDocument.delete({ where: { id: doc.id } })
   res.json({ success: true })
-})
+}))
 
 export default router

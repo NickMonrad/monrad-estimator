@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
 const router = Router({ mergeParams: true })
@@ -18,7 +19,7 @@ async function verifyResourceType(rtId: string, projectId: string) {
 const VALID_PRICING_MODELS = ['ACTUAL_DAYS', 'PRO_RATA']
 
 // GET /projects/:projectId/resource-types/:rtId/named-resources
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId } = req.params as { projectId: string; rtId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -32,10 +33,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     orderBy: { name: 'asc' },
   })
   res.json(resources)
-})
+}))
 
 // POST /projects/:projectId/resource-types/:rtId/named-resources
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId } = req.params as { projectId: string; rtId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -86,10 +87,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   await prisma.resourceType.update({ where: { id: rtId }, data: { count: total } })
 
   res.status(201).json(resource)
-})
+}))
 
 // PUT /projects/:projectId/resource-types/:rtId/named-resources/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -121,10 +122,10 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     data,
   })
   res.json(resource)
-})
+}))
 
 // PATCH /projects/:projectId/resource-types/:rtId/named-resources/:id
-router.patch('/:id', async (req: AuthRequest, res: Response) => {
+router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -147,10 +148,10 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
     data,
   })
   res.json(resource)
-})
+}))
 
 // DELETE /projects/:projectId/resource-types/:rtId/named-resources/:id
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -169,6 +170,6 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
   await prisma.resourceType.update({ where: { id: rtId }, data: { count: total } })
 
   res.status(204).send()
-})
+}))
 
 export default router

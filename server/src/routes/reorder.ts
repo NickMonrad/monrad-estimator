@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
+import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
 const router = Router({ mergeParams: true })
@@ -11,7 +12,7 @@ async function ownedProject(projectId: string, userId: string) {
 
 // PATCH /projects/:projectId/reorder/epics
 // Body: { items: [{ id, order }] }
-router.patch('/epics', async (req: AuthRequest, res: Response) => {
+router.patch('/epics', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId } = req.params as { projectId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -28,11 +29,11 @@ router.patch('/epics', async (req: AuthRequest, res: Response) => {
     prisma.epic.update({ where: { id }, data: { order } })
   ))
   res.json({ ok: true })
-})
+}))
 
 // PATCH /projects/:projectId/reorder/features
 // Body: { items: [{ id, order, epicId }] }
-router.patch('/features', async (req: AuthRequest, res: Response) => {
+router.patch('/features', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId } = req.params as { projectId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -49,11 +50,11 @@ router.patch('/features', async (req: AuthRequest, res: Response) => {
     prisma.feature.update({ where: { id }, data: { order, epicId } })
   ))
   res.json({ ok: true })
-})
+}))
 
 // PATCH /projects/:projectId/reorder/stories
 // Body: { items: [{ id, order, featureId }] }
-router.patch('/stories', async (req: AuthRequest, res: Response) => {
+router.patch('/stories', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId } = req.params as { projectId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -70,11 +71,11 @@ router.patch('/stories', async (req: AuthRequest, res: Response) => {
     prisma.userStory.update({ where: { id }, data: { order, featureId } })
   ))
   res.json({ ok: true })
-})
+}))
 
 // PATCH /projects/:projectId/reorder/tasks
 // Body: { items: [{ id, order, storyId }] }
-router.patch('/tasks', async (req: AuthRequest, res: Response) => {
+router.patch('/tasks', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId } = req.params as { projectId: string }
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -91,6 +92,6 @@ router.patch('/tasks', async (req: AuthRequest, res: Response) => {
     prisma.task.update({ where: { id }, data: { order, userStoryId: storyId } })
   ))
   res.json({ ok: true })
-})
+}))
 
 export default router
