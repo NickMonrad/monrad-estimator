@@ -41,13 +41,18 @@ const mockStory = { id: 'story-new', featureId: 'feat-1', name: 'Auth Feature \u
 beforeEach(() => vi.clearAllMocks())
 
 describe('GET /api/templates', () => {
-  it('returns empty array', async () => {
+  it('returns empty array with auth', async () => {
     vi.mocked(prisma.featureTemplate.findMany).mockResolvedValue([])
 
-    const res = await request(app).get('/api/templates')
+    const res = await request(app).get('/api/templates').set('Authorization', authHeader)
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual([])
+  })
+
+  it('returns 401 without auth', async () => {
+    const res = await request(app).get('/api/templates')
+    expect(res.status).toBe(401)
   })
 })
 

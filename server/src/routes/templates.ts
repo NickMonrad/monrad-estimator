@@ -37,9 +37,9 @@ async function captureSnapshot(templateId: string, label: string | null, trigger
   })
 }
 
-// GET /api/templates — no auth required
+// GET /api/templates — auth required
 // ?archived=true → only soft-deleted templates; default → only live templates
-router.get('/', async (req, res: Response) => {
+router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   const archived = req.query.archived === 'true'
   const templates = await prisma.featureTemplate.findMany({
     where: { deletedAt: archived ? { not: null } : null },
@@ -62,8 +62,8 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
   res.status(201).json(template)
 })
 
-// GET /api/templates/export-csv — no auth required (before /:id to avoid conflict)
-router.get('/export-csv', async (_req, res: Response) => {
+// GET /api/templates/export-csv — auth required (before /:id to avoid conflict)
+router.get('/export-csv', authenticate, async (_req: AuthRequest, res: Response) => {
   const templates = await prisma.featureTemplate.findMany({
     orderBy: { name: 'asc' },
     include: { tasks: { orderBy: { order: 'asc' } } },
@@ -232,8 +232,8 @@ router.post('/:id/restore', authenticate, async (req: AuthRequest, res: Response
   res.json(restored)
 })
 
-// GET /api/templates/:id/export-csv — no auth required (before /:id to avoid conflict)
-router.get('/:id/export-csv', async (req, res: Response) => {
+// GET /api/templates/:id/export-csv — auth required (before /:id to avoid conflict)
+router.get('/:id/export-csv', authenticate, async (req: AuthRequest, res: Response) => {
   const template = await prisma.featureTemplate.findUnique({
     where: { id: req.params.id as string },
     include: { tasks: { orderBy: { order: 'asc' } } },
@@ -261,7 +261,7 @@ router.get('/:id/export-csv', async (req, res: Response) => {
 })
 
 // GET /api/templates/:id
-router.get('/:id', async (req, res: Response) => {
+router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   const template = await prisma.featureTemplate.findUnique({
     where: { id: req.params.id as string },
     include: templateInclude,
