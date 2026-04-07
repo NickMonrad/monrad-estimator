@@ -4,6 +4,9 @@ import { AuthRequest } from '../middleware/auth.js'
 import { createHash, randomBytes } from 'crypto'
 import { sendEmail } from '../lib/email.js'
 
+// #170: HTML escape helper to prevent HTML injection in email templates
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
 const router = Router()
 
 // GET /api/orgs — list orgs for current user
@@ -134,8 +137,8 @@ router.post('/:id/invites/:inviteId/resend', async (req: AuthRequest, res: Respo
     const clientUrl = process.env.CLIENT_URL ?? 'http://localhost:5173'
     await sendEmail({
       to: invite.email,
-      subject: `You've been invited to join ${org.name} on Monrad Estimator`,
-      html: `<p>You've been invited to join <strong>${org.name}</strong>.</p><p><a href="${clientUrl}/accept-invite?token=${newToken}">Accept invitation</a></p><p>This link expires in 7 days.</p>`,
+      subject: `You've been invited to join ${esc(org.name)} on Monrad Estimator`,
+      html: `<p>You've been invited to join <strong>${esc(org.name)}</strong>.</p><p><a href="${clientUrl}/accept-invite?token=${newToken}">Accept invitation</a></p><p>This link expires in 7 days.</p>`,
     })
 
     res.json(updated)
@@ -211,8 +214,8 @@ router.post('/:id/invites', async (req: AuthRequest, res: Response) => {
   const clientUrl = process.env.CLIENT_URL ?? 'http://localhost:5173'
   await sendEmail({
     to: email,
-    subject: `You've been invited to join ${org.name} on Monrad Estimator`,
-    html: `<p>You've been invited to join <strong>${org.name}</strong>.</p><p><a href="${clientUrl}/accept-invite?token=${token}">Accept invitation</a></p><p>This link expires in 7 days.</p>`,
+    subject: `You've been invited to join ${esc(org.name)} on Monrad Estimator`,
+    html: `<p>You've been invited to join <strong>${esc(org.name)}</strong>.</p><p><a href="${clientUrl}/accept-invite?token=${token}">Accept invitation</a></p><p>This link expires in 7 days.</p>`,
   })
 
   res.status(201).json({ message: 'Invite sent' })

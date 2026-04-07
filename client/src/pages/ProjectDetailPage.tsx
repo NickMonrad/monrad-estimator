@@ -1,4 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
+import DOMPurify from 'dompurify'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
@@ -68,7 +69,7 @@ export default function ProjectDetailPage() {
           {project.description && (
             <div
               className="text-sm text-gray-600 dark:text-gray-400 mt-1 rich-text-content"
-              dangerouslySetInnerHTML={{ __html: project.description }}
+              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(project.description) }}
             />
           )}
         </div>

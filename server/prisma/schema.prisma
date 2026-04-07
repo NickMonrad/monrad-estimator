@@ -12,6 +12,7 @@ model User {
   email     String    @unique
   name      String
   password  String
+  role      UserRole  @default(USER)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   projects  Project[]
@@ -448,4 +449,10 @@ model Customer {
   projects    Project[]
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
+}
+
+
+enum UserRole {
+  USER
+  ADMIN
 }
