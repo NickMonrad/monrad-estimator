@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
+import { pruneSnapshots } from '../lib/snapshotUtils.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -63,6 +64,8 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     },
     select: { id: true, label: true, trigger: true, createdAt: true },
   })
+  // #177: enforce retention policy — keep the 20 most-recent snapshots per project
+  await pruneSnapshots(prisma, projectId)
   res.status(201).json(snap)
 }))
 
@@ -138,6 +141,8 @@ router.post('/:snapshotId/rollback', asyncHandler(async (req: AuthRequest, res: 
       createdById: req.userId!,
     },
   })
+  // #177: enforce retention policy after auto-snapshot
+  await pruneSnapshots(prisma, projectId)
 
   const resourceTypes = await prisma.resourceType.findMany({
     where: { projectId },

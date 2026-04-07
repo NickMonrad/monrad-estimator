@@ -5,6 +5,7 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { parse } from 'csv-parse/sync'
 import { stringify } from 'csv-stringify/sync'
 import { calcDurationDays } from '../utils/round.js'
+import { pruneSnapshots } from '../lib/snapshotUtils.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -352,6 +353,8 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
         createdById: req.userId!,
       },
     })
+    // #177: enforce retention policy — keep the 20 most-recent snapshots per project
+    await pruneSnapshots(prisma, projectId)
   }
 
   // #176: wrap all DB writes in a transaction for atomicity

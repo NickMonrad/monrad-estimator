@@ -310,10 +310,12 @@ function buildResponse(
 }
 
 // Compute over-allocation warnings for parallel-mode epics
+// #178: accept pre-loaded features and resourceTypes to avoid redundant DB queries
 async function computeParallelWarnings(
-  projectId: string,
   fallbackHoursPerDay: number,
   entries: Array<{ featureId: string; startWeek: number; durationWeeks: number; feature: { epic: { id: string; name: string; featureMode: string } } }>,
+  allFeatures: Array<{ id: string; userStories: Array<{ isActive: boolean | null; tasks: Array<{ resourceTypeId: string | null; resourceType: { id: string; name: string; hoursPerDay: number | null } | null; hoursEffort: number; durationDays: number | null }> }> }>,
+  allResourceTypes: ResourceTypeWithNamed[],
 ): Promise<ParallelWarning[]> {
   const warnings: ParallelWarning[] = []
 
@@ -331,18 +333,17 @@ async function computeParallelWarnings(
     ep.endWeek = Math.max(ep.endWeek, e.startWeek + e.durationWeeks)
   }
 
+  // Build lookup maps from pre-loaded data — no additional DB queries needed
+  const featureById = new Map(allFeatures.map(f => [f.id, f]))
+  const rtCountMap = new Map(allResourceTypes.map(rt => [rt.id, rt.count]))
+  const rtMap = new Map(allResourceTypes.map(rt => [rt.id, rt as ResourceTypeWithNamed]))
+
   for (const [epicId, { epicName, featureIds, startWeek, endWeek }] of parallelEpics) {
     if (featureIds.length < 2) continue
     const epicSpanDays = (endWeek - startWeek) * 5
 
-    // Load tasks for all features in this parallel epic
-    const features = await prisma.feature.findMany({
-      where: { id: { in: featureIds } },
-      include: { userStories: { include: { tasks: { include: { resourceType: true } } } } },
-    })
-    const resourceTypes = await prisma.resourceType.findMany({ where: { projectId }, include: { namedResources: true } })
-    const rtCountMap = new Map(resourceTypes.map(rt => [rt.id, rt.count]))
-    const rtMap = new Map(resourceTypes.map(rt => [rt.id, rt as ResourceTypeWithNamed]))
+    // Use pre-loaded features filtered to this parallel epic
+    const features = featureIds.map(id => featureById.get(id)).filter((f): f is NonNullable<typeof f> => f !== undefined)
 
     // Sum total person-days per resource type across ALL features (they run simultaneously)
     const demandMap = new Map<string, { name: string; days: number; count: number }>()
@@ -420,8 +421,12 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   // Filter out inactive epics/features
   const activeEntries = entries.filter(e => e.feature.isActive !== false && e.feature.epic.isActive !== false)
 
-  // Compute parallel over-allocation warnings
-  const parallelWarnings = await computeParallelWarnings(project.id, project.hoursPerDay, activeEntries)
+  // Load resource types before computing warnings (passed in to avoid redundant queries)
+  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
+
+  // #178: pass pre-loaded features and resource types — no extra DB queries inside
+  const activeFeatures = activeEntries.map(e => e.feature)
+  const parallelWarnings = await computeParallelWarnings(project.hoursPerDay, activeEntries, activeFeatures, resourceTypes)
 
   const storyTimelineEntries = await prisma.storyTimelineEntry.findMany({
     where: { projectId: project.id },
@@ -448,7 +453,6 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     isManual: e.isManual,
   }))
 
-  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
   const simulatedDemand = project.weeklyDemandCache
     ? new Map<string, number>(Object.entries(project.weeklyDemandCache as Record<string, number>))
     : undefined
@@ -641,16 +645,60 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     return f.epic.order * 100000 + f.order
   }
 
-  const queue: string[] = []
+  // #178: min-heap replacing array + sort — O(n log n) overall vs O(n² log n)
+  class MinHeap {
+    private data: Array<{ priority: number; id: string }> = []
+
+    push(item: { priority: number; id: string }) {
+      this.data.push(item)
+      this._bubbleUp(this.data.length - 1)
+    }
+
+    pop(): { priority: number; id: string } | undefined {
+      if (this.data.length === 0) return undefined
+      const top = this.data[0]
+      const last = this.data.pop()!
+      if (this.data.length > 0) {
+        this.data[0] = last
+        this._sinkDown(0)
+      }
+      return top
+    }
+
+    get length() { return this.data.length }
+
+    private _bubbleUp(i: number) {
+      while (i > 0) {
+        const parent = Math.floor((i - 1) / 2)
+        if (this.data[parent].priority <= this.data[i].priority) break
+        ;[this.data[parent], this.data[i]] = [this.data[i], this.data[parent]]
+        i = parent
+      }
+    }
+
+    private _sinkDown(i: number) {
+      const n = this.data.length
+      while (true) {
+        let smallest = i
+        const l = 2 * i + 1, r = 2 * i + 2
+        if (l < n && this.data[l].priority < this.data[smallest].priority) smallest = l
+        if (r < n && this.data[r].priority < this.data[smallest].priority) smallest = r
+        if (smallest === i) break
+        ;[this.data[smallest], this.data[i]] = [this.data[i], this.data[smallest]]
+        i = smallest
+      }
+    }
+  }
+
+  const queue = new MinHeap()
   for (const [fId, deg] of inDegree) {
-    if (deg === 0) queue.push(fId)
+    if (deg === 0) queue.push({ priority: featurePriority(fId), id: fId })
   }
 
   const processed: string[] = []
 
   while (queue.length > 0) {
-    queue.sort((a, b) => featurePriority(a) - featurePriority(b))
-    const fId = queue.shift()!
+    const { id: fId } = queue.pop()!
     processed.push(fId)
 
     const f = featureMap.get(fId)!
@@ -675,7 +723,7 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     for (const succId of adjList.get(fId) ?? []) {
       const newDeg = (inDegree.get(succId) ?? 1) - 1
       inDegree.set(succId, newDeg)
-      if (newDeg === 0) queue.push(succId)
+      if (newDeg === 0) queue.push({ priority: featurePriority(succId), id: succId })
     }
   }
 
@@ -910,27 +958,35 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     return [...storyResourceHours(story).values()].reduce((a, b) => a + b, 0)
   }
 
-  // Compute scheduled position for every story
+  // #178: Compute scheduled position for every story in O(S) total — one pass per feature
+  // Previously O(S²): for each story we'd scan siblings from the start to accumulate the cursor.
+  // Now we build the storyPositionMap (featureId → pre-computed schedules) in a single pass
+  // per feature, then stamp each story's result without any repeated scanning.
   const storyScheduled = new Map<string, { startWeek: number; durationWeeks: number; isManual: boolean }>()
 
+  // Pass 1: manual-pinned stories (O(S) total, independent of siblings)
   for (const story of allStories) {
-    const fId = story.feature.id
-    const featureStart = startWeeks.get(fId) ?? 0
-    const featureDone = finishWeeks.get(fId) ?? (featureStart + 1)
-    const featureDuration = Math.max(0.2, featureDone - featureStart)
-
     if (manualStoryWeeks.has(story.id)) {
       const sw = manualStoryWeeks.get(story.id)!
       const totalHours = storyTotalHours(story)
       const dur = Math.max(0.2, totalHours / fallbackHoursPerDay / 5)
       storyScheduled.set(story.id, { startWeek: sw, durationWeeks: dur, isManual: true })
-      continue
     }
+  }
 
-    // Proportional sequential scheduling within feature window
-    const siblings = (storiesByFeature.get(fId) ?? []).filter(s => !manualStoryWeeks.has(s.id))
+  // Pass 2: proportional sequential scheduling — one pass per feature, O(S) total
+  for (const [fId, stories] of storiesByFeature) {
+    const featureStart = startWeeks.get(fId) ?? 0
+    const featureDone = finishWeeks.get(fId) ?? (featureStart + 1)
+    const featureDuration = Math.max(0.2, featureDone - featureStart)
+
+    // Exclude manually-pinned stories from proportional scheduling
+    const siblings = stories.filter(s => !manualStoryWeeks.has(s.id))
+    if (siblings.length === 0) continue
+
     const totalFeatureHours = siblings.reduce((sum, s) => sum + storyTotalHours(s), 0)
 
+    // Build position map in a single forward scan — no repeated iteration
     let cursor = featureStart
     for (const sibling of siblings) {
       const hrs = storyTotalHours(sibling)
@@ -938,10 +994,7 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
         ? (hrs / totalFeatureHours) * featureDuration
         : featureDuration / Math.max(1, siblings.length)
       const safeDur = Math.max(0.2, dur)
-      if (sibling.id === story.id) {
-        storyScheduled.set(story.id, { startWeek: cursor, durationWeeks: safeDur, isManual: false })
-        break
-      }
+      storyScheduled.set(sibling.id, { startWeek: cursor, durationWeeks: safeDur, isManual: false })
       cursor += safeDur
     }
   }
@@ -990,7 +1043,8 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     orderBy: { startWeek: 'asc' },
   })
 
-  const parallelWarnings = await computeParallelWarnings(project.id, project.hoursPerDay, entries)
+  // #178: pass pre-loaded allFeatures and resourceTypes to avoid redundant DB queries
+  const parallelWarnings = await computeParallelWarnings(project.hoursPerDay, entries, allFeatures, resourceTypes)
 
   const storyTimelineEntries = await prisma.storyTimelineEntry.findMany({
     where: { projectId: project.id },
