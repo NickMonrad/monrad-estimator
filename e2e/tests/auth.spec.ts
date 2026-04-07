@@ -151,9 +151,10 @@ test.describe('Security hardening — Sprint 2', () => {
     if (projects.length === 0) return // skip if no projects exist
 
     const projectId = projects[0].id
-    const res = await request.post(`${API_BASE}/api/documents/generate`, {
+    // Route is /api/projects/:projectId/documents/generate
+    const res = await request.post(`${API_BASE}/api/projects/${projectId}/documents/generate`, {
       headers: { Authorization: `Bearer ${token}` },
-      data: { projectId, format: '../../../etc/passwd' },
+      data: { type: 'scope', label: 'test', format: '../../../etc/passwd', documentData: {} },
     })
     expect(res.status()).toBe(400)
   })
