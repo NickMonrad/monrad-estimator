@@ -130,3 +130,57 @@ test.describe('Security hardening', () => {
     await expect(page.getByRole('heading', { name: /projects/i })).toBeVisible({ timeout: 10_000 })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Security hardening — Sprint 2 (feature/security-sprint-2)
+// ---------------------------------------------------------------------------
+test.describe('Security hardening — Sprint 2', () => {
+  // ── Test 1: Path traversal rejected (API-level) ───────────────────────────
+  test('document generation rejects path traversal in format field', async ({ request }) => {
+    // Login to get a token
+    const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
+      data: { email: TEST_EMAIL, password: TEST_PASSWORD },
+    })
+    const { token } = await loginRes.json()
+
+    // We need a project ID — get first project from API
+    const projectsRes = await request.get(`${API_BASE}/api/projects`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const projects = await projectsRes.json()
+    if (projects.length === 0) return // skip if no projects exist
+
+    const projectId = projects[0].id
+    const res = await request.post(`${API_BASE}/api/documents/generate`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { projectId, format: '../../../etc/passwd' },
+    })
+    expect(res.status()).toBe(400)
+  })
+
+  // ── Test 2: Unauthenticated template GET returns 401 ─────────────────────
+  test('GET /api/templates returns 401 when unauthenticated', async ({ request }) => {
+    const res = await request.get(`${API_BASE}/api/templates`)
+    expect(res.status()).toBe(401)
+  })
+
+  // ── Test 3: Unauthenticated global resource types GET returns 401 ─────────
+  test('GET /api/global-resource-types returns 401 when unauthenticated', async ({ request }) => {
+    const res = await request.get(`${API_BASE}/api/global-resource-types`)
+    expect(res.status()).toBe(401)
+  })
+
+  // ── Test 4: Non-admin cannot create global resource type (403) ────────────
+  test('POST /api/global-resource-types returns 403 for non-admin user', async ({ request }) => {
+    const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
+      data: { email: TEST_EMAIL, password: TEST_PASSWORD },
+    })
+    const { token } = await loginRes.json()
+
+    const res = await request.post(`${API_BASE}/api/global-resource-types`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { name: 'E2E Test Resource', category: 'ENGINEERING' },
+    })
+    expect(res.status()).toBe(403)
+  })
+})
