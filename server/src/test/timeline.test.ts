@@ -102,6 +102,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
   it('returns empty entries when no timeline scheduled', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([])
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([])
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -116,6 +117,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
   it('returns computed startDate and endDate based on project.startDate', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue(mockEntries as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([])
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')

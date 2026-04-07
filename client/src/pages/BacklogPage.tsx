@@ -68,21 +68,28 @@ export default function BacklogPage() {
 
   const hoursPerDay = project?.hoursPerDay ?? 7.6
 
+  // Full invalidation: for mutations that affect effort/hours/active-status
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['backlog', projectId] })
     qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
   }
 
+  // Backlog-only invalidation: for metadata-only mutations (name, description, assumptions)
+  // that cannot affect timeline scheduling or resource demand
+  const invalidateBacklog = () => {
+    qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  }
+
   const createEpic = useMutation({
     mutationFn: (data: typeof epicForm) => api.post(`/projects/${projectId}/epics`, data),
-    onSuccess: (res) => { invalidate(); setAddingEpic(false); setEpicForm({ name: '', description: '', assumptions: '' }); setExpandedEpics(s => { const n = new Set(s); n.add(res.data.id); return n }) },
+    onSuccess: (res) => { invalidateBacklog(); setAddingEpic(false); setEpicForm({ name: '', description: '', assumptions: '' }); setExpandedEpics(s => { const n = new Set(s); n.add(res.data.id); return n }) },
   })
 
   const updateEpic = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.put(`/projects/${projectId}/epics/${id}`, data),
-    onSuccess: () => { invalidate(); setEditingEpicId(null) },
+    onSuccess: () => { invalidateBacklog(); setEditingEpicId(null) },
   })
 
   const toggleEpicActive = useMutation({
