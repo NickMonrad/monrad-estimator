@@ -10,6 +10,7 @@ export default function RegisterPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: FormEvent) => {
@@ -17,8 +18,13 @@ export default function RegisterPage() {
     setError('')
     setLoading(true)
     try {
-      await register(email, name, password)
-      navigate('/')
+      const loggedIn = await register(email, name, password)
+      if (loggedIn) {
+        navigate('/')
+      } else {
+        // Existing email — show generic success without revealing whether the account exists
+        setSuccess(true)
+      }
     } catch (err: any) {
       setError(err.response?.data?.error ?? 'Registration failed')
     } finally {
@@ -32,6 +38,11 @@ export default function RegisterPage() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Monrad Estimator</h1>
         <p className="text-gray-500 dark:text-gray-400 mb-6">Create your account</p>
         {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>}
+        {success && (
+          <div className="mb-4 p-3 bg-green-50 text-green-700 rounded-lg text-sm">
+            Your registration was received — please check your inbox to get started.
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full name</label>

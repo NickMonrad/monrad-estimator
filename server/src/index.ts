@@ -1,7 +1,11 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
+import pinoHttp from 'pino-http'
+import { logger } from './lib/logger.js'
 import { authenticate } from './middleware/auth.js'
+import { errorHandler } from './middleware/errorHandler.js'
 import authRoutes from './routes/auth.js'
 import projectRoutes from './routes/projects.js'
 import epicRoutes from './routes/epics.js'
@@ -30,6 +34,14 @@ import documentRoutes from './routes/documents.js'
 const app = express()
 const PORT = process.env.PORT ?? 3001
 
+// JWT_SECRET startup validation
+const jwtSecret = process.env.JWT_SECRET ?? ''
+if (!jwtSecret || jwtSecret === 'change-me-in-production' || jwtSecret.length < 32) {
+  throw new Error('JWT_SECRET must be set to a secure random string of 32+ characters')
+}
+
+app.use(helmet())
+app.use(pinoHttp({ logger }))
 app.use(cors({ origin: process.env.CLIENT_URL ?? 'http://localhost:5173' }))
 app.use(express.json({ limit: '10mb' }))
 
@@ -62,4 +74,5 @@ app.use('/api/orgs', authenticate, orgRoutes)
 app.use('/api/customers', authenticate, customerRoutes)
 
 export { app }
+app.use(errorHandler)
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`))
