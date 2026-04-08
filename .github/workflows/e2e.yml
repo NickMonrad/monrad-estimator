@@ -49,14 +49,21 @@ jobs:
         continue-on-error: true  # Don't fail CI on audit warnings initially
 
       # ── Install all workspace dependencies at once ──────────────
-      # Delete the lockfile before installing. macOS-generated lockfiles don't
-      # include Linux-specific optional native binaries (e.g. @rolldown/binding-linux-x64-gnu,
-      # @rollup/rollup-linux-x64-gnu). Deleting forces npm to resolve fresh on Linux.
-      # --legacy-peer-deps: eslint-plugin-react-hooks@7 hasn't declared ESLint 10
-      # in its peerDeps yet (only ^3-^9) — it works fine at runtime.
-      # See: https://github.com/npm/cli/issues/4828
       - name: Install all dependencies
-        run: rm -f package-lock.json && npm install --legacy-peer-deps
+        run: npm ci
+
+      # ── Fix platform-native binaries (npm/cli#4828) ────────────
+      # macOS-generated lockfile omits Linux-specific optional native packages.
+      # After npm ci, surgically install the Linux x64 bindings that Vite 8
+      # (rolldown) and Rollup 4 need. Versions are read from the installed
+      # packages so they always stay in sync.
+      - name: Install missing Linux native binaries
+        run: |
+          ROLLDOWN_VER=$(node -p "require('rolldown/package.json').version")
+          ROLLUP_VER=$(node -p "require('rollup/package.json').version")
+          npm install --no-save --ignore-scripts \
+            "@rolldown/binding-linux-x64-gnu@$ROLLDOWN_VER" \
+            "@rollup/rollup-linux-x64-gnu@$ROLLUP_VER" 2>/dev/null || true
 
       # ── TypeScript type-checking ──────────────────────────────────
       - name: TypeScript check (client)
