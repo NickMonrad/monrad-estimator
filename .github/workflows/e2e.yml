@@ -52,6 +52,21 @@ jobs:
       - name: Install all dependencies
         run: npm ci
 
+      # ── Fix platform-native binaries (npm/cli#4828) ────────────
+      # macOS-generated lockfile omits Linux-specific optional native packages.
+      # After npm ci, surgically install the Linux x64 bindings that Vite 8
+      # (rolldown, lightningcss), Rollup 4, and Tailwind CSS (oxide) need.
+      # Versions are read from the installed packages so they stay in sync.
+      # Note: some packages don't export ./package.json so we use fs.readFileSync.
+      - name: Install missing Linux native binaries
+        run: |
+          get_ver() { node -p "JSON.parse(require('fs').readFileSync('node_modules/$1/package.json','utf8')).version"; }
+          npm install --no-save --ignore-scripts \
+            "@rolldown/binding-linux-x64-gnu@$(get_ver rolldown)" \
+            "@rollup/rollup-linux-x64-gnu@$(get_ver rollup)" \
+            "lightningcss-linux-x64-gnu@$(get_ver lightningcss)" \
+            "@tailwindcss/oxide-linux-x64-gnu@$(get_ver @tailwindcss/oxide)"
+
       # ── TypeScript type-checking ──────────────────────────────────
       - name: TypeScript check (client)
         working-directory: client
