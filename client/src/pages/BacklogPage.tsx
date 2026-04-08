@@ -391,7 +391,7 @@ export default function BacklogPage() {
           onImported={invalidate}
         />
       )}
-    </div>
+    </AppLayout>
   )
 }
 
@@ -705,6 +705,6 @@ function EpicForm({ initial, onSave, onCancel, saving }: {
         </button>
         <button onClick={onCancel} className="px-4 py-1.5 rounded-lg text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
-  </AppLayout>
+    </div>
   )
 }

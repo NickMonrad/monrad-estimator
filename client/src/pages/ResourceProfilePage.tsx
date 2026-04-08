@@ -13,6 +13,8 @@ export default function ResourceProfilePage() {
   } = state
   const navigate = useNavigate()
 
+  if (!projectId) return null
+
   return (
     <AppLayout
       breadcrumb={
@@ -86,8 +88,8 @@ export default function ResourceProfilePage() {
           </nav>
         </div>
 
-        {activeTab === 'profile' && <ResourceProfileTab {...state} />}
-        {activeTab === 'commercial' && <CommercialTab {...state} />}
+        {activeTab === 'profile' && <ResourceProfileTab {...state} projectId={projectId} />}
+        {activeTab === 'commercial' && <CommercialTab {...state} projectId={projectId} />}
       </main>
     </AppLayout>
   )

@@ -7,6 +7,7 @@ import type {
   Project,
   ResourceProfile,
   ResourceType,
+  NamedResourceEntry,
   OverheadItem,
   ProjectDiscount,
   RateCard,
@@ -238,7 +239,7 @@ export function useResourceProfile() {
   const removeLastPerson = useMutation({
     mutationFn: async (rtId: string) => {
       const res = await api.get(`/projects/${projectId}/resource-types/${rtId}/named-resources`)
-      const resources = res.data as NamedResource[]
+      const resources = res.data as NamedResourceEntry[]
       if (resources.length > 1) {
         await api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${resources[resources.length - 1].id}`)
       }
@@ -535,7 +536,7 @@ export function useResourceProfile() {
     updateResourceType, updateAllocationMutation, updateNrAllocationMutation,
     addPerson, removeLastPerson,
     createOverhead, updateOverhead, deleteOverhead,
-    handleSubmit, handleFormSubmit: handleSubmit, handleEdit, handleDelete,
+    handleFormSubmit, handleEdit, handleDelete,
     resetForm,
     slugify, toCsvValue, buildProfileCsv, downloadBlob,
     handleExportProfile, handleExportFull,

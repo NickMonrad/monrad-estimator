@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { Link } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import type { DragEndEvent } from '@dnd-kit/core'
@@ -323,7 +322,7 @@ export default function TemplateLibraryPage() {
           onImported={() => { invalidate(); setShowTplImport(false) }}
         />
       )}
-    </div>
+    </AppLayout>
   )
 }
 
@@ -403,7 +402,7 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
         </button>
         <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
-  </AppLayout>
+    </div>
   )
 }
 

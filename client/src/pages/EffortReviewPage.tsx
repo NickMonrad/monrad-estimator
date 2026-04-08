@@ -414,7 +414,7 @@ export default function EffortReviewPage() {
           />
         )}
       </main>
-    </div>
+    </AppLayout>
   )
 }
 
@@ -816,6 +816,6 @@ function DetailView({
           </div>
         )
       })}
-  </AppLayout>
+    </div>
   )
 }
