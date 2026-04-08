@@ -49,12 +49,13 @@ jobs:
         continue-on-error: true  # Don't fail CI on audit warnings initially
 
       # ── Install all workspace dependencies at once ──────────────
-      # Using npm install (not npm ci) because npm ci is strict about the lockfile
-      # but macOS-generated lockfiles don't include Linux-specific native binaries
-      # (e.g. @rolldown/binding-linux-x64-gnu from Vite 8, @rollup/rollup-linux-x64-gnu).
-      # npm install resolves platform-specific optional deps fresh on each platform.
+      # Delete the lockfile before installing. macOS-generated lockfiles don't
+      # include Linux-specific optional native binaries (e.g. @rolldown/binding-linux-x64-gnu,
+      # @rollup/rollup-linux-x64-gnu). Deleting the lockfile forces npm to resolve all
+      # platform-specific optional deps fresh on the Linux runner.
+      # See: https://github.com/npm/cli/issues/4828
       - name: Install all dependencies
-        run: npm install
+        run: rm -f package-lock.json && npm install
 
       # ── TypeScript type-checking ──────────────────────────────────
       - name: TypeScript check (client)
