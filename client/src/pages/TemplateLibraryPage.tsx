@@ -6,8 +6,7 @@ import type { DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../lib/api'
-import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/layout/ThemeToggle'
+import AppLayout from '../components/layout/AppLayout'
 import TemplateCsvImportModal from '../components/templates/TemplateCsvImportModal'
 import TemplateHistoryPanel from '../components/templates/TemplateHistoryPanel'
 
@@ -42,7 +41,6 @@ interface FeatureTemplate {
 }
 
 export default function TemplateLibraryPage() {
-  const { user, logout } = useAuth()
   const qc = useQueryClient()
 
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
@@ -129,28 +127,7 @@ export default function TemplateLibraryPage() {
   const fmt = (h: number) => `${h}h (${(h / HOURS_PER_DAY).toFixed(1)}d)`
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center">
-              <span className="text-white text-xs font-bold">M</span>
-            </div>
-            <Link to="/" className="font-semibold text-gray-900 dark:text-white">Monrad Estimator</Link>
-            <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Resource Types</Link>
-            <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Templates</Link>
-            <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Rate Cards</Link>
-            <Link to="/orgs" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Team</Link>
-            <Link to="/customers" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Customers</Link>
-          </div>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout>
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Template Library</h1>
@@ -426,7 +403,7 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
         </button>
         <button onClick={onCancel} className="px-3 py-1 rounded text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
-    </div>
+  </AppLayout>
   )
 }
 

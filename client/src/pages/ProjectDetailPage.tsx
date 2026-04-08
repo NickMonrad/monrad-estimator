@@ -2,7 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import DOMPurify from 'dompurify'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { useAuth } from '../hooks/useAuth'
+import AppLayout from '../components/layout/AppLayout'
 
 const STATUS_COLOURS: Record<string, string> = {
   DRAFT: 'bg-gray-100 text-gray-700',
@@ -15,7 +15,6 @@ const STATUS_COLOURS: Record<string, string> = {
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', id],
@@ -36,26 +35,14 @@ export default function ProjectDetailPage() {
   ]
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
-              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center">
-                <span className="text-white text-xs font-bold">M</span>
-              </div>
-              <span className="font-semibold text-gray-900 dark:text-white group-hover:text-lab3-navy dark:group-hover:text-lab3-blue transition-colors">Monrad Estimator</span>
-            </button>
-            <span className="text-gray-300 dark:text-gray-600">/</span>
-            <span className="text-gray-600 dark:text-gray-400 text-sm">{project.name}</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout
+      breadcrumb={
+        <>
+          <span>/</span>
+          <span className="text-gray-600 dark:text-gray-400 text-sm">{project.name}</span>
+        </>
+      }
+    >
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="mb-6">
           <div className="flex items-center gap-3 mb-1">
@@ -88,6 +75,6 @@ export default function ProjectDetailPage() {
           ))}
         </div>
       </main>
-    </div>
+    </AppLayout>
   )
 }
