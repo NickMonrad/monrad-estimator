@@ -51,11 +51,12 @@ jobs:
       # ── Install all workspace dependencies at once ──────────────
       # Delete the lockfile before installing. macOS-generated lockfiles don't
       # include Linux-specific optional native binaries (e.g. @rolldown/binding-linux-x64-gnu,
-      # @rollup/rollup-linux-x64-gnu). Deleting the lockfile forces npm to resolve all
-      # platform-specific optional deps fresh on the Linux runner.
+      # @rollup/rollup-linux-x64-gnu). Deleting forces npm to resolve fresh on Linux.
+      # --legacy-peer-deps: eslint-plugin-react-hooks@7 hasn't declared ESLint 10
+      # in its peerDeps yet (only ^3-^9) — it works fine at runtime.
       # See: https://github.com/npm/cli/issues/4828
       - name: Install all dependencies
-        run: rm -f package-lock.json && npm install
+        run: rm -f package-lock.json && npm install --legacy-peer-deps
 
       # ── TypeScript type-checking ──────────────────────────────────
       - name: TypeScript check (client)
