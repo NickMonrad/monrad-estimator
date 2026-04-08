@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
-import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/layout/ThemeToggle'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import AppLayout from '../components/layout/AppLayout'
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer, getOrgs } from '../lib/api'
 
 interface Customer {
@@ -30,58 +29,50 @@ interface CustomerForm {
 const emptyForm: CustomerForm = { name: '', description: '', accountCode: '', crmLink: '', orgId: '' }
 
 export default function CustomersPage() {
-  const { user, logout } = useAuth()
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [orgs, setOrgs] = useState<Org[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState<CustomerForm>(emptyForm)
-  useEffect(() => { loadCustomers(); loadOrgs() }, [])
 
-  async function loadCustomers() {
-    try {
-      const data = await getCustomers()
-      setCustomers(data)
-    } catch {
-      setError('Failed to load customers')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { data: customers = [], isLoading } = useQuery<Customer[]>({
+    queryKey: ['customers'],
+    queryFn: getCustomers,
+  })
 
-  async function loadOrgs() {
-    try {
-      const data = await getOrgs()
-      setOrgs(data)
-    } catch {
-      // Non-critical — orgs just won't be available for the move action
-    }
-  }
+  const { data: orgs = [] } = useQuery<Org[]>({
+    queryKey: ['orgs'],
+    queryFn: getOrgs,
+  })
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault()
-    try {
-      if (editId) {
-        const updated = await updateCustomer(editId, form)
-        setCustomers(prev => prev.map(c => c.id === editId ? updated : c))
-      } else {
-        const created = await createCustomer(form)
-        setCustomers(prev => [created, ...prev])
-      }
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (editId) return updateCustomer(editId, form)
+      return createCustomer(form)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['customers'] })
       setShowForm(false)
       setEditId(null)
       setForm(emptyForm)
-    } catch {
-      setError('Failed to save customer')
-    }
+    },
+    onError: () => setError('Failed to save customer'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteCustomer,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['customers'] }),
+    onError: () => setError('Failed to delete customer'),
+  })
+
+  function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    saveMutation.mutate()
   }
 
-  async function handleDelete(id: string) {
+  function handleDelete(id: string) {
     if (!confirm('Delete this customer?')) return
-    await deleteCustomer(id)
-    setCustomers(prev => prev.filter(c => c.id !== id))
+    deleteMutation.mutate(id)
   }
 
   function handleEdit(customer: Customer) {
@@ -90,31 +81,10 @@ export default function CustomersPage() {
     setShowForm(true)
   }
 
-  if (loading) return <div className="p-6">Loading...</div>
+  if (isLoading) return <div className="p-6">Loading...</div>
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center">
-              <span className="text-white text-xs font-bold">M</span>
-            </div>
-            <Link to="/" className="font-semibold text-gray-900 dark:text-white">Monrad Estimator</Link>
-            <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Resource Types</Link>
-            <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Templates</Link>
-            <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Rate Cards</Link>
-            <Link to="/orgs" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Team</Link>
-            <Link to="/customers" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Customers</Link>
-          </div>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout>
       <main className="max-w-4xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Customers</h1>
@@ -232,6 +202,6 @@ export default function CustomersPage() {
       )}
       </main>
 
-    </div>
+  </AppLayout>
   )
 }

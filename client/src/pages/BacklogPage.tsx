@@ -9,8 +9,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { api } from '../lib/api'
-import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/layout/ThemeToggle'
+import AppLayout from '../components/layout/AppLayout'
 import { useReorderEpics, useReorderFeatures, useReorderStories, useReorderTasks } from '../hooks/useReorder'
 import type { Epic, Feature, UserStory, Task, ResourceType, Project } from '../types/backlog'
 import FeatureList from '../components/backlog/FeatureList'
@@ -21,7 +20,6 @@ import RichTextEditor from '../components/shared/RichTextEditor'
 export default function BacklogPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
   const qc = useQueryClient()
 
   const [expandedEpics, setExpandedEpics] = useState<Set<string>>(new Set())
@@ -203,28 +201,16 @@ export default function BacklogPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* TODO: dark mode — add dark: variants to cards, panels, and modals in this file */}
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-            <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
-              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center"><span className="text-white text-xs font-bold">M</span></div>
-              <span className="font-semibold text-gray-900 dark:text-white group-hover:text-lab3-navy dark:group-hover:text-lab3-blue transition-colors">Monrad Estimator</span>
-            </button>
-            <span>/</span>
-            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">{project?.name ?? '…'}</button>
-            <span>/</span>
-            <span className="text-gray-700 dark:text-gray-300">Backlog</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout
+      breadcrumb={<>
+          <span>/</span>
+          <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">
+            {project?.name ?? '…'}
+          </button>
+          <span>/</span>
+          <span className="text-gray-700 dark:text-gray-300">Backlog</span>
+        </>}
+    >
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -719,6 +705,6 @@ function EpicForm({ initial, onSave, onCancel, saving }: {
         </button>
         <button onClick={onCancel} className="px-4 py-1.5 rounded-lg text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
       </div>
-    </div>
+  </AppLayout>
   )
 }

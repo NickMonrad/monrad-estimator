@@ -2,8 +2,7 @@ import { useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/layout/ThemeToggle'
+import AppLayout from '../components/layout/AppLayout'
 import type { Project } from '../types/backlog'
 
 type ResourceCategory = 'ENGINEERING' | 'GOVERNANCE' | 'PROJECT_MANAGEMENT'
@@ -232,13 +231,13 @@ function exportCSV(
     ? buildSummaryCSV(effort, hasCost)
     : buildDetailCSV(effort, hasCost)
 
-  const uri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv)
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
-  link.setAttribute('href', uri)
-  link.setAttribute('download', filename)
-  document.body.appendChild(link)
+  link.href = url
+  link.download = filename
   link.click()
-  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 const CATEGORY_LABELS: Record<ResourceCategory, string> = {
@@ -268,7 +267,6 @@ const CATEGORY_BAR_BG: Record<ResourceCategory, string> = {
 export default function EffortReviewPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
   const [view, setView] = useState<'summary' | 'detail'>('summary')
   const [expandedRts, setExpandedRts] = useState<Set<string>>(new Set())
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
@@ -314,27 +312,16 @@ export default function EffortReviewPage() {
   const hasCost = filteredEffort?.hasCost ?? false
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-            <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
-              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center"><span className="text-white text-xs font-bold">M</span></div>
-              <span className="font-semibold text-gray-900 dark:text-white group-hover:text-lab3-navy dark:group-hover:text-lab3-blue transition-colors">Monrad Estimator</span>
-            </button>
-            <span>/</span>
-            <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">{project?.name ?? '…'}</button>
-            <span>/</span>
-            <span className="text-gray-700 dark:text-gray-300">Effort Review</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout
+      breadcrumb={<>
+          <span>/</span>
+          <button onClick={() => navigate(`/projects/${projectId}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">
+            {project?.name ?? '…'}
+          </button>
+          <span>/</span>
+          <span className="text-gray-700 dark:text-gray-300">Effort Review</span>
+        </>}
+    >
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Effort Review</h1>
@@ -829,6 +816,6 @@ function DetailView({
           </div>
         )
       })}
-    </div>
+  </AppLayout>
   )
 }
