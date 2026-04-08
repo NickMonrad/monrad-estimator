@@ -4,6 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # express-rate-limit v8 breaks Vitest via ip-address@10.1.0 hoisting (see PR #204)
+      # Keep pinned at ^7 until upstream issue is resolved
+      - dependency-name: "express-rate-limit"
+        versions: ["8.x", "9.x"]
     groups:
       server-deps:
         patterns:
