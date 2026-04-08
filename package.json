@@ -22,6 +22,10 @@
   "devDependencies": {
     "concurrently": "^8.2.2"
   },
+  "optionalDependencies": {
+    "@rollup/rollup-linux-x64-gnu": ">=4.0.0",
+    "@rollup/rollup-linux-x64-musl": ">=4.0.0"
+  },
   "dependencies": {
     "ip-address": "^10.1.0"
   }
