@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, getCustomers, getOrgs, moveProjectToOrg } from '../lib/api'
-import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/layout/ThemeToggle'
+import AppLayout from '../components/layout/AppLayout'
 import RichTextEditor from '../components/shared/RichTextEditor'
 
 const STATUS_OPTIONS = ['DRAFT', 'ACTIVE', 'REVIEW', 'COMPLETE', 'ARCHIVED']
@@ -21,7 +20,6 @@ interface Org {
 export default function ProjectSettingsPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
   const qc = useQueryClient()
 
   const [form, setForm] = useState({ name: '', description: '', customerId: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0 })
@@ -30,6 +28,7 @@ export default function ProjectSettingsPage() {
   const [orgs, setOrgs] = useState<Org[]>([])
   const [selectedOrgId, setSelectedOrgId] = useState('')
   const [orgSaved, setOrgSaved] = useState(false)
+  const [dropdownError, setDropdownError] = useState<string | null>(null)
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', id],
@@ -37,8 +36,12 @@ export default function ProjectSettingsPage() {
   })
 
   useEffect(() => {
-    getCustomers().then(setCustomers).catch(() => {})
-    getOrgs().then(setOrgs).catch(() => {})
+    Promise.all([
+      getCustomers().then(setCustomers),
+      getOrgs().then(setOrgs),
+    ]).catch(() => {
+      setDropdownError('Failed to load customer / team data. Some dropdowns may be unavailable.')
+    })
   }, [])
 
   useEffect(() => {
@@ -76,30 +79,24 @@ export default function ProjectSettingsPage() {
   if (!project) return <div className="min-h-screen flex items-center justify-center text-gray-400">Project not found</div>
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* TODO: dark mode — add dark: variants throughout this page */}
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-            <button onClick={() => navigate('/')} className="flex items-center gap-2 group">
-              <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center"><span className="text-white text-xs font-bold">M</span></div>
-              <span className="font-semibold text-gray-900 dark:text-white group-hover:text-lab3-navy dark:group-hover:text-lab3-blue transition-colors">Monrad Estimator</span>
-            </button>
-            <span>/</span>
-            <button onClick={() => navigate(`/projects/${id}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">{project.name}</button>
-            <span>/</span>
-            <span className="text-gray-700 dark:text-gray-300">Settings</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout
+      breadcrumb={<>
+          <span>/</span>
+          <button onClick={() => navigate(`/projects/${id}`)} className="hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors">
+            {project?.name ?? '…'}
+          </button>
+          <span>/</span>
+          <span className="text-gray-700 dark:text-gray-300">Settings</span>
+        </>}
+    >
       <main className="max-w-2xl mx-auto px-6 py-8">
         <h1 className="text-xl font-semibold text-gray-900 mb-6">Project Settings</h1>
+
+        {dropdownError && (
+          <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg text-sm text-amber-700 dark:text-amber-400">
+            ⚠️ {dropdownError}
+          </div>
+        )}
 
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 p-6 space-y-4">
           <div>
@@ -211,6 +208,6 @@ export default function ProjectSettingsPage() {
           </div>
         </div>
       </main>
-    </div>
+  </AppLayout>
   )
 }

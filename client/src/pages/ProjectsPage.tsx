@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { api, getOrgs, getCustomers, moveProjectToOrg } from '../lib/api'
-import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/layout/ThemeToggle'
+import AppLayout from '../components/layout/AppLayout'
 import { useGeocitiesEgg } from '../hooks/useGeocitiesEgg'
 import { stripHtml } from '../lib/stripHtml'
 
@@ -42,7 +41,6 @@ const STATUS_COLOURS: Record<string, string> = {
 }
 
 export default function ProjectsPage() {
-  const { user, logout } = useAuth()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [showNew, setShowNew] = useState(false)
@@ -121,34 +119,7 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Header */}
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Logo — 3 rapid clicks triggers Geocities easter egg */}
-            <button
-              onClick={geocitiesClick}
-              className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center focus:outline-none"
-              aria-label="Monrad Estimator logo"
-            >
-              <span className="text-white text-xs font-bold">M</span>
-            </button>
-            <span className="font-semibold text-gray-900 dark:text-white">Monrad Estimator</span>
-            <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Resource Types</Link>
-            <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Templates</Link>
-            <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Rate Cards</Link>
-            <Link to="/orgs" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Team</Link>
-            <Link to="/customers" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Customers</Link>
-          </div>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout onLogoClick={geocitiesClick}>
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Projects</h1>
@@ -436,6 +407,6 @@ export default function ProjectsPage() {
           </div>
         </div>
       )}
-    </div>
+    </AppLayout>
   )
 }

@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
-import { useAuth } from '../hooks/useAuth'
-import ThemeToggle from '../components/layout/ThemeToggle'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import AppLayout from '../components/layout/AppLayout'
 import { getOrgs, createOrg, getOrgMembers, removeOrgMember, inviteToOrg, getOrgInvites, cancelOrgInvite, resendOrgInvite } from '../lib/api'
 
 interface OrgMember {
@@ -28,8 +27,7 @@ interface Org {
 }
 
 export default function OrgsPage() {
-  const { user, logout } = useAuth()
-  const [orgs, setOrgs] = useState<Org[]>([])
+  const queryClient = useQueryClient()
   const [newOrgName, setNewOrgName] = useState('')
   const [expandedOrgId, setExpandedOrgId] = useState<string | null>(null)
   const [members, setMembers] = useState<Record<string, OrgMember[]>>({})
@@ -38,34 +36,26 @@ export default function OrgsPage() {
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER')
   const [inviteStatus, setInviteStatus] = useState<Record<string, string>>({})
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    loadOrgs()
-  }, [])
+  const { data: orgs = [], isLoading } = useQuery<Org[]>({
+    queryKey: ['orgs'],
+    queryFn: getOrgs,
+  })
 
-  async function loadOrgs() {
-    try {
-      const data = await getOrgs()
-      setOrgs(data)
-    } catch {
-      setError('Failed to load organisations')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const createOrgMutation = useMutation({
+    mutationFn: (name: string) => createOrg({ name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orgs'] })
+      setNewOrgName('')
+    },
+    onError: () => setError('Failed to create organisation'),
+  })
 
   async function handleCreateOrg(e: React.FormEvent) {
     e.preventDefault()
     if (!newOrgName.trim()) return
-    try {
-      const org = await createOrg({ name: newOrgName.trim() })
-      setOrgs(prev => [org, ...prev])
-      setNewOrgName('')
-    } catch {
-      setError('Failed to create organisation')
-    }
+    createOrgMutation.mutate(newOrgName.trim())
   }
 
   async function handleExpand(orgId: string) {
@@ -108,31 +98,10 @@ export default function OrgsPage() {
     }
   }
 
-  if (loading) return <div className="p-6">Loading...</div>
+  if (isLoading) return <div className="p-6">Loading...</div>
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-lab3-navy rounded-lg flex items-center justify-center">
-              <span className="text-white text-xs font-bold">M</span>
-            </div>
-            <Link to="/" className="font-semibold text-gray-900 dark:text-white">Monrad Estimator</Link>
-            <Link to="/resource-types" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Resource Types</Link>
-            <Link to="/templates" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Templates</Link>
-            <Link to="/rate-cards" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Rate Cards</Link>
-            <Link to="/orgs" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Team</Link>
-            <Link to="/customers" className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2">Customers</Link>
-          </div>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <span className="text-sm text-gray-500 dark:text-gray-400">{user?.name}</span>
-            <button onClick={logout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Sign out</button>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout>
       <main className="max-w-4xl mx-auto px-6 py-8">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Team</h1>
 
@@ -265,6 +234,6 @@ export default function OrgsPage() {
         </div>
       )}
       </main>
-    </div>
+  </AppLayout>
   )
 }
