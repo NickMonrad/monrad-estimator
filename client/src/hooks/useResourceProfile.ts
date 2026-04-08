@@ -503,6 +503,10 @@ export function useResourceProfile() {
   }
 
 
+  const saveBufferOnboarding = () =>
+    api.patch(`/projects/${projectId}`, { bufferWeeks, onboardingWeeks })
+      .then(() => qc.invalidateQueries({ queryKey: ['resource-profile', projectId] }))
+
   return {
     projectId, navigate, qc,
     project, profile, profileLoading, overheadItems, resourceTypes,
@@ -526,18 +530,22 @@ export function useResourceProfile() {
     taxRateDraft, setTaxRateDraft,
     editingAllocation, setEditingAllocation,
     allocationDraft, setAllocationDraft,
-    hasCost, chartData, filteredResourceRows, commercialData,
+    hasCost, columnCount, chartData, filteredResourceRows, commercialData,
     createDiscount, deleteDiscount, updateTax, applyRateCard,
     updateResourceType, updateAllocationMutation, updateNrAllocationMutation,
     addPerson, removeLastPerson,
     createOverhead, updateOverhead, deleteOverhead,
-    handleSubmit, handleEdit, handleDelete,
+    handleSubmit, handleFormSubmit: handleSubmit, handleEdit, handleDelete,
+    resetForm,
     slugify, toCsvValue, buildProfileCsv, downloadBlob,
     handleExportProfile, handleExportFull,
     handleDiscountSubmit, handleApplyRateCard,
     startEditAllocation, getAllocationBadge,
-    toggleRow,
+    toggleRow, toggleNamedResources,
+    weekToDate, fmtDate, formatNumber,
+    saveBufferOnboarding,
   }
 }
 
 export type ResourceProfileState = ReturnType<typeof useResourceProfile>
+export type UseResourceProfileReturn = ResourceProfileState
