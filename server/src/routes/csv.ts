@@ -66,6 +66,7 @@ export interface StagedRow {
   assumptions: string
   errors: string[]
   warnings: string[]
+  status?: 'new' | 'existing' | 'error'
 }
 
 async function ownedProject(projectId: string, userId: string) {
@@ -293,7 +294,34 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
   const errorCount = staged.filter(r => r.errors.length > 0).length
   const warningCount = staged.filter(r => r.warnings.length > 0).length
 
-  res.json({ staged, summary: { total: staged.length, errorCount, warningCount } })
+  // Fetch existing epics/features/stories to determine new vs existing status
+  const existingEpics = await prisma.epic.findMany({
+    where: { projectId: req.params.projectId as string },
+    include: {
+      features: {
+        include: { userStories: { select: { name: true } } },
+      }
+    },
+  })
+  const existingKeys = new Set<string>()
+  for (const ep of existingEpics) {
+    existingKeys.add(ep.name.toLowerCase())
+    for (const ft of ep.features) {
+      existingKeys.add(`${ep.name}|||${ft.name}`.toLowerCase())
+      for (const st of ft.userStories) {
+        existingKeys.add(`${ep.name}|||${ft.name}|||${st.name}`.toLowerCase())
+      }
+    }
+  }
+
+  // Annotate each staged row with status
+  const annotatedStaged = staged.map(row => {
+    if (row.errors.length > 0) return { ...row, status: 'error' as const }
+    const key = [row.epic, row.feature, row.story].filter(Boolean).join('|||').toLowerCase()
+    return { ...row, status: existingKeys.has(key) ? 'existing' as const : 'new' as const }
+  })
+
+  res.json({ staged: annotatedStaged, summary: { total: staged.length, errorCount, warningCount } })
 }))
 
 // POST /api/projects/:projectId/backlog/import-csv

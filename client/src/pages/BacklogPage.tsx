@@ -273,6 +273,7 @@ export default function BacklogPage() {
                     editSaving={updateEpic.isPending}
                     onDelete={() => deleteEpic.mutate(epic.id)}
                     onToggleActive={() => toggleEpicActive.mutate({ id: epic.id, isActive: epic.isActive !== false ? false : true })}
+                    onToggleFeatureMode={() => updateEpic.mutate({ id: epic.id, data: { featureMode: epic.featureMode === 'parallel' ? 'sequential' : 'parallel' } })}
                     epicTotalHours={epicTotalHours(epic)}
                     resourceTypes={resourceTypes}
                     projectId={projectId!}
@@ -395,7 +396,7 @@ export default function BacklogPage() {
   )
 }
 
-function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, epicTotalHours, resourceTypes, projectId, hoursPerDay, epicColour }: {
+function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, onToggleFeatureMode, epicTotalHours, resourceTypes, projectId, hoursPerDay, epicColour }: {
   epic: Epic
   expanded: boolean
   onToggle: () => void
@@ -406,6 +407,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   editSaving: boolean
   onDelete: () => void
   onToggleActive: () => void
+  onToggleFeatureMode: () => void
   epicTotalHours: number
   resourceTypes: ResourceType[]
   projectId: string
@@ -433,11 +435,28 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
             <span className="text-gray-400 dark:text-gray-500 text-sm select-none">{expanded ? '▼' : '▶'}</span>
             <span className="text-xs text-lab3-navy dark:text-blue-300 bg-blue-50 dark:bg-blue-900 px-2 py-0.5 rounded font-medium">Epic</span>
             <span className={`font-medium flex-1 ${epic.isActive === false ? 'line-through text-gray-400' : 'text-gray-900 dark:text-white'}`}>{epic.name}</span>
+            <button
+              onClick={e => { e.stopPropagation(); onToggleFeatureMode() }}
+              title={`Feature mode: ${epic.featureMode ?? 'sequential'} — click to toggle`}
+              className={epic.featureMode === 'parallel'
+                ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-xs px-2 py-0.5 rounded cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/50'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-xs px-2 py-0.5 rounded cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600'}
+            >
+              {epic.featureMode === 'parallel' ? 'parallel' : 'sequential'}
+            </button>
             <span className="text-sm text-gray-400 dark:text-gray-500">
               {epic.features.length} feature{epic.features.length !== 1 ? 's' : ''} · {epicTotalHours.toFixed(2)}h · {(epicTotalHours / hoursPerDay).toFixed(1)}d
             </span>
             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-              <button onClick={onToggleActive} title={epic.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-2 py-1 ${epic.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 hover:text-gray-600'}`}>{epic.isActive === false ? '○' : '●'}</button>
+              <button
+                onClick={onToggleActive}
+                title={epic.isActive === false ? 'Mark in scope' : 'Mark out of scope'}
+                className={epic.isActive === false
+                  ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-600 text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 line-through'
+                  : 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800 text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/50'}
+              >
+                {epic.isActive === false ? 'Out of scope' : 'In scope'}
+              </button>
               <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-2 py-1">Edit</button>
               <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
             </div>
