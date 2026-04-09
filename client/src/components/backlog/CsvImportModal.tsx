@@ -14,6 +14,7 @@ export interface StagedRow {
   assumptions: string
   errors: string[]
   warnings: string[]
+  status?: 'new' | 'existing' | 'error'
 }
 
 interface Props {
@@ -208,7 +209,7 @@ export default function CsvImportModal({ projectId, onClose, onImported }: Props
                   </thead>
                   <tbody>
                     {staged.map((row, i) => (
-                      <tr key={i} className={`border-b border-gray-100 dark:border-gray-700 ${row.errors.length > 0 ? 'bg-red-50 dark:bg-red-950/30' : row.warnings.length > 0 ? 'bg-yellow-50 dark:bg-yellow-950/20' : 'dark:bg-gray-800'}`}>
+                      <tr key={i} className={`border-b border-gray-100 dark:border-gray-700 ${row.errors.length > 0 ? 'bg-red-50 dark:bg-red-950/30' : row.status === 'new' ? 'bg-yellow-50 dark:bg-yellow-950/20' : 'dark:bg-gray-800'}`}>
                         <td className="px-3 py-2 text-gray-400 dark:text-gray-500">
                           {row.errors.length > 0 ? <span className="text-red-500 font-bold">⚠ {row.rowIndex}</span> : row.rowIndex}
                         </td>
