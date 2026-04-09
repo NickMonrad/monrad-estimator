@@ -74,17 +74,25 @@ export default function CommercialTab({
 
     {/* ── Unrated resources warning ── */}
     {(() => {
-      const unrated = filteredResourceRows.filter(r => r.dayRate == null && (r.totalHours > 0 || r.totalDays > 0))
-      if (unrated.length === 0) return null
+      const unratedResources = filteredResourceRows.filter(r => r.dayRate == null)
+      const unratedOverhead = (profile?.overheadRows ?? []).filter(r => r.dayRate == null && r.computedDays > 0)
+      const unratedOverheadNames = unratedOverhead
+        .map(r => r.resourceTypeName ?? r.name)
+        .filter(name => !unratedResources.some(r => r.name === name))
+      const allUnratedNames = [
+        ...unratedResources.map(r => r.name),
+        ...unratedOverheadNames,
+      ]
+      if (allUnratedNames.length === 0) return null
       return (
         <div className="mb-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 flex items-start gap-2">
           <span className="text-yellow-500 mt-0.5">⚠️</span>
           <div>
             <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
-              {unrated.length} resource type{unrated.length !== 1 ? 's' : ''} have no rate applied and are excluded from cost calculations.
+              {allUnratedNames.length} resource type{allUnratedNames.length !== 1 ? 's' : ''} have no rate applied and are excluded from cost calculations.
             </p>
             <p className="text-xs text-yellow-700 dark:text-yellow-400 mt-0.5">
-              Missing rates: {unrated.map(r => r.name).join(', ')}
+              Missing rates: {allUnratedNames.join(', ')}
             </p>
           </div>
         </div>
