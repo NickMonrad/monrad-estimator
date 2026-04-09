@@ -1,4 +1,4 @@
-export interface ScopeDocumentProps {
+interface ScopeDocumentProps {
   project: {
     name: string
     customer: string | null
