@@ -39,7 +39,7 @@ export async function generatePdfFromHtml(html: string): Promise<Buffer> {
         ...sanitizeHtml.defaults.allowedAttributes,
         '*': ['class', 'style', 'id'],
         // SVG container
-        'svg': ['xmlns', 'viewBox', 'width', 'height'],
+        'svg': ['xmlns', 'viewBox', 'width', 'height', 'style'],
         // SVG presentation attributes (used by Gantt bars, labels, grid lines)
         'rect': ['x', 'y', 'width', 'height', 'fill', 'stroke', 'stroke-width', 'rx', 'ry', 'opacity'],
         'line': ['x1', 'y1', 'x2', 'y2', 'stroke', 'stroke-width', 'stroke-dasharray'],
