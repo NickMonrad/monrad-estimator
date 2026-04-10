@@ -69,6 +69,7 @@ export interface Epic {
   order: number
   projectId: string
   isActive?: boolean
+  featureMode?: string
   features: Feature[]
 }
 

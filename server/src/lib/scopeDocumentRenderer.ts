@@ -218,8 +218,10 @@ function renderGanttSvg(td: TimelineData): string {
   // Left column separator line (drawn last so it sits on top)
   parts.push(`<line x1="${LABEL_W}" y1="0" x2="${LABEL_W}" y2="${svgH}" stroke="#d1d5db" stroke-width="1"/>`)
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">${parts.join('')}</svg>`
-  return `<div style="overflow-x:auto; margin: 0 0 16px 0">${svg}</div>`
+  // width="100%" + viewBox lets the SVG scale down to fit the A4 page width
+  // while preserving aspect ratio — prevents truncation on wide timelines
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="100%" style="display:block; max-width:${svgW}px">${parts.join('')}</svg>`
+  return `<div style="margin: 0 0 16px 0">${svg}</div>`
 }
 
 const CSS = `

@@ -22,7 +22,7 @@ export default function ProjectSettingsPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
 
-  const [form, setForm] = useState({ name: '', description: '', customerId: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0 })
+  const [form, setForm] = useState({ name: '', description: '', customerId: '', status: 'DRAFT', hoursPerDay: 7.6, bufferWeeks: 0, onboardingWeeks: 0, taxRate: 10, taxLabel: 'GST' })
   const [saved, setSaved] = useState(false)
   const [customers, setCustomers] = useState<Customer[]>([])
   const [orgs, setOrgs] = useState<Org[]>([])
@@ -53,6 +53,9 @@ export default function ProjectSettingsPage() {
         status: project.status ?? 'DRAFT',
         hoursPerDay: project.hoursPerDay ?? 7.6,
         bufferWeeks: project.bufferWeeks ?? 0,
+        onboardingWeeks: project.onboardingWeeks ?? 0,
+        taxRate: project.taxRate ?? 10,
+        taxLabel: project.taxLabel ?? 'GST',
       })
       setSelectedOrgId(project.orgId ?? '')
     }
@@ -170,14 +173,25 @@ export default function ProjectSettingsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Buffer weeks at end</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Onboarding weeks</label>
+            <input
+              type="number" value={form.onboardingWeeks}
+              onChange={e => setForm(v => ({ ...v, onboardingWeeks: parseInt(e.target.value) || 0 }))}
+              min={0} max={52} step={1}
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+            />
+            <p className="text-xs text-gray-400 mt-1">Weeks reserved at the START of the project for onboarding.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Buffer weeks</label>
             <input
               type="number" value={form.bufferWeeks}
               onChange={e => setForm(v => ({ ...v, bufferWeeks: parseInt(e.target.value) || 0 }))}
               min={0} max={52} step={1}
               className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
-            <p className="text-xs text-gray-400 mt-1">Adds extra weeks to the end of the project (e.g. for handover). Affects FULL_PROJECT allocation and timeline display.</p>
+            <p className="text-xs text-gray-400 mt-1">Weeks reserved at the END of the project (e.g. for handover). Affects FULL_PROJECT allocation and timeline display.</p>
           </div>
 
           <div>
@@ -188,6 +202,25 @@ export default function ProjectSettingsPage() {
               className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
             />
             <p className="text-xs text-gray-400 mt-1">Used to convert hours to days in estimates. Default is 7.6h.</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tax label (e.g. GST, VAT)</label>
+              <input
+                type="text" value={form.taxLabel} onChange={f('taxLabel')}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tax rate (%)</label>
+              <input
+                type="number" value={form.taxRate}
+                onChange={e => setForm(v => ({ ...v, taxRate: parseFloat(e.target.value) || 0 }))}
+                step="0.01" min={0}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue"
+              />
+            </div>
           </div>
 
           <div className="flex items-center gap-3 pt-2">
