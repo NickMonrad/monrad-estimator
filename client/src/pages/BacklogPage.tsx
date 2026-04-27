@@ -101,6 +101,60 @@ export default function BacklogPage() {
     onSuccess: invalidate,
   })
 
+  const { data: epicDepsData = [] } = useQuery<Array<{ epicId: string; dependsOnId: string }>>({
+    queryKey: ['epicDeps', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/epic-dependencies`).then(r => r.data),
+    enabled: !!projectId,
+  })
+
+  const [epicDepError, setEpicDepError] = useState<string | null>(null)
+
+  const addEpicDep = useMutation({
+    mutationFn: ({ epicId, dependsOnId }: { epicId: string; dependsOnId: string }) =>
+      api.post(`/projects/${projectId}/epic-dependencies`, { epicId, dependsOnId }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
+      setEpicDepError(null)
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to add dependency'
+      setEpicDepError(msg)
+    },
+  })
+
+  const removeEpicDep = useMutation({
+    mutationFn: ({ epicId, dependsOnId }: { epicId: string; dependsOnId: string }) =>
+      api.delete(`/projects/${projectId}/epic-dependencies/${epicId}/${dependsOnId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['epicDeps', projectId] }),
+  })
+
+  const { data: featureDepsData = [] } = useQuery<Array<{ featureId: string; dependsOnId: string }>>({
+    queryKey: ['feature-deps', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/feature-dependencies`).then(r => r.data),
+    enabled: !!projectId,
+  })
+
+  const [featureDepError, setFeatureDepError] = useState<string | null>(null)
+
+  const addFeatureDepBacklog = useMutation({
+    mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
+      api.post(`/projects/${projectId}/feature-dependencies`, { featureId, dependsOnId }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
+      setFeatureDepError(null)
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to add dependency'
+      setFeatureDepError(msg)
+    },
+  })
+
+  const removeFeatureDepBacklog = useMutation({
+    mutationFn: ({ featureId, dependsOnId }: { featureId: string; dependsOnId: string }) =>
+      api.delete(`/projects/${projectId}/feature-dependencies/${featureId}/${dependsOnId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['feature-deps', projectId] }),
+  })
+
   interface Snapshot { id: string; label: string | null; trigger: string; createdAt: string }
   interface Diff { added: string[]; removed: string[]; snapshotAt: string }
 
@@ -279,6 +333,16 @@ export default function BacklogPage() {
                     projectId={projectId!}
                     hoursPerDay={hoursPerDay}
                     epicColour={getEpicColour(index)}
+                    allEpics={tree.map(e => ({ id: e.id, name: e.name }))}
+                    epicDeps={epicDepsData}
+                    onAddEpicDep={(epicId, dependsOnId) => addEpicDep.mutate({ epicId, dependsOnId })}
+                    onRemoveEpicDep={(epicId, dependsOnId) => removeEpicDep.mutate({ epicId, dependsOnId })}
+                    epicDepError={epicDepError}
+                    allFeatures={tree.flatMap(e => e.features.map(f => ({ id: f.id, name: f.name, epicName: e.name })))}
+                    featureDeps={featureDepsData}
+                    onAddFeatureDep={(featureId, dependsOnId) => addFeatureDepBacklog.mutate({ featureId, dependsOnId })}
+                    onRemoveFeatureDep={(featureId, dependsOnId) => removeFeatureDepBacklog.mutate({ featureId, dependsOnId })}
+                    featureDepError={featureDepError}
                   />
                 ))}
 
@@ -396,7 +460,7 @@ export default function BacklogPage() {
   )
 }
 
-function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, onToggleFeatureMode, epicTotalHours, resourceTypes, projectId, hoursPerDay, epicColour }: {
+function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, onToggleFeatureMode, epicTotalHours, resourceTypes, projectId, hoursPerDay, epicColour, allEpics, epicDeps, onAddEpicDep, onRemoveEpicDep, epicDepError, allFeatures, featureDeps, onAddFeatureDep, onRemoveFeatureDep, featureDepError }: {
   epic: Epic
   expanded: boolean
   onToggle: () => void
@@ -413,9 +477,20 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   projectId: string
   hoursPerDay: number
   epicColour: EpicColour
+  allEpics: Array<{ id: string; name: string }>
+  epicDeps: Array<{ epicId: string; dependsOnId: string }>
+  onAddEpicDep: (epicId: string, dependsOnId: string) => void
+  onRemoveEpicDep: (epicId: string, dependsOnId: string) => void
+  epicDepError: string | null
+  allFeatures: Array<{ id: string; name: string; epicName: string }>
+  featureDeps: Array<{ featureId: string; dependsOnId: string }>
+  onAddFeatureDep: (featureId: string, dependsOnId: string) => void
+  onRemoveFeatureDep: (featureId: string, dependsOnId: string) => void
+  featureDepError: string | null
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'epic-' + epic.id })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
+  const [epicDepPickerOpen, setEpicDepPickerOpen] = useState(false)
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden border-l-4 ${epicColour.border}`}>
@@ -476,11 +551,63 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
               />
             </div>
           )}
+          {/* Epic dependencies row */}
+          <div className="flex flex-wrap items-center gap-1 mt-1 ml-7" onClick={e => e.stopPropagation()}>
+            {epicDeps
+              .filter(d => d.epicId === epic.id)
+              .map(d => {
+                const depName = allEpics.find(e => e.id === d.dependsOnId)?.name ?? d.dependsOnId
+                return (
+                  <span key={d.dependsOnId} className="inline-flex items-center gap-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded">
+                    → {depName}
+                    <button onClick={() => onRemoveEpicDep(epic.id, d.dependsOnId)} className="ml-0.5 text-gray-400 hover:text-red-500">×</button>
+                  </span>
+                )
+              })}
+            <div className="relative">
+              <button
+                onClick={() => setEpicDepPickerOpen(v => !v)}
+                className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 border border-dashed border-gray-300 dark:border-gray-600 px-1.5 py-0.5 rounded"
+                title="Add epic dependency"
+              >＋ dep</button>
+              {epicDepPickerOpen && (
+                <div className="absolute top-full left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[160px]">
+                  {allEpics
+                    .filter(e => e.id !== epic.id && !epicDeps.some(d => d.epicId === epic.id && d.dependsOnId === e.id))
+                    .map(e => (
+                      <button
+                        key={e.id}
+                        className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                        onClick={() => { onAddEpicDep(epic.id, e.id); setEpicDepPickerOpen(false) }}
+                      >
+                        {e.name}
+                      </button>
+                    ))}
+                  {allEpics.filter(e => e.id !== epic.id && !epicDeps.some(d => d.epicId === epic.id && d.dependsOnId === e.id)).length === 0 && (
+                    <span className="text-xs px-3 py-1.5 text-gray-400 block">No epics available</span>
+                  )}
+                </div>
+              )}
+            </div>
+            {epicDepError && <span className="text-xs text-red-500">{epicDepError}</span>}
+          </div>
         </div>
       )}
       {expanded && (
         <div className="border-t border-gray-100 dark:border-gray-700 px-3 pb-3 pt-2">
-          <FeatureList epicId={epic.id} features={epic.features} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} epicColour={epicColour} />
+          <FeatureList
+            epicId={epic.id}
+            features={epic.features}
+            resourceTypes={resourceTypes}
+            projectId={projectId}
+            hoursPerDay={hoursPerDay}
+            epicColour={epicColour}
+            allFeatures={allFeatures}
+            featureDeps={featureDeps}
+            onAddFeatureDep={onAddFeatureDep}
+            onRemoveFeatureDep={onRemoveFeatureDep}
+            featureDepError={featureDepError}
+          />
         </div>
       )}
     </div>

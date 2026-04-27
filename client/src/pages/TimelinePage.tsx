@@ -452,6 +452,32 @@ export default function TimelinePage() {
     },
   })
 
+  const { data: epicDeps = [] } = useQuery<Array<{ epicId: string; dependsOnId: string; epic: { name: string }; dependsOn: { name: string } }>>({
+    queryKey: ['epicDeps', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/epic-dependencies`).then(r => r.data),
+    enabled: !!projectId,
+  })
+
+  const addEpicDep = useMutation({
+    mutationFn: ({ epicId, dependsOnId }: { epicId: string; dependsOnId: string }) =>
+      api.post(`/projects/${projectId}/epic-dependencies`, { epicId, dependsOnId }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      setScheduleStale(true)
+    },
+  })
+
+  const removeEpicDep = useMutation({
+    mutationFn: ({ epicId, dependsOnId }: { epicId: string; dependsOnId: string }) =>
+      api.delete(`/projects/${projectId}/epic-dependencies/${epicId}/${dependsOnId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      setScheduleStale(true)
+    },
+  })
+
   const updateStoryTimeline = useMutation({
     mutationFn: ({ storyId, startWeek, durationWeeks }: { storyId: string; startWeek: number; durationWeeks: number }) =>
       api.put(`/projects/${projectId}/timeline/stories/${storyId}`, { startWeek, durationWeeks }).then(r => r.data),
@@ -902,6 +928,9 @@ export default function TimelinePage() {
                 onRemoveFeatureDep={(featureId, dependsOnId) => removeFeatureDep.mutate({ featureId, dependsOnId })}
                 onAddStoryDep={(storyId, dependsOnId) => addStoryDep.mutate({ storyId, dependsOnId })}
                 onRemoveStoryDep={(storyId, dependsOnId) => removeStoryDep.mutate({ storyId, dependsOnId })}
+                epicDependencies={epicDeps}
+                onAddEpicDep={(epicId, dependsOnId) => addEpicDep.mutate({ epicId, dependsOnId })}
+                onRemoveEpicDep={(epicId, dependsOnId) => removeEpicDep.mutate({ epicId, dependsOnId })}
                 editingFeatureId={editingFeatureId}
                 setEditingFeatureId={setEditingFeatureId}
                 editingStoryId={editingStoryId}

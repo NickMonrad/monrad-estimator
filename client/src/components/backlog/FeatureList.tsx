@@ -9,7 +9,6 @@ import type { EpicColour } from '../../lib/epicColours'
 import StoryList from './StoryList'
 import ApplyTemplateModal from './ApplyTemplateModal'
 import RichTextEditor from '../shared/RichTextEditor'
-
 interface Props {
   epicId: string
   features: Feature[]
@@ -17,9 +16,14 @@ interface Props {
   projectId: string
   hoursPerDay: number
   epicColour?: EpicColour
+  allFeatures?: Array<{ id: string; name: string; epicName: string }>
+  featureDeps?: Array<{ featureId: string; dependsOnId: string }>
+  onAddFeatureDep?: (featureId: string, dependsOnId: string) => void
+  onRemoveFeatureDep?: (featureId: string, dependsOnId: string) => void
+  featureDepError?: string | null
 }
 
-function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, onToggleFeatureMode, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay, epicColour }: {
+function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, onToggleFeatureMode, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay, epicColour, allFeatures, featureDeps, onAddFeatureDep, onRemoveFeatureDep, featureDepError }: {
   feature: Feature
   isEditing: boolean
   expanded: boolean
@@ -36,10 +40,16 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
   projectId: string
   hoursPerDay: number
   epicColour?: EpicColour
+  allFeatures?: Array<{ id: string; name: string; epicName: string }>
+  featureDeps?: Array<{ featureId: string; dependsOnId: string }>
+  onAddFeatureDep?: (featureId: string, dependsOnId: string) => void
+  onRemoveFeatureDep?: (featureId: string, dependsOnId: string) => void
+  featureDepError?: string | null
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'feature-' + feature.id })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : undefined }
   const totalHours = feature.userStories.reduce((s, st) => s + st.tasks.reduce((a, t) => a + t.hoursEffort, 0), 0)
+  const [featureDepPickerOpen, setFeatureDepPickerOpen] = useState(false)
 
   return (
     <div ref={setNodeRef} style={style} {...attributes}>
@@ -90,11 +100,56 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
       {expanded && (
         <StoryList featureId={feature.id} stories={feature.userStories} resourceTypes={resourceTypes} projectId={projectId} hoursPerDay={hoursPerDay} epicColour={epicColour} />
       )}
+      {/* Feature dependency row */}
+      {(featureDeps !== undefined || onAddFeatureDep) && (
+        <div className="flex flex-wrap items-center gap-1 mt-0.5 ml-6" onClick={e => e.stopPropagation()}>
+          {(featureDeps ?? [])
+            .filter(d => d.featureId === feature.id)
+            .map(d => {
+              const depFeature = (allFeatures ?? []).find(f => f.id === d.dependsOnId)
+              const depLabel = depFeature ? `${depFeature.epicName} / ${depFeature.name}` : d.dependsOnId
+              return (
+                <span key={d.dependsOnId} className="inline-flex items-center gap-0.5 text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded">
+                  → {depLabel}
+                  <button onClick={() => onRemoveFeatureDep?.(feature.id, d.dependsOnId)} className="ml-0.5 text-blue-400 hover:text-red-500">×</button>
+                </span>
+              )
+            })}
+          {onAddFeatureDep && (
+            <div className="relative">
+              <button
+                onClick={() => setFeatureDepPickerOpen(v => !v)}
+                className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 border border-dashed border-gray-300 dark:border-gray-600 px-1.5 py-0.5 rounded"
+                title="Add feature dependency"
+              >＋ dep</button>
+              {featureDepPickerOpen && (
+                <div className="absolute top-full left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[200px]">
+                  {(allFeatures ?? [])
+                    .filter(f => f.id !== feature.id && !(featureDeps ?? []).some(d => d.featureId === feature.id && d.dependsOnId === f.id))
+                    .map(f => (
+                      <button
+                        key={f.id}
+                        className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                        onClick={() => { onAddFeatureDep(feature.id, f.id); setFeatureDepPickerOpen(false) }}
+                      >
+                        <span className="text-gray-400 dark:text-gray-500">{f.epicName} / </span>{f.name}
+                      </button>
+                    ))}
+                  {(allFeatures ?? []).filter(f => f.id !== feature.id && !(featureDeps ?? []).some(d => d.featureId === feature.id && d.dependsOnId === f.id)).length === 0 && (
+                    <span className="text-xs px-3 py-1.5 text-gray-400 block">No features available</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {featureDepError && <span className="text-xs text-red-500">{featureDepError}</span>}
+        </div>
+      )}
     </div>
   )
 }
 
-export default function FeatureList({ epicId, features, resourceTypes, projectId, hoursPerDay, epicColour }: Props) {
+export default function FeatureList({ epicId, features, resourceTypes, projectId, hoursPerDay, epicColour, allFeatures, featureDeps, onAddFeatureDep, onRemoveFeatureDep, featureDepError }: Props) {
   const qc = useQueryClient()
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
@@ -166,6 +221,11 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
             projectId={projectId}
             hoursPerDay={hoursPerDay}
             epicColour={epicColour}
+            allFeatures={allFeatures}
+            featureDeps={featureDeps}
+            onAddFeatureDep={onAddFeatureDep}
+            onRemoveFeatureDep={onRemoveFeatureDep}
+            featureDepError={featureDepError}
           />
         ))}
       </SortableContext>
