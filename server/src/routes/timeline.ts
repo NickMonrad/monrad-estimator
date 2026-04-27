@@ -117,6 +117,7 @@ function buildResponse(
   }> = [],
   featureDeps: Array<{ featureId: string; dependsOnId: string }> = [],
   storyDeps: Array<{ storyId: string; dependsOnId: string }> = [],
+  epicDeps: Array<{ epicId: string; dependsOnId: string }> = [],
   resourceTypes: ResourceTypeWithNamed[] = [],
   simulatedDemand?: Map<string, number>,  // key: `${rtName}|${week}` → days consumed
 ) {
@@ -273,6 +274,7 @@ function buildResponse(
     storyEntries,
     featureDependencies: featureDeps,
     storyDependencies: storyDeps,
+    epicDependencies: epicDeps,
     weeklyDemand,
     weeklyCapacity,
     namedResources: namedResourcesList,
@@ -437,6 +439,10 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     where: { featureId: { in: allFeatureIds } },
     select: { featureId: true, dependsOnId: true },
   })
+  const epicDependencies = await prisma.epicDependency.findMany({
+    where: { epic: { projectId: project.id } },
+    select: { epicId: true, dependsOnId: true },
+  })
   const activeFeatureIdSet = new Set(allFeatureIds)
   const activeStoryTimelineEntries = storyTimelineEntries.filter(e => activeFeatureIdSet.has(e.story.featureId))
   const allStoryIds = activeStoryTimelineEntries.map(e => e.storyId)
@@ -456,7 +462,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const simulatedDemand = project.weeklyDemandCache
     ? new Map<string, number>(Object.entries(project.weeklyDemandCache as Record<string, number>))
     : undefined
-  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes, simulatedDemand))
+  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDependencies, resourceTypes, simulatedDemand))
 }))
 
 // POST /api/projects/:projectId/timeline/schedule
@@ -558,6 +564,12 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
   })
   const manualStoryWeeks = new Map(existingStoryEntries.map(e => [e.storyId, e.startWeek]))
 
+  // Load epic dependencies for hard constraint edges in the topological sort
+  const epicDeps = await prisma.epicDependency.findMany({
+    where: { epic: { projectId: project.id } },
+    select: { epicId: true, dependsOnId: true },
+  })
+
   // Kahn's topological sort over features
   const inDegree = new Map<string, number>()
   const adjList = new Map<string, string[]>()   // from → [to, ...]
@@ -632,6 +644,19 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
   for (const f of allFeatures) {
     for (const dep of (f.dependencies ?? [])) {
       addEdge(dep.dependsOnId, dep.featureId)
+    }
+  }
+
+  // 4. Epic dependency hard constraints
+  //    All features of dependsOn epic → all features of dependent epic
+  for (const epicDep of epicDeps) {
+    const fromEpic = epics.find(e => e.id === epicDep.dependsOnId)
+    const toEpic = epics.find(e => e.id === epicDep.epicId)
+    if (!fromEpic || !toEpic) continue
+    for (const fromFeature of fromEpic.features) {
+      for (const toFeature of toEpic.features) {
+        addEdge(fromFeature.id, toFeature.id)
+      }
     }
   }
 
@@ -1055,6 +1080,10 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     where: { featureId: { in: allFeatureIds } },
     select: { featureId: true, dependsOnId: true },
   })
+  const epicDependenciesForResponse = await prisma.epicDependency.findMany({
+    where: { epic: { projectId: project.id } },
+    select: { epicId: true, dependsOnId: true },
+  })
   const allStoryIds = storyTimelineEntries.map(e => e.storyId)
   const storyDependencies = await prisma.storyDependency.findMany({
     where: { storyId: { in: allStoryIds } },
@@ -1076,7 +1105,7 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     data: { weeklyDemandCache: Object.fromEntries(weeklyConsumptionMap) },
   })
 
-  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, resourceTypes, weeklyConsumptionMap))
+  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDependenciesForResponse, resourceTypes, weeklyConsumptionMap))
 }))
 
 // PUT /api/projects/:projectId/timeline/stories/:storyId — manual story timeline override
