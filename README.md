@@ -217,6 +217,8 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Timeline & Resource Profile enhancements — person-first model, over-allocation indicators, custom feature colours, onboarding/buffer zones, PNG/CSV export, allocation mode-aware named resources | #164 |
 | Doc Generator v2 — Puppeteer server-side PDF, TipTap rich text editor (all description/assumptions fields), Overview section in scope doc, timezone-aware timestamps on document label and filename | #166 |
 | Doc Generator v2 (continued) — redesigned Documents page (generation panel + document grid), Gantt chart section (server-side SVG), sections metadata on document cards, project name in label/filename, HTML preserved in CSV export for round-trip fidelity | #166 |
+| Quick wins — dark mode description contrast, project settings tax/onboarding fields, backlog feature mode (sequential/parallel) badges, scope toggle pill redesign, CSV import row colouring, unrated resource warning improvements; Gantt PDF sanitize-html fix + landscape page; pin axios to 1.14.0 (supply chain safety) | #220 |
+| Backlog dependency tracking — EpicDependency schema + API (circular dep detection), epic dep hard constraints in timeline scheduler, epic dep arrows on Timeline Gantt, dep selector UI on backlog epic/feature rows, EpicDependsOn/FeatureDependsOn columns in CSV import/export | #228 |
 
 ---
 
@@ -230,7 +232,6 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 ### 🔧 Near-term enhancements
 | # | Title |
 |---|---|
-| [#150](https://github.com/NickMonrad/monrad-estimator/issues/150) | Resource Profile: warn when project resources have no rates applied |
 | [#108](https://github.com/NickMonrad/monrad-estimator/issues/108) | docs: comprehensive functional specification (`docs/FUNCTIONAL_SPEC.md`) |
 | [#109](https://github.com/NickMonrad/monrad-estimator/issues/109) | Global Customer entity (name, description, account code, CRM link) + link to projects |
 | [#57](https://github.com/NickMonrad/monrad-estimator/issues/57) | Template tasks: assumptions + description fields |
