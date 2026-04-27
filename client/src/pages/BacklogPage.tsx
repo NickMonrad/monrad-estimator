@@ -493,7 +493,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   const [epicDepPickerOpen, setEpicDepPickerOpen] = useState(false)
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes} className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden border-l-4 ${epicColour.border}`}>
+    <div ref={setNodeRef} style={style} {...attributes} className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 border-l-4 ${epicColour.border}`}>
       {isEditing ? (
         <div className="p-3">
           <EpicForm
