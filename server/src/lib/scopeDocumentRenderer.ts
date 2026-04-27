@@ -218,8 +218,10 @@ function renderGanttSvg(td: TimelineData): string {
   // Left column separator line (drawn last so it sits on top)
   parts.push(`<line x1="${LABEL_W}" y1="0" x2="${LABEL_W}" y2="${svgH}" stroke="#d1d5db" stroke-width="1"/>`)
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">${parts.join('')}</svg>`
-  return `<div style="overflow-x:auto; margin: 0 0 16px 0">${svg}</div>`
+  // width="100%" + viewBox lets the SVG scale down to fit the A4 page width
+  // while preserving aspect ratio — prevents truncation on wide timelines
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="100%" style="display:block; max-width:${svgW}px">${parts.join('')}</svg>`
+  return `<div style="margin: 0 0 16px 0">${svg}</div>`
 }
 
 const CSS = `
@@ -278,6 +280,15 @@ tr.overhead-row td { color: #666; }
 .assumption-text { font-size: 8pt; color: #666; line-height: 1.5; }
 .assumption-text p { margin-bottom: 3px; }
 .assumption-text ul { padding-left: 1.2em; }
+@page gantt-page {
+  size: A4 landscape;
+  margin: 40px 48px;
+}
+.gantt-page-section {
+  page: gantt-page;
+  page-break-before: always;
+  padding-top: 4px;
+}
 @media print {
   body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .page-section { page-break-before: always; }
@@ -504,7 +515,7 @@ export function renderScopeDocumentHtml(props: ScopeDocumentProps): string {
       ? ` starting ${formatDate(td.startDate)}`
       : ''
     ganttHtml = `
-  <div class="page-section">
+  <div class="gantt-page-section">
     <div class="section-heading">Project Timeline</div>
     <p style="font-size:12px;color:#6b7280;margin-bottom:12px;">
       Gantt chart showing feature scheduling across ${totalWeeks} weeks${startDateLabel}.

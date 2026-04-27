@@ -18,6 +18,7 @@ export default function CommercialTab({
   updateAllocationMutation, updateNrAllocationMutation,
   handleDiscountSubmit, handleApplyRateCard, startEditAllocation, getAllocationBadge,
   weekToDate, fmtDate, formatNumber, saveBufferOnboarding,
+  filteredResourceRows,
 }: Props) {
   return (
     <>
@@ -70,6 +71,33 @@ export default function CommercialTab({
         <button onClick={saveBufferOnboarding} className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue">Save</button>
       </div>
     </div>
+
+    {/* ── Unrated resources warning ── */}
+    {(() => {
+      const unratedResources = filteredResourceRows.filter(r => r.dayRate == null)
+      const unratedOverhead = (profile?.overheadRows ?? []).filter(r => r.dayRate == null && r.computedDays > 0)
+      const unratedOverheadNames = unratedOverhead
+        .map(r => r.resourceTypeName ?? r.name)
+        .filter(name => !unratedResources.some(r => r.name === name))
+      const allUnratedNames = [
+        ...unratedResources.map(r => r.name),
+        ...unratedOverheadNames,
+      ]
+      if (allUnratedNames.length === 0) return null
+      return (
+        <div className="mb-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 flex items-start gap-2">
+          <span className="text-yellow-500 mt-0.5">⚠️</span>
+          <div>
+            <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
+              {allUnratedNames.length} resource type{allUnratedNames.length !== 1 ? 's' : ''} have no rate applied and are excluded from cost calculations.
+            </p>
+            <p className="text-xs text-yellow-700 dark:text-yellow-400 mt-0.5">
+              Missing rates: {allUnratedNames.join(', ')}
+            </p>
+          </div>
+        </div>
+      )
+    })()}
 
     {/* ── Cost Summary Table ── */}
     <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">

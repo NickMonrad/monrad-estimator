@@ -17,6 +17,7 @@ const CSV_HEADERS = [
   'HoursEffort', 'DurationDays',
   'Description', 'Assumptions',
   'EpicStatus', 'FeatureStatus', 'StoryStatus',
+  'EpicMode', 'FeatureMode',
 ]
 
 interface CsvRow {
@@ -28,6 +29,8 @@ interface CsvRow {
   EpicStatus: string
   FeatureStatus: string
   StoryStatus: string
+  EpicMode: string
+  FeatureMode: string
   Template: string
   ResourceType: string
   // legacy fields — kept for backwards compat (old CSVs may still have these)
@@ -52,6 +55,8 @@ export interface StagedRow {
   epicStatus: boolean
   featureStatus: boolean
   storyStatus: boolean
+  epicMode: string
+  featureMode: string
   template: string
   resourceType: string
   // legacy fields kept for backwards compat
@@ -66,6 +71,7 @@ export interface StagedRow {
   assumptions: string
   errors: string[]
   warnings: string[]
+  status?: 'new' | 'existing' | 'error'
 }
 
 async function ownedProject(projectId: string, userId: string) {
@@ -117,7 +123,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
 
   if (epics.length === 0) {
     // blank template with one example row
-    rows.push(['Task', 'My Epic', 'My Feature', 'My Story', 'My Task', '', 'Developer', '', '', '', '', '', '', ''])
+    rows.push(['Task', 'My Epic', 'My Feature', 'My Story', 'My Task', '', 'Developer', '', '', '', '', '', '', '', '', ''])
   } else {
     for (const epic of epics) {
       // Epic row
@@ -126,6 +132,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
         '', '', '', '',
         sanitizeCsvCell(epic.description ?? ''), sanitizeCsvCell(epic.assumptions ?? ''),
         epic.isActive ? 'active' : 'inactive', '', '',
+        epic.featureMode ?? 'sequential', '',
       ])
 
       for (const feature of epic.features) {
@@ -135,6 +142,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
           '', '', '', '',
           sanitizeCsvCell(feature.description ?? ''), sanitizeCsvCell(feature.assumptions ?? ''),
           '', feature.isActive ? 'active' : 'inactive', '',
+          '', feature.featureMode ?? 'sequential',
         ])
 
         for (const story of feature.userStories) {
@@ -145,6 +153,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
             '', '', '',
             sanitizeCsvCell(story.description ?? ''), sanitizeCsvCell(story.assumptions ?? ''),
             '', '', story.isActive ? 'active' : 'inactive',
+            '', '',
           ])
 
           // Task rows
@@ -158,6 +167,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
               sanitizeCsvCell(task.description ?? ''),
               sanitizeCsvCell(task.assumptions ?? ''),
               '', '', '',
+              '', '',
             ])
           }
         }
@@ -224,6 +234,10 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     const epicStatus = parseStatus(raw.EpicStatus)
     const featureStatus = parseStatus(raw.FeatureStatus)
     const storyStatus = parseStatus(raw.StoryStatus)
+    const rawEpicMode = raw.EpicMode?.trim().toLowerCase() || 'sequential'
+    const epicMode = (rawEpicMode === 'sequential' || rawEpicMode === 'parallel') ? rawEpicMode : 'sequential'
+    const rawFeatureMode = raw.FeatureMode?.trim().toLowerCase() || 'sequential'
+    const featureMode = (rawFeatureMode === 'sequential' || rawFeatureMode === 'parallel') ? rawFeatureMode : 'sequential'
     const template = raw.Template?.trim() ?? ''
 
     const resourceType = raw.ResourceType?.trim() ?? ''
@@ -274,6 +288,8 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       epicStatus,
       featureStatus,
       storyStatus,
+      epicMode,
+      featureMode,
       template,
       resourceType,
       hoursExtraSmall: parseNum(raw.HoursExtraSmall),
@@ -293,7 +309,34 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
   const errorCount = staged.filter(r => r.errors.length > 0).length
   const warningCount = staged.filter(r => r.warnings.length > 0).length
 
-  res.json({ staged, summary: { total: staged.length, errorCount, warningCount } })
+  // Fetch existing epics/features/stories to determine new vs existing status
+  const existingEpics = await prisma.epic.findMany({
+    where: { projectId: req.params.projectId as string },
+    include: {
+      features: {
+        include: { userStories: { select: { name: true } } },
+      }
+    },
+  })
+  const existingKeys = new Set<string>()
+  for (const ep of existingEpics) {
+    existingKeys.add(ep.name.toLowerCase())
+    for (const ft of ep.features) {
+      existingKeys.add(`${ep.name}|||${ft.name}`.toLowerCase())
+      for (const st of ft.userStories) {
+        existingKeys.add(`${ep.name}|||${ft.name}|||${st.name}`.toLowerCase())
+      }
+    }
+  }
+
+  // Annotate each staged row with status
+  const annotatedStaged = staged.map(row => {
+    if (row.errors.length > 0) return { ...row, status: 'error' as const }
+    const key = [row.epic, row.feature, row.story].filter(Boolean).join('|||').toLowerCase()
+    return { ...row, status: existingKeys.has(key) ? 'existing' as const : 'new' as const }
+  })
+
+  res.json({ staged: annotatedStaged, summary: { total: staged.length, errorCount, warningCount } })
 }))
 
 // POST /api/projects/:projectId/backlog/import-csv
@@ -387,6 +430,7 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
               projectId,
               order: epicOrder++,
               isActive: row.type === 'Epic' ? row.epicStatus : true,
+              featureMode: row.type === 'Epic' ? (row.epicMode ?? 'sequential') : 'sequential',
               description: row.type === 'Epic' ? (row.description || null) : null,
               assumptions: row.type === 'Epic' ? (row.assumptions || null) : null,
             },
@@ -398,6 +442,7 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
             where: { id: epic.id },
             data: {
               isActive: row.epicStatus,
+              featureMode: row.epicMode ?? 'sequential',
               ...(row.type === 'Epic' ? {
                 description: row.description || null,
                 assumptions: row.assumptions || null,
@@ -424,6 +469,7 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
               epicId,
               order: featCount,
               isActive: row.type === 'Feature' ? row.featureStatus : true,
+              featureMode: row.type === 'Feature' ? (row.featureMode ?? 'sequential') : 'sequential',
               description: row.type === 'Feature' ? (row.description || null) : null,
               assumptions: row.type === 'Feature' ? (row.assumptions || null) : null,
             },
@@ -434,6 +480,7 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
             where: { id: feature.id },
             data: {
               isActive: row.featureStatus,
+              featureMode: row.featureMode ?? 'sequential',
               ...(row.type === 'Feature' ? {
                 description: row.description || null,
                 assumptions: row.assumptions || null,

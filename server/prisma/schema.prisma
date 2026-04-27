@@ -171,6 +171,7 @@ model Feature {
   description    String?
   assumptions    String?
   order          Int                  @default(0)
+  featureMode      String               @default("sequential")
   isActive         Boolean              @default(true)
   timelineColour   String?
   epic             Epic                 @relation(fields: [epicId], references: [id], onDelete: Cascade)

@@ -19,7 +19,7 @@ interface Props {
   epicColour?: EpicColour
 }
 
-function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay, epicColour }: {
+function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, onToggleFeatureMode, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay, epicColour }: {
   feature: Feature
   isEditing: boolean
   expanded: boolean
@@ -29,6 +29,7 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
   onSave: (data: { name: string; description: string; assumptions: string }) => void
   onDelete: () => void
   onToggleActive: () => void
+  onToggleFeatureMode: () => void
   isSaving: boolean
   onApplyTemplate: () => void
   resourceTypes: ResourceType[]
@@ -57,13 +58,30 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
           <span className="text-blue-500 dark:text-blue-400 text-xs select-none">{expanded ? '▼' : '▶'}</span>
           <span className="text-xs text-blue-500 dark:text-blue-300 bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded">Feature</span>
           <span className={`text-sm flex-1 truncate ${feature.isActive === false ? 'line-through text-gray-400 dark:text-gray-500' : 'text-gray-800 dark:text-gray-200'}`}>{feature.name}</span>
+          <button
+            onClick={e => { e.stopPropagation(); onToggleFeatureMode() }}
+            title={`Story mode: ${feature.featureMode ?? 'sequential'} — click to toggle`}
+            className={feature.featureMode === 'parallel'
+              ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-xs px-2 py-0.5 rounded cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/50'
+              : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-xs px-2 py-0.5 rounded cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600'}
+          >
+            {feature.featureMode === 'parallel' ? 'parallel' : 'sequential'}
+          </button>
           <span className="text-xs text-gray-400 dark:text-gray-500">{feature.userStories.length} stor{feature.userStories.length !== 1 ? 'ies' : 'y'} · {totalHours.toFixed(2)}h · {(totalHours / hoursPerDay).toFixed(1)}d</span>
           <button onClick={e => { e.stopPropagation(); onApplyTemplate() }}
             className="text-xs text-purple-500 hover:text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2 py-0.5 rounded transition-colors">
             + Template
           </button>
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-            <button onClick={onToggleActive} title={feature.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${feature.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600'}`}>{feature.isActive === false ? '○' : '●'}</button>
+            <button
+              onClick={onToggleActive}
+              title={feature.isActive === false ? 'Mark in scope' : 'Mark out of scope'}
+              className={feature.isActive === false
+                ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-600 text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 line-through'
+                : 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800 text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/50'}
+            >
+              {feature.isActive === false ? 'Out of scope' : 'In scope'}
+            </button>
             <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
@@ -105,6 +123,12 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
     onSuccess: invalidate,
   })
 
+  const toggleFeatureMode = useMutation({
+    mutationFn: ({ id, featureMode }: { id: string; featureMode: string }) =>
+      api.put(`/epics/${epicId}/features/${id}`, { featureMode }),
+    onSuccess: invalidate,
+  })
+
   const deleteFeature = useMutation({
     mutationFn: (id: string) => api.delete(`/epics/${epicId}/features/${id}`),
     onSuccess: invalidate,
@@ -135,6 +159,7 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
             onSave={(data) => updateFeature.mutate({ id: feature.id, data })}
             onDelete={() => deleteFeature.mutate(feature.id)}
             onToggleActive={() => toggleFeatureActive.mutate({ id: feature.id, isActive: feature.isActive !== false ? false : true })}
+            onToggleFeatureMode={() => toggleFeatureMode.mutate({ id: feature.id, featureMode: feature.featureMode === 'parallel' ? 'sequential' : 'parallel' })}
             isSaving={updateFeature.isPending}
             onApplyTemplate={() => setApplyTemplateFeatureId(feature.id)}
             resourceTypes={resourceTypes}

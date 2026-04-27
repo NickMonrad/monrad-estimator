@@ -58,6 +58,7 @@ export interface Feature {
   order: number
   epicId: string
   isActive?: boolean
+  featureMode?: string
   userStories: UserStory[]
 }
 
@@ -69,6 +70,7 @@ export interface Epic {
   order: number
   projectId: string
   isActive?: boolean
+  featureMode?: string
   features: Feature[]
 }
 

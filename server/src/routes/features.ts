@@ -41,10 +41,11 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const epic = await ownedEpic(req.params.epicId as string, req.userId!)
   if (!epic) { res.status(404).json({ error: 'Epic not found' }); return }
-  const { name, description, assumptions, order, isActive, timelineColour } = req.body
+  const { name, description, assumptions, order, isActive, timelineColour, featureMode } = req.body
   const data: Record<string, unknown> = { name, description, assumptions, order }
   if (isActive !== undefined) data.isActive = isActive
   if (timelineColour !== undefined) data.timelineColour = timelineColour
+  if (featureMode !== undefined) data.featureMode = featureMode
   const feature = await prisma.feature.update({
     where: { id: req.params.id as string, epicId: req.params.epicId as string },
     data,

@@ -396,10 +396,12 @@ test.describe('CSV redesign — Type column and status fields', () => {
     // Type must be the first column
     expect(headerCols[0]).toBe('Type')
 
-    // EpicStatus, FeatureStatus, StoryStatus must be the last 3 columns
-    expect(headerCols[headerCols.length - 3]).toBe('EpicStatus')
-    expect(headerCols[headerCols.length - 2]).toBe('FeatureStatus')
-    expect(headerCols[headerCols.length - 1]).toBe('StoryStatus')
+    // Status and mode columns must be present
+    expect(headerCols).toContain('EpicStatus')
+    expect(headerCols).toContain('FeatureStatus')
+    expect(headerCols).toContain('StoryStatus')
+    expect(headerCols).toContain('EpicMode')
+    expect(headerCols).toContain('FeatureMode')
 
     // All 4 row types must be present
     const typeIdx = headerCols.indexOf('Type')

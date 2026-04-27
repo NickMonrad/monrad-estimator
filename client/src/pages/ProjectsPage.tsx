@@ -296,7 +296,7 @@ export default function ProjectsPage() {
                 </div>
                 {project.org && <span className="text-xs bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 mb-1 inline-block">{project.org.name}</span>}
                 {project.customer && <p className="text-xs text-gray-500 mb-1">Customer: {project.customer.name}</p>}
-                {project.description && <p className="text-sm text-gray-600 mb-3 line-clamp-2">{stripHtml(project.description)}</p>}
+                {project.description && <p className="text-sm text-gray-600 dark:text-gray-300 mb-3 line-clamp-2">{stripHtml(project.description)}</p>}
                 <div className="flex items-center justify-between text-xs text-gray-400 mt-2">
                   <span>{project._count.epics} epic{project._count.epics !== 1 ? 's' : ''}</span>
                   <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
