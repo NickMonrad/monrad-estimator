@@ -501,3 +501,62 @@ test.describe('CSV redesign — Type column and status fields', () => {
   // is already covered by the existing test in the 'Backlog' describe block above:
   //   "durationDays is auto-calculated from hoursEffort on CSV import"
 })
+
+// ─── Dependencies (PR #228 / issue #226) ────────────────────────────────────
+test.describe('Dependencies', () => {
+  test('CSV export includes EpicDependsOn and FeatureDependsOn columns', async ({ page }) => {
+    const PROJ = `E2E Dep CSV Export ${Date.now()}`
+    await login(page)
+    await createProject(page, PROJ)
+    await page.getByRole('heading', { name: PROJ, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor()
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    // Seed one epic + feature via CSV import so the export has real hierarchy rows
+    const csv = [
+      'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus,EpicMode,FeatureMode,EpicDependsOn,FeatureDependsOn',
+      'Epic,E2E DepEpic,,,,,,,,,,active,,,sequential,,, ',
+      'Feature,E2E DepEpic,E2E DepFeature,,,,,,,,,,,,,sequential,,',
+    ].join('\n')
+    const tmpFile = path.join(os.tmpdir(), `csv-dep-export-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, csv)
+
+    await page.getByRole('button', { name: /import csv/i }).click()
+    const fileInput = page.locator('input[type="file"]')
+    await fileInput.setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('E2E DepEpic')).toBeVisible({ timeout: 10_000 })
+
+    // Export and verify that both new dependency columns are present in the header
+    const downloadPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name: /export csv/i }).click()
+    const download = await downloadPromise
+    const exportPath = await download.path()
+    const content = fs.readFileSync(exportPath!, 'utf-8')
+    const headerCols = content.trim().split(/\r?\n/)[0].split(',').map(c => c.trim())
+
+    expect(headerCols).toContain('EpicDependsOn')
+    expect(headerCols).toContain('FeatureDependsOn')
+  })
+
+  test('epic rows on backlog page show Add dep button', async ({ page }) => {
+    const PROJ = `E2E Dep UI ${Date.now()}`
+    await login(page)
+    await createProject(page, PROJ)
+    await page.getByRole('heading', { name: PROJ, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor()
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    // Add an epic so the epic row is rendered
+    await page.getByRole('button', { name: /add epic/i }).click()
+    await page.getByPlaceholder(/epic name/i).fill('E2E Dep UI Epic')
+    await page.getByRole('button', { name: /save epic/i }).click()
+    await expect(page.getByText('E2E Dep UI Epic')).toBeVisible({ timeout: 8_000 })
+
+    // The "＋ dep" button (title="Add epic dependency") must be visible on the epic row
+    await expect(page.getByTitle('Add epic dependency').first()).toBeVisible({ timeout: 8_000 })
+  })
+})
