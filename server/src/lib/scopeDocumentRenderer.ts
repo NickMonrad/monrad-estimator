@@ -280,6 +280,15 @@ tr.overhead-row td { color: #666; }
 .assumption-text { font-size: 8pt; color: #666; line-height: 1.5; }
 .assumption-text p { margin-bottom: 3px; }
 .assumption-text ul { padding-left: 1.2em; }
+@page gantt-page {
+  size: A4 landscape;
+  margin: 40px 48px;
+}
+.gantt-page-section {
+  page: gantt-page;
+  page-break-before: always;
+  padding-top: 4px;
+}
 @media print {
   body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .page-section { page-break-before: always; }
@@ -506,7 +515,7 @@ export function renderScopeDocumentHtml(props: ScopeDocumentProps): string {
       ? ` starting ${formatDate(td.startDate)}`
       : ''
     ganttHtml = `
-  <div class="page-section">
+  <div class="gantt-page-section">
     <div class="section-heading">Project Timeline</div>
     <p style="font-size:12px;color:#6b7280;margin-bottom:12px;">
       Gantt chart showing feature scheduling across ${totalWeeks} weeks${startDateLabel}.

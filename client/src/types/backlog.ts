@@ -58,6 +58,7 @@ export interface Feature {
   order: number
   epicId: string
   isActive?: boolean
+  featureMode?: string
   userStories: UserStory[]
 }
 

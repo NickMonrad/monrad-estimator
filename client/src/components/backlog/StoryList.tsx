@@ -68,7 +68,15 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
             </button>
           )}
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-            <button onClick={onToggleActive} title={story.isActive === false ? 'Mark in scope' : 'Mark out of scope'} className={`text-xs px-1 ${story.isActive === false ? 'text-gray-300 hover:text-gray-500' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600'}`}>{story.isActive === false ? '○' : '●'}</button>
+            <button
+              onClick={onToggleActive}
+              title={story.isActive === false ? 'Mark in scope' : 'Mark out of scope'}
+              className={story.isActive === false
+                ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-600 text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 line-through'
+                : 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800 text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/50'}
+            >
+              {story.isActive === false ? 'Out of scope' : 'In scope'}
+            </button>
             <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
