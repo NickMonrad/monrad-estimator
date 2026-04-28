@@ -65,7 +65,7 @@ export interface StagedRow {
   epicDependsOn: string[]   // array of epic names
   featureDependsOn: string[]  // array of feature names
   template: string
-  templateSize: string   // 'Small' | 'Medium' | 'Large' | 'XL' | ''
+  templateSize: string   // 'XS' | 'Small' | 'Medium' | 'Large' | 'XL' | ''
   resourceType: string
   // legacy fields kept for backwards compat
   hoursExtraSmall: number
@@ -97,10 +97,11 @@ function parseStatus(val: string | undefined): boolean {
 
 /** Pick hours from a TemplateTask based on the sizing tier string */
 function pickHours(
-  task: { hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number },
+  task: { hoursExtraSmall: number; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number },
   size: string,
 ): number {
   switch (size.toLowerCase()) {
+    case 'xs':     return task.hoursExtraSmall ?? 0
     case 'small':  return task.hoursSmall ?? 0
     case 'medium': return task.hoursMedium ?? 0
     case 'large':  return task.hoursLarge ?? 0
@@ -326,9 +327,9 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     }
 
     // TemplateSize validation — only meaningful on Story rows
-    const validSizes = new Set(['small', 'medium', 'large', 'xl'])
+    const validSizes = new Set(['xs', 'small', 'medium', 'large', 'xl'])
     if (type === 'Story' && templateSize && !validSizes.has(templateSize.toLowerCase())) {
-      warnings.push(`TemplateSize "${templateSize}" is not valid — use Small, Medium, Large, or XL`)
+      warnings.push(`TemplateSize "${templateSize}" is not valid — use XS, Small, Medium, Large, or XL`)
     }
     if (type !== 'Story' && templateSize) {
       warnings.push(`TemplateSize column is only applied on Story rows — will be ignored for this ${type} row`)
