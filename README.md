@@ -243,6 +243,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
 | [#19](https://github.com/NickMonrad/monrad-estimator/issues/19) | Apply template button — improve discoverability |
 | [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST configurable rate per project via Project Settings (ex-GST/inc-GST totals already ship in Resource Profile; rate UI missing) |
+| [#229](https://github.com/NickMonrad/monrad-estimator/issues/229) | CSV import: auto-expand template tasks and backfill estimates from template sizing (requires new TemplateSize column) |
 
 ### 🚀 Feature ideas
 | # | Title |
