@@ -3,9 +3,10 @@ import type {
   StoryTimelineEntry,
   FeatureDependency,
   StoryDependency,
+  EpicDependency,
   GanttDraggingState,
 } from '../../hooks/useGanttLayout'
-import { COL_W, FEAT_ROW_H, STORY_ROW_H, DEP_ARROW_COLOR } from '../../hooks/useGanttLayout'
+import { COL_W, FEAT_ROW_H, STORY_ROW_H, EPIC_ROW_H, DEP_ARROW_COLOR } from '../../hooks/useGanttLayout'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -22,8 +23,10 @@ function bezierArrow(x1: number, y1: number, x2: number, y2: number): string {
 interface GanttDependencyArrowsProps {
   featureDependencies: FeatureDependency[]
   storyDependencies: StoryDependency[]
+  epicDependencies: EpicDependency[]
   featureById: Map<string, TimelineEntry>
   storyById: Map<string, StoryTimelineEntry>
+  epicById: Map<string, { epicId: string; startWeek: number; durationWeeks: number }>
   rowY: Map<string, number>
   weekOffset: number
   dragging: GanttDraggingState | null
@@ -35,8 +38,10 @@ interface GanttDependencyArrowsProps {
 export default function GanttDependencyArrows({
   featureDependencies,
   storyDependencies,
+  epicDependencies,
   featureById,
   storyById,
+  epicById,
   rowY,
   weekOffset,
   dragging,
@@ -111,6 +116,34 @@ export default function GanttDependencyArrows({
             fill="none"
             markerEnd="url(#arrow)"
             opacity={0.7}
+          />
+        )
+      })}
+
+      {/* Epic dependency arrows */}
+      {epicDependencies.map(dep => {
+        const predEpic = epicById.get(dep.dependsOnId)
+        const succEpic = epicById.get(dep.epicId)
+        if (!predEpic || !succEpic) return null
+
+        const predY = rowY.get(`epic-${dep.dependsOnId}`)
+        const succY = rowY.get(`epic-${dep.epicId}`)
+        if (predY === undefined || succY === undefined) return null
+
+        const x1 = (predEpic.startWeek + weekOffset + predEpic.durationWeeks) * COL_W
+        const y1 = predY + EPIC_ROW_H / 2
+        const x2 = (succEpic.startWeek + weekOffset) * COL_W
+        const y2 = succY + EPIC_ROW_H / 2
+
+        return (
+          <path
+            key={`edep-${dep.dependsOnId}-${dep.epicId}`}
+            d={bezierArrow(x1, y1, x2, y2)}
+            stroke={DEP_ARROW_COLOR}
+            strokeWidth={2}
+            fill="none"
+            markerEnd="url(#arrow)"
+            opacity={0.8}
           />
         )
       })}

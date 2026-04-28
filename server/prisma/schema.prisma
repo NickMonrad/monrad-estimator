@@ -159,10 +159,22 @@ model Epic {
   project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   projectId         String
   features          Feature[]
+  epicDependencies  EpicDependency[]  @relation("EpicDeps")
+  epicDependents    EpicDependency[]  @relation("EpicDepsOn")
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   @@index([projectId, order])
+}
+
+model EpicDependency {
+  epic        Epic     @relation("EpicDeps", fields: [epicId], references: [id], onDelete: Cascade)
+  epicId      String
+  dependsOn   Epic     @relation("EpicDepsOn", fields: [dependsOnId], references: [id], onDelete: Cascade)
+  dependsOnId String
+  createdAt   DateTime @default(now())
+
+  @@id([epicId, dependsOnId])
 }
 
 model Feature {

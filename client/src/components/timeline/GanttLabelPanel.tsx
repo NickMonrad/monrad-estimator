@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { GanttRow } from '../../hooks/useGanttLayout'
 import { EPIC_ROW_H, FEAT_ROW_H, STORY_ROW_H, HEADER_H, LABEL_W } from '../../hooks/useGanttLayout'
 import { getEpicColour } from '../../lib/epicColours'
@@ -17,6 +18,9 @@ interface GanttLabelPanelProps {
   onMoveFeature?: (epicId: string, featureIdx: number, direction: 'up' | 'down') => void
   onUpdateEpicMode?: (epicId: string, featureMode: 'sequential' | 'parallel') => void
   onUpdateEpicScheduleMode?: (epicId: string, scheduleMode: 'sequential' | 'parallel') => void
+  epicDependencies?: Array<{ epicId: string; dependsOnId: string }>
+  onAddEpicDep?: (epicId: string, dependsOnId: string) => void
+  onRemoveEpicDep?: (epicId: string, dependsOnId: string) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -34,7 +38,15 @@ export default function GanttLabelPanel({
   onMoveFeature,
   onUpdateEpicMode,
   onUpdateEpicScheduleMode,
+  epicDependencies = [],
+  onAddEpicDep,
+  onRemoveEpicDep,
 }: GanttLabelPanelProps) {
+  // track which epic row has its dep-picker dropdown open
+  const [depPickerEpicId, setDepPickerEpicId] = useState<string | null>(null)
+
+  // derive the full list of epic rows for the dep dropdown
+  const allEpicRows = rows.filter((r): r is Extract<GanttRow, { type: 'epic' }> => r.type === 'epic')
   return (
     <div
       style={{ width: LABEL_W, flexShrink: 0 }}
@@ -140,6 +152,61 @@ export default function GanttLabelPanel({
                 >
                   {row.epicScheduleMode === 'parallel' ? '⬛' : '⏭'}
                 </button>
+              )}
+              {/* Epic dependency chips + picker */}
+              {onAddEpicDep && (
+                <div
+                  className="flex items-center gap-1 flex-shrink-0 relative"
+                  onClick={e => e.stopPropagation()}
+                >
+                  {/* existing dep chips */}
+                  {epicDependencies
+                    .filter(d => d.epicId === row.epicId)
+                    .map(d => {
+                      const depName = allEpicRows.find(r => r.epicId === d.dependsOnId)?.epicName ?? d.dependsOnId
+                      return (
+                        <span
+                          key={d.dependsOnId}
+                          className="inline-flex items-center gap-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 px-1 py-0.5 rounded"
+                          title={`Depends on: ${depName}`}
+                        >
+                          →{depName.slice(0, 6)}
+                          <button
+                            onClick={() => onRemoveEpicDep?.(row.epicId, d.dependsOnId)}
+                            className="ml-0.5 text-gray-400 hover:text-red-500 leading-none"
+                          >×</button>
+                        </span>
+                      )
+                    })}
+                  {/* add dep button */}
+                  <button
+                    onClick={() => setDepPickerEpicId(prev => prev === row.epicId ? null : row.epicId)}
+                    className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 px-1 leading-none"
+                    title="Add dependency"
+                  >＋</button>
+                  {/* dropdown picker */}
+                  {depPickerEpicId === row.epicId && (
+                    <div className="absolute top-full left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[140px]">
+                      {allEpicRows
+                        .filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId))
+                        .map(r => (
+                          <button
+                            key={r.epicId}
+                            className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                            onClick={() => {
+                              onAddEpicDep(row.epicId, r.epicId)
+                              setDepPickerEpicId(null)
+                            }}
+                          >
+                            {r.epicName}
+                          </button>
+                        ))}
+                      {allEpicRows.filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId)).length === 0 && (
+                        <span className="text-xs px-3 py-1.5 text-gray-400 block">No epics available</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )

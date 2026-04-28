@@ -23,6 +23,11 @@ export interface StoryDependency {
   dependsOnId: string
 }
 
+export interface EpicDependency {
+  epicId: string
+  dependsOnId: string
+}
+
 export type GanttRow =
   | {
       type: 'epic'

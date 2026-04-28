@@ -74,7 +74,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `backlog.spec.ts` — Backlog (11 tests)
+### `backlog.spec.ts` — Backlog (13 tests)
 
 #### `Backlog` describe block (8 tests)
 
@@ -96,6 +96,13 @@ API-level tests using the `request` fixture. No browser UI involved.
 | export includes Type column and status columns at end | Seeds data via old-format CSV import, then exports and verifies: `Type` is column 0; `EpicStatus`, `FeatureStatus`, `StoryStatus` are the last 3 columns; all 4 row types (Epic/Feature/Story/Task) are present; the Epic row has `active` in `EpicStatus` and empty `FeatureStatus`/`StoryStatus` |
 | import with status columns — inactive epic/feature visible after import | Imports a new-format CSV with `EpicStatus=inactive`, `FeatureStatus=inactive`, `StoryStatus=active`, and a plain Task row; asserts the backlog renders the imported epic (inactive items shown with strikethrough but still visible) |
 | staging warns when EpicStatus is set on a Task row (wrong type) | Uploads a CSV with a Task row that has `EpicStatus=inactive`; after automatic staging, verifies the yellow warning panel appears with text "Warnings (import will still proceed):" and the message "EpicStatus is only applied on Epic rows" |
+
+#### `Dependencies` describe block (2 tests — PR #228 / issue #226)
+
+| Test | Description |
+|------|-------------|
+| CSV export includes EpicDependsOn and FeatureDependsOn columns | Seeds a project with one epic + feature via CSV import, exports the backlog CSV, and asserts that both `EpicDependsOn` and `FeatureDependsOn` column headers are present in the exported file |
+| epic rows on backlog page show Add dep button | Creates a project, adds one epic via the UI, and asserts the `＋ dep` button (`title="Add epic dependency"`) is visible on the epic row — confirming the dependency UI is rendered on the Backlog page |
 
 ---
 

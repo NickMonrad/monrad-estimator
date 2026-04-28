@@ -18,6 +18,7 @@ const CSV_HEADERS = [
   'Description', 'Assumptions',
   'EpicStatus', 'FeatureStatus', 'StoryStatus',
   'EpicMode', 'FeatureMode',
+  'EpicDependsOn', 'FeatureDependsOn',
 ]
 
 interface CsvRow {
@@ -31,6 +32,8 @@ interface CsvRow {
   StoryStatus: string
   EpicMode: string
   FeatureMode: string
+  EpicDependsOn: string
+  FeatureDependsOn: string
   Template: string
   ResourceType: string
   // legacy fields — kept for backwards compat (old CSVs may still have these)
@@ -57,6 +60,8 @@ export interface StagedRow {
   storyStatus: boolean
   epicMode: string
   featureMode: string
+  epicDependsOn: string[]   // array of epic names
+  featureDependsOn: string[]  // array of feature names
   template: string
   resourceType: string
   // legacy fields kept for backwards compat
@@ -121,9 +126,32 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
 
   const rows: string[][] = [CSV_HEADERS]
 
+  // Build dependency lookup maps for export
+  const epicDepsRaw = await prisma.epicDependency.findMany({
+    where: { epic: { projectId: req.params.projectId as string } },
+    include: { dependsOn: { select: { name: true } } },
+  })
+  const epicDepNames = new Map<string, string[]>()
+  for (const d of epicDepsRaw) {
+    const arr = epicDepNames.get(d.epicId) ?? []
+    arr.push(d.dependsOn.name)
+    epicDepNames.set(d.epicId, arr)
+  }
+
+  const featureDepsRaw = await prisma.featureDependency.findMany({
+    where: { feature: { epic: { projectId: req.params.projectId as string } } },
+    include: { dependsOn: { select: { name: true } } },
+  })
+  const featureDepNames = new Map<string, string[]>()
+  for (const d of featureDepsRaw) {
+    const arr = featureDepNames.get(d.featureId) ?? []
+    arr.push(d.dependsOn.name)
+    featureDepNames.set(d.featureId, arr)
+  }
+
   if (epics.length === 0) {
     // blank template with one example row
-    rows.push(['Task', 'My Epic', 'My Feature', 'My Story', 'My Task', '', 'Developer', '', '', '', '', '', '', '', '', ''])
+    rows.push(['Task', 'My Epic', 'My Feature', 'My Story', 'My Task', '', 'Developer', '', '', '', '', '', '', '', '', '', '', ''])
   } else {
     for (const epic of epics) {
       // Epic row
@@ -133,6 +161,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
         sanitizeCsvCell(epic.description ?? ''), sanitizeCsvCell(epic.assumptions ?? ''),
         epic.isActive ? 'active' : 'inactive', '', '',
         epic.featureMode ?? 'sequential', '',
+        epicDepNames.get(epic.id)?.join(', ') ?? '', '',
       ])
 
       for (const feature of epic.features) {
@@ -143,6 +172,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
           sanitizeCsvCell(feature.description ?? ''), sanitizeCsvCell(feature.assumptions ?? ''),
           '', feature.isActive ? 'active' : 'inactive', '',
           '', feature.featureMode ?? 'sequential',
+          '', featureDepNames.get(feature.id)?.join(', ') ?? '',
         ])
 
         for (const story of feature.userStories) {
@@ -153,6 +183,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
             '', '', '',
             sanitizeCsvCell(story.description ?? ''), sanitizeCsvCell(story.assumptions ?? ''),
             '', '', story.isActive ? 'active' : 'inactive',
+            '', '',
             '', '',
           ])
 
@@ -167,6 +198,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
               sanitizeCsvCell(task.description ?? ''),
               sanitizeCsvCell(task.assumptions ?? ''),
               '', '', '',
+              '', '',
               '', '',
             ])
           }
@@ -240,6 +272,16 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     const featureMode = (rawFeatureMode === 'sequential' || rawFeatureMode === 'parallel') ? rawFeatureMode : 'sequential'
     const template = raw.Template?.trim() ?? ''
 
+    const epicDependsOn = (raw.EpicDependsOn ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+
+    const featureDependsOn = (raw.FeatureDependsOn ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+
     const resourceType = raw.ResourceType?.trim() ?? ''
 
     const errors: string[] = []
@@ -290,6 +332,8 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       storyStatus,
       epicMode,
       featureMode,
+      epicDependsOn,
+      featureDependsOn,
       template,
       resourceType,
       hoursExtraSmall: parseNum(raw.HoursExtraSmall),
@@ -305,6 +349,22 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       warnings,
     }
   })
+
+  // Cross-row dependency name validation (warnings only — import still proceeds)
+  const knownEpicNames = new Set(staged.filter(r => r.type === 'Epic').map(r => r.epic))
+  const knownFeatureNames = new Set(staged.filter(r => r.type === 'Feature').map(r => r.feature))
+  for (const row of staged) {
+    for (const depName of row.epicDependsOn) {
+      if (!knownEpicNames.has(depName)) {
+        row.warnings.push(`EpicDependsOn: '${depName}' not found in this import`)
+      }
+    }
+    for (const depName of row.featureDependsOn) {
+      if (!knownFeatureNames.has(depName)) {
+        row.warnings.push(`FeatureDependsOn: '${depName}' not found in this import`)
+      }
+    }
+  }
 
   const errorCount = staged.filter(r => r.errors.length > 0).length
   const warningCount = staged.filter(r => r.warnings.length > 0).length
@@ -579,6 +639,50 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           },
         })
         tasksUpdated++
+      }
+    }
+
+    // ── Epic dependencies ─────────────────────────────────────────────────────
+    // Build name→id map from what was just created/updated
+    const epicNameToId = new Map<string, string>()
+    for (const [epicKey, epicId] of epicMap.entries()) {
+      epicNameToId.set(epicKey, epicId)
+    }
+    for (const row of rows) {
+      if (row.type !== 'Epic' || !row.epicDependsOn?.length) continue
+      const epicId = epicNameToId.get(row.epic)
+      if (!epicId) continue
+      for (const depName of row.epicDependsOn) {
+        const depEpicId = epicNameToId.get(depName)
+        if (!depEpicId || depEpicId === epicId) continue
+        await tx.epicDependency.upsert({
+          where: { epicId_dependsOnId: { epicId, dependsOnId: depEpicId } },
+          create: { epicId, dependsOnId: depEpicId },
+          update: {},
+        })
+      }
+    }
+
+    // ── Feature dependencies ──────────────────────────────────────────────────
+    // Build name→id map from what was just created/updated
+    const featureNameToId = new Map<string, string>()
+    for (const [featureKey, featureId] of featureMap.entries()) {
+      // featureKey is "epicName||featureName" — extract just the feature name
+      const featureName = featureKey.split('||')[1]
+      if (featureName) featureNameToId.set(featureName, featureId)
+    }
+    for (const row of rows) {
+      if (row.type !== 'Feature' || !row.featureDependsOn?.length) continue
+      const featureId = featureMap.get(`${row.epic}||${row.feature}`)
+      if (!featureId) continue
+      for (const depName of row.featureDependsOn) {
+        const depFeatureId = featureNameToId.get(depName)
+        if (!depFeatureId || depFeatureId === featureId) continue
+        await tx.featureDependency.upsert({
+          where: { featureId_dependsOnId: { featureId, dependsOnId: depFeatureId } },
+          create: { featureId, dependsOnId: depFeatureId },
+          update: {},
+        })
       }
     }
 

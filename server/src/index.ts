@@ -25,6 +25,7 @@ import discountRoutes from './routes/discounts.js'
 import overheadRoutes from './routes/overhead.js'
 import resourceProfileRoutes from './routes/resourceProfile.js'
 import featureDependenciesRouter from './routes/featureDependencies.js'
+import epicDependenciesRouter from './routes/epicDependencies.js'
 import rateCardRoutes, { applyRateCardRouter } from './routes/rateCards.js'
 import namedResourceRoutes from './routes/namedResources.js'
 import orgRoutes from './routes/orgs.js'
@@ -67,6 +68,7 @@ app.use('/api/projects/:projectId/overhead', overheadRoutes)
 app.use('/api/projects/:projectId/resource-profile', resourceProfileRoutes)
 app.use('/api/projects/:projectId/resource-types/:rtId/named-resources', namedResourceRoutes)
 app.use('/api/projects/:projectId/feature-dependencies', featureDependenciesRouter)
+app.use('/api/projects/:projectId/epic-dependencies', epicDependenciesRouter)
 app.use('/api/rate-cards', rateCardRoutes)
 app.use('/api/projects/:projectId/apply-rate-card', applyRateCardRouter)
 app.use('/api/projects/:projectId/documents', documentRoutes)

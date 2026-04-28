@@ -10,6 +10,7 @@ import type {
   StoryTimelineEntry,
   FeatureDependency,
   StoryDependency,
+  EpicDependency,
   GanttDraggingState,
 } from '../../hooks/useGanttLayout'
 import GanttBar from './GanttBar'
@@ -38,6 +39,7 @@ interface GanttChartProps {
   storyEntries?: StoryTimelineEntry[]
   featureDependencies?: FeatureDependency[]
   storyDependencies?: StoryDependency[]
+  epicDependencies?: EpicDependency[]
   totalWeeks: number
   projectStartDate: Date | null
   onDragFeature: (featureId: string, newStartWeek: number) => void
@@ -46,6 +48,8 @@ interface GanttChartProps {
   onAddStoryDep: (storyId: string, dependsOnId: string) => void
   onRemoveFeatureDep: (featureId: string, dependsOnId: string) => void
   onRemoveStoryDep: (storyId: string, dependsOnId: string) => void
+  onAddEpicDep?: (epicId: string, dependsOnId: string) => void
+  onRemoveEpicDep?: (epicId: string, dependsOnId: string) => void
   editingFeatureId: string | null
   setEditingFeatureId: (id: string | null) => void
   editingStoryId: string | null
@@ -69,6 +73,7 @@ export default function GanttChart({
   storyEntries = [],
   featureDependencies = [],
   storyDependencies = [],
+  epicDependencies = [],
   totalWeeks,
   projectStartDate,
   onDragFeature,
@@ -77,6 +82,8 @@ export default function GanttChart({
   onMoveFeature,
   onUpdateEpicMode,
   onUpdateEpicScheduleMode,
+  onAddEpicDep,
+  onRemoveEpicDep,
   editingFeatureId: _editingFeatureId,
   setEditingFeatureId,
   editingStoryId: _editingStoryId,
@@ -102,7 +109,7 @@ export default function GanttChart({
   // -----------------------------------------------------------------------
   // Layout (rows, positions)
   // -----------------------------------------------------------------------
-  const { rows, rowY, totalHeight } = useGanttLayout(
+  const { rows, rowY, totalHeight, epicGroups } = useGanttLayout(
     entries, storyEntries, totalWeeks, expandedEpics, expandedFeatures,
   )
 
@@ -118,6 +125,19 @@ export default function GanttChart({
     for (const s of storyEntries) m.set(s.storyId, s)
     return m
   }, [storyEntries])
+
+  // epicById: maps epicId → { epicId, startWeek, durationWeeks }
+  const epicById = useMemo(() => {
+    const m = new Map<string, { epicId: string; startWeek: number; durationWeeks: number }>()
+    for (const eg of epicGroups) {
+      const allWeeks = eg.features.flatMap(f => [f.startWeek, f.startWeek + f.durationWeeks])
+      if (allWeeks.length === 0) continue
+      const minWeek = Math.min(...allWeeks)
+      const maxWeek = Math.max(...allWeeks)
+      m.set(eg.epicId, { epicId: eg.epicId, startWeek: minWeek, durationWeeks: maxWeek - minWeek })
+    }
+    return m
+  }, [epicGroups])
 
   // Set of featureIds that have at least one story entry
   const featuresWithStories = useMemo(() => new Set(storyEntries.map(s => s.featureId)), [storyEntries])
@@ -187,6 +207,9 @@ export default function GanttChart({
         onMoveFeature={onMoveFeature}
         onUpdateEpicMode={onUpdateEpicMode}
         onUpdateEpicScheduleMode={onUpdateEpicScheduleMode}
+        epicDependencies={epicDependencies}
+        onAddEpicDep={onAddEpicDep}
+        onRemoveEpicDep={onRemoveEpicDep}
       />
 
       {/* Right SVG area — horizontally scrollable */}
@@ -195,8 +218,10 @@ export default function GanttChart({
           <GanttDependencyArrows
             featureDependencies={featureDependencies}
             storyDependencies={storyDependencies}
+            epicDependencies={epicDependencies}
             featureById={featureById}
             storyById={storyById}
+            epicById={epicById}
             rowY={rowY}
             weekOffset={weekOffset}
             dragging={dragging}
