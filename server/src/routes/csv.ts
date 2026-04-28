@@ -168,8 +168,36 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
   }
 
   if (epics.length === 0) {
-    // blank template with one example row
-    rows.push(['Task', 'My Epic', 'My Feature', 'My Story', 'My Task', '', '', 'Developer', '', '', '', '', '', '', '', '', '', '', ''])
+    // Description row — explains each column
+    rows.push([
+      'Type: Epic | Feature | Story | Task',
+      'Epic name (required on all rows)',
+      'Feature name (required on Feature/Story/Task rows)',
+      'Story name (required on Story/Task rows)',
+      'Task name (required on Task rows)',
+      'Template name to link to story (Story rows only)',
+      'Template size tier: XS | Small | Medium | Large | XL (Story rows only — auto-expands tasks)',
+      'Resource type name (Task rows only)',
+      'Hours of effort (Task rows only)',
+      'Duration in days — auto-calculated if blank (Task rows only)',
+      'Description (rich text supported)',
+      'Assumptions (rich text supported)',
+      'Epic status: active | inactive',
+      'Feature status: active | inactive',
+      'Story status: active | inactive',
+      'Epic feature mode: sequential | parallel',
+      'Feature story mode: sequential | parallel',
+      'Epic dependencies: comma-separated epic names this epic depends on',
+      'Feature dependencies: comma-separated feature names this feature depends on',
+    ])
+    // Example Epic row
+    rows.push(['Epic', 'Platform Setup', '', '', '', '', '', '', '', '', 'Core infrastructure and environment setup', '', 'active', '', '', 'sequential', '', '', ''])
+    // Example Feature row
+    rows.push(['Feature', 'Platform Setup', 'Authentication', '', '', '', '', '', '', '', 'Login and registration flows', '', '', 'active', '', '', 'sequential', '', ''])
+    // Example Story row (with template)
+    rows.push(['Story', 'Platform Setup', 'Authentication', 'User can log in', '', 'Login Flow', 'Medium', '', '', '', 'As a user I can log in with email and password', '', '', '', 'active', '', '', '', ''])
+    // Example Task row
+    rows.push(['Task', 'Platform Setup', 'Authentication', 'User can log in', 'Backend API', '', '', 'Developer', '8', '', '', '', '', '', '', '', '', '', ''])
   } else {
     for (const epic of epics) {
       // Epic row
