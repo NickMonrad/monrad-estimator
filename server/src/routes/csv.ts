@@ -13,6 +13,7 @@ router.use(authenticate)
 const CSV_HEADERS = [
   'Type', 'Epic', 'Feature', 'Story', 'Task',
   'Template',
+  'TemplateSize',
   'ResourceType',
   'HoursEffort', 'DurationDays',
   'Description', 'Assumptions',
@@ -35,6 +36,7 @@ interface CsvRow {
   EpicDependsOn: string
   FeatureDependsOn: string
   Template: string
+  TemplateSize: string
   ResourceType: string
   // legacy fields — kept for backwards compat (old CSVs may still have these)
   HoursExtraSmall: string
@@ -63,6 +65,7 @@ export interface StagedRow {
   epicDependsOn: string[]   // array of epic names
   featureDependsOn: string[]  // array of feature names
   template: string
+  templateSize: string   // 'Small' | 'Medium' | 'Large' | 'XL' | ''
   resourceType: string
   // legacy fields kept for backwards compat
   hoursExtraSmall: number
@@ -90,6 +93,20 @@ function parseNum(val: string | undefined): number {
 
 function parseStatus(val: string | undefined): boolean {
   return (val?.trim().toLowerCase() === 'inactive') ? false : true
+}
+
+/** Pick hours from a TemplateTask based on the sizing tier string */
+function pickHours(
+  task: { hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number },
+  size: string,
+): number {
+  switch (size.toLowerCase()) {
+    case 'small':  return task.hoursSmall ?? 0
+    case 'medium': return task.hoursMedium ?? 0
+    case 'large':  return task.hoursLarge ?? 0
+    case 'xl':     return task.hoursExtraLarge ?? 0
+    default:       return 0
+  }
 }
 
 /** Prevent CSV formula injection by prefixing dangerous characters with a single quote */
@@ -151,13 +168,13 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
 
   if (epics.length === 0) {
     // blank template with one example row
-    rows.push(['Task', 'My Epic', 'My Feature', 'My Story', 'My Task', '', 'Developer', '', '', '', '', '', '', '', '', '', '', ''])
+    rows.push(['Task', 'My Epic', 'My Feature', 'My Story', 'My Task', '', '', 'Developer', '', '', '', '', '', '', '', '', '', '', ''])
   } else {
     for (const epic of epics) {
       // Epic row
       rows.push([
         'Epic', sanitizeCsvCell(epic.name), '', '', '',
-        '', '', '', '',
+        '', '', '', '', '',
         sanitizeCsvCell(epic.description ?? ''), sanitizeCsvCell(epic.assumptions ?? ''),
         epic.isActive ? 'active' : 'inactive', '', '',
         epic.featureMode ?? 'sequential', '',
@@ -168,7 +185,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
         // Feature row
         rows.push([
           'Feature', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), '', '',
-          '', '', '', '',
+          '', '', '', '', '',
           sanitizeCsvCell(feature.description ?? ''), sanitizeCsvCell(feature.assumptions ?? ''),
           '', feature.isActive ? 'active' : 'inactive', '',
           '', feature.featureMode ?? 'sequential',
@@ -180,6 +197,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
           rows.push([
             'Story', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), sanitizeCsvCell(story.name), '',
             sanitizeCsvCell(story.appliedTemplate?.name ?? ''),
+            '', // TemplateSize — UserStory has no sizingTier field; exported blank
             '', '', '',
             sanitizeCsvCell(story.description ?? ''), sanitizeCsvCell(story.assumptions ?? ''),
             '', '', story.isActive ? 'active' : 'inactive',
@@ -191,7 +209,8 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
           for (const task of story.tasks) {
             rows.push([
               'Task', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), sanitizeCsvCell(story.name), sanitizeCsvCell(task.name),
-              '',
+              '', // Template
+              '', // TemplateSize
               sanitizeCsvCell(task.resourceType?.name ?? ''),
               String(task.hoursEffort),
               String(task.durationDays != null ? Math.round(task.durationDays * 100) / 100 : ''),
@@ -271,6 +290,7 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     const rawFeatureMode = raw.FeatureMode?.trim().toLowerCase() || 'sequential'
     const featureMode = (rawFeatureMode === 'sequential' || rawFeatureMode === 'parallel') ? rawFeatureMode : 'sequential'
     const template = raw.Template?.trim() ?? ''
+    const templateSize = raw.TemplateSize?.trim() ?? ''
 
     const epicDependsOn = (raw.EpicDependsOn ?? '')
       .split(',')
@@ -305,6 +325,15 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       warnings.push(`Template column is only applied on Story rows — will be ignored for this ${type} row`)
     }
 
+    // TemplateSize validation — only meaningful on Story rows
+    const validSizes = new Set(['small', 'medium', 'large', 'xl'])
+    if (type === 'Story' && templateSize && !validSizes.has(templateSize.toLowerCase())) {
+      warnings.push(`TemplateSize "${templateSize}" is not valid — use Small, Medium, Large, or XL`)
+    }
+    if (type !== 'Story' && templateSize) {
+      warnings.push(`TemplateSize column is only applied on Story rows — will be ignored for this ${type} row`)
+    }
+
     // Status-on-wrong-type warnings
     if (type !== 'Epic' && raw.EpicStatus?.trim()) {
       warnings.push(`EpicStatus is only applied on Epic rows — will be ignored for this ${type} row`)
@@ -335,6 +364,7 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       epicDependsOn,
       featureDependsOn,
       template,
+      templateSize,
       resourceType,
       hoursExtraSmall: parseNum(raw.HoursExtraSmall),
       hoursSmall: parseNum(raw.HoursSmall),
@@ -466,6 +496,15 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
     const epicMap = new Map<string, string>() // epic name → epic id
     const featureMap = new Map<string, string>() // "epic||feature" → feature id
     const storyMap = new Map<string, string>() // "epic||feature||story" → story id
+    const storyTemplateMap = new Map<string, { appliedTemplateId: string | null; templateSize: string }>()
+
+    // Build set of story keys that have at least one Task row in the CSV (used for Gap 1 auto-expand check)
+    const storyKeysWithTaskRows = new Set<string>()
+    for (const row of rows) {
+      if (row.type === 'Task' && row.story) {
+        storyKeysWithTaskRows.add(`${row.epic}||${row.feature}||${row.story}`)
+      }
+    }
 
     let epicOrder = await tx.epic.count({ where: { projectId } })
 
@@ -564,6 +603,7 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           ? await tx.featureTemplate.findUnique({ where: { name: row.template } })
           : null
         const appliedTemplateId = templateRecord?.id ?? null
+        const templateSize = isStoryRow ? (row.templateSize ?? '') : ''
 
         let story = await tx.userStory.findFirst({ where: { featureId, name: row.story } })
         if (!story) {
@@ -596,6 +636,44 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           storiesUpdated++
         }
         storyMap.set(storyKey, story.id)
+
+        // Track template info for Gap 2 (Task rows that need hour backfill)
+        storyTemplateMap.set(storyKey, { appliedTemplateId, templateSize })
+
+        // Gap 1: Auto-expand template tasks when no Task rows for this story appear in the CSV
+        if (appliedTemplateId && templateSize && !storyKeysWithTaskRows.has(storyKey)) {
+          const tmpl = await tx.featureTemplate.findUnique({
+            where: { id: appliedTemplateId },
+            include: { tasks: { orderBy: { order: 'asc' } } },
+          })
+          if (tmpl) {
+            let taskOrder = await tx.task.count({ where: { userStoryId: story.id } })
+            for (const tmplTask of tmpl.tasks) {
+              const hours = pickHours(tmplTask, templateSize)
+              const tmplRt = tmplTask.resourceTypeName
+                ? rtByName.get(tmplTask.resourceTypeName.toLowerCase())
+                : undefined
+              const tmplResourceTypeId = tmplRt?.id ?? null
+              const tmplHoursPerDay = tmplRt?.hoursPerDay ?? fallbackHoursPerDay
+              const existingTask = await tx.task.findFirst({
+                where: { userStoryId: story.id, name: tmplTask.name },
+              })
+              if (!existingTask) {
+                await tx.task.create({
+                  data: {
+                    name: tmplTask.name,
+                    userStoryId: story.id,
+                    order: taskOrder++,
+                    resourceTypeId: tmplResourceTypeId,
+                    hoursEffort: hours,
+                    durationDays: calcDurationDays(hours, tmplHoursPerDay),
+                  },
+                })
+                tasksCreated++
+              }
+            }
+          }
+        }
       }
       const storyId = storyMap.get(storyKey)!
 
@@ -611,6 +689,20 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
       const resourceTypeId = resourceType?.id ?? null
       const hoursPerDay = resourceType?.hoursPerDay ?? fallbackHoursPerDay
 
+      // Gap 2: Backfill hours from template when row hours are blank (0) and story has Template+TemplateSize
+      let effectiveHoursEffort = row.hoursEffort
+      if (effectiveHoursEffort === 0) {
+        const storyTmpl = storyTemplateMap.get(storyKey)
+        if (storyTmpl?.appliedTemplateId && storyTmpl.templateSize) {
+          const tmplTask = await tx.templateTask.findFirst({
+            where: { templateId: storyTmpl.appliedTemplateId, name: row.task },
+          })
+          if (tmplTask) {
+            effectiveHoursEffort = pickHours(tmplTask, storyTmpl.templateSize)
+          }
+        }
+      }
+
       const task = await tx.task.findFirst({ where: { userStoryId: storyId, name: row.task } })
       if (!task) {
         const taskCount = await tx.task.count({ where: { userStoryId: storyId } })
@@ -620,8 +712,8 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
             userStoryId: storyId,
             order: taskCount,
             resourceTypeId,
-            hoursEffort: row.hoursEffort,
-            durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
+            hoursEffort: effectiveHoursEffort,
+            durationDays: row.durationDays || calcDurationDays(effectiveHoursEffort, hoursPerDay),
             description: row.description || null,
             assumptions: row.assumptions || null,
           },
@@ -632,8 +724,8 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           where: { id: task.id },
           data: {
             resourceTypeId,
-            hoursEffort: row.hoursEffort,
-            durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
+            hoursEffort: effectiveHoursEffort,
+            durationDays: row.durationDays || calcDurationDays(effectiveHoursEffort, hoursPerDay),
             description: row.description || null,
             assumptions: row.assumptions || null,
           },
