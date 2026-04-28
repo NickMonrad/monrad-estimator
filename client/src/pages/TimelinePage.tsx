@@ -10,6 +10,8 @@ import GanttChart from '../components/timeline/GanttChart'
 import ResourceHistogram from '../components/timeline/ResourceHistogram'
 import TimelineTooltip from '../components/timeline/TimelineTooltip'
 import { getEpicColour } from '../lib/epicColours'
+import type { GanttScale } from '../hooks/useGanttLayout'
+import { colWForScale } from '../hooks/useGanttLayout'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -258,6 +260,12 @@ export default function TimelinePage() {
   const [scheduleStale, setScheduleStale] = useState(false)
   const rlKey = `timeline.resourceLevel.${projectId}`
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
+
+  const SCALE_KEY = 'gantt-scale'
+  const [ganttScale, setGanttScale] = useState<GanttScale>(
+    () => (localStorage.getItem(SCALE_KEY) as GanttScale | null) ?? 'week',
+  )
+  const ganttColW = colWForScale(ganttScale)
 
   // Scroll sync refs for Gantt + Histogram right panels
   const ganttScrollRef = useRef<HTMLDivElement>(null)
@@ -893,8 +901,23 @@ export default function TimelinePage() {
 
         {/* Gantt chart */}
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+          <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
             <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">Gantt Chart</h2>
+            {/* Scale toggle */}
+            <div className="flex items-center gap-1">
+              {(['week', 'month', 'quarter'] as const).map(s => (
+                <button
+                  key={s}
+                  onClick={() => { setGanttScale(s); localStorage.setItem(SCALE_KEY, s) }}
+                  className={ganttScale === s
+                    ? 'bg-lab3-navy text-white px-3 py-1 rounded text-sm font-medium dark:bg-lab3-blue'
+                    : 'border border-gray-200 text-gray-600 px-3 py-1 rounded text-sm dark:border-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
           </div>
 
           {isLoading && <div className="p-8 text-center text-gray-400 dark:text-gray-500 text-sm">Loading…</div>}
@@ -914,6 +937,7 @@ export default function TimelinePage() {
                 storyDependencies={timeline.storyDependencies}
                 totalWeeks={totalWeeks}
                 projectStartDate={projectStartDate}
+                scale={ganttScale}
                 onDragFeature={(featureId, newStartWeek) => {
                   const entry = timeline.entries.find(e => e.featureId === featureId)
                   if (!entry) return
@@ -962,7 +986,7 @@ export default function TimelinePage() {
                   weeklyDemand={timeline.weeklyDemand}
                   weeklyCapacity={timeline.weeklyCapacity}
                   totalWeeks={totalWeeks}
-                  colW={64}
+                  colW={ganttColW}
                   labelW={300}
                   weekOffset={timeline.onboardingWeeks ?? 0}
                   scrollContainerRef={histScrollRef}
@@ -975,7 +999,7 @@ export default function TimelinePage() {
                 <NamedResourcesPanel
                   namedResources={timeline.namedResources}
                   totalWeeks={totalWeeks}
-                  colW={64}
+                  colW={ganttColW}
                   labelW={300}
                   weeklyDemand={timeline.weeklyDemand}
                   weekOffset={timeline.onboardingWeeks ?? 0}

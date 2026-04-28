@@ -6,7 +6,7 @@ import type {
   EpicDependency,
   GanttDraggingState,
 } from '../../hooks/useGanttLayout'
-import { COL_W, FEAT_ROW_H, STORY_ROW_H, EPIC_ROW_H, DEP_ARROW_COLOR } from '../../hooks/useGanttLayout'
+import { FEAT_ROW_H, STORY_ROW_H, EPIC_ROW_H, DEP_ARROW_COLOR } from '../../hooks/useGanttLayout'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,6 +29,7 @@ interface GanttDependencyArrowsProps {
   epicById: Map<string, { epicId: string; startWeek: number; durationWeeks: number }>
   rowY: Map<string, number>
   weekOffset: number
+  colW: number
   dragging: GanttDraggingState | null
 }
 
@@ -44,6 +45,7 @@ export default function GanttDependencyArrows({
   epicById,
   rowY,
   weekOffset,
+  colW,
   dragging,
 }: GanttDependencyArrowsProps) {
   return (
@@ -69,9 +71,9 @@ export default function GanttDependencyArrows({
         const predStart = predDragging ? dragging!.currentStart : predEntry.startWeek
         const succStart = succDragging ? dragging!.currentStart : succEntry.startWeek
 
-        const x1 = (predStart + weekOffset + predEntry.durationWeeks) * COL_W
+        const x1 = (predStart + weekOffset + predEntry.durationWeeks) * colW
         const y1 = predY + FEAT_ROW_H / 2
-        const x2 = (succStart + weekOffset) * COL_W
+        const x2 = (succStart + weekOffset) * colW
         const y2 = succY + FEAT_ROW_H / 2
 
         return (
@@ -102,9 +104,9 @@ export default function GanttDependencyArrows({
         const predStart = predDragging ? dragging!.currentStart : predEntry.startWeek
         const succStart = succDragging ? dragging!.currentStart : succEntry.startWeek
 
-        const x1 = (predStart + weekOffset + predEntry.durationWeeks) * COL_W
+        const x1 = (predStart + weekOffset + predEntry.durationWeeks) * colW
         const y1 = predY + STORY_ROW_H / 2
-        const x2 = (succStart + weekOffset) * COL_W
+        const x2 = (succStart + weekOffset) * colW
         const y2 = succY + STORY_ROW_H / 2
 
         return (
@@ -130,9 +132,9 @@ export default function GanttDependencyArrows({
         const succY = rowY.get(`epic-${dep.epicId}`)
         if (predY === undefined || succY === undefined) return null
 
-        const x1 = (predEpic.startWeek + weekOffset + predEpic.durationWeeks) * COL_W
+        const x1 = (predEpic.startWeek + weekOffset + predEpic.durationWeeks) * colW
         const y1 = predY + EPIC_ROW_H / 2
-        const x2 = (succEpic.startWeek + weekOffset) * COL_W
+        const x2 = (succEpic.startWeek + weekOffset) * colW
         const y2 = succY + EPIC_ROW_H / 2
 
         return (

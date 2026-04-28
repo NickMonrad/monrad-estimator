@@ -1,6 +1,6 @@
 import type { TimelineEntry } from '../../types/backlog'
 import type { GanttRow, StoryTimelineEntry, GanttDraggingState } from '../../hooks/useGanttLayout'
-import { COL_W, EPIC_ROW_H, FEAT_ROW_H, STORY_ROW_H } from '../../hooks/useGanttLayout'
+import { EPIC_ROW_H, FEAT_ROW_H, STORY_ROW_H } from '../../hooks/useGanttLayout'
 import { getEpicColour } from '../../lib/epicColours'
 
 // ---------------------------------------------------------------------------
@@ -16,6 +16,7 @@ interface GanttBarProps {
   y: number
   weekOffset: number
   totalWeeks: number
+  colW: number
   dragging: GanttDraggingState | null
   svgColors: SvgColors
   weeklyDemand: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
@@ -53,6 +54,7 @@ export default function GanttBar({
   y,
   weekOffset,
   totalWeeks,
+  colW,
   dragging,
   svgColors,
   weeklyDemand,
@@ -67,12 +69,12 @@ export default function GanttBar({
   // ── Epic bar ──────────────────────────────────────────────────────────────
   if (row.type === 'epic') {
     const colour = getEpicColour(row.epicIdx)
-    const barW = (row.maxWeek - row.minWeek) * COL_W
+    const barW = (row.maxWeek - row.minWeek) * colW
     if (barW <= 0) return null
     return (
       <g>
         <rect
-          x={(row.minWeek + weekOffset) * COL_W}
+          x={(row.minWeek + weekOffset) * colW}
           y={y + 4}
           width={barW}
           height={EPIC_ROW_H - 8}
@@ -81,7 +83,7 @@ export default function GanttBar({
           rx={3}
         />
         <rect
-          x={(row.minWeek + weekOffset) * COL_W}
+          x={(row.minWeek + weekOffset) * colW}
           y={y + 4}
           width={barW}
           height={EPIC_ROW_H - 8}
@@ -92,7 +94,7 @@ export default function GanttBar({
         />
         <line
           x1={0} y1={y + EPIC_ROW_H}
-          x2={totalWeeks * COL_W} y2={y + EPIC_ROW_H}
+          x2={totalWeeks * colW} y2={y + EPIC_ROW_H}
           stroke={svgColors.gridLine}
           strokeWidth={1}
         />
@@ -107,7 +109,7 @@ export default function GanttBar({
     const barColor = entry.timelineColour ?? colour.hex
     const isDragging = dragging?.type === 'feature' && dragging.id === entry.featureId
     const effectiveStart = isDragging ? dragging!.currentStart : entry.startWeek
-    const barW = Math.max(entry.durationWeeks * COL_W, 4)
+    const barW = Math.max(entry.durationWeeks * colW, 4)
     const isOverAllocated = weeklyDemand.some(d =>
       d.week >= entry.startWeek &&
       d.week < entry.startWeek + entry.durationWeeks &&
@@ -117,7 +119,7 @@ export default function GanttBar({
     return (
       <g>
         <rect
-          x={(effectiveStart + weekOffset) * COL_W}
+          x={(effectiveStart + weekOffset) * colW}
           y={y + 4}
           width={barW}
           height={FEAT_ROW_H - 8}
@@ -132,7 +134,7 @@ export default function GanttBar({
         />
         {isOverAllocated && (
           <circle
-            cx={(effectiveStart + weekOffset) * COL_W + barW - 8}
+            cx={(effectiveStart + weekOffset) * colW + barW - 8}
             cy={y + FEAT_ROW_H / 2}
             r={4}
             fill="#ef4444"
@@ -141,7 +143,7 @@ export default function GanttBar({
         )}
         {entry.isManual && (
           <text
-            x={(effectiveStart + weekOffset) * COL_W + 6}
+            x={(effectiveStart + weekOffset) * colW + 6}
             y={y + FEAT_ROW_H / 2 + 4}
             fontSize={10}
             style={{ pointerEvents: 'none' }}
@@ -151,7 +153,7 @@ export default function GanttBar({
         )}
         <line
           x1={0} y1={y + FEAT_ROW_H}
-          x2={totalWeeks * COL_W} y2={y + FEAT_ROW_H}
+          x2={totalWeeks * colW} y2={y + FEAT_ROW_H}
           stroke={svgColors.rowSep}
           strokeWidth={1}
         />
@@ -170,9 +172,9 @@ export default function GanttBar({
   return (
     <g>
       <rect
-        x={(effectiveStart + weekOffset) * COL_W}
+        x={(effectiveStart + weekOffset) * colW}
         y={y + 3}
-        width={Math.max(storyEntry.durationWeeks * COL_W, 4)}
+        width={Math.max(storyEntry.durationWeeks * colW, 4)}
         height={STORY_ROW_H - 6}
         fill={storyBarColor}
         fillOpacity={0.4}
@@ -186,7 +188,7 @@ export default function GanttBar({
       />
       {storyEntry.isManual && (
         <text
-          x={(effectiveStart + weekOffset) * COL_W + 6}
+          x={(effectiveStart + weekOffset) * colW + 6}
           y={y + STORY_ROW_H / 2 + 4}
           fontSize={9}
           style={{ pointerEvents: 'none' }}
@@ -196,7 +198,7 @@ export default function GanttBar({
       )}
       <line
         x1={0} y1={y + STORY_ROW_H}
-        x2={totalWeeks * COL_W} y2={y + STORY_ROW_H}
+        x2={totalWeeks * colW} y2={y + STORY_ROW_H}
         stroke={svgColors.rowSep}
         strokeWidth={1}
       />

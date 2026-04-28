@@ -136,11 +136,6 @@ function renderGanttSvg(td: TimelineData): string {
     return d
   }
 
-  function monthLabel(d: Date): string {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    return `${months[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`
-  }
-
   // Build SVG parts
   const parts: string[] = []
 
@@ -156,33 +151,56 @@ function renderGanttSvg(td: TimelineData): string {
   // Header row background
   parts.push(`<rect x="0" y="0" width="${svgW}" height="${HEADER_H}" fill="#f3f4f6"/>`)
 
-  // Week/month labels in header
+  // Month-scale header: two-row layout (top = month label, bottom = week-within-month)
+  // Build month groups
+  interface MonthGroupSvg { label: string; startWeek: number; endWeek: number }
+  const monthGroupsSvg: MonthGroupSvg[] = []
+  const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
   if (td.startDate) {
-    let lastMonth = -1
-    for (let w = 0; w < totalWeeks; w++) {
+    let currentMonthKey = -1
+    let groupStart = 0
+    for (let w = 0; w <= totalWeeks; w++) {
       const d = weekToDate(w)
-      if (!d) break
-      const month = d.getMonth()
-      if (month !== lastMonth) {
-        lastMonth = month
-        const x = LABEL_W + w * COL_W + 3
-        parts.push(`<text x="${x}" y="${HEADER_H - 14}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">${monthLabel(d)}</text>`)
-        // tick mark at month boundary
-        const lineX = LABEL_W + w * COL_W
-        parts.push(`<line x1="${lineX}" y1="${HEADER_H - 8}" x2="${lineX}" y2="${HEADER_H}" stroke="#d1d5db" stroke-width="1"/>`)
+      const monthKey = d ? d.getFullYear() * 100 + d.getMonth() : -999
+      if (w === totalWeeks || monthKey !== currentMonthKey) {
+        if (w > 0 && currentMonthKey !== -1) {
+          const startD = weekToDate(groupStart)!
+          const label = `${MONTH_NAMES[startD.getMonth()]} ${String(startD.getFullYear()).slice(2)}`
+          monthGroupsSvg.push({ label, startWeek: groupStart, endWeek: w })
+        }
+        currentMonthKey = monthKey
+        groupStart = w
       }
     }
   } else {
-    for (let w = 0; w < totalWeeks; w += 2) {
-      const x = LABEL_W + w * COL_W + 3
-      parts.push(`<text x="${x}" y="${HEADER_H - 14}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280">Wk ${w + 1}</text>`)
+    for (let w = 0; w < totalWeeks; w += 4) {
+      const monthNum = Math.floor(w / 4) + 1
+      monthGroupsSvg.push({ label: `Month ${monthNum}`, startWeek: w, endWeek: Math.min(w + 4, totalWeeks) })
     }
   }
 
-  // Week numbers row (bottom of header)
-  for (let w = 0; w < totalWeeks; w++) {
-    const x = LABEL_W + w * COL_W
-    parts.push(`<text x="${x + COL_W / 2}" y="${HEADER_H - 3}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="8" fill="#9ca3af" text-anchor="middle">${w + 1}</text>`)
+  // Mid-header separator line
+  const MID_Y = Math.floor(HEADER_H / 2) + 2
+  parts.push(`<line x1="${LABEL_W}" y1="${MID_Y}" x2="${svgW}" y2="${MID_Y}" stroke="#e5e7eb" stroke-width="1"/>`)
+
+  // Render month groups: top-row label + bottom-row week numbers
+  for (const mg of monthGroupsSvg) {
+    const groupX = LABEL_W + mg.startWeek * COL_W
+    const groupW = (mg.endWeek - mg.startWeek) * COL_W
+    // Full-height group separator
+    parts.push(`<line x1="${groupX}" y1="0" x2="${groupX}" y2="${svgH}" stroke="#e5e7eb" stroke-width="1"/>`)
+    // Month label centred in top row
+    const labelX = groupX + groupW / 2
+    parts.push(`<text x="${labelX}" y="${MID_Y - 4}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#6b7280" text-anchor="middle">${esc(mg.label)}</text>`)
+    // Week-within-month numbers in bottom row
+    for (let wi = 0; wi < mg.endWeek - mg.startWeek; wi++) {
+      const wx = LABEL_W + (mg.startWeek + wi) * COL_W
+      if (wi > 0) {
+        parts.push(`<line x1="${wx}" y1="${MID_Y}" x2="${wx}" y2="${svgH}" stroke="#f3f4f6" stroke-width="1"/>`)
+      }
+      parts.push(`<text x="${wx + COL_W / 2}" y="${HEADER_H - 4}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="8" fill="#9ca3af" text-anchor="middle">${wi + 1}</text>`)
+    }
   }
 
   // Render epic groups and feature rows
