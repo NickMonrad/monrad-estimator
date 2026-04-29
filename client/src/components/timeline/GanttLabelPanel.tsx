@@ -70,7 +70,7 @@ export default function GanttLabelPanel({
             <div
               key={row.key}
               style={{ height: EPIC_ROW_H, backgroundColor: `${colour.hex}14` }}
-              className="border-b border-gray-100 dark:border-gray-700 flex items-center px-3 gap-1 cursor-pointer select-none"
+              className="border-b border-gray-100 dark:border-gray-700 flex flex-col justify-center px-3 py-1 gap-0.5 cursor-pointer select-none"
               onClick={() =>
                 setExpandedEpics(prev => {
                   const next = new Set(prev)
@@ -80,134 +80,137 @@ export default function GanttLabelPanel({
                 })
               }
             >
-              {/* Epic reorder arrows */}
-              {onMoveEpic && (
-                <div
-                  className="flex flex-col -my-0.5 mr-1 flex-shrink-0"
-                  onClick={e => e.stopPropagation()}
+              {/* Line 1: reorder + toggle + title */}
+              <div className="flex items-center gap-1 min-w-0">
+                {onMoveEpic && (
+                  <div
+                    className="flex flex-col -my-0.5 mr-0.5 flex-shrink-0"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => onMoveEpic(row.epicId, 'up', row.epicIdx)}
+                      disabled={row.epicIdx === 0}
+                      className="text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
+                      title="Move epic up"
+                    >▲</button>
+                    <button
+                      onClick={() => onMoveEpic(row.epicId, 'down', row.epicIdx)}
+                      disabled={row.epicIdx === row.epicCount - 1}
+                      className="text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
+                      title="Move epic down"
+                    >▼</button>
+                  </div>
+                )}
+                <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">{isOpen ? '▼' : '▶'}</span>
+                <span
+                  className="text-sm font-semibold truncate min-w-0"
+                  style={{ color: colour.hex }}
+                  title={row.epicName}
                 >
-                  <button
-                    onClick={() => onMoveEpic(row.epicId, 'up', row.epicIdx)}
-                    disabled={row.epicIdx === 0}
-                    className="text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
-                    title="Move epic up"
-                  >▲</button>
-                  <button
-                    onClick={() => onMoveEpic(row.epicId, 'down', row.epicIdx)}
-                    disabled={row.epicIdx === row.epicCount - 1}
-                    className="text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 disabled:opacity-0 disabled:cursor-default leading-none text-xs"
-                    title="Move epic down"
-                  >▼</button>
-                </div>
-              )}
-              <span className="mr-1 text-xs text-gray-400 dark:text-gray-500">{isOpen ? '▼' : '▶'}</span>
-              <span
-                className="text-sm font-semibold truncate"
-                style={{ color: colour.hex }}
-                title={row.epicName}
+                  {row.epicName}
+                </span>
+              </div>
+
+              {/* Line 2: feature mode + schedule mode + dep chips */}
+              <div
+                className="flex items-center gap-1 pl-6 flex-wrap"
+                onClick={e => e.stopPropagation()}
               >
-                {row.epicName}
-              </span>
-              {/* Feature mode button */}
-              {onUpdateEpicMode && (
-                <button
-                  onClick={e => {
-                    e.stopPropagation()
-                    onUpdateEpicMode(
-                      row.epicId,
-                      row.epicFeatureMode === 'sequential' ? 'parallel' : 'sequential',
-                    )
-                  }}
-                  title={
-                    row.epicFeatureMode === 'sequential'
-                      ? 'Features run sequentially — click for parallel'
-                      : 'Features run in parallel — click for sequential'
-                  }
-                  aria-label={row.epicFeatureMode === 'sequential' ? 'sequential' : 'parallel'}
-                  className="ml-1 text-xs px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 flex-shrink-0"
-                >
-                  {row.epicFeatureMode === 'sequential' ? '↓ seq' : '⇉ par'}
-                </button>
-              )}
-              {/* Schedule mode button */}
-              {onUpdateEpicScheduleMode && (
-                <button
-                  onClick={e => {
-                    e.stopPropagation()
-                    onUpdateEpicScheduleMode(
-                      row.epicId,
-                      row.epicScheduleMode === 'sequential' ? 'parallel' : 'sequential',
-                    )
-                  }}
-                  title={
-                    row.epicScheduleMode === 'sequential'
-                      ? 'Epic starts after previous — click for concurrent'
-                      : 'Epic runs concurrently — click to chain after previous'
-                  }
-                  className={`text-xs px-1.5 py-0.5 rounded border font-medium flex-shrink-0 ${
-                    row.epicScheduleMode === 'parallel'
-                      ? 'bg-purple-100 text-purple-700 border-purple-300'
-                      : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-600'
-                  }`}
-                >
-                  {row.epicScheduleMode === 'parallel' ? '⬛' : '⏭'}
-                </button>
-              )}
-              {/* Epic dependency chips + picker */}
-              {onAddEpicDep && (
-                <div
-                  className="flex items-center gap-1 flex-shrink-0 relative"
-                  onClick={e => e.stopPropagation()}
-                >
-                  {/* existing dep chips */}
-                  {epicDependencies
-                    .filter(d => d.epicId === row.epicId)
-                    .map(d => {
-                      const depName = allEpicRows.find(r => r.epicId === d.dependsOnId)?.epicName ?? d.dependsOnId
-                      return (
-                        <span
-                          key={d.dependsOnId}
-                          className="inline-flex items-center gap-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 px-1 py-0.5 rounded"
-                          title={`Depends on: ${depName}`}
-                        >
-                          →{depName.slice(0, 6)}
-                          <button
-                            onClick={() => onRemoveEpicDep?.(row.epicId, d.dependsOnId)}
-                            className="ml-0.5 text-gray-400 hover:text-red-500 leading-none"
-                          >×</button>
-                        </span>
-                      )
-                    })}
-                  {/* add dep button */}
+                {/* Feature mode button */}
+                {onUpdateEpicMode && (
                   <button
-                    onClick={() => setDepPickerEpicId(prev => prev === row.epicId ? null : row.epicId)}
-                    className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 px-1 leading-none"
-                    title="Add dependency"
-                  >＋</button>
-                  {/* dropdown picker */}
-                  {depPickerEpicId === row.epicId && (
-                    <div className="absolute top-full left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[140px]">
-                      {allEpicRows
-                        .filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId))
-                        .map(r => (
-                          <button
-                            key={r.epicId}
-                            className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
-                            onClick={() => {
-                              onAddEpicDep(row.epicId, r.epicId)
-                              setDepPickerEpicId(null)
-                            }}
+                    onClick={e => {
+                      e.stopPropagation()
+                      onUpdateEpicMode(
+                        row.epicId,
+                        row.epicFeatureMode === 'sequential' ? 'parallel' : 'sequential',
+                      )
+                    }}
+                    title={
+                      row.epicFeatureMode === 'sequential'
+                        ? 'Features run sequentially — click for parallel'
+                        : 'Features run in parallel — click for sequential'
+                    }
+                    aria-label={row.epicFeatureMode === 'sequential' ? 'sequential' : 'parallel'}
+                    className="text-xs px-1.5 py-0 rounded border border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 flex-shrink-0 leading-5"
+                  >
+                    {row.epicFeatureMode === 'sequential' ? '↓ seq' : '⇉ par'}
+                  </button>
+                )}
+                {/* Schedule mode button */}
+                {onUpdateEpicScheduleMode && (
+                  <button
+                    onClick={e => {
+                      e.stopPropagation()
+                      onUpdateEpicScheduleMode(
+                        row.epicId,
+                        row.epicScheduleMode === 'sequential' ? 'parallel' : 'sequential',
+                      )
+                    }}
+                    title={
+                      row.epicScheduleMode === 'sequential'
+                        ? 'Epic starts after previous — click for concurrent'
+                        : 'Epic runs concurrently — click to chain after previous'
+                    }
+                    className={`text-xs px-1.5 py-0 rounded border font-medium flex-shrink-0 leading-5 ${
+                      row.epicScheduleMode === 'parallel'
+                        ? 'bg-purple-100 text-purple-700 border-purple-300'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-600'
+                    }`}
+                  >
+                    {row.epicScheduleMode === 'parallel' ? '⬛' : '⏭'}
+                  </button>
+                )}
+                {/* Epic dependency chips + picker */}
+                {onAddEpicDep && (
+                  <div className="flex items-center gap-1 flex-shrink-0 relative">
+                    {epicDependencies
+                      .filter(d => d.epicId === row.epicId)
+                      .map(d => {
+                        const depName = allEpicRows.find(r => r.epicId === d.dependsOnId)?.epicName ?? d.dependsOnId
+                        return (
+                          <span
+                            key={d.dependsOnId}
+                            className="inline-flex items-center gap-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 px-1 py-0 rounded leading-5"
+                            title={`Depends on: ${depName}`}
                           >
-                            {r.epicName}
-                          </button>
-                        ))}
-                      {allEpicRows.filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId)).length === 0 && (
-                        <span className="text-xs px-3 py-1.5 text-gray-400 block">No epics available</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
+                            →{depName.slice(0, 8)}
+                            <button
+                              onClick={() => onRemoveEpicDep?.(row.epicId, d.dependsOnId)}
+                              className="ml-0.5 text-gray-400 hover:text-red-500 leading-none"
+                            >×</button>
+                          </span>
+                        )
+                      })}
+                    <button
+                      onClick={() => setDepPickerEpicId(prev => prev === row.epicId ? null : row.epicId)}
+                      className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 px-1 leading-none"
+                      title="Add dependency"
+                    >＋</button>
+                    {depPickerEpicId === row.epicId && (
+                      <div className="absolute top-full left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[140px]">
+                        {allEpicRows
+                          .filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId))
+                          .map(r => (
+                            <button
+                              key={r.epicId}
+                              className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                              onClick={() => {
+                                onAddEpicDep(row.epicId, r.epicId)
+                                setDepPickerEpicId(null)
+                              }}
+                            >
+                              {r.epicName}
+                            </button>
+                          ))}
+                        {allEpicRows.filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId)).length === 0 && (
+                          <span className="text-xs px-3 py-1.5 text-gray-400 block">No epics available</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )
         }

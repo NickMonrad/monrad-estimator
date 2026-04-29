@@ -84,7 +84,7 @@ export function colWForScale(scale: GanttScale): number {
 // Layout constants (shared across Gantt sub-components)
 // ---------------------------------------------------------------------------
 export const COL_W = 64
-export const EPIC_ROW_H = 36
+export const EPIC_ROW_H = 52
 export const FEAT_ROW_H = 36
 export const STORY_ROW_H = 28
 export const HEADER_H = 44
