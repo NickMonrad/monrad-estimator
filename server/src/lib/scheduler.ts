@@ -372,12 +372,12 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
 
   // ── Kahn's topological sort over features ─────────────────────────────────
   const inDegree = new Map<string, number>()
-  const adjList = new Map<string, string[]>()   // from → [to, ...]
+  const adjList = new Map<string, Set<string>>()   // from → Set<to>  (Set for O(1) dedup)
   const predecessors = new Map<string, string[]>() // to → [from, ...]
 
   for (const f of allFeatures) {
     inDegree.set(f.id, 0)
-    adjList.set(f.id, [])
+    adjList.set(f.id, new Set())
     predecessors.set(f.id, [])
   }
 
@@ -385,8 +385,8 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     const succs = adjList.get(fromId)
     const preds = predecessors.get(toId)
     if (!succs || !preds) return // one of the features not in this project
-    if (succs.includes(toId)) return // deduplicate
-    succs.push(toId)
+    if (succs.has(toId)) return // deduplicate (O(1) with Set)
+    succs.add(toId)
     preds.push(fromId)
     inDegree.set(toId, (inDegree.get(toId) ?? 0) + 1)
   }
@@ -439,9 +439,10 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
   }
 
   // 4. Epic dependency hard constraints
+  const epicById = new Map(epics.map(e => [e.id, e]))
   for (const epicDep of epicDeps) {
-    const fromEpic = epics.find(e => e.id === epicDep.dependsOnId)
-    const toEpic = epics.find(e => e.id === epicDep.epicId)
+    const fromEpic = epicById.get(epicDep.dependsOnId)
+    const toEpic = epicById.get(epicDep.epicId)
     if (!fromEpic || !toEpic) continue
     for (const fromFeature of fromEpic.features) {
       for (const toFeature of toEpic.features) {

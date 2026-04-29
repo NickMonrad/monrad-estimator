@@ -378,4 +378,46 @@ describe('runScheduler', () => {
     const totalDays = [...result.weeklyConsumptionMap.values()].reduce((a, b) => a + b, 0)
     expect(totalDays).toBeCloseTo(5, 0)  // 40h / 8hpd = 5 days
   })
+
+  // ── Cross-epic dep anti-cycle (hasCrossEpicDep skip logic) ──────────────────
+  it('hasCrossEpicDep: skips inter-epic chaining edge to avoid cycle, both features scheduled', () => {
+    const rt = makeRt('rt1', 'Dev', 1)
+    // fA (in epicA) explicitly depends on fB (in epicB).
+    // Without the hasCrossEpicDep guard the inter-epic chain would add fA→fB
+    // while the explicit dep adds fB→fA, creating a cycle.
+    const fB = makeFeature('fB', [makeStory('sB', [makeTask(40, 'rt1', 'Dev')])], 0)
+    const fA = makeFeature(
+      'fA',
+      [makeStory('sA', [makeTask(40, 'rt1', 'Dev')])],
+      0,
+      [{ featureId: 'fA', dependsOnId: 'fB' }], // fA depends on fB
+    )
+    const epicA = makeEpic('epicA', [fA], { order: 0 })
+    const epicB = makeEpic('epicB', [fB], { order: 1 })
+
+    // Should complete without an infinite loop or thrown error
+    const result = runScheduler(baseInput({ epics: [epicA, epicB], resourceTypes: [rt] }))
+
+    const entryA = result.featureSchedule.find(e => e.featureId === 'fA')
+    const entryB = result.featureSchedule.find(e => e.featureId === 'fB')
+    expect(entryA).toBeDefined()
+    expect(entryB).toBeDefined()
+    // fA depends on fB so fA must start no earlier than fB finishes
+    expect(entryA!.startWeek).toBeGreaterThanOrEqual(entryB!.startWeek + entryB!.durationWeeks - 0.001)
+  })
+
+  // ── Epic timelineStartWeek anchor ────────────────────────────────────────────
+  it('timelineStartWeek: epic2 feature starts at the pinned week regardless of epic1 end', () => {
+    const rt = makeRt('rt1', 'Dev', 1)
+    const f1 = makeFeature('f1', [makeStory('s1', [makeTask(40, 'rt1', 'Dev')])])
+    const f2 = makeFeature('f2', [makeStory('s2', [makeTask(40, 'rt1', 'Dev')])])
+    const epic1 = makeEpic('e1', [f1], { order: 0 })
+    const epic2 = makeEpic('e2', [f2], { order: 1, timelineStartWeek: 5 })
+
+    const result = runScheduler(baseInput({ epics: [epic1, epic2], resourceTypes: [rt] }))
+
+    const entry2 = result.featureSchedule.find(e => e.featureId === 'f2')!
+    // The timelineStartWeek anchor must be respected; inter-epic chaining is skipped
+    expect(entry2.startWeek).toBe(5)
+  })
 })
