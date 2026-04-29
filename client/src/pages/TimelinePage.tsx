@@ -11,7 +11,7 @@ import ResourceHistogram from '../components/timeline/ResourceHistogram'
 import TimelineTooltip from '../components/timeline/TimelineTooltip'
 import { getEpicColour } from '../lib/epicColours'
 import type { GanttScale } from '../hooks/useGanttLayout'
-import { colWForScale } from '../hooks/useGanttLayout'
+import { colWForScale, LABEL_W } from '../hooks/useGanttLayout'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -318,10 +318,9 @@ export default function TimelinePage() {
     const container = ganttContainerRef.current
     if (!container) return
 
-    // Exact dimensions: all panels share labelW=300 and colW=64
-    const EXPORT_LABEL_W = 300
-    const EXPORT_COL_W = 64
-    const fullWidth = EXPORT_LABEL_W + totalWeeks * EXPORT_COL_W
+    // Exact dimensions: label panel + chart columns at the current scale
+    const EXPORT_LABEL_W = LABEL_W
+    const fullWidth = EXPORT_LABEL_W + totalWeeks * ganttColW
     const fullHeight = container.scrollHeight
 
     // Dark-mode aware background colour — read from DOM since handler is outside hook scope
@@ -959,7 +958,7 @@ export default function TimelinePage() {
                 style={{ height: 12 }}
                 onScroll={handleTopScroll}
               >
-                <div style={{ width: totalWeeks * ganttColW + 380, height: 1 }} />
+                <div style={{ width: totalWeeks * ganttColW + LABEL_W, height: 1 }} />
               </div>
               <GanttChart
                 entries={timeline.entries}
