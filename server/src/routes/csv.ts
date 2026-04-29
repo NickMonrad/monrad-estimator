@@ -6,6 +6,7 @@ import { parse } from 'csv-parse/sync'
 import { stringify } from 'csv-stringify/sync'
 import { calcDurationDays } from '../utils/round.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
+import { buildSnapshot } from './snapshots.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -518,18 +519,16 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
     rtByName.set(rtName.toLowerCase(), newRt)
   }
 
-  // Auto-snapshot before import
-  const existingEpics = await prisma.epic.findMany({
-    where: { projectId },
-    include: { features: { include: { userStories: { include: { tasks: { include: { resourceType: true } } } } } } },
-  })
+  // Auto-snapshot before import using shared buildSnapshot() for full state capture
+  const existingEpics = await prisma.epic.findMany({ where: { projectId }, select: { id: true } })
   if (existingEpics.length > 0) {
+    const snapshotData = await buildSnapshot(projectId)
     await prisma.backlogSnapshot.create({
       data: {
         projectId,
         label: 'Auto-snapshot before CSV import',
         trigger: 'csv_import',
-        snapshot: existingEpics as unknown as object,
+        snapshot: snapshotData as unknown as object,
         createdById: req.userId!,
       },
     })
