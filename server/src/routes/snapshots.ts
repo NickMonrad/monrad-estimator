@@ -251,7 +251,7 @@ router.post('/:snapshotId/rollback', asyncHandler(async (req: AuthRequest, res: 
   const preRollbackData = await buildSnapshot(projectId)
   const dateStr = new Date().toISOString().slice(0, 10)
   const originalLabel = snap.label ?? snapshotId
-  await prisma.backlogSnapshot.create({
+  const preSnap = await prisma.backlogSnapshot.create({
     data: {
       projectId,
       label: `Auto-saved before rollback to '${originalLabel}' — ${dateStr}`,
@@ -270,6 +270,7 @@ router.post('/:snapshotId/rollback', asyncHandler(async (req: AuthRequest, res: 
       snapshotData !== null &&
       !('schemaVersion' in snapshotData))
 
+  try {
   if (isLegacy) {
     // --- Legacy v1: restore epics only (original behaviour) ---
     const epics = extractEpics(snapshotData)
@@ -319,15 +320,74 @@ router.post('/:snapshotId/rollback', asyncHandler(async (req: AuthRequest, res: 
     type V2Snapshot = Awaited<ReturnType<typeof buildSnapshot>>
     const v2 = snapshotData as V2Snapshot
 
-    // Build an ID map of current resource types (by snapshot id) for task FK resolution
-    const currentRTs = await prisma.resourceType.findMany({
-      where: { projectId },
-      select: { id: true, name: true },
-    })
-    const rtNameMap = new Map(currentRTs.map(rt => [rt.name.toLowerCase(), rt.id]))
-
     await prisma.$transaction(async tx => {
-      // 1. Restore epics (delete all, recreate from snapshot — IDs will change)
+      // 1. Restore ResourceTypes FIRST so task FKs resolve correctly when recreating epics
+      const rtNameMap = new Map<string, string>()
+      for (const rt of v2.resourceTypes) {
+        await tx.resourceType.upsert({
+          where: { id: rt.id },
+          update: {
+            name: rt.name,
+            category: rt.category,
+            count: rt.count,
+            hoursPerDay: rt.hoursPerDay,
+            dayRate: rt.dayRate,
+            globalTypeId: rt.globalTypeId,
+            allocationMode: rt.allocationMode,
+            allocationPercent: rt.allocationPercent,
+            allocationStartWeek: rt.allocationStartWeek,
+            allocationEndWeek: rt.allocationEndWeek,
+          },
+          create: {
+            id: rt.id,
+            name: rt.name,
+            category: rt.category,
+            count: rt.count,
+            hoursPerDay: rt.hoursPerDay,
+            dayRate: rt.dayRate,
+            globalTypeId: rt.globalTypeId,
+            allocationMode: rt.allocationMode,
+            allocationPercent: rt.allocationPercent,
+            allocationStartWeek: rt.allocationStartWeek,
+            allocationEndWeek: rt.allocationEndWeek,
+            projectId,
+          },
+        })
+        rtNameMap.set(rt.name.toLowerCase(), rt.id)
+      }
+
+      // 2. Restore NamedResources (depends on RTs existing)
+      for (const nr of v2.namedResources) {
+        await tx.namedResource.upsert({
+          where: { id: nr.id },
+          update: {
+            name: nr.name,
+            startWeek: nr.startWeek,
+            endWeek: nr.endWeek,
+            allocationPct: nr.allocationPct,
+            allocationMode: nr.allocationMode,
+            allocationPercent: nr.allocationPercent,
+            allocationStartWeek: nr.allocationStartWeek,
+            allocationEndWeek: nr.allocationEndWeek,
+            pricingModel: nr.pricingModel,
+          },
+          create: {
+            id: nr.id,
+            resourceTypeId: nr.resourceTypeId,
+            name: nr.name,
+            startWeek: nr.startWeek,
+            endWeek: nr.endWeek,
+            allocationPct: nr.allocationPct,
+            allocationMode: nr.allocationMode,
+            allocationPercent: nr.allocationPercent,
+            allocationStartWeek: nr.allocationStartWeek,
+            allocationEndWeek: nr.allocationEndWeek,
+            pricingModel: nr.pricingModel,
+          },
+        })
+      }
+
+      // 3. Restore epics (delete all, recreate from snapshot — IDs will change)
       //    We track old→new ID mapping so downstream FK restores use new IDs.
       await tx.epic.deleteMany({ where: { projectId } })
 
@@ -372,7 +432,7 @@ router.post('/:snapshotId/rollback', asyncHandler(async (req: AuthRequest, res: 
         }
       }
 
-      // 2. Restore project fields
+      // 4. Restore project fields
       if (v2.project) {
         await tx.project.update({
           where: { id: projectId },
@@ -383,84 +443,6 @@ router.post('/:snapshotId/rollback', asyncHandler(async (req: AuthRequest, res: 
             hoursPerDay: v2.project.hoursPerDay,
           },
         })
-      }
-
-      // 3. Restore ResourceTypes — update if exists, create if not
-      for (const rt of v2.resourceTypes) {
-        const exists = await tx.resourceType.findUnique({ where: { id: rt.id } })
-        if (exists) {
-          await tx.resourceType.update({
-            where: { id: rt.id },
-            data: {
-              name: rt.name,
-              category: rt.category,
-              count: rt.count,
-              hoursPerDay: rt.hoursPerDay,
-              dayRate: rt.dayRate,
-              globalTypeId: rt.globalTypeId,
-              allocationMode: rt.allocationMode,
-              allocationPercent: rt.allocationPercent,
-              allocationStartWeek: rt.allocationStartWeek,
-              allocationEndWeek: rt.allocationEndWeek,
-            },
-          })
-        } else {
-          await tx.resourceType.create({
-            data: {
-              id: rt.id,
-              name: rt.name,
-              category: rt.category,
-              count: rt.count,
-              hoursPerDay: rt.hoursPerDay,
-              dayRate: rt.dayRate,
-              globalTypeId: rt.globalTypeId,
-              allocationMode: rt.allocationMode,
-              allocationPercent: rt.allocationPercent,
-              allocationStartWeek: rt.allocationStartWeek,
-              allocationEndWeek: rt.allocationEndWeek,
-              projectId,
-            },
-          })
-        }
-        // Keep rtNameMap in sync so task FKs resolve correctly
-        rtNameMap.set(rt.name.toLowerCase(), rt.id)
-      }
-
-      // 4. Restore NamedResources — update if exists, create if not
-      for (const nr of v2.namedResources) {
-        const exists = await tx.namedResource.findUnique({ where: { id: nr.id } })
-        if (exists) {
-          await tx.namedResource.update({
-            where: { id: nr.id },
-            data: {
-              name: nr.name,
-              startWeek: nr.startWeek,
-              endWeek: nr.endWeek,
-              allocationPct: nr.allocationPct,
-              allocationMode: nr.allocationMode,
-              allocationPercent: nr.allocationPercent,
-              allocationStartWeek: nr.allocationStartWeek,
-              allocationEndWeek: nr.allocationEndWeek,
-              pricingModel: nr.pricingModel,
-            },
-          })
-        } else {
-          await tx.namedResource.create({
-            data: {
-              id: nr.id,
-              resourceTypeId: nr.resourceTypeId,
-              name: nr.name,
-              startWeek: nr.startWeek,
-              endWeek: nr.endWeek,
-              allocationPct: nr.allocationPct,
-              allocationMode: nr.allocationMode,
-              allocationPercent: nr.allocationPercent,
-              allocationStartWeek: nr.allocationStartWeek,
-              allocationEndWeek: nr.allocationEndWeek,
-              pricingModel: nr.pricingModel,
-            },
-          })
-        }
       }
 
       // 5. Restore TimelineEntries — delete then recreate using new feature IDs
@@ -553,6 +535,10 @@ router.post('/:snapshotId/rollback', asyncHandler(async (req: AuthRequest, res: 
         })
       }
     })
+  }
+  } catch (err) {
+    await prisma.backlogSnapshot.delete({ where: { id: preSnap.id } }).catch(() => {})
+    throw err
   }
 
   res.json({ message: 'Rollback complete' })
