@@ -113,6 +113,16 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'resourceTypes array is required' }); return
   }
 
+  // Fix 4: element-level validation — run BEFORE snapshot to avoid wasteful writes
+  const invalid = candidateRTs.some(
+    r => typeof r.resourceTypeId !== 'string'
+      || !Number.isInteger(r.count) || r.count < 1
+      || typeof r.suggestedStartWeek !== 'number' || r.suggestedStartWeek < 0,
+  )
+  if (invalid) {
+    res.status(400).json({ error: 'Invalid resourceTypes element' }); return
+  }
+
   // ── 1. Create pre-apply snapshot for undo support ─────────────────────────
   const snapshotData = await buildSnapshot(projectId)
   const dateStr = new Date().toISOString().slice(0, 10)
@@ -152,11 +162,21 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // 3c. Prepare updated SchedulerInput with new counts
-    const updatedRTs = schedulerInput.resourceTypes.map(rt => ({
-      ...rt,
-      count: countMap.get(rt.id) ?? rt.count,
-    })) as SchedulerResourceType[]
+    // 3c. Prepare updated SchedulerInput with new counts AND new namedResource startWeeks.
+    // Fix: the DB is updated in 3b but the in-memory schedulerInput still holds the old
+    // startWeek values loaded before the transaction — override them here so the scheduler
+    // call materialises the timeline with the correct ramp-up start week.
+    const updatedRTs = schedulerInput.resourceTypes.map(rt => {
+      const newCount = countMap.get(rt.id) ?? rt.count
+      const newStartWeek = startWeekMap.get(rt.id)
+      return {
+        ...rt,
+        count: newCount,
+        namedResources: newStartWeek !== undefined && newStartWeek > 0
+          ? rt.namedResources.map(nr => ({ ...nr, startWeek: newStartWeek }))
+          : rt.namedResources,
+      }
+    }) as SchedulerResourceType[]
 
     const { featureSchedule, storySchedule } = runScheduler({
       ...schedulerInput,
@@ -282,12 +302,14 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const result = runOptimiser(schedulerInput, config)
 
   // ── 7. Serialise Maps to plain objects for JSON transport ─────────────────
-  // Maps don't serialise automatically; convert to { [rtName]: count } objects.
+  // Maps don't serialise automatically; convert to { [rtId]: count } objects.
+  // gapWeeksByResourceTypeId is keyed by resourceTypeId; include a resourceTypes
+  // lookup in the response so consumers can map ids → names without a second fetch.
   const serialiseCandidate = (c: OptimiserCandidate) => ({
     ...c,
     metrics: {
       ...c.metrics,
-      gapWeeksByType: Object.fromEntries(c.metrics.gapWeeksByType),
+      gapWeeksByResourceTypeId: Object.fromEntries(c.metrics.gapWeeksByResourceTypeId),
     },
   })
 
@@ -295,6 +317,8 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     candidates: result.candidates.map(serialiseCandidate),
     baseline: serialiseCandidate(result.baseline),
     searchStats: result.searchStats,
+    /** Lookup table: id → name for gapWeeksByResourceTypeId consumers */
+    resourceTypes: schedulerInput.resourceTypes.map(rt => ({ id: rt.id, name: rt.name })),
   })
 }))
 

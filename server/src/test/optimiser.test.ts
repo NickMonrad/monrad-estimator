@@ -8,7 +8,11 @@
  * We construct minimal SchedulerInput objects and assert on OptimiserResult.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import request from 'supertest'
+import jwt from 'jsonwebtoken'
+import { app } from '../index.js'
+import { prisma } from '../lib/prisma.js'
 import {
   runOptimiser,
   type OptimiserConfig,
@@ -459,5 +463,239 @@ describe('runOptimiser', () => {
     expect(result.searchStats.scenariosEvaluated).toBeGreaterThanOrEqual(0)
     expect(result.searchStats.durationMs).toBeGreaterThanOrEqual(0)
     expect(typeof result.searchStats.sampled).toBe('boolean')
+  })
+
+  // ── Fix 7(a): topN > actual candidates — no padding ───────────────────────
+  it('topN exceeding available scenarios returns only actual candidates (no padding)', () => {
+    const input = twoRtInput()
+    // 3×3 = 9 total scenarios in the grid
+    const result = runOptimiser(input, baseConfig({
+      mode: 'speed',
+      constraints: {
+        countRanges: [
+          { resourceTypeId: 'rt-dev', min: 1, max: 3 },
+          { resourceTypeId: 'rt-des', min: 1, max: 3 },
+        ],
+        allowRampUp: false,
+      },
+      topN: 20, // asks for more than available
+    }))
+
+    // 9 scenarios run, 9 found (no constraints to filter any out)
+    expect(result.searchStats.scenariosEvaluated).toBe(9)
+    expect(result.searchStats.candidatesFound).toBe(9)
+    // Slice to topN but don't pad — must be exactly 9
+    expect(result.candidates.length).toBe(9)
+    // No NaN scores
+    for (const c of result.candidates) {
+      expect(isNaN(c.score)).toBe(false)
+      expect(isFinite(c.score)).toBe(true)
+    }
+  })
+
+  // ── Fix 7(b): single-scenario grid (all min===max===current) ─────────────
+  it('single-scenario grid returns 1 candidate with metrics ≈ baseline, no NaN in balanced mode', () => {
+    const input = twoRtInput() // rt-dev count=2, rt-des count=1
+
+    const result = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [
+          { resourceTypeId: 'rt-dev', min: 2, max: 2 }, // locked to current
+          { resourceTypeId: 'rt-des', min: 1, max: 1 }, // locked to current
+        ],
+        allowRampUp: false,
+      },
+      topN: 5,
+    }))
+
+    expect(result.searchStats.scenariosEvaluated).toBe(1)
+    expect(result.searchStats.candidatesFound).toBe(1)
+    expect(result.candidates.length).toBe(1)
+
+    const c = result.candidates[0]
+    // The single candidate is the current config — metrics must equal baseline
+    expect(c.metrics.deliveryWeeks).toBe(result.baseline.metrics.deliveryWeeks)
+    expect(c.metrics.avgUtilisationPct).toBeCloseTo(result.baseline.metrics.avgUtilisationPct, 5)
+    // No NaN scores in balanced mode (single-point normalisation guard)
+    expect(isNaN(c.score)).toBe(false)
+    expect(isFinite(c.score)).toBe(true)
+  })
+
+  // ── Fix 7(c): manually pinned story — demand still counted ────────────────
+  it('manually pinned story (via manualStoryEntries): task demand is counted in utilisation', () => {
+    const rt = makeRt('rt-dev', 'Developer', 2)
+    // Story will be pinned to startWeek: 5 via manualStoryEntries (simulating isManual=true)
+    const story = makeStory('s-pinned', [makeTask(80, 'rt-dev', 'Developer')])
+    const feature = makeFeature('f1', [story])
+    const epic = makeEpic('e1', [feature])
+
+    const input: SchedulerInput = {
+      project: { hoursPerDay: 8 },
+      epics: [epic],
+      resourceTypes: [rt],
+      epicDeps: [],
+      manualFeatureEntries: [],
+      // Pin the story to week 5 — simulates a story with isManual=true on its timeline entry
+      manualStoryEntries: [{ storyId: 's-pinned', startWeek: 5 }],
+      resourceLevel: false,
+    }
+
+    const result = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 2, max: 2 }],
+        allowRampUp: false,
+      },
+      topN: 1,
+    }))
+
+    // computeMetrics must count the task's 80h demand even though the story is manually pinned
+    expect(result.baseline.metrics.avgUtilisationPct).toBeGreaterThan(0)
+    expect(isNaN(result.baseline.metrics.avgUtilisationPct)).toBe(false)
+
+    // Candidates should not have NaN scores (verifies balanced-mode normalisation)
+    if (result.candidates.length > 0) {
+      expect(isNaN(result.candidates[0].score)).toBe(false)
+      expect(isFinite(result.candidates[0].score)).toBe(true)
+    }
+  })
+
+  // ── Fix 6: seeded PRNG produces deterministic samples ─────────────────────
+  it('seeded PRNG: randomSample is deterministic when rng is injected', () => {
+    // Tiny mulberry32 — fast, seedable, no external dep
+    function mulberry32(seed: number): () => number {
+      let s = seed
+      return function () {
+        s |= 0; s = (s + 0x6D2B79F5) | 0
+        let t = Math.imul(s ^ (s >>> 15), 1 | s)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+    }
+
+    // 4 RTs with 10 options each → 10^4 = 10,000 > MAX_SCENARIOS → sampling triggered
+    const rts: SchedulerResourceType[] = [
+      makeRt('rt-a', 'TypeA', 5),
+      makeRt('rt-b', 'TypeB', 5),
+      makeRt('rt-c', 'TypeC', 5),
+      makeRt('rt-d', 'TypeD', 5),
+    ]
+    const story = makeStory('s', [makeTask(40, 'rt-a', 'TypeA')])
+    const feature = makeFeature('f', [story])
+    const epic = makeEpic('e', [feature])
+    const input: SchedulerInput = {
+      project: { hoursPerDay: 8 },
+      epics: [epic],
+      resourceTypes: rts,
+      epicDeps: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+      resourceLevel: false,
+    }
+
+    const countRanges = [
+      { resourceTypeId: 'rt-a', min: 1, max: 10 },
+      { resourceTypeId: 'rt-b', min: 1, max: 10 },
+      { resourceTypeId: 'rt-c', min: 1, max: 10 },
+      { resourceTypeId: 'rt-d', min: 1, max: 10 },
+    ]
+
+    const run1 = runOptimiser(input, baseConfig({
+      constraints: { countRanges, allowRampUp: false },
+      topN: 5,
+      rng: mulberry32(42),
+    }))
+
+    const run2 = runOptimiser(input, baseConfig({
+      constraints: { countRanges, allowRampUp: false },
+      topN: 5,
+      rng: mulberry32(42),
+    }))
+
+    // Both runs used sampling
+    expect(run1.searchStats.sampled).toBe(true)
+    expect(run2.searchStats.sampled).toBe(true)
+
+    // Same seed → same candidates in same order
+    expect(run1.candidates.length).toBe(run2.candidates.length)
+    for (let i = 0; i < run1.candidates.length; i++) {
+      expect(run1.candidates[i].resourceTypes).toEqual(run2.candidates[i].resourceTypes)
+      expect(run1.candidates[i].score).toBe(run2.candidates[i].score)
+    }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Route-level tests: POST /api/projects/:projectId/optimise/apply
+// ─────────────────────────────────────────────────────────────────────────────
+
+process.env.JWT_SECRET = 'test-secret'
+
+const userId = 'user-opt-1'
+const token = jwt.sign({ userId }, 'test-secret')
+const authHeader = `Bearer ${token}`
+const projectId = 'proj-opt-1'
+const mockProject = { id: projectId, ownerId: userId, hoursPerDay: 8 }
+
+describe('POST /api/projects/:projectId/optimise/apply — element-level validation', () => {
+  beforeEach(() => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+  })
+
+  it('returns 400 when count is not an integer (e.g. "three")', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [
+          { resourceTypeId: 'rt-1', count: 'three', suggestedStartWeek: 0 },
+        ],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid resourceTypes element')
+  })
+
+  it('returns 400 when count < 1', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [
+          { resourceTypeId: 'rt-1', count: 0, suggestedStartWeek: 0 },
+        ],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid resourceTypes element')
+  })
+
+  it('returns 400 when resourceTypeId is missing', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [
+          { count: 2, suggestedStartWeek: 0 },
+        ],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid resourceTypes element')
+  })
+
+  it('returns 400 when suggestedStartWeek is negative', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [
+          { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: -1 },
+        ],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid resourceTypes element')
   })
 })

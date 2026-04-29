@@ -53,6 +53,11 @@ export interface OptimiserConfig {
   dayRates?: Map<string, number>
   /** Top N candidates to return (ranked best-first) */
   topN: number
+  /**
+   * Optional PRNG for random sampling (injected for deterministic testing).
+   * Defaults to Math.random when not provided.
+   */
+  rng?: () => number
 }
 
 export interface OptimiserCandidate {
@@ -65,8 +70,8 @@ export interface OptimiserCandidate {
   metrics: {
     deliveryWeeks: number
     avgUtilisationPct: number
-    /** Count of gap weeks per RT name (capacity > 0, no demand scheduled) */
-    gapWeeksByType: Map<string, number>
+    /** Count of gap weeks per resourceTypeId (capacity > 0, no demand scheduled) */
+    gapWeeksByResourceTypeId: Map<string, number>
     /** 0 when dayRates not provided */
     estimatedCost: number
     parallelWarningCount: number
@@ -80,7 +85,10 @@ export interface OptimiserResult {
   candidates: OptimiserCandidate[] // top N, ranked best-first
   baseline: OptimiserCandidate     // current config metrics for diff display
   searchStats: {
+    /** Total number of scheduler invocations (includes filtered-out scenarios) */
     scenariosEvaluated: number
+    /** Number of scenarios that passed all constraints (≤ scenariosEvaluated) */
+    candidatesFound: number
     durationMs: number
     /** true when search space exceeded MAX_SCENARIOS and random sampling was used */
     sampled: boolean
@@ -129,6 +137,7 @@ function cartesianProduct(
 function randomSample(
   ranges: Array<{ resourceTypeId: string; min: number; max: number }>,
   n: number,
+  rng: () => number = Math.random,
 ): Array<Array<{ resourceTypeId: string; count: number }>> {
   const samples: Array<Array<{ resourceTypeId: string; count: number }>> = []
   const seen = new Set<string>()
@@ -137,7 +146,7 @@ function randomSample(
   for (let attempts = 0; attempts < maxAttempts && samples.length < n; attempts++) {
     const config = ranges.map(r => ({
       resourceTypeId: r.resourceTypeId,
-      count: r.min + Math.floor(Math.random() * (r.max - r.min + 1)),
+      count: r.min + Math.floor(rng() * (r.max - r.min + 1)),
     }))
     const key = config.map(c => `${c.resourceTypeId}:${c.count}`).join(',')
     if (!seen.has(key)) {
@@ -221,7 +230,7 @@ function computeMetrics(
   // ── Utilisation and gap weeks per RT ──────────────────────────────────────
   let totalUtil = 0
   let rtWithDemandCount = 0
-  const gapWeeksByType = new Map<string, number>()
+  const gapWeeksByResourceTypeId = new Map<string, number>()
 
   for (const rt of input.resourceTypes) {
     const demandHours = demandHoursByRtId.get(rt.id) ?? 0
@@ -241,7 +250,7 @@ function computeMetrics(
       totalUtil += (demandHours / totalCapacityHours) * 100
       rtWithDemandCount++
     }
-    gapWeeksByType.set(rt.name, gapWeeks)
+    gapWeeksByResourceTypeId.set(rt.id, gapWeeks)
   }
 
   const avgUtilisationPct = rtWithDemandCount > 0 ? totalUtil / rtWithDemandCount : 0
@@ -259,7 +268,7 @@ function computeMetrics(
   return {
     deliveryWeeks,
     avgUtilisationPct,
-    gapWeeksByType,
+    gapWeeksByResourceTypeId,
     estimatedCost,
     parallelWarningCount,
   }
@@ -338,8 +347,9 @@ function scoreCandidate(
 export function runOptimiser(
   baseInput: SchedulerInput,
   config: OptimiserConfig,
+  _now: () => number = Date.now,
 ): OptimiserResult {
-  const startMs = Date.now()
+  const startMs = _now()
   const { mode, constraints, dayRates, topN } = config
   const { countRanges, allowRampUp, maxBudget, maxDurationWeeks } = constraints
 
@@ -397,7 +407,7 @@ export function runOptimiser(
   if (totalSpace <= MAX_SCENARIOS) {
     scenarios = cartesianProduct(countRanges)
   } else {
-    scenarios = randomSample(countRanges, MAX_SCENARIOS)
+    scenarios = randomSample(countRanges, MAX_SCENARIOS, config.rng ?? Math.random)
     sampled = true
   }
 
@@ -408,8 +418,10 @@ export function runOptimiser(
   }
 
   const rawCandidates: RawCandidate[] = []
+  let scenariosRun = 0
 
   for (const scenario of scenarios) {
+    scenariosRun++
     const overrideMap = new Map(scenario.map(s => [s.resourceTypeId, s.count]))
     const newRTs = applyCountOverrides(baseInput.resourceTypes, scenario)
     const scenarioInput: SchedulerInput = { ...baseInput, resourceTypes: newRTs, resourceLevel: false }
@@ -501,8 +513,9 @@ export function runOptimiser(
     candidates: scoredCandidates.slice(0, topN),
     baseline: baselineCandidate,
     searchStats: {
-      scenariosEvaluated: rawCandidates.length,
-      durationMs: Date.now() - startMs,
+      scenariosEvaluated: scenariosRun,
+      candidatesFound: rawCandidates.length,
+      durationMs: _now() - startMs,
       sampled,
     },
   }
