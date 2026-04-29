@@ -219,6 +219,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Doc Generator v2 (continued) — redesigned Documents page (generation panel + document grid), Gantt chart section (server-side SVG), sections metadata on document cards, project name in label/filename, HTML preserved in CSV export for round-trip fidelity | #166 |
 | Quick wins — dark mode description contrast, project settings tax/onboarding fields, backlog feature mode (sequential/parallel) badges, scope toggle pill redesign, CSV import row colouring, unrated resource warning improvements; Gantt PDF sanitize-html fix + landscape page; pin axios to 1.14.0 (supply chain safety) | #220 |
 | Backlog dependency tracking — EpicDependency schema + API (circular dep detection), epic dep hard constraints in timeline scheduler, epic dep arrows on Timeline Gantt, dep selector UI on backlog epic/feature rows, EpicDependsOn/FeatureDependsOn columns in CSV import/export | #228 |
+| Timeline scale toggle (week/month/quarter/year), cross-epic FeatureDependsOn in CSV, TemplateSize column in backlog CSV for template task auto-expand; Year scale (H1/H2 top row, Q1–Q4 bottom row); allocation mode/% + timeline start/end weeks in Resource Counts; Expand All / Collapse All toggle; dep picker search filter; top scrollbar mirror; full-width Gantt layout; named resource per-person T&M histogram; onboarding/buffer zone calc fix; auto-reschedule prevention on resource changes | #231 |
 
 ---
 
@@ -233,17 +234,6 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | # | Title |
 |---|---|
 | [#108](https://github.com/NickMonrad/monrad-estimator/issues/108) | docs: comprehensive functional specification (`docs/FUNCTIONAL_SPEC.md`) |
-| [#109](https://github.com/NickMonrad/monrad-estimator/issues/109) | Global Customer entity (name, description, account code, CRM link) + link to projects |
-| [#57](https://github.com/NickMonrad/monrad-estimator/issues/57) | Template tasks: assumptions + description fields |
-| [#61](https://github.com/NickMonrad/monrad-estimator/issues/61) | Template tasks: percentage-based tasks (% of cumulative totals) |
-| [#56](https://github.com/NickMonrad/monrad-estimator/issues/56) | Clone project |
-| [#64](https://github.com/NickMonrad/monrad-estimator/issues/64) | Global configuration menu (resource types, templates, overhead defaults) |
-| [#23](https://github.com/NickMonrad/monrad-estimator/issues/23) | Global default overheads, inheritable per project |
-| [#46](https://github.com/NickMonrad/monrad-estimator/issues/46) | Soft-delete templates with restore |
-| [#62](https://github.com/NickMonrad/monrad-estimator/issues/62) | Refactor: flatMap in effort.ts + snapshots.ts |
-| [#19](https://github.com/NickMonrad/monrad-estimator/issues/19) | Apply template button — improve discoverability |
-| [#69](https://github.com/NickMonrad/monrad-estimator/issues/69) | GST configurable rate per project via Project Settings (ex-GST/inc-GST totals already ship in Resource Profile; rate UI missing) |
-| [#229](https://github.com/NickMonrad/monrad-estimator/issues/229) | CSV import: auto-expand template tasks and backfill estimates from template sizing (requires new TemplateSize column) |
 
 ### 🚀 Feature ideas
 | # | Title |

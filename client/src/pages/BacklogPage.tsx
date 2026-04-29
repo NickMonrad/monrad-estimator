@@ -71,6 +71,8 @@ export default function BacklogPage() {
     qc.invalidateQueries({ queryKey: ['backlog', projectId] })
     qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+    qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
+    qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
   }
 
   // Backlog-only invalidation: for metadata-only mutations (name, description, assumptions)

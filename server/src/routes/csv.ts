@@ -13,6 +13,7 @@ router.use(authenticate)
 const CSV_HEADERS = [
   'Type', 'Epic', 'Feature', 'Story', 'Task',
   'Template',
+  'TemplateSize',
   'ResourceType',
   'HoursEffort', 'DurationDays',
   'Description', 'Assumptions',
@@ -35,6 +36,7 @@ interface CsvRow {
   EpicDependsOn: string
   FeatureDependsOn: string
   Template: string
+  TemplateSize: string
   ResourceType: string
   // legacy fields — kept for backwards compat (old CSVs may still have these)
   HoursExtraSmall: string
@@ -63,6 +65,7 @@ export interface StagedRow {
   epicDependsOn: string[]   // array of epic names
   featureDependsOn: string[]  // array of feature names
   template: string
+  templateSize: string   // 'XS' | 'Small' | 'Medium' | 'Large' | 'XL' | ''
   resourceType: string
   // legacy fields kept for backwards compat
   hoursExtraSmall: number
@@ -90,6 +93,21 @@ function parseNum(val: string | undefined): number {
 
 function parseStatus(val: string | undefined): boolean {
   return (val?.trim().toLowerCase() === 'inactive') ? false : true
+}
+
+/** Pick hours from a TemplateTask based on the sizing tier string */
+function pickHours(
+  task: { hoursExtraSmall: number; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number },
+  size: string,
+): number {
+  switch (size.toLowerCase()) {
+    case 'xs':     return task.hoursExtraSmall ?? 0
+    case 'small':  return task.hoursSmall ?? 0
+    case 'medium': return task.hoursMedium ?? 0
+    case 'large':  return task.hoursLarge ?? 0
+    case 'xl':     return task.hoursExtraLarge ?? 0
+    default:       return 0
+  }
 }
 
 /** Prevent CSV formula injection by prefixing dangerous characters with a single quote */
@@ -140,24 +158,60 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
 
   const featureDepsRaw = await prisma.featureDependency.findMany({
     where: { feature: { epic: { projectId: req.params.projectId as string } } },
-    include: { dependsOn: { select: { name: true } } },
+    include: {
+      feature: { select: { epicId: true } },
+      dependsOn: { select: { name: true, epicId: true, epic: { select: { name: true } } } },
+    },
   })
   const featureDepNames = new Map<string, string[]>()
   for (const d of featureDepsRaw) {
     const arr = featureDepNames.get(d.featureId) ?? []
-    arr.push(d.dependsOn.name)
+    // Use qualified "EpicName: FeatureName" format for cross-epic deps so they round-trip correctly
+    const isCrossEpic = d.feature.epicId !== d.dependsOn.epicId
+    arr.push(isCrossEpic ? `${d.dependsOn.epic.name}: ${d.dependsOn.name}` : d.dependsOn.name)
     featureDepNames.set(d.featureId, arr)
   }
 
   if (epics.length === 0) {
-    // blank template with one example row
-    rows.push(['Task', 'My Epic', 'My Feature', 'My Story', 'My Task', '', 'Developer', '', '', '', '', '', '', '', '', '', '', ''])
+    // Description row — explains each column
+    rows.push([
+      'Type: Epic | Feature | Story | Task',
+      'Epic name (required on all rows)',
+      'Feature name (required on Feature/Story/Task rows)',
+      'Story name (required on Story/Task rows)',
+      'Task name (required on Task rows)',
+      'Template name to link to story (Story rows only)',
+      'Template size tier: XS | Small | Medium | Large | XL (Story rows only — auto-expands tasks)',
+      'Resource type name (Task rows only)',
+      'Hours of effort (Task rows only)',
+      'Duration in days — auto-calculated if blank (Task rows only)',
+      'Description (rich text supported)',
+      'Assumptions (rich text supported)',
+      'Epic status: active | inactive',
+      'Feature status: active | inactive',
+      'Story status: active | inactive',
+      'Epic feature mode: sequential | parallel',
+      'Feature story mode: sequential | parallel',
+      'Epic dependencies: comma-separated epic names this epic depends on',
+      'Feature dependencies: comma-separated feature names this feature depends on (same-epic: "FeatureName"; cross-epic: "EpicName: FeatureName")',
+    ])
+    // Example Epic row
+    rows.push(['Epic', 'Platform Setup', '', '', '', '', '', '', '', '', 'Core infrastructure and environment setup', '', 'active', '', '', 'sequential', '', '', ''])
+    rows.push(['Epic', 'Mobile App', '', '', '', '', '', '', '', '', 'Mobile front-end layer', '', 'active', '', '', 'sequential', '', 'Platform Setup', ''])
+    // Example Feature rows — same-epic dep, then cross-epic dep
+    rows.push(['Feature', 'Platform Setup', 'Authentication', '', '', '', '', '', '', '', 'Login and registration flows', '', '', 'active', '', '', 'sequential', '', ''])
+    rows.push(['Feature', 'Platform Setup', 'User Profile', '', '', '', '', '', '', '', 'User profile management', '', '', 'active', '', '', 'sequential', '', 'Authentication'])
+    rows.push(['Feature', 'Mobile App', 'Login Screen', '', '', '', '', '', '', '', 'Mobile login UI', '', '', 'active', '', '', 'sequential', '', 'Platform Setup: Authentication'])
+    // Example Story row (with template)
+    rows.push(['Story', 'Platform Setup', 'Authentication', 'User can log in', '', 'Login Flow', 'Medium', '', '', '', 'As a user I can log in with email and password', '', '', '', 'active', '', '', '', ''])
+    // Example Task row
+    rows.push(['Task', 'Platform Setup', 'Authentication', 'User can log in', 'Backend API', '', '', 'Developer', '8', '', '', '', '', '', '', '', '', '', ''])
   } else {
     for (const epic of epics) {
       // Epic row
       rows.push([
         'Epic', sanitizeCsvCell(epic.name), '', '', '',
-        '', '', '', '',
+        '', '', '', '', '',
         sanitizeCsvCell(epic.description ?? ''), sanitizeCsvCell(epic.assumptions ?? ''),
         epic.isActive ? 'active' : 'inactive', '', '',
         epic.featureMode ?? 'sequential', '',
@@ -168,7 +222,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
         // Feature row
         rows.push([
           'Feature', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), '', '',
-          '', '', '', '',
+          '', '', '', '', '',
           sanitizeCsvCell(feature.description ?? ''), sanitizeCsvCell(feature.assumptions ?? ''),
           '', feature.isActive ? 'active' : 'inactive', '',
           '', feature.featureMode ?? 'sequential',
@@ -180,6 +234,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
           rows.push([
             'Story', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), sanitizeCsvCell(story.name), '',
             sanitizeCsvCell(story.appliedTemplate?.name ?? ''),
+            '', // TemplateSize — UserStory has no sizingTier field; exported blank
             '', '', '',
             sanitizeCsvCell(story.description ?? ''), sanitizeCsvCell(story.assumptions ?? ''),
             '', '', story.isActive ? 'active' : 'inactive',
@@ -191,7 +246,8 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
           for (const task of story.tasks) {
             rows.push([
               'Task', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), sanitizeCsvCell(story.name), sanitizeCsvCell(task.name),
-              '',
+              '', // Template
+              '', // TemplateSize
               sanitizeCsvCell(task.resourceType?.name ?? ''),
               String(task.hoursEffort),
               String(task.durationDays != null ? Math.round(task.durationDays * 100) / 100 : ''),
@@ -271,6 +327,7 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     const rawFeatureMode = raw.FeatureMode?.trim().toLowerCase() || 'sequential'
     const featureMode = (rawFeatureMode === 'sequential' || rawFeatureMode === 'parallel') ? rawFeatureMode : 'sequential'
     const template = raw.Template?.trim() ?? ''
+    const templateSize = raw.TemplateSize?.trim() ?? ''
 
     const epicDependsOn = (raw.EpicDependsOn ?? '')
       .split(',')
@@ -305,6 +362,15 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       warnings.push(`Template column is only applied on Story rows — will be ignored for this ${type} row`)
     }
 
+    // TemplateSize validation — only meaningful on Story rows
+    const validSizes = new Set(['xs', 'small', 'medium', 'large', 'xl'])
+    if (type === 'Story' && templateSize && !validSizes.has(templateSize.toLowerCase())) {
+      warnings.push(`TemplateSize "${templateSize}" is not valid — use XS, Small, Medium, Large, or XL`)
+    }
+    if (type !== 'Story' && templateSize) {
+      warnings.push(`TemplateSize column is only applied on Story rows — will be ignored for this ${type} row`)
+    }
+
     // Status-on-wrong-type warnings
     if (type !== 'Epic' && raw.EpicStatus?.trim()) {
       warnings.push(`EpicStatus is only applied on Epic rows — will be ignored for this ${type} row`)
@@ -335,6 +401,7 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       epicDependsOn,
       featureDependsOn,
       template,
+      templateSize,
       resourceType,
       hoursExtraSmall: parseNum(raw.HoursExtraSmall),
       hoursSmall: parseNum(raw.HoursSmall),
@@ -353,6 +420,8 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
   // Cross-row dependency name validation (warnings only — import still proceeds)
   const knownEpicNames = new Set(staged.filter(r => r.type === 'Epic').map(r => r.epic))
   const knownFeatureNames = new Set(staged.filter(r => r.type === 'Feature').map(r => r.feature))
+  // Build "EpicName||FeatureName" set for cross-epic qualified lookup
+  const knownEpicFeaturePairs = new Set(staged.filter(r => r.type === 'Feature').map(r => `${r.epic}||${r.feature}`))
   for (const row of staged) {
     for (const depName of row.epicDependsOn) {
       if (!knownEpicNames.has(depName)) {
@@ -360,7 +429,15 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       }
     }
     for (const depName of row.featureDependsOn) {
-      if (!knownFeatureNames.has(depName)) {
+      const colonIdx = depName.indexOf(': ')
+      if (colonIdx !== -1) {
+        // Cross-epic qualified format: "EpicName: FeatureName"
+        const epicPart = depName.slice(0, colonIdx)
+        const featPart = depName.slice(colonIdx + 2)
+        if (!knownEpicFeaturePairs.has(`${epicPart}||${featPart}`)) {
+          row.warnings.push(`FeatureDependsOn: '${depName}' not found in this import`)
+        }
+      } else if (!knownFeatureNames.has(depName)) {
         row.warnings.push(`FeatureDependsOn: '${depName}' not found in this import`)
       }
     }
@@ -466,6 +543,15 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
     const epicMap = new Map<string, string>() // epic name → epic id
     const featureMap = new Map<string, string>() // "epic||feature" → feature id
     const storyMap = new Map<string, string>() // "epic||feature||story" → story id
+    const storyTemplateMap = new Map<string, { appliedTemplateId: string | null; templateSize: string }>()
+
+    // Build set of story keys that have at least one Task row in the CSV (used for Gap 1 auto-expand check)
+    const storyKeysWithTaskRows = new Set<string>()
+    for (const row of rows) {
+      if (row.type === 'Task' && row.story) {
+        storyKeysWithTaskRows.add(`${row.epic}||${row.feature}||${row.story}`)
+      }
+    }
 
     let epicOrder = await tx.epic.count({ where: { projectId } })
 
@@ -564,6 +650,7 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           ? await tx.featureTemplate.findUnique({ where: { name: row.template } })
           : null
         const appliedTemplateId = templateRecord?.id ?? null
+        const templateSize = isStoryRow ? (row.templateSize ?? '') : ''
 
         let story = await tx.userStory.findFirst({ where: { featureId, name: row.story } })
         if (!story) {
@@ -596,6 +683,44 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           storiesUpdated++
         }
         storyMap.set(storyKey, story.id)
+
+        // Track template info for Gap 2 (Task rows that need hour backfill)
+        storyTemplateMap.set(storyKey, { appliedTemplateId, templateSize })
+
+        // Gap 1: Auto-expand template tasks when no Task rows for this story appear in the CSV
+        if (appliedTemplateId && templateSize && !storyKeysWithTaskRows.has(storyKey)) {
+          const tmpl = await tx.featureTemplate.findUnique({
+            where: { id: appliedTemplateId },
+            include: { tasks: { orderBy: { order: 'asc' } } },
+          })
+          if (tmpl) {
+            let taskOrder = await tx.task.count({ where: { userStoryId: story.id } })
+            for (const tmplTask of tmpl.tasks) {
+              const hours = pickHours(tmplTask, templateSize)
+              const tmplRt = tmplTask.resourceTypeName
+                ? rtByName.get(tmplTask.resourceTypeName.toLowerCase())
+                : undefined
+              const tmplResourceTypeId = tmplRt?.id ?? null
+              const tmplHoursPerDay = tmplRt?.hoursPerDay ?? fallbackHoursPerDay
+              const existingTask = await tx.task.findFirst({
+                where: { userStoryId: story.id, name: tmplTask.name },
+              })
+              if (!existingTask) {
+                await tx.task.create({
+                  data: {
+                    name: tmplTask.name,
+                    userStoryId: story.id,
+                    order: taskOrder++,
+                    resourceTypeId: tmplResourceTypeId,
+                    hoursEffort: hours,
+                    durationDays: calcDurationDays(hours, tmplHoursPerDay),
+                  },
+                })
+                tasksCreated++
+              }
+            }
+          }
+        }
       }
       const storyId = storyMap.get(storyKey)!
 
@@ -611,6 +736,20 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
       const resourceTypeId = resourceType?.id ?? null
       const hoursPerDay = resourceType?.hoursPerDay ?? fallbackHoursPerDay
 
+      // Gap 2: Backfill hours from template when row hours are blank (0) and story has Template+TemplateSize
+      let effectiveHoursEffort = row.hoursEffort
+      if (effectiveHoursEffort === 0) {
+        const storyTmpl = storyTemplateMap.get(storyKey)
+        if (storyTmpl?.appliedTemplateId && storyTmpl.templateSize) {
+          const tmplTask = await tx.templateTask.findFirst({
+            where: { templateId: storyTmpl.appliedTemplateId, name: row.task },
+          })
+          if (tmplTask) {
+            effectiveHoursEffort = pickHours(tmplTask, storyTmpl.templateSize)
+          }
+        }
+      }
+
       const task = await tx.task.findFirst({ where: { userStoryId: storyId, name: row.task } })
       if (!task) {
         const taskCount = await tx.task.count({ where: { userStoryId: storyId } })
@@ -620,8 +759,8 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
             userStoryId: storyId,
             order: taskCount,
             resourceTypeId,
-            hoursEffort: row.hoursEffort,
-            durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
+            hoursEffort: effectiveHoursEffort,
+            durationDays: row.durationDays || calcDurationDays(effectiveHoursEffort, hoursPerDay),
             description: row.description || null,
             assumptions: row.assumptions || null,
           },
@@ -632,8 +771,8 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           where: { id: task.id },
           data: {
             resourceTypeId,
-            hoursEffort: row.hoursEffort,
-            durationDays: row.durationDays || calcDurationDays(row.hoursEffort, hoursPerDay),
+            hoursEffort: effectiveHoursEffort,
+            durationDays: row.durationDays || calcDurationDays(effectiveHoursEffort, hoursPerDay),
             description: row.description || null,
             assumptions: row.assumptions || null,
           },
@@ -664,19 +803,31 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
     }
 
     // ── Feature dependencies ──────────────────────────────────────────────────
-    // Build name→id map from what was just created/updated
-    const featureNameToId = new Map<string, string>()
+    // Build epic-scoped name→id map: epicName → (featureName → featureId)
+    // Scoping to the same epic prevents cross-epic name collisions when templates
+    // share identical feature names (e.g. every epic has "Infrastructure & Environment")
+    const featureNameByEpic = new Map<string, Map<string, string>>()
     for (const [featureKey, featureId] of featureMap.entries()) {
-      // featureKey is "epicName||featureName" — extract just the feature name
-      const featureName = featureKey.split('||')[1]
-      if (featureName) featureNameToId.set(featureName, featureId)
+      const [epicName, featureName] = featureKey.split('||')
+      if (!featureNameByEpic.has(epicName)) featureNameByEpic.set(epicName, new Map())
+      featureNameByEpic.get(epicName)!.set(featureName, featureId)
     }
     for (const row of rows) {
       if (row.type !== 'Feature' || !row.featureDependsOn?.length) continue
       const featureId = featureMap.get(`${row.epic}||${row.feature}`)
       if (!featureId) continue
+      const epicFeatures = featureNameByEpic.get(row.epic) ?? new Map<string, string>()
       for (const depName of row.featureDependsOn) {
-        const depFeatureId = featureNameToId.get(depName)
+        // Support "EpicName: FeatureName" for cross-epic deps; plain name = same-epic
+        let depFeatureId: string | undefined
+        const colonIdx = depName.indexOf(': ')
+        if (colonIdx !== -1) {
+          const epicPart = depName.slice(0, colonIdx)
+          const featPart = depName.slice(colonIdx + 2)
+          depFeatureId = featureNameByEpic.get(epicPart)?.get(featPart)
+        } else {
+          depFeatureId = epicFeatures.get(depName)
+        }
         if (!depFeatureId || depFeatureId === featureId) continue
         await tx.featureDependency.upsert({
           where: { featureId_dependsOnId: { featureId, dependsOnId: depFeatureId } },
