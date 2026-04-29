@@ -188,7 +188,7 @@ export default function GanttLabelPanel({
                       title="Add dependency"
                     >＋</button>
                     {depPickerEpicId === row.epicId && (
-                      <div className="absolute top-full left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[140px]">
+                      <div className={`absolute ${row.epicIdx >= row.epicCount - 4 ? 'bottom-full mb-1' : 'top-full mt-1'} left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[140px] max-h-64 overflow-y-auto`}>
                         {allEpicRows
                           .filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId))
                           .map(r => (
