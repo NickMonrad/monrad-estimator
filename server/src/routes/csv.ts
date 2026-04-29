@@ -158,12 +158,17 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
 
   const featureDepsRaw = await prisma.featureDependency.findMany({
     where: { feature: { epic: { projectId: req.params.projectId as string } } },
-    include: { dependsOn: { select: { name: true } } },
+    include: {
+      feature: { select: { epicId: true } },
+      dependsOn: { select: { name: true, epicId: true, epic: { select: { name: true } } } },
+    },
   })
   const featureDepNames = new Map<string, string[]>()
   for (const d of featureDepsRaw) {
     const arr = featureDepNames.get(d.featureId) ?? []
-    arr.push(d.dependsOn.name)
+    // Use qualified "EpicName: FeatureName" format for cross-epic deps so they round-trip correctly
+    const isCrossEpic = d.feature.epicId !== d.dependsOn.epicId
+    arr.push(isCrossEpic ? `${d.dependsOn.epic.name}: ${d.dependsOn.name}` : d.dependsOn.name)
     featureDepNames.set(d.featureId, arr)
   }
 
@@ -188,12 +193,15 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       'Epic feature mode: sequential | parallel',
       'Feature story mode: sequential | parallel',
       'Epic dependencies: comma-separated epic names this epic depends on',
-      'Feature dependencies: comma-separated feature names this feature depends on',
+      'Feature dependencies: comma-separated feature names this feature depends on (same-epic: "FeatureName"; cross-epic: "EpicName: FeatureName")',
     ])
     // Example Epic row
     rows.push(['Epic', 'Platform Setup', '', '', '', '', '', '', '', '', 'Core infrastructure and environment setup', '', 'active', '', '', 'sequential', '', '', ''])
-    // Example Feature row
+    rows.push(['Epic', 'Mobile App', '', '', '', '', '', '', '', '', 'Mobile front-end layer', '', 'active', '', '', 'sequential', '', 'Platform Setup', ''])
+    // Example Feature rows — same-epic dep, then cross-epic dep
     rows.push(['Feature', 'Platform Setup', 'Authentication', '', '', '', '', '', '', '', 'Login and registration flows', '', '', 'active', '', '', 'sequential', '', ''])
+    rows.push(['Feature', 'Platform Setup', 'User Profile', '', '', '', '', '', '', '', 'User profile management', '', '', 'active', '', '', 'sequential', '', 'Authentication'])
+    rows.push(['Feature', 'Mobile App', 'Login Screen', '', '', '', '', '', '', '', 'Mobile login UI', '', '', 'active', '', '', 'sequential', '', 'Platform Setup: Authentication'])
     // Example Story row (with template)
     rows.push(['Story', 'Platform Setup', 'Authentication', 'User can log in', '', 'Login Flow', 'Medium', '', '', '', 'As a user I can log in with email and password', '', '', '', 'active', '', '', '', ''])
     // Example Task row
@@ -412,6 +420,8 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
   // Cross-row dependency name validation (warnings only — import still proceeds)
   const knownEpicNames = new Set(staged.filter(r => r.type === 'Epic').map(r => r.epic))
   const knownFeatureNames = new Set(staged.filter(r => r.type === 'Feature').map(r => r.feature))
+  // Build "EpicName||FeatureName" set for cross-epic qualified lookup
+  const knownEpicFeaturePairs = new Set(staged.filter(r => r.type === 'Feature').map(r => `${r.epic}||${r.feature}`))
   for (const row of staged) {
     for (const depName of row.epicDependsOn) {
       if (!knownEpicNames.has(depName)) {
@@ -419,7 +429,15 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
       }
     }
     for (const depName of row.featureDependsOn) {
-      if (!knownFeatureNames.has(depName)) {
+      const colonIdx = depName.indexOf(': ')
+      if (colonIdx !== -1) {
+        // Cross-epic qualified format: "EpicName: FeatureName"
+        const epicPart = depName.slice(0, colonIdx)
+        const featPart = depName.slice(colonIdx + 2)
+        if (!knownEpicFeaturePairs.has(`${epicPart}||${featPart}`)) {
+          row.warnings.push(`FeatureDependsOn: '${depName}' not found in this import`)
+        }
+      } else if (!knownFeatureNames.has(depName)) {
         row.warnings.push(`FeatureDependsOn: '${depName}' not found in this import`)
       }
     }
@@ -800,7 +818,16 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
       if (!featureId) continue
       const epicFeatures = featureNameByEpic.get(row.epic) ?? new Map<string, string>()
       for (const depName of row.featureDependsOn) {
-        const depFeatureId = epicFeatures.get(depName)
+        // Support "EpicName: FeatureName" for cross-epic deps; plain name = same-epic
+        let depFeatureId: string | undefined
+        const colonIdx = depName.indexOf(': ')
+        if (colonIdx !== -1) {
+          const epicPart = depName.slice(0, colonIdx)
+          const featPart = depName.slice(colonIdx + 2)
+          depFeatureId = featureNameByEpic.get(epicPart)?.get(featPart)
+        } else {
+          depFeatureId = epicFeatures.get(depName)
+        }
         if (!depFeatureId || depFeatureId === featureId) continue
         await tx.featureDependency.upsert({
           where: { featureId_dependsOnId: { featureId, dependsOnId: depFeatureId } },
