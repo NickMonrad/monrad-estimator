@@ -88,7 +88,7 @@ export const EPIC_ROW_H = 52
 export const FEAT_ROW_H = 36
 export const STORY_ROW_H = 28
 export const HEADER_H = 44
-export const LABEL_W = 300
+export const LABEL_W = 380
 export const DEP_ARROW_COLOR = '#9ca3af'
 
 // ---------------------------------------------------------------------------

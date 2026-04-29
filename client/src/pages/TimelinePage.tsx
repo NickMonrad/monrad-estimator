@@ -367,6 +367,8 @@ export default function TimelinePage() {
     }
   }
 
+  const initialScheduleDone = useRef(false)
+
   const { data: project } = useQuery<Project>({
     queryKey: ['project', projectId],
     queryFn: () => api.get(`/projects/${projectId}`).then(r => r.data),
@@ -398,6 +400,16 @@ export default function TimelinePage() {
       }
     }
   }, [editingFeatureId, timeline])
+
+  // Auto-schedule on page load so features added via CSV import always appear.
+  // The scheduler is idempotent — manual overrides are preserved.
+  useEffect(() => {
+    if (!initialScheduleDone.current && timeline !== undefined && project !== undefined) {
+      initialScheduleDone.current = true
+      const body = project.startDate ? { startDate: project.startDate.slice(0, 10), resourceLevel } : { resourceLevel }
+      scheduleTimeline.mutate(body)
+    }
+  }, [timeline, project])
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['timeline', projectId] })
 
@@ -691,7 +703,7 @@ export default function TimelinePage() {
           <span className="text-gray-700 dark:text-gray-300">Timeline</span>
         </>}
     >
-      <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+      <main className="w-full px-6 py-6 space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Timeline Planner</h1>
         </div>
