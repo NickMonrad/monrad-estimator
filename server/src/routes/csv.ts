@@ -785,19 +785,22 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
     }
 
     // ── Feature dependencies ──────────────────────────────────────────────────
-    // Build name→id map from what was just created/updated
-    const featureNameToId = new Map<string, string>()
+    // Build epic-scoped name→id map: epicName → (featureName → featureId)
+    // Scoping to the same epic prevents cross-epic name collisions when templates
+    // share identical feature names (e.g. every epic has "Infrastructure & Environment")
+    const featureNameByEpic = new Map<string, Map<string, string>>()
     for (const [featureKey, featureId] of featureMap.entries()) {
-      // featureKey is "epicName||featureName" — extract just the feature name
-      const featureName = featureKey.split('||')[1]
-      if (featureName) featureNameToId.set(featureName, featureId)
+      const [epicName, featureName] = featureKey.split('||')
+      if (!featureNameByEpic.has(epicName)) featureNameByEpic.set(epicName, new Map())
+      featureNameByEpic.get(epicName)!.set(featureName, featureId)
     }
     for (const row of rows) {
       if (row.type !== 'Feature' || !row.featureDependsOn?.length) continue
       const featureId = featureMap.get(`${row.epic}||${row.feature}`)
       if (!featureId) continue
+      const epicFeatures = featureNameByEpic.get(row.epic) ?? new Map<string, string>()
       for (const depName of row.featureDependsOn) {
-        const depFeatureId = featureNameToId.get(depName)
+        const depFeatureId = epicFeatures.get(depName)
         if (!depFeatureId || depFeatureId === featureId) continue
         await tx.featureDependency.upsert({
           where: { featureId_dependsOnId: { featureId, dependsOnId: depFeatureId } },

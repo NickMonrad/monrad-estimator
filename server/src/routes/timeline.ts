@@ -752,6 +752,37 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     }
   }
 
+  // Fallback: if any features weren't processed (cycle or unresolvable deps),
+  // schedule them at the end of their epic's predecessor chain so nothing is silently dropped
+  if (processed.length < allFeatures.length) {
+    // Compute max finishWeek for each epic among features that *were* processed
+    const epicMaxFinish = new Map<string, number>()
+    for (const f of allFeatures) {
+      const fw = finishWeeks.get(f.id)
+      if (fw === undefined) continue
+      const prev = epicMaxFinish.get(f.epic.id) ?? 0
+      if (fw > prev) epicMaxFinish.set(f.epic.id, fw)
+    }
+    // For each unscheduled feature: start at max(epic anchor, all prev-epic finishes)
+    for (const f of allFeatures) {
+      if (startWeeks.has(f.id)) continue
+      let earliest = f.epic.timelineStartWeek ?? 0
+      // Walk the sorted epic chain up to this epic and find the latest finish
+      for (const prevEpic of sortedEpics) {
+        if (prevEpic.order >= f.epic.order) break
+        const prevFinish = epicMaxFinish.get(prevEpic.id) ?? 0
+        if (prevFinish > earliest) earliest = prevFinish
+      }
+      startWeeks.set(f.id, earliest)
+      finishWeeks.set(f.id, earliest + featureDurationWeeks(f))
+      processed.push(f.id)
+      // Update epicMaxFinish so subsequent features in the same epic can build on this
+      const cur = epicMaxFinish.get(f.epic.id) ?? 0
+      const newFinish = earliest + featureDurationWeeks(f)
+      if (newFinish > cur) epicMaxFinish.set(f.epic.id, newFinish)
+    }
+  }
+
   // Tracks actual per-week resource consumption from the levelling simulation
   // key: `${rtName}|${week}` → days consumed; populated only when resourceLevel=true
   const weeklyConsumptionMap = new Map<string, number>()
