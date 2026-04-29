@@ -10,12 +10,12 @@ async function ownedProject(projectId: string, userId: string) {
   return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
 }
 
-function computeDates(projectStartDate: Date | null, startWeek: number, durationWeeks: number) {
+function computeDates(projectStartDate: Date | null, startWeek: number, durationWeeks: number, onboardingWeeks = 0) {
   if (!projectStartDate) return { startDate: null, endDate: null }
   const start = new Date(projectStartDate)
-  start.setDate(start.getDate() + startWeek * 7)
+  start.setDate(start.getDate() + (startWeek + onboardingWeeks) * 7)
   const end = new Date(projectStartDate)
-  end.setDate(end.getDate() + (startWeek + durationWeeks) * 7)
+  end.setDate(end.getDate() + (startWeek + durationWeeks + onboardingWeeks) * 7)
   return { startDate: start.toISOString(), endDate: end.toISOString() }
 }
 
@@ -246,6 +246,9 @@ function buildResponse(
             endWeek: isFullProject ? null : (nr.allocationEndWeek ?? (derivedRt?.end ?? null)),
             allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
             allocationMode: nr.allocationMode,
+            allocationPercent: nr.allocationPercent ?? 100,
+            allocationStartWeek: nr.allocationStartWeek ?? null,
+            allocationEndWeek: nr.allocationEndWeek ?? null,
           }
         })
       }
@@ -305,7 +308,7 @@ function buildResponse(
         isManual: e.isManual,
         resourceBreakdown: breakdown,
         effectiveEngineers,
-        ...computeDates(project.startDate, e.startWeek, e.durationWeeks),
+        ...computeDates(project.startDate, e.startWeek, e.durationWeeks, project.onboardingWeeks ?? 0),
       }
     }),
   }
@@ -1233,8 +1236,9 @@ router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) =
   for (const e of timelineEntries) {
     const featureName = e.feature.name.replace(/,/g, ' ')
     const epicName = e.feature.epic.name.replace(/,/g, ' ')
-    const startDate = toDateStr(project.startDate, e.startWeek)
-    const endDate = toDateStr(project.startDate, e.startWeek + e.durationWeeks)
+    const onboardingWeeks = project.onboardingWeeks ?? 0
+    const startDate = toDateStr(project.startDate, e.startWeek + onboardingWeeks)
+    const endDate = toDateStr(project.startDate, e.startWeek + e.durationWeeks + onboardingWeeks)
     ganttRows.push(`${featureName},${epicName},${e.startWeek},${e.durationWeeks},${startDate},${endDate}`)
   }
 
@@ -1379,7 +1383,7 @@ router.put('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) =
     startWeek: entry.startWeek,
     durationWeeks: entry.durationWeeks,
     isManual: entry.isManual,
-    ...computeDates(project.startDate, entry.startWeek, entry.durationWeeks),
+    ...computeDates(project.startDate, entry.startWeek, entry.durationWeeks, project.onboardingWeeks ?? 0),
   })
 }))
 

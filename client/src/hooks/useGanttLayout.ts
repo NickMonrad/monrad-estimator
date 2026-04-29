@@ -69,13 +69,14 @@ export interface GanttDraggingState {
 // ---------------------------------------------------------------------------
 // Scale type
 // ---------------------------------------------------------------------------
-export type GanttScale = 'week' | 'month' | 'quarter'
+export type GanttScale = 'week' | 'month' | 'quarter' | 'year'
 
 /** Returns the pixel width per week for the given scale. */
 export function colWForScale(scale: GanttScale): number {
   switch (scale) {
     case 'month':   return 28
     case 'quarter': return 16
+    case 'year':    return 8
     default:        return 64
   }
 }

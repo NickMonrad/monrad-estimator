@@ -258,8 +258,9 @@ export default function ResourceHistogram({
 
                   const cap = capacityLookup.get(`${w}|${rt.name}`) ?? 0
                   const barH = Math.min(demand * scale, BAR_MAX_H + 6)
-                  const barX = (w + weekOffset) * colW + 4
-                  const barW = colW - 8
+                  const inset = Math.min(4, Math.max(1, Math.floor(colW / 4)))
+                  const barX = (w + weekOffset) * colW + inset
+                  const barW = Math.max(1, colW - inset * 2)
                   const barY = rowY + ROW_H - 6 - barH
                   const fill = barColour(demand, cap)
 

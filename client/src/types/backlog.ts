@@ -180,6 +180,9 @@ export interface NamedResourceEntry {
   endWeek: number | null
   allocationPct: number
   allocationMode?: string
+  allocationPercent?: number
+  allocationStartWeek?: number | null
+  allocationEndWeek?: number | null
 }
 
 export interface TimelineSummary {

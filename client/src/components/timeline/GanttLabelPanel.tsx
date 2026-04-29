@@ -53,6 +53,12 @@ export default function GanttLabelPanel({
 
   // derive the full list of epic rows for the dep dropdown
   const allEpicRows = rows.filter((r): r is Extract<GanttRow, { type: 'epic' }> => r.type === 'epic')
+
+  // Expand / Collapse All toggle state
+  const allEpicIds = allEpicRows.map(r => r.epicId)
+  const allExpanded = allEpicIds.length > 0 && allEpicIds.every(id => expandedEpics.has(id))
+  const allCollapsed = allEpicIds.length > 0 && allEpicIds.every(id => !expandedEpics.has(id))
+
   return (
     <div
       style={{ width: LABEL_W, flexShrink: 0 }}
@@ -61,9 +67,29 @@ export default function GanttLabelPanel({
       {/* Label header */}
       <div
         style={{ height: HEADER_H }}
-        className="border-b border-gray-100 dark:border-gray-700 flex items-end px-3 pb-2"
+        className="relative border-b border-gray-100 dark:border-gray-700 flex items-end px-3 pb-2"
       >
         <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Feature</span>
+
+        {/* Expand All / Collapse All pill toggle */}
+        {allEpicIds.length > 0 && (
+          <div className="absolute bottom-1 right-2 flex items-center rounded border border-gray-200 dark:border-gray-600 overflow-hidden">
+            <button
+              className={`px-2 py-0.5 text-xs ${allExpanded ? 'bg-lab3-navy text-white' : 'bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+              onClick={() => setExpandedEpics(new Set(allEpicIds))}
+              title="Expand all epics"
+            >
+              Expand All
+            </button>
+            <button
+              className={`px-2 py-0.5 text-xs border-l border-gray-200 dark:border-gray-600 ${allCollapsed ? 'bg-lab3-navy text-white' : 'bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+              onClick={() => setExpandedEpics(new Set())}
+              title="Collapse all epics"
+            >
+              Collapse All
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Label rows */}

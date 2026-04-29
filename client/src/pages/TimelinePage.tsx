@@ -159,9 +159,12 @@ function NamedResourcesPanel({
                     const rtDemand = demandByRt.get(rtName)
 
                     if (isEffort && rtDemand) {
-                      // T&M: render a demand-following mini histogram
+                      // T&M: render a demand-following mini histogram per person.
+                      // weeklyDemand tracks the whole resource type pool, so divide by
+                      // the number of named resources to get each person's share.
+                      const personCount = Math.max(people.length, 1)
                       const ROW_H = 28
-                      const maxCap = Math.max(...Array.from(rtDemand.values()).map(d => d.capacity), 1)
+                      const maxCap = Math.max(...Array.from(rtDemand.values()).map(d => d.capacity / personCount), 1)
                       return (
                         <div
                           key={`${rtName}-${nr.name}-${i}`}
@@ -176,7 +179,9 @@ function NamedResourcesPanel({
                             {Array.from({ length: totalWeeks }, (_, w) => {
                               const d = rtDemand.get(w)
                               if (!d || d.demand <= 0) return null
-                              const pct = Math.min(d.demand / maxCap, 1)
+                              const personDemand = d.demand / personCount
+                              const personCap = d.capacity / personCount
+                              const pct = Math.min(personDemand / maxCap, 1)
                               const barH = Math.max(Math.round(pct * ROW_H), 2)
                               return (
                                 <g key={w}>
@@ -191,7 +196,7 @@ function NamedResourcesPanel({
                                     onMouseEnter={(e) => setTooltip({
                                       x: e.clientX,
                                       y: e.clientY,
-                                      content: `${nr.name} · T&M\nWk ${w}: ${d.demand.toFixed(1)} / ${d.capacity.toFixed(1)} days (${Math.round(d.demand / d.capacity * 100)}%)`,
+                                      content: `${nr.name} · T&M\nWk ${w}: ${personDemand.toFixed(1)} / ${personCap.toFixed(1)} days (${Math.round(personDemand / personCap * 100)}%)`,
                                     })}
                                     onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
                                     onMouseLeave={() => setTooltip(null)}
@@ -410,13 +415,15 @@ export default function TimelinePage() {
     }
   }, [editingFeatureId, timeline])
 
-  // Auto-schedule on page load so features added via CSV import always appear.
-  // The scheduler is idempotent — manual overrides are preserved.
+  // Auto-schedule on page load ONLY if no entries exist yet (first run for new projects).
+  // For projects with existing entries, the user drives rescheduling via the button.
   useEffect(() => {
     if (!initialScheduleDone.current && timeline !== undefined && project !== undefined) {
       initialScheduleDone.current = true
-      const body = project.startDate ? { startDate: project.startDate.slice(0, 10), resourceLevel } : { resourceLevel }
-      scheduleTimeline.mutate(body)
+      if (timeline.entries.length === 0) {
+        const body = project.startDate ? { startDate: project.startDate.slice(0, 10), resourceLevel } : { resourceLevel }
+        scheduleTimeline.mutate(body)
+      }
     }
   }, [timeline, project])
 
@@ -548,7 +555,7 @@ export default function TimelinePage() {
       if (data.dayRate !== undefined) payload.dayRate = data.dayRate
       return api.put(`/projects/${projectId}/resource-types/${id}`, payload).then(r => r.data)
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['resource-types', projectId] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['resource-types', projectId] }); setScheduleStale(true) },
   })
 
   const addNamedResource = useMutation({
@@ -559,6 +566,7 @@ export default function TimelinePage() {
       }).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      setScheduleStale(true)
     },
   })
 
@@ -567,6 +575,16 @@ export default function TimelinePage() {
       api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      setScheduleStale(true)
+    },
+  })
+
+  const updateNamedResource = useMutation({
+    mutationFn: ({ rtId, nrId, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }: { rtId: string; nrId: string; allocationMode: string; allocationPercent: number; allocationStartWeek?: number | null; allocationEndWeek?: number | null }) =>
+      api.patch(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`, { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      setScheduleStale(true)
     },
   })
 
@@ -813,7 +831,7 @@ export default function TimelinePage() {
         {/* Stale schedule banner */}
         {scheduleStale && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
-            <span className="text-amber-800">⚠ Dependencies or epic mode changed — re-run <strong>Auto-schedule</strong> to apply.</span>
+            <span className="text-amber-800">⚠ Schedule may be stale (dependencies, epic mode, or resourcing changed) — re-run <strong>Auto-schedule</strong> to apply.</span>
             <button onClick={handleSchedule} className="bg-amber-500 text-white px-3 py-1 rounded text-xs font-medium hover:bg-amber-600">
               Auto-schedule now
             </button>
@@ -874,14 +892,78 @@ export default function TimelinePage() {
                               {nrs.length > 0 && (
                                 <div className="mt-1 space-y-0.5 pl-2">
                                   {nrs.map((nr, i) => (
-                                    <div key={nr.id ?? `${rt.id}-${i}`} className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-                                      <span className="flex-1 truncate">{nr.name}</span>
-                                      {nr.startWeek != null && <span className="text-gray-400">W{nr.startWeek}–{nr.endWeek ?? '∞'}</span>}
-                                      <span className="text-gray-400">{nr.allocationPct}%</span>
+                                    <div key={nr.id ?? `${rt.id}-${i}`} className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mt-0.5 pl-2">
+                                      <span className="flex-1 truncate text-gray-600 dark:text-gray-300">{nr.name}</span>
+                                      {/* Mode selector */}
+                                      {nr.id && (
+                                        <select
+                                          value={nr.allocationMode ?? 'EFFORT'}
+                                          onChange={e => {
+                                            const mode = e.target.value
+                                            const pct = mode === 'EFFORT' ? 100 : (nr.allocationPercent ?? 100)
+                                            updateNamedResource.mutate({ rtId: rt.id, nrId: nr.id!, allocationMode: mode, allocationPercent: pct })
+                                          }}
+                                          className="text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300"
+                                        >
+                                          <option value="EFFORT">T&amp;M</option>
+                                          <option value="FULL_PROJECT">Full Project</option>
+                                          <option value="TIMELINE">Timeline</option>
+                                        </select>
+                                      )}
+                                      {/* % input — only shown for non-EFFORT modes */}
+                                      {nr.id && (nr.allocationMode ?? 'EFFORT') !== 'EFFORT' && (
+                                        <div className="flex items-center gap-0.5">
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            max={100}
+                                            defaultValue={nr.allocationPercent ?? 100}
+                                            key={`${nr.id}-pct-${nr.allocationPercent}`}
+                                            onBlur={e => {
+                                              const val = Math.min(100, Math.max(1, parseInt(e.target.value) || 100))
+                                              updateNamedResource.mutate({ rtId: rt.id, nrId: nr.id!, allocationMode: nr.allocationMode ?? 'EFFORT', allocationPercent: val })
+                                            }}
+                                            className="w-12 text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                                          />
+                                          <span className="text-gray-400">%</span>
+                                        </div>
+                                      )}
+                                      {/* Start/end week — only for TIMELINE mode */}
+                                      {nr.id && nr.allocationMode === 'TIMELINE' && (
+                                        <div className="flex items-center gap-0.5 text-gray-400">
+                                          <span>W</span>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            placeholder="start"
+                                            defaultValue={nr.allocationStartWeek ?? ''}
+                                            key={`${nr.id}-sw-${nr.allocationStartWeek}`}
+                                            onBlur={e => {
+                                              const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
+                                              updateNamedResource.mutate({ rtId: rt.id, nrId: nr.id!, allocationMode: 'TIMELINE', allocationPercent: nr.allocationPercent ?? 100, allocationStartWeek: val })
+                                            }}
+                                            className="w-10 text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 placeholder-gray-300"
+                                          />
+                                          <span>–</span>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            placeholder="end"
+                                            defaultValue={nr.allocationEndWeek ?? ''}
+                                            key={`${nr.id}-ew-${nr.allocationEndWeek}`}
+                                            onBlur={e => {
+                                              const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
+                                              updateNamedResource.mutate({ rtId: rt.id, nrId: nr.id!, allocationMode: 'TIMELINE', allocationPercent: nr.allocationPercent ?? 100, allocationEndWeek: val })
+                                            }}
+                                            className="w-10 text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 placeholder-gray-300"
+                                          />
+                                        </div>
+                                      )}
+                                      {/* remove button */}
                                       {nr.id && (
                                         <button
                                           onClick={() => handleRemoveNamedResource(rt.id, nr.id!)}
-                                          className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400 ml-1"
+                                          className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400 ml-0.5"
                                           title="Remove person"
                                         >×</button>
                                       )}
@@ -926,7 +1008,7 @@ export default function TimelinePage() {
             <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">Gantt Chart</h2>
             {/* Scale toggle */}
             <div className="flex items-center gap-1">
-              {(['week', 'month', 'quarter'] as const).map(s => (
+              {(['week', 'month', 'quarter', 'year'] as const).map(s => (
                 <button
                   key={s}
                   onClick={() => { setGanttScale(s); localStorage.setItem(SCALE_KEY, s) }}
@@ -935,7 +1017,7 @@ export default function TimelinePage() {
                     : 'border border-gray-200 text-gray-600 px-3 py-1 rounded text-sm dark:border-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
                   }
                 >
-                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                  {s === 'week' ? 'Wk' : s === 'month' ? 'Mo' : s === 'quarter' ? 'Qtr' : 'Yr'}
                 </button>
               ))}
             </div>
@@ -1017,7 +1099,7 @@ export default function TimelinePage() {
                   weeklyCapacity={timeline.weeklyCapacity}
                   totalWeeks={totalWeeks}
                   colW={ganttColW}
-                  labelW={300}
+                  labelW={LABEL_W}
                   weekOffset={timeline.onboardingWeeks ?? 0}
                   scrollContainerRef={histScrollRef}
                   onScroll={handleHistScroll}
@@ -1030,7 +1112,7 @@ export default function TimelinePage() {
                   namedResources={timeline.namedResources}
                   totalWeeks={totalWeeks}
                   colW={ganttColW}
-                  labelW={300}
+                  labelW={LABEL_W}
                   weeklyDemand={timeline.weeklyDemand}
                   weekOffset={timeline.onboardingWeeks ?? 0}
                 />

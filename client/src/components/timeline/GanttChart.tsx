@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import type { TimelineEntry } from '../../types/backlog'
 import { useIsDark } from '../../hooks/useIsDark'
 import {
@@ -91,6 +91,36 @@ function buildQuarterGroups(totalWeeks: number, startDate: Date | null): GroupBa
   return groups
 }
 
+/** Group totalWeeks into half-year bands (H1/H2). */
+function buildHalfYearGroups(totalWeeks: number, startDate: Date | null): GroupBand[] {
+  if (!startDate) {
+    const groups: GroupBand[] = []
+    for (let w = 0; w < totalWeeks; w += 26) {
+      const half = Math.floor(w / 26)
+      groups.push({ label: `H${(half % 2) + 1}`, startWeek: w, endWeek: Math.min(w + 26, totalWeeks) })
+    }
+    return groups
+  }
+  const groups: GroupBand[] = []
+  let currentKey = -1
+  let groupStart = 0
+  for (let w = 0; w <= totalWeeks; w++) {
+    const d = addDays(startDate, w * 7)
+    const half = d.getMonth() < 6 ? 0 : 1
+    const key = d.getFullYear() * 10 + half
+    if (w === totalWeeks || key !== currentKey) {
+      if (w > 0 && currentKey !== -1) {
+        const halfNum = (currentKey % 10) + 1
+        const year = Math.floor(currentKey / 10)
+        groups.push({ label: `H${halfNum} ${year}`, startWeek: groupStart, endWeek: w })
+      }
+      currentKey = key
+      groupStart = w
+    }
+  }
+  return groups
+}
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -160,11 +190,33 @@ export default function GanttChart({
   const colW = colWForScale(scale)
   const [expandedFeatures, setExpandedFeatures] = useState<Set<string>>(new Set())
   const [expandedEpics, setExpandedEpics] = useState<Set<string>>(new Set())
+  // Tracks ALL epic IDs ever seen — separate from expandedEpics so "Collapse All" doesn't
+  // make every epic look "new" on the next entries refetch.
+  const knownEpicIds = useRef<Set<string>>(new Set())
 
-  // Initialise expandedEpics with all unique epic IDs whenever entries change
   useEffect(() => {
     const ids = new Set(entries.map(e => e.epicId))
-    setExpandedEpics(ids)
+    if (knownEpicIds.current.size === 0 && ids.size > 0) {
+      // First load — expand all and record as known
+      knownEpicIds.current = new Set(ids)
+      setExpandedEpics(ids)
+    } else if (ids.size > 0) {
+      // Only auto-expand epics that are genuinely new (not seen before)
+      const newIds: string[] = []
+      for (const id of ids) {
+        if (!knownEpicIds.current.has(id)) {
+          newIds.push(id)
+          knownEpicIds.current.add(id)
+        }
+      }
+      if (newIds.length > 0) {
+        setExpandedEpics(prev => {
+          const merged = new Set(prev)
+          for (const id of newIds) merged.add(id)
+          return merged
+        })
+      }
+    }
   }, [entries])
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null)
@@ -267,6 +319,10 @@ export default function GanttChart({
     () => buildQuarterGroups(totalWeeks, projectStartDate),
     [totalWeeks, projectStartDate],
   )
+  const halfYearGroups = useMemo(
+    () => buildHalfYearGroups(totalWeeks, projectStartDate),
+    [totalWeeks, projectStartDate],
+  )
 
   // Two-row header mid-line Y position
   const HEADER_MID = 24
@@ -314,11 +370,19 @@ export default function GanttChart({
             <g style={{ pointerEvents: 'none' }}>
               <rect x={0} y={0} width={weekOffset * colW} height={totalHeight}
                 fill={isDark ? 'rgba(251,191,36,0.08)' : 'rgba(251,191,36,0.12)'} />
-              <rect x={4} y={HEADER_H + 4} width={Math.min(weekOffset * colW - 8, 110)} height={16}
-                rx={3} fill={isDark ? 'rgba(251,191,36,0.18)' : 'rgba(251,191,36,0.25)'} />
-              <text x={8} y={HEADER_H + 15} fontSize={9} fill={isDark ? '#fbbf24' : '#b45309'} fontWeight={500}>
-                Onboarding ({weekOffset}w)
-              </text>
+              {weekOffset * colW >= 28 && (
+                <>
+                  <rect x={4} y={HEADER_H + 4} width={Math.min(weekOffset * colW - 8, 110)} height={16}
+                    rx={3} fill={isDark ? 'rgba(251,191,36,0.18)' : 'rgba(251,191,36,0.25)'} />
+                  <text x={8} y={HEADER_H + 15} fontSize={9} fill={isDark ? '#fbbf24' : '#b45309'} fontWeight={500}>
+                    {weekOffset * colW >= 80
+                      ? `Onboarding (${weekOffset}w)`
+                      : weekOffset * colW >= 40
+                        ? `Onbrd`
+                        : `O`}
+                  </text>
+                </>
+              )}
               <line x1={weekOffset * colW} y1={0} x2={weekOffset * colW} y2={totalHeight}
                 stroke={isDark ? '#92400e' : '#d97706'} strokeWidth={1} strokeDasharray="4,3" />
             </g>
@@ -330,13 +394,21 @@ export default function GanttChart({
               <rect x={(totalWeeks - bufferWeeks) * colW} y={0}
                 width={bufferWeeks * colW} height={totalHeight}
                 fill={isDark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.10)'} />
-              <rect x={(totalWeeks - bufferWeeks) * colW + 4} y={HEADER_H + 4}
-                width={Math.min(bufferWeeks * colW - 8, 80)} height={16}
-                rx={3} fill={isDark ? 'rgba(99,102,241,0.20)' : 'rgba(99,102,241,0.18)'} />
-              <text x={(totalWeeks - bufferWeeks) * colW + 8} y={HEADER_H + 15}
-                fontSize={9} fill={isDark ? '#818cf8' : '#4338ca'} fontWeight={500}>
-                Buffer ({bufferWeeks}w)
-              </text>
+              {bufferWeeks * colW >= 28 && (
+                <>
+                  <rect x={(totalWeeks - bufferWeeks) * colW + 4} y={HEADER_H + 4}
+                    width={Math.min(bufferWeeks * colW - 8, 80)} height={16}
+                    rx={3} fill={isDark ? 'rgba(99,102,241,0.20)' : 'rgba(99,102,241,0.18)'} />
+                  <text x={(totalWeeks - bufferWeeks) * colW + 8} y={HEADER_H + 15}
+                    fontSize={9} fill={isDark ? '#818cf8' : '#4338ca'} fontWeight={500}>
+                    {bufferWeeks * colW >= 64
+                      ? `Buffer (${bufferWeeks}w)`
+                      : bufferWeeks * colW >= 36
+                        ? `Buf`
+                        : `B`}
+                  </text>
+                </>
+              )}
               <line x1={(totalWeeks - bufferWeeks) * colW} y1={0}
                 x2={(totalWeeks - bufferWeeks) * colW} y2={totalHeight}
                 stroke={isDark ? '#4338ca' : '#6366f1'} strokeWidth={1} strokeDasharray="4,3" />
@@ -445,6 +517,46 @@ export default function GanttChart({
                     <text x={groupX + groupW / 2} y={HEADER_H - 4}
                       textAnchor="middle" fontSize={9} fill={svgColors.weekNumText}>
                       {monthAbbrev}
+                    </text>
+                  </g>
+                )
+              })}
+            </>
+          )}
+
+          {/* ── Year scale header: top row = half-year, bottom row = quarter abbrev ── */}
+          {scale === 'year' && (
+            <>
+              <line x1={0} y1={HEADER_MID} x2={totalWeeks * colW} y2={HEADER_MID}
+                stroke={svgColors.weekSep} strokeWidth={1} />
+              {/* Half-year group labels */}
+              {halfYearGroups.map((hg, hi) => {
+                const groupX = hg.startWeek * colW
+                const groupW = (hg.endWeek - hg.startWeek) * colW
+                return (
+                  <g key={hi}>
+                    <line x1={groupX} y1={0} x2={groupX} y2={totalHeight}
+                      stroke={svgColors.weekSep} strokeWidth={2} />
+                    <text x={groupX + groupW / 2} y={HEADER_MID - 6}
+                      textAnchor="middle" fontSize={10} fill={svgColors.headerText}>
+                      {hg.label}
+                    </text>
+                  </g>
+                )
+              })}
+              {/* Quarter bands in bottom row */}
+              {quarterGroups.map((qg, qi) => {
+                const groupX = qg.startWeek * colW
+                const groupW = (qg.endWeek - qg.startWeek) * colW
+                // Extract just the quarter number for the abbreviated label
+                const qLabel = qg.label.startsWith('Q') ? qg.label.split(' ')[0] : qg.label
+                return (
+                  <g key={qi}>
+                    <line x1={groupX} y1={HEADER_MID} x2={groupX} y2={totalHeight}
+                      stroke={svgColors.gridLine} strokeWidth={1} />
+                    <text x={groupX + groupW / 2} y={HEADER_H - 4}
+                      textAnchor="middle" fontSize={9} fill={svgColors.weekNumText}>
+                      {qLabel}
                     </text>
                   </g>
                 )
