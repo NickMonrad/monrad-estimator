@@ -44,6 +44,12 @@ export default function GanttLabelPanel({
 }: GanttLabelPanelProps) {
   // track which epic row has its dep-picker dropdown open
   const [depPickerEpicId, setDepPickerEpicId] = useState<string | null>(null)
+  const [depPickerSearch, setDepPickerSearch] = useState('')
+
+  function openDepPicker(epicId: string) {
+    setDepPickerEpicId(prev => prev === epicId ? null : epicId)
+    setDepPickerSearch('')
+  }
 
   // derive the full list of epic rows for the dep dropdown
   const allEpicRows = rows.filter((r): r is Extract<GanttRow, { type: 'epic' }> => r.type === 'epic')
@@ -183,29 +189,50 @@ export default function GanttLabelPanel({
                         )
                       })}
                     <button
-                      onClick={() => setDepPickerEpicId(prev => prev === row.epicId ? null : row.epicId)}
+                      onClick={() => openDepPicker(row.epicId)}
                       className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 px-1 leading-none"
                       title="Add dependency"
                     >＋</button>
                     {depPickerEpicId === row.epicId && (
-                      <div className={`absolute ${row.epicIdx >= row.epicCount - 4 ? 'bottom-full mb-1' : 'top-full mt-1'} left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[140px] max-h-64 overflow-y-auto`}>
-                        {allEpicRows
-                          .filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId))
-                          .map(r => (
-                            <button
-                              key={r.epicId}
-                              className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
-                              onClick={() => {
-                                onAddEpicDep(row.epicId, r.epicId)
-                                setDepPickerEpicId(null)
-                              }}
-                            >
-                              {r.epicName}
-                            </button>
-                          ))}
-                        {allEpicRows.filter(r => r.epicId !== row.epicId && !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId)).length === 0 && (
-                          <span className="text-xs px-3 py-1.5 text-gray-400 block">No epics available</span>
-                        )}
+                      <div className={`absolute ${row.epicIdx >= row.epicCount - 4 ? 'bottom-full mb-1' : 'top-full mt-1'} left-0 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg py-1 min-w-[200px] max-h-72 flex flex-col`}>
+                        <div className="px-2 pb-1 border-b border-gray-100 dark:border-gray-700">
+                          <input
+                            autoFocus
+                            type="text"
+                            placeholder="Search epics…"
+                            value={depPickerSearch}
+                            onChange={e => setDepPickerSearch(e.target.value)}
+                            onClick={e => e.stopPropagation()}
+                            className="w-full text-xs px-2 py-1 border border-gray-200 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          />
+                        </div>
+                        <div className="overflow-y-auto flex-1">
+                          {allEpicRows
+                            .filter(r =>
+                              r.epicId !== row.epicId &&
+                              !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId) &&
+                              r.epicName.toLowerCase().includes(depPickerSearch.toLowerCase())
+                            )
+                            .map(r => (
+                              <button
+                                key={r.epicId}
+                                className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                                onClick={() => {
+                                  onAddEpicDep(row.epicId, r.epicId)
+                                  setDepPickerEpicId(null)
+                                }}
+                              >
+                                {r.epicName}
+                              </button>
+                            ))}
+                          {allEpicRows.filter(r =>
+                            r.epicId !== row.epicId &&
+                            !epicDependencies.some(d => d.epicId === row.epicId && d.dependsOnId === r.epicId) &&
+                            r.epicName.toLowerCase().includes(depPickerSearch.toLowerCase())
+                          ).length === 0 && (
+                            <span className="text-xs px-3 py-1.5 text-gray-400 block">No epics found</span>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
