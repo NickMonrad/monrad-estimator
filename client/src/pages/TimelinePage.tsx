@@ -270,6 +270,7 @@ export default function TimelinePage() {
   // Scroll sync refs for Gantt + Histogram right panels
   const ganttScrollRef = useRef<HTMLDivElement>(null)
   const histScrollRef = useRef<HTMLDivElement>(null)
+  const topScrollRef = useRef<HTMLDivElement>(null)
   const isSyncingScroll = useRef(false)
 
   // Ref for PNG export — wraps the entire Gantt+histogram+named resources section
@@ -278,18 +279,27 @@ export default function TimelinePage() {
   const handleGanttScroll = useCallback(() => {
     if (isSyncingScroll.current) return
     isSyncingScroll.current = true
-    if (histScrollRef.current && ganttScrollRef.current) {
-      histScrollRef.current.scrollLeft = ganttScrollRef.current.scrollLeft
-    }
+    const sl = ganttScrollRef.current?.scrollLeft ?? 0
+    if (histScrollRef.current) histScrollRef.current.scrollLeft = sl
+    if (topScrollRef.current) topScrollRef.current.scrollLeft = sl
     isSyncingScroll.current = false
   }, [])
 
   const handleHistScroll = useCallback(() => {
     if (isSyncingScroll.current) return
     isSyncingScroll.current = true
-    if (ganttScrollRef.current && histScrollRef.current) {
-      ganttScrollRef.current.scrollLeft = histScrollRef.current.scrollLeft
-    }
+    const sl = histScrollRef.current?.scrollLeft ?? 0
+    if (ganttScrollRef.current) ganttScrollRef.current.scrollLeft = sl
+    if (topScrollRef.current) topScrollRef.current.scrollLeft = sl
+    isSyncingScroll.current = false
+  }, [])
+
+  const handleTopScroll = useCallback(() => {
+    if (isSyncingScroll.current) return
+    isSyncingScroll.current = true
+    const sl = topScrollRef.current?.scrollLeft ?? 0
+    if (ganttScrollRef.current) ganttScrollRef.current.scrollLeft = sl
+    if (histScrollRef.current) histScrollRef.current.scrollLeft = sl
     isSyncingScroll.current = false
   }, [])
 
@@ -942,6 +952,15 @@ export default function TimelinePage() {
 
           {!isLoading && timeline?.entries && timeline.entries.length > 0 && (
             <div ref={ganttContainerRef}>
+              {/* Top mirror scrollbar — synced with the Gantt scroll container */}
+              <div
+                ref={topScrollRef}
+                className="overflow-x-auto"
+                style={{ height: 12 }}
+                onScroll={handleTopScroll}
+              >
+                <div style={{ width: totalWeeks * ganttColW + 380, height: 1 }} />
+              </div>
               <GanttChart
                 entries={timeline.entries}
                 storyEntries={timeline.storyEntries}
