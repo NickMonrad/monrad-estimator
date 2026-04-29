@@ -31,6 +31,7 @@ import namedResourceRoutes from './routes/namedResources.js'
 import orgRoutes from './routes/orgs.js'
 import customerRoutes from './routes/customers.js'
 import documentRoutes from './routes/documents.js'
+import optimiserRoutes from './routes/optimiser.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3001
@@ -72,6 +73,7 @@ app.use('/api/projects/:projectId/epic-dependencies', epicDependenciesRouter)
 app.use('/api/rate-cards', rateCardRoutes)
 app.use('/api/projects/:projectId/apply-rate-card', applyRateCardRouter)
 app.use('/api/projects/:projectId/documents', documentRoutes)
+app.use('/api/projects/:projectId/optimise', optimiserRoutes)
 app.use('/api/orgs', authenticate, orgRoutes)
 app.use('/api/customers', authenticate, customerRoutes)
 

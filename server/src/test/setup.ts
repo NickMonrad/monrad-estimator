@@ -56,7 +56,7 @@ vi.mock('../lib/prisma.js', () => ({
       task: { create: vi.fn() },
       project: { update: vi.fn() },
       resourceType: { findUnique: vi.fn().mockResolvedValue(null), update: vi.fn(), create: vi.fn(), upsert: vi.fn() },
-      namedResource: { findUnique: vi.fn().mockResolvedValue(null), update: vi.fn(), create: vi.fn(), upsert: vi.fn() },
+      namedResource: { findUnique: vi.fn().mockResolvedValue(null), update: vi.fn(), updateMany: vi.fn(), create: vi.fn(), upsert: vi.fn() },
       timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
       storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
       epicDependency: { deleteMany: vi.fn(), createMany: vi.fn() },
