@@ -274,10 +274,21 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
     }
   }
 
+  // Precompute RT capacity in days for quick lookup
+  const rtCapacityDays = new Map<string, number>()
+  for (const rt of resourceTypes) {
+    rtCapacityDays.set(rt.id, getWeeklyCapacity(rt, 0, hpd) / (rt.hoursPerDay ?? hpd))
+  }
+
+  // Best-fit window: among feasible weeks within this window from the earliest
+  // feasible slot, pick the one that best fills under-utilised resource gaps.
+  const BEST_FIT_WINDOW = 12
+
   for (const featureId of topoOrder) {
     const dur = featureDurations.get(featureId) ?? 1
     const demandRates = featureDemandRates.get(featureId) ?? new Map()
     const bottlenecks = featureBottleneckRts.get(featureId) ?? new Set(demandRates.keys())
+    const ceilDur = Math.ceil(dur)
 
     // Min start = max finish of all predecessors
     let minStart = 0
@@ -287,47 +298,69 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
     }
     minStart = Math.ceil(minStart)
 
-    // Search for earliest integer week that fits (only checking bottleneck RTs)
-    let placedAt: number | null = null
-
-    for (let week = minStart; week <= minStart + MAX_SEARCH; week++) {
-      let fits = true
-
-      for (let w = week; w < week + Math.ceil(dur); w++) {
+    // Helper: check if a week slot is feasible (bottleneck RTs have capacity)
+    function isFeasible(week: number): boolean {
+      for (let w = week; w < week + ceilDur; w++) {
         for (const [rtId, demandRate] of demandRates) {
-          // Only bottleneck RTs constrain placement
           if (!bottlenecks.has(rtId)) continue
-
           const rt = rtById.get(rtId) as SchedulerResourceType | undefined
           if (!rt) continue
-
           const key = `${rtId}|${w}`
           const alreadyUsed = utilisedDays.get(key) ?? 0
-          const proposed = alreadyUsed + demandRate
-
-          const capacityDays = getWeeklyCapacity(rt, w, hpd) / (rt.hoursPerDay ?? hpd)
-
-          if (proposed > capacityDays + 1e-9) {
-            fits = false
-            break
-          }
+          const capacityDays = rtCapacityDays.get(rtId) ?? 0
+          if (alreadyUsed + demandRate > capacityDays + 1e-9) return false
         }
-        if (!fits) break
       }
-
-      if (fits) {
-        placedAt = week
-        break
-      }
+      return true
     }
 
-    // Fallback: if no slot found, place at minStart
-    const startWeek = placedAt ?? minStart
-    featureStartWeeks.set(featureId, startWeek)
-    featureFinishWeeks.set(featureId, startWeek + dur)
+    // Helper: score a week — how much existing demand exists for this feature's
+    // RTs in the weeks it would occupy. Higher = better gap-fill.
+    // We want to place where our secondary resources already have work,
+    // i.e. avoid placing into dead zones.
+    function gapFillScore(week: number): number {
+      let score = 0
+      for (let w = week; w < week + ceilDur; w++) {
+        for (const [rtId] of demandRates) {
+          if (bottlenecks.has(rtId)) continue // skip bottleneck (already constrained)
+          const key = `${rtId}|${w}`
+          const existing = utilisedDays.get(key) ?? 0
+          // Score: prefer weeks where this RT already has demand (filling, not creating new islands)
+          score += existing
+        }
+      }
+      return score
+    }
 
-    // Update utilisation grid for ALL RTs (not just bottlenecks)
-    for (let w = startWeek; w < startWeek + Math.ceil(dur); w++) {
+    // Find feasible candidates within BEST_FIT_WINDOW of the first feasible slot
+    let firstFeasible: number | null = null
+    const candidates: Array<{ week: number; score: number }> = []
+
+    for (let week = minStart; week <= minStart + MAX_SEARCH; week++) {
+      if (!isFeasible(week)) continue
+
+      if (firstFeasible === null) firstFeasible = week
+
+      // Only consider candidates within the window from first feasible
+      if (week > firstFeasible + BEST_FIT_WINDOW) break
+
+      candidates.push({ week, score: gapFillScore(week) })
+    }
+
+    // Pick best candidate (highest gap-fill score; tie-break: earliest week)
+    let placedAt: number
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => b.score - a.score || a.week - b.week)
+      placedAt = candidates[0].week
+    } else {
+      placedAt = minStart // fallback
+    }
+
+    featureStartWeeks.set(featureId, placedAt)
+    featureFinishWeeks.set(featureId, placedAt + dur)
+
+    // Update utilisation grid for ALL RTs
+    for (let w = placedAt; w < placedAt + ceilDur; w++) {
       for (const [rtId, demandRate] of demandRates) {
         const key = `${rtId}|${w}`
         utilisedDays.set(key, (utilisedDays.get(key) ?? 0) + demandRate)
