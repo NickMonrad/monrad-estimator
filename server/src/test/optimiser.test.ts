@@ -252,7 +252,10 @@ describe('runOptimiser', () => {
     const input = twoRtInput()
     const dayRates = new Map([['rt-dev', 100], ['rt-des', 80]])
 
-    // No budget constraint: all 4×2 = 8 scenarios pass
+    // Cost is demand-based (Σ task hours / hpd × dayRate), so it does NOT vary
+    // with count. Verify the budget filter still functions:
+    //   - generous budget → all scenarios pass
+    //   - tight budget   → all scenarios filtered out
     const uncapped = runOptimiser(input, baseConfig({
       mode: 'balanced',
       constraints: {
@@ -266,16 +269,16 @@ describe('runOptimiser', () => {
       topN: 10,
     }))
 
-    // Tight budget: only cheap scenarios (few resources) should survive
-    // Set budget to the median cost of the uncapped result set
-    if (uncapped.candidates.length < 2) {
-      // Edge case: skip if not enough candidates
-      return
+    if (uncapped.candidates.length === 0) return // edge case guard
+    const demandCost = uncapped.candidates[0].metrics.estimatedCost
+    expect(demandCost).toBeGreaterThan(0)
+    // All uncapped candidates should share the same demand-based cost.
+    for (const c of uncapped.candidates) {
+      expect(c.metrics.estimatedCost).toBe(demandCost)
     }
-    const costs = uncapped.candidates.map(c => c.metrics.estimatedCost).sort((a, b) => a - b)
-    const medianCost = costs[Math.floor(costs.length / 2)]
 
-    const capped = runOptimiser(input, baseConfig({
+    // Budget tighter than demand cost → every scenario is filtered out.
+    const tooTight = runOptimiser(input, baseConfig({
       mode: 'balanced',
       constraints: {
         countRanges: [
@@ -283,18 +286,61 @@ describe('runOptimiser', () => {
           { resourceTypeId: 'rt-des', min: 1, max: 2 },
         ],
         allowRampUp: false,
-        maxBudget: medianCost,
+        maxBudget: demandCost - 1,
       },
       dayRates,
       topN: 10,
     }))
+    expect(tooTight.candidates.length).toBe(0)
 
-    // All surviving candidates must be within budget
-    for (const c of capped.candidates) {
-      expect(c.metrics.estimatedCost).toBeLessThanOrEqual(medianCost + 0.001)
+    // Budget == demand cost (with epsilon) → all candidates pass.
+    const looseEnough = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [
+          { resourceTypeId: 'rt-dev', min: 1, max: 4 },
+          { resourceTypeId: 'rt-des', min: 1, max: 2 },
+        ],
+        allowRampUp: false,
+        maxBudget: demandCost + 0.01,
+      },
+      dayRates,
+      topN: 10,
+    }))
+    for (const c of looseEnough.candidates) {
+      expect(c.metrics.estimatedCost).toBeLessThanOrEqual(demandCost + 0.01)
     }
-    // Budget filter must have removed at least one scenario (the expensive ones)
-    expect(capped.candidates.length).toBeLessThan(uncapped.candidates.length)
+    expect(looseEnough.candidates.length).toBe(uncapped.candidates.length)
+  })
+
+  // ── Cost is demand-based (matches Effort Review) ─────────────────────────
+  it('estimatedCost is demand-based: independent of count for a given dayRate', () => {
+    const input = twoRtInput()
+    const dayRates = new Map([['rt-dev', 100], ['rt-des', 80]])
+
+    // Expected demand cost: Σ (hoursEffort / hpd) × dayRate, hpd=8
+    //   dev tasks: 80 + 160 = 240h → 30 days × $100 = $3000
+    //   des tasks: 40 + 80  = 120h → 15 days × $80  = $1200
+    //   total = $4200
+    const expected = 4200
+
+    const result = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [
+          { resourceTypeId: 'rt-dev', min: 1, max: 5 },
+          { resourceTypeId: 'rt-des', min: 1, max: 3 },
+        ],
+        allowRampUp: false,
+      },
+      dayRates,
+      topN: 20,
+    }))
+
+    expect(result.baseline.metrics.estimatedCost).toBeCloseTo(expected, 2)
+    for (const c of result.candidates) {
+      expect(c.metrics.estimatedCost).toBeCloseTo(expected, 2)
+    }
   })
 
   // ── Empty project: no epics ───────────────────────────────────────────────

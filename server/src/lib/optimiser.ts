@@ -261,12 +261,27 @@ function computeMetrics(
   const avgUtilisationPct = rtWithDemandCount > 0 ? totalUtil / rtWithDemandCount : 0
 
   // ── Estimated cost ────────────────────────────────────────────────────────
-  // weeklyRate = count × dayRate × 5 days; totalCost = weeklyRate × deliveryWeeks
+  // Demand-based cost (matches Effort Review / Resource Profile):
+  //   Σ over active tasks: (hoursEffort / hpd) × dayRate
+  // We deliberately do NOT use count × dayRate × deliveryWeeks (capacity-based)
+  // because that bills for idle time and diverges from the rest of the app.
   let estimatedCost = 0
-  if (dayRates && dayRates.size > 0 && deliveryWeeks > 0) {
-    for (const rt of input.resourceTypes) {
-      const dayRate = dayRates.get(rt.id) ?? 0
-      if (dayRate > 0) estimatedCost += rt.count * dayRate * 5 * deliveryWeeks
+  if (dayRates && dayRates.size > 0) {
+    for (const epic of input.epics) {
+      for (const feature of epic.features) {
+        if (feature.isActive === false) continue
+        for (const story of feature.userStories) {
+          if (story.isActive === false) continue
+          for (const task of story.tasks) {
+            if (!task.resourceTypeId) continue
+            const dayRate = dayRates.get(task.resourceTypeId) ?? 0
+            if (dayRate <= 0) continue
+            const rt = input.resourceTypes.find(r => r.id === task.resourceTypeId)
+            const hpd = rt?.hoursPerDay ?? input.project.hoursPerDay
+            estimatedCost += (task.hoursEffort / hpd) * dayRate
+          }
+        }
+      }
     }
   }
 
