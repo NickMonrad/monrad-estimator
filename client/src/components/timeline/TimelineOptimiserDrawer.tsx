@@ -311,6 +311,7 @@ export default function TimelineOptimiserDrawer({
   const [allowRampUp, setAllowRampUp] = useState(false)
   const [maxBudget, setMaxBudget] = useState('')
   const [maxDurationWeeks, setMaxDurationWeeks] = useState('')
+  const [minDurationWeeks, setMinDurationWeeks] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [lastResult, setLastResult] = useState<OptimiserResponse | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
@@ -322,6 +323,7 @@ export default function TimelineOptimiserDrawer({
       setAllowRampUp(false)
       setMaxBudget('')
       setMaxDurationWeeks('')
+      setMinDurationWeeks('')
       setAdvancedOpen(false)
       setRunError(null)
       setLastResult(null)
@@ -366,6 +368,7 @@ export default function TimelineOptimiserDrawer({
           allowRampUp,
           maxBudget: maxBudget ? Number(maxBudget) : undefined,
           maxDurationWeeks: maxDurationWeeks ? Number(maxDurationWeeks) : undefined,
+          minDurationWeeks: minDurationWeeks ? Number(minDurationWeeks) : undefined,
         },
       })
     },
@@ -542,6 +545,19 @@ export default function TimelineOptimiserDrawer({
                     placeholder="no limit"
                     value={maxBudget}
                     onChange={e => setMaxBudget(e.target.value)}
+                    className="w-32 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-lab3-blue placeholder-gray-300"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-gray-500 dark:text-gray-400 w-36">
+                    Min duration (weeks)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="no limit"
+                    value={minDurationWeeks}
+                    onChange={e => setMinDurationWeeks(e.target.value)}
                     className="w-32 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-lab3-blue placeholder-gray-300"
                   />
                 </div>

@@ -90,6 +90,7 @@ export interface OptimiserRequest {
     allowRampUp: boolean
     maxBudget?: number
     maxDurationWeeks?: number
+    minDurationWeeks?: number
   }
   dayRates?: Record<string, number>
   topN?: number

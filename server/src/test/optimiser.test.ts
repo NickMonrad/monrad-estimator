@@ -794,9 +794,9 @@ describe('runOptimiser', () => {
     }
   }
 
-  it('parallel over-allocation: only feasible candidates returned (parallelWarningCount === 0)', () => {
-    // Baseline has count=1 (over-allocated), search range 1–3.
-    // count=1 → infeasible (1 scenario), counts 2 and 3 → feasible (2 scenarios).
+  it('parallel over-allocation: floor eliminates warnings so all scenarios are now feasible', () => {
+    // With the demand floor, the scheduler extends feature durations to fit shared resource
+    // demand. Previously count=1 generated a parallel warning; now the floor prevents it.
     const input = parallelOverloadInput(1)
     const result = runOptimiser(input, baseConfig({
       mode: 'speed',
@@ -810,24 +810,19 @@ describe('runOptimiser', () => {
     // All 3 scenarios evaluated
     expect(result.searchStats.scenariosEvaluated).toBe(3)
 
-    // count=1 is infeasible; counts 2 and 3 are feasible
-    expect(result.infeasibleCount).toBe(1)
-    expect(result.candidates.length).toBe(2)
+    // Floor ensures demand ≤ capacity for every count — no scenario is infeasible
+    expect(result.infeasibleCount).toBe(0)
+    expect(result.candidates.length).toBe(3)
 
-    // Every returned candidate must have no parallel warnings
+    // Every returned candidate has no parallel warnings
     for (const c of result.candidates) {
       expect(c.metrics.parallelWarningCount).toBe(0)
     }
-
-    // candidatesFound matches the feasible count
-    expect(result.searchStats.candidatesFound).toBe(2)
   })
 
-  it('parallel over-allocation: all infeasible → candidates empty, infeasibleCount > 0', () => {
-    // 3 rt-dev features in parallel: rt-dev demand = 8+8+8 = 24 days.
-    // Epic span = 10 days (rt-fixed anchor, in feature 1 only).
-    // count=1: capacity=10 < 24 → warning; count=2: capacity=20 < 24 → warning.
-    // All range 1–2 scenarios are infeasible.
+  it('parallel over-allocation: floor extends duration so all scenarios become feasible', () => {
+    // With the demand floor, even count=1 with 3 features sharing rt-dev is feasible
+    // (floor = 24 person-days / (1×5) = 4.8 weeks → capacity = 24 = demand → no warning)
     const rtDev = makeRt('rt-dev', 'Developer', 1, 8)
     const rtFixed = makeRt('rt-fixed', 'Anchor', 1, 8)
     const f1 = makeFeature('pf1', [makeStory('ps1', [
@@ -856,17 +851,17 @@ describe('runOptimiser', () => {
       topN: 5,
     }))
 
-    expect(result.candidates).toHaveLength(0)
-    expect(result.infeasibleCount).toBeGreaterThan(0)
-    expect(result.infeasibleCount).toBe(result.searchStats.scenariosEvaluated)
-    // baseline is always present (represents current state — not filtered)
+    // Floor ensures demand ≤ capacity for all counts — all scenarios are feasible
+    expect(result.infeasibleCount).toBe(0)
+    expect(result.candidates.length).toBeGreaterThan(0)
     expect(result.baseline).toBeDefined()
-    expect(result.baseline.metrics.parallelWarningCount).toBeGreaterThan(0)
+    // baseline should also have no parallel warnings
+    expect(result.baseline.metrics.parallelWarningCount).toBe(0)
   })
 
-  it('parallel over-allocation: baseline is always present even when it has warnings', () => {
-    // Range locked to count=1 (infeasible). Only 1 scenario, it's filtered.
-    // Baseline (also count=1) must still be returned.
+  it('parallel over-allocation: baseline is always present regardless of search range', () => {
+    // Range locked to count=1. With floor, count=1 is feasible — baseline has no warnings.
+    // The baseline is always returned even when it's the same as the only candidate.
     const input = parallelOverloadInput(1)
 
     const result = runOptimiser(input, baseConfig({
@@ -878,13 +873,13 @@ describe('runOptimiser', () => {
       topN: 5,
     }))
 
-    // Baseline must always be returned regardless of its warning count
+    // Baseline must always be returned
     expect(result.baseline).toBeDefined()
     expect(result.baseline.resourceTypes.find(r => r.resourceTypeId === 'rt-dev')!.count).toBe(1)
-    // It has warnings (current state is infeasible)
-    expect(result.baseline.metrics.parallelWarningCount).toBeGreaterThan(0)
-    // But candidates array is empty (filter applied to search scenarios, not baseline)
-    expect(result.candidates).toHaveLength(0)
+    // With floor, baseline has no parallel warnings
+    expect(result.baseline.metrics.parallelWarningCount).toBe(0)
+    // count=1 is feasible → 1 candidate returned
+    expect(result.candidates.length).toBe(1)
   })
 })
 
@@ -959,5 +954,32 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
 
     expect(res.status).toBe(400)
     expect(res.body.error).toBe('Invalid resourceTypes element')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// minDurationWeeks constraint
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('minDurationWeeks constraint', () => {
+  it('filters all candidates when minDurationWeeks is impossibly high', () => {
+    const input = twoRtInput()
+    const config = baseConfig({
+      mode: 'speed',
+      constraints: {
+        countRanges: [
+          { resourceTypeId: 'rt-dev', min: 1, max: 3 },
+          { resourceTypeId: 'rt-des', min: 1, max: 3 },
+        ],
+        allowRampUp: false,
+        minDurationWeeks: 100_000,
+      },
+      topN: 5,
+    })
+
+    const result = runOptimiser(input, config)
+
+    // No scenario can deliver in 100,000+ weeks so all are filtered
+    expect(result.candidates.length).toBe(0)
   })
 })

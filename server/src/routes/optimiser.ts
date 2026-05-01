@@ -238,6 +238,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       allowRampUp?: boolean
       maxBudget?: number
       maxDurationWeeks?: number
+      minDurationWeeks?: number
     }
     /** JSON object: { [resourceTypeId]: dayRate } */
     dayRates?: Record<string, number>
@@ -293,6 +294,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       allowRampUp: body.constraints?.allowRampUp ?? false,
       maxBudget: body.constraints?.maxBudget,
       maxDurationWeeks: body.constraints?.maxDurationWeeks,
+      minDurationWeeks: body.constraints?.minDurationWeeks,
     },
     dayRates,
     topN,

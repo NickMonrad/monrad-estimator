@@ -41,6 +41,8 @@ export interface OptimiserConfig {
     maxBudget?: number
     /** Candidates with deliveryWeeks > maxDurationWeeks are filtered out. */
     maxDurationWeeks?: number
+    /** Candidates with deliveryWeeks < minDurationWeeks are filtered out. */
+    minDurationWeeks?: number
   }
   /**
    * Day rate per RT (resourceTypeId → dayRate).
@@ -371,7 +373,7 @@ export function runOptimiser(
 ): OptimiserResult {
   const startMs = _now()
   const { mode, constraints, dayRates, topN } = config
-  const { countRanges, allowRampUp, maxBudget, maxDurationWeeks } = constraints
+  const { countRanges, allowRampUp, maxBudget, maxDurationWeeks, minDurationWeeks } = constraints
 
   // ── 1. Baseline run (non-levelled, consistent with scenario evaluations) ──
   const baselineOutput = runScheduler({ ...baseInput, resourceLevel: false })
@@ -483,6 +485,9 @@ export function runOptimiser(
 
     // Apply maxDurationWeeks constraint
     if (maxDurationWeeks !== undefined && deliveryWeeks > maxDurationWeeks) continue
+
+    // Apply minDurationWeeks constraint
+    if (minDurationWeeks !== undefined && deliveryWeeks < minDurationWeeks) continue
 
     const metrics = computeMetrics(
       scenarioInput,
