@@ -1,5 +1,8 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login, createProject } from './helpers'
+import path from 'path'
+import fs from 'fs'
+import os from 'os'
 
 /**
  * Shared setup for timeline tests 2-4.
@@ -177,5 +180,147 @@ test.describe('Timeline', () => {
     await expect(page.getByRole('combobox').filter({ hasText: /add dependency/i })).toBeVisible({
       timeout: 8_000,
     })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resource Optimiser drawer — Phase 4, issue #233
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Minimal CSV that creates a Developer + Tech Lead resource type so the
+ * Optimiser has a non-trivial search space.
+ */
+const OPTIMISER_CSV = [
+  'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+  'Epic,Opt Epic,,,,,,,,,,active,,',
+  'Feature,Opt Epic,Opt Feature,,,,,,,,,,,',
+  'Story,Opt Epic,Opt Feature,Opt Story,,,,,,,,,,active',
+  'Task,Opt Epic,Opt Feature,Opt Story,Dev Task A,,Developer,16,2,,,,,',
+  'Task,Opt Epic,Opt Feature,Opt Story,Dev Task B,,Developer,8,1,,,,,',
+  'Task,Opt Epic,Opt Feature,Opt Story,Lead Task,,Tech Lead,8,1,,,,,',
+].join('\n')
+
+/**
+ * Creates a fresh project, seeds it with resource types via CSV import,
+ * navigates to the Timeline page, and runs Auto-schedule.
+ * Resources (Developer + Tech Lead) are required for the Run optimiser
+ * button to be enabled.
+ */
+async function setupOptimiserTimeline(page: Page): Promise<void> {
+  const suffix = Date.now()
+  const projectName = `E2E Optimiser ${suffix}`
+
+  await login(page)
+  await createProject(page, projectName)
+
+  // Open project hub → Backlog
+  await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+  await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+  await page.getByRole('button', { name: /backlog/i }).click()
+
+  // Import CSV to seed resource types
+  await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
+  await page.getByRole('button', { name: /import csv/i }).click()
+  const tmpFile = path.join(os.tmpdir(), `optimiser-seed-${suffix}.csv`)
+  fs.writeFileSync(tmpFile, OPTIMISER_CSV)
+  await page.locator('input[type="file"]').setInputFiles(tmpFile)
+  fs.unlinkSync(tmpFile)
+
+  // Two-step staging confirmation
+  await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+  await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+  await expect(page.getByText('Opt Epic')).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to Timeline
+  const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+  await page.goto(`/projects/${projectId}`)
+  await page.getByRole('button', { name: /timeline/i }).waitFor({ timeout: 8_000 })
+  await page.getByRole('button', { name: /timeline/i }).click()
+  await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 8_000 })
+
+  // Set a start date and run Auto-schedule so the scheduler has produced entries
+  const dateInput = page.locator('input[type="date"]')
+  await expect(dateInput).toBeVisible({ timeout: 8_000 })
+  await dateInput.fill('2026-06-01')
+  await expect(dateInput).toHaveValue('2026-06-01')
+  await page.getByRole('button', { name: /auto-schedule/i }).click()
+  await expect(
+    page.getByRole('button', { name: /sequential|parallel/i }).first()
+  ).toBeVisible({ timeout: 15_000 })
+}
+
+// ── Test 1: open & close ──────────────────────────────────────────────────────
+// Uses the lighter setupTimeline (no CSV needed for open/close alone).
+test.describe('Optimiser drawer — open and close', () => {
+  test('open and close the drawer', async ({ page }) => {
+    await setupTimeline(page)
+
+    // Click the ✨ Optimise header button
+    await page.getByRole('button', { name: '✨ Optimise' }).click()
+
+    // Drawer heading and dialog role should be visible
+    const drawer = page.getByRole('dialog', { name: /optimise resources/i })
+    await expect(drawer).toBeVisible({ timeout: 8_000 })
+    await expect(drawer.getByRole('heading', { name: /optimise resources/i })).toBeVisible()
+
+    // Close via the × button (aria-label="Close")
+    await drawer.getByRole('button', { name: 'Close' }).click()
+
+    // Drawer must be gone from the DOM
+    await expect(drawer).not.toBeVisible({ timeout: 5_000 })
+  })
+})
+
+// ── Tests 2 & 3: require resource types ──────────────────────────────────────
+test.describe('Optimiser drawer — with resources', () => {
+  test.beforeEach(async ({ page }) => {
+    // CSV import + navigation takes ~20-30s; allow 90s total
+    test.setTimeout(90_000)
+    await setupOptimiserTimeline(page)
+  })
+
+  test('run optimiser and see results', async ({ page }) => {
+    // Open the drawer
+    await page.getByRole('button', { name: '✨ Optimise' }).click()
+    const drawer = page.getByRole('dialog', { name: /optimise resources/i })
+    await expect(drawer).toBeVisible({ timeout: 8_000 })
+
+    // Click Run optimiser
+    await drawer.getByRole('button', { name: 'Run optimiser' }).click()
+
+    // Wait for search stats footer (up to 30s for the optimiser to complete)
+    // Rendered as: "Evaluated X scenarios in Y.Zs"
+    await expect(drawer.getByText(/Evaluated [\d,]+ scenarios/)).toBeVisible({ timeout: 30_000 })
+
+    // Baseline card must be visible
+    await expect(drawer.getByText('Current configuration')).toBeVisible()
+
+    // At least one candidate card — "Top scenarios" heading + at least one Apply button
+    await expect(drawer.getByText('Top scenarios')).toBeVisible()
+    await expect(drawer.getByRole('button', { name: 'Apply' }).first()).toBeVisible()
+  })
+
+  test('apply button is present on candidate cards, dialog is dismissed without mutation', async ({ page }) => {
+    // Open the drawer and run the optimiser
+    await page.getByRole('button', { name: '✨ Optimise' }).click()
+    const drawer = page.getByRole('dialog', { name: /optimise resources/i })
+    await expect(drawer).toBeVisible({ timeout: 8_000 })
+
+    await drawer.getByRole('button', { name: 'Run optimiser' }).click()
+    await expect(drawer.getByText(/Evaluated [\d,]+ scenarios/)).toBeVisible({ timeout: 30_000 })
+    await expect(drawer.getByText('Top scenarios')).toBeVisible()
+
+    // Each candidate card has a visible Apply button
+    const applyButtons = drawer.getByRole('button', { name: 'Apply' })
+    const count = await applyButtons.count()
+    expect(count).toBeGreaterThan(0)
+
+    // Click Apply on the first card but DISMISS the confirm dialog so no data is mutated
+    page.once('dialog', dialog => dialog.dismiss())
+    await applyButtons.first().click()
+
+    // Drawer must still be open (apply was aborted by the user)
+    await expect(drawer).toBeVisible({ timeout: 5_000 })
   })
 })
