@@ -43,7 +43,7 @@ function makeFeature(
   order = 0,
   deps: Array<{ featureId: string; dependsOnId: string }> = [],
 ): SchedulerFeature {
-  return { id, order, isActive: null, userStories: stories, dependencies: deps }
+  return { id, order, isActive: null, timelineStartWeek: null, userStories: stories, dependencies: deps }
 }
 
 function makeEpic(

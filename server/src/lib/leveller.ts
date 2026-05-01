@@ -2,8 +2,11 @@
  * leveller.ts — Greedy resource-levelling algorithm for the Monrad Estimator.
  *
  * Pure function: no I/O, no Prisma, no side effects.
- * Takes a SchedulerInput and returns proposed epic start weeks that
- * spread demand across time, respecting epic dependencies.
+ * Takes a SchedulerInput and returns proposed epic + feature start weeks that
+ * spread demand across time, respecting epic and feature dependencies.
+ *
+ * Phase 4: stagger individual features (not just epics), filling resource
+ * gaps by interleaving features across parallel-mode epics.
  */
 
 import {
@@ -20,6 +23,8 @@ import {
 export interface LevellingResult {
   /** epicId → proposed startWeek */
   epicStartWeeks: Map<string, number>
+  /** featureId → proposed startWeek */
+  featureStartWeeks: Map<string, number>
   totalDeliveryWeeks: number
   peakUtilisationPct: number
 }
@@ -29,171 +34,215 @@ export interface LevellingResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Greedy bin-packing leveller.
+ * Greedy bin-packing leveller — feature-level placement.
  *
- * 1. Runs the scheduler (resourceLevel: false) to get epic durations.
- * 2. Computes per-epic demand profiles (demandDaysPerWeek per RT).
- * 3. Builds epic-level dependency graph.
- * 4. Greedily places epics into the earliest week slot that doesn't
- *    exceed capacity for any RT in any covered week.
+ * 1. Runs the scheduler (resourceLevel: false) to get feature durations.
+ * 2. Computes per-feature demand profiles (demandDaysPerWeek per RT).
+ * 3. Builds feature-level dependency graph (explicit deps, epic deps,
+ *    sequential intra-epic chains).
+ * 4. Topological sort features (Kahn's).
+ * 5. Greedily places each feature at the earliest week that fits within
+ *    RT capacity constraints.
+ * 6. Derives epic start weeks as min of contained feature start weeks.
  */
 export function levelEpicStarts(input: SchedulerInput): LevellingResult {
   const { project, epics, resourceTypes, epicDeps } = input
   const hpd = project.hoursPerDay
 
-  // ── Step 1: Run scheduler to get baseline feature schedule ───────────────
+  // ── Step 1: Run scheduler to get baseline feature durations ─────────────
   const output = runScheduler({ ...input, resourceLevel: false })
   const { featureSchedule } = output
 
-  // Build lookup: featureId → { startWeek, finishWeek }
-  const featureStartMap = new Map<string, number>()
-  const featureFinishMap = new Map<string, number>()
+  // Build feature duration map.
+  // For features in parallel epics, compute raw (un-inflated) durations
+  // since the leveller handles capacity itself via greedy placement.
+  // For sequential epics, use the scheduler's durations (which don't inflate).
+  const rtCountMap = new Map(resourceTypes.map(rt => [rt.id, rt.count]))
+  const featureDurations = new Map<string, number>()
+  const parallelEpicIds = new Set(epics.filter(e => e.featureMode === 'parallel').map(e => e.id))
+
   for (const fs of featureSchedule) {
-    featureStartMap.set(fs.featureId, fs.startWeek)
-    featureFinishMap.set(fs.featureId, fs.startWeek + fs.durationWeeks)
+    featureDurations.set(fs.featureId, fs.durationWeeks)
   }
 
-  // ── Step 2: Compute per-epic demand profiles ──────────────────────────────
-  // For each epic: duration in weeks + demand rate (days/week) per RT.
-  // epicDurations: epicId → durationWeeks
-  // epicDemandRates: epicId → Map<rtId, demandDaysPerWeek>
+  // Recompute raw durations for features in parallel epics
+  // (the scheduler inflates them via parallelEpicMinSpan floor, which we don't want)
+  for (const epic of epics) {
+    if (!parallelEpicIds.has(epic.id)) continue
+    for (const feature of epic.features) {
+      const allTasks = feature.userStories
+        .filter(s => s.isActive !== false)
+        .flatMap(s => s.tasks)
+      if (allTasks.length === 0) {
+        featureDurations.set(feature.id, 1)
+        continue
+      }
+      // Max days across RTs (same logic as scheduler's featureDurationWeeks minus the floor)
+      const byRt = new Map<string | null, typeof allTasks>()
+      for (const task of allTasks) {
+        const group = byRt.get(task.resourceTypeId) ?? []
+        group.push(task)
+        byRt.set(task.resourceTypeId, group)
+      }
+      let maxDays = 0
+      for (const [rtId, tasks] of byRt) {
+        const personDays = tasks.reduce((sum, t) => {
+          const rtHpd = t.resourceType?.hoursPerDay ?? hpd
+          return sum + (t.durationDays ?? (t.hoursEffort / rtHpd))
+        }, 0)
+        const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
+        const days = personDays / count
+        if (days > maxDays) maxDays = days
+      }
+      featureDurations.set(feature.id, Math.max(0.2, maxDays / 5))
+    }
+  }
 
-  const epicDurations = new Map<string, number>()
-  const epicDemandRates = new Map<string, Map<string, number>>()
+  // ── Step 2: Compute per-feature demand rates (days/week per RT) ─────────
+  const featureDemandRates = new Map<string, Map<string, number>>()
 
   for (const epic of epics) {
-    const featureIds = epic.features.map(f => f.id)
-    if (featureIds.length === 0) {
-      epicDurations.set(epic.id, 1)
-      epicDemandRates.set(epic.id, new Map())
-      continue
-    }
-
-    // Compute epic span from feature schedule
-    let epicStart = Infinity
-    let epicFinish = 0
-    for (const fId of featureIds) {
-      const fs = featureStartMap.get(fId)
-      const ff = featureFinishMap.get(fId)
-      if (fs !== undefined) epicStart = Math.min(epicStart, fs)
-      if (ff !== undefined) epicFinish = Math.max(epicFinish, ff)
-    }
-    const durationWeeks = Math.max(1, epicStart === Infinity ? 1 : epicFinish - epicStart)
-    epicDurations.set(epic.id, durationWeeks)
-
-    // Compute total demand days per RT across all active features/stories/tasks
-    const totalDemandDaysByRt = new Map<string, number>()
     for (const feature of epic.features) {
+      const dur = featureDurations.get(feature.id) ?? 1
+      const demandByRt = new Map<string, number>()
+
       for (const story of feature.userStories) {
         if (story.isActive === false) continue
         for (const task of story.tasks) {
           if (!task.resourceTypeId) continue
           const rtHpd = task.resourceType?.hoursPerDay ?? hpd
           const demandDays = task.durationDays ?? (task.hoursEffort / rtHpd)
-          totalDemandDaysByRt.set(
+          demandByRt.set(
             task.resourceTypeId,
-            (totalDemandDaysByRt.get(task.resourceTypeId) ?? 0) + demandDays,
+            (demandByRt.get(task.resourceTypeId) ?? 0) + demandDays,
           )
         }
       }
-    }
 
-    // Demand rate = totalDemand / epicDuration (evenly distributed approximation)
-    const demandRateByRt = new Map<string, number>()
-    for (const [rtId, totalDemand] of totalDemandDaysByRt) {
-      demandRateByRt.set(rtId, totalDemand / durationWeeks)
+      // Convert total demand to rate (days/week)
+      const rateByRt = new Map<string, number>()
+      for (const [rtId, totalDemand] of demandByRt) {
+        rateByRt.set(rtId, totalDemand / dur)
+      }
+      featureDemandRates.set(feature.id, rateByRt)
     }
-    epicDemandRates.set(epic.id, demandRateByRt)
   }
 
-  // ── Step 3: Build dependency graph (epic-level) ───────────────────────────
-  // earliestStart[epicId] will be updated as we place epics.
-  // We process epics in topological order by (epicDep chain + epic.order).
-
+  // ── Step 3: Build feature-level dependency graph ────────────────────────
   const epicById = new Map(epics.map(e => [e.id, e]))
-
-  // Build adjacency (dependsOn → [dependents]) and in-degree
-  const epicInDeg = new Map<string, number>()
-  const epicSuccessors = new Map<string, string[]>()
-  const epicPredecessors = new Map<string, string[]>()
+  const featureEpicMap = new Map<string, string>() // featureId → epicId
+  const allFeatureIds: string[] = []
+  const featureOrderKey = new Map<string, number>() // for topo tie-break
 
   for (const epic of epics) {
-    epicInDeg.set(epic.id, 0)
-    epicSuccessors.set(epic.id, [])
-    epicPredecessors.set(epic.id, [])
+    for (const feature of epic.features) {
+      allFeatureIds.push(feature.id)
+      featureEpicMap.set(feature.id, epic.id)
+      // Round-robin tie-break: interleave features across epics by processing
+      // feature[0] from all epics first, then feature[1], etc.
+      featureOrderKey.set(feature.id, feature.order * 100000 + epic.order)
+    }
   }
 
+  const predecessors = new Map<string, Set<string>>()
+  const successors = new Map<string, Set<string>>()
+  const inDegree = new Map<string, number>()
+
+  for (const fId of allFeatureIds) {
+    predecessors.set(fId, new Set())
+    successors.set(fId, new Set())
+    inDegree.set(fId, 0)
+  }
+
+  function addEdge(fromId: string, toId: string) {
+    if (fromId === toId) return
+    const preds = predecessors.get(toId)
+    const succs = successors.get(fromId)
+    if (!preds || !succs) return
+    if (preds.has(fromId)) return // already exists
+    preds.add(fromId)
+    succs.add(toId)
+    inDegree.set(toId, (inDegree.get(toId) ?? 0) + 1)
+  }
+
+  // 3a. Explicit feature dependencies
+  for (const epic of epics) {
+    for (const feature of epic.features) {
+      for (const dep of feature.dependencies ?? []) {
+        addEdge(dep.dependsOnId, dep.featureId)
+      }
+    }
+  }
+
+  // 3b. Epic dependencies → all features in dependent epic depend on all features in predecessor
   for (const dep of epicDeps) {
-    // dep.epicId depends on dep.dependsOnId
-    const succs = epicSuccessors.get(dep.dependsOnId)
-    const preds = epicPredecessors.get(dep.epicId)
-    if (!succs || !preds) continue
-    succs.push(dep.epicId)
-    preds.push(dep.dependsOnId)
-    epicInDeg.set(dep.epicId, (epicInDeg.get(dep.epicId) ?? 0) + 1)
+    const fromEpic = epicById.get(dep.dependsOnId)
+    const toEpic = epicById.get(dep.epicId)
+    if (!fromEpic || !toEpic) continue
+    for (const fromFeature of fromEpic.features) {
+      for (const toFeature of toEpic.features) {
+        addEdge(fromFeature.id, toFeature.id)
+      }
+    }
   }
 
-  // Topological sort (Kahn's) with tie-break by epic.order
+  // 3c. Sequential intra-epic edges (only for sequential-mode epics)
+  for (const epic of epics) {
+    if ((epic.featureMode ?? 'sequential') !== 'sequential') continue
+    const sorted = [...epic.features].sort((a, b) => a.order - b.order)
+    for (let i = 1; i < sorted.length; i++) {
+      addEdge(sorted[i - 1].id, sorted[i].id)
+    }
+  }
+  // 3d. NO intra-epic edges for parallel-mode epics
+
+  // ── Step 4: Topological sort (Kahn's with tie-break) ────────────────────
   const topoOrder: string[] = []
   const queue: string[] = []
 
-  // Seed: epics with no deps
-  for (const epic of epics) {
-    if ((epicInDeg.get(epic.id) ?? 0) === 0) {
-      queue.push(epic.id)
-    }
+  for (const fId of allFeatureIds) {
+    if ((inDegree.get(fId) ?? 0) === 0) queue.push(fId)
   }
-  // Sort queue by epic.order for deterministic output
-  queue.sort((a, b) => (epicById.get(a)?.order ?? 0) - (epicById.get(b)?.order ?? 0))
+  queue.sort((a, b) => (featureOrderKey.get(a) ?? 0) - (featureOrderKey.get(b) ?? 0))
 
   while (queue.length > 0) {
-    // Pick lowest-order epic from queue
-    const epicId = queue.shift()!
-    topoOrder.push(epicId)
+    const fId = queue.shift()!
+    topoOrder.push(fId)
 
-    const succs = epicSuccessors.get(epicId) ?? []
-    const newReady: string[] = []
-    for (const succId of succs) {
-      const newDeg = (epicInDeg.get(succId) ?? 1) - 1
-      epicInDeg.set(succId, newDeg)
-      if (newDeg === 0) newReady.push(succId)
+    for (const succId of successors.get(fId) ?? []) {
+      const newDeg = (inDegree.get(succId) ?? 1) - 1
+      inDegree.set(succId, newDeg)
+      if (newDeg === 0) queue.push(succId)
     }
-    newReady.sort((a, b) => (epicById.get(a)?.order ?? 0) - (epicById.get(b)?.order ?? 0))
-    queue.push(...newReady)
-    queue.sort((a, b) => (epicById.get(a)?.order ?? 0) - (epicById.get(b)?.order ?? 0))
+    // Re-sort after adding new entries for deterministic output
+    queue.sort((a, b) => (featureOrderKey.get(a) ?? 0) - (featureOrderKey.get(b) ?? 0))
   }
 
-  // Fallback: any unprocessed epics (cycles) appended in order
+  // Fallback: features not processed (cycles) appended by order
   const processedSet = new Set(topoOrder)
-  for (const epic of [...epics].sort((a, b) => a.order - b.order)) {
-    if (!processedSet.has(epic.id)) topoOrder.push(epic.id)
+  for (const fId of allFeatureIds) {
+    if (!processedSet.has(fId)) topoOrder.push(fId)
   }
 
-  // ── Step 4: Greedy placement ──────────────────────────────────────────────
+  // ── Step 5: Greedy placement ────────────────────────────────────────────
   const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
-
-  // Tracks already-allocated demand days per (week, rtId)
+  const featureStartWeeks = new Map<string, number>()
+  const featureFinishWeeks = new Map<string, number>()
   const utilisedDays = new Map<string, number>() // key: `${rtId}|${week}`
-
-  const epicStartWeeks = new Map<string, number>()
-  const epicFinishWeeks = new Map<string, number>()
 
   const MAX_SEARCH = 200
 
-  for (const epicId of topoOrder) {
-    const epic = epicById.get(epicId)
-    if (!epic) continue
+  for (const featureId of topoOrder) {
+    const dur = featureDurations.get(featureId) ?? 1
+    const demandRates = featureDemandRates.get(featureId) ?? new Map()
 
-    const durationWeeks = epicDurations.get(epicId) ?? 1
-    const demandRates = epicDemandRates.get(epicId) ?? new Map()
-
-    // Earliest start = max finish of all predecessor epics
+    // Min start = max finish of all predecessors
     let minStart = 0
-    for (const predId of epicPredecessors.get(epicId) ?? []) {
-      const predFinish = epicFinishWeeks.get(predId) ?? 0
+    for (const predId of predecessors.get(featureId) ?? []) {
+      const predFinish = featureFinishWeeks.get(predId) ?? 0
       if (predFinish > minStart) minStart = predFinish
     }
-    minStart = Math.ceil(minStart) // snap to integer week boundary
+    minStart = Math.ceil(minStart)
 
     // Search for earliest integer week that fits
     let placedAt: number | null = null
@@ -201,8 +250,7 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
     for (let week = minStart; week <= minStart + MAX_SEARCH; week++) {
       let fits = true
 
-      // Check every week the epic would occupy
-      for (let w = week; w < week + Math.ceil(durationWeeks); w++) {
+      for (let w = week; w < week + Math.ceil(dur); w++) {
         for (const [rtId, demandRate] of demandRates) {
           const rt = rtById.get(rtId) as SchedulerResourceType | undefined
           if (!rt) continue
@@ -230,11 +278,11 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
 
     // Fallback: if no slot found, place at minStart
     const startWeek = placedAt ?? minStart
-    epicStartWeeks.set(epicId, startWeek)
-    epicFinishWeeks.set(epicId, startWeek + durationWeeks)
+    featureStartWeeks.set(featureId, startWeek)
+    featureFinishWeeks.set(featureId, startWeek + dur)
 
     // Update utilisation grid
-    for (let w = startWeek; w < startWeek + Math.ceil(durationWeeks); w++) {
+    for (let w = startWeek; w < startWeek + Math.ceil(dur); w++) {
       for (const [rtId, demandRate] of demandRates) {
         const key = `${rtId}|${w}`
         utilisedDays.set(key, (utilisedDays.get(key) ?? 0) + demandRate)
@@ -242,9 +290,20 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
     }
   }
 
-  // ── Step 5: Compute metrics ───────────────────────────────────────────────
+  // ── Step 6: Derive epic start weeks ─────────────────────────────────────
+  const epicStartWeeks = new Map<string, number>()
+  for (const epic of epics) {
+    let minW = Infinity
+    for (const f of epic.features) {
+      const fw = featureStartWeeks.get(f.id)
+      if (fw !== undefined && fw < minW) minW = fw
+    }
+    epicStartWeeks.set(epic.id, minW === Infinity ? 0 : minW)
+  }
+
+  // ── Step 7: Compute metrics ─────────────────────────────────────────────
   const totalDeliveryWeeks =
-    epicFinishWeeks.size > 0 ? Math.max(...epicFinishWeeks.values()) : 0
+    featureFinishWeeks.size > 0 ? Math.max(...featureFinishWeeks.values()) : 0
 
   // Peak utilisation: max over all (rtId, week) of utilised / capacity
   let peakUtilisationPct = 0
@@ -263,6 +322,7 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
 
   return {
     epicStartWeeks,
+    featureStartWeeks,
     totalDeliveryWeeks,
     peakUtilisationPct: Math.round(peakUtilisationPct * 10) / 10,
   }

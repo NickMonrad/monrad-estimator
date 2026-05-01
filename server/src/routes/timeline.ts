@@ -766,6 +766,7 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (dryRun) {
     res.json({
       epicStartWeeks: Object.fromEntries(levellingResult.epicStartWeeks),
+      featureStartWeeks: Object.fromEntries(levellingResult.featureStartWeeks),
       totalDeliveryWeeks: levellingResult.totalDeliveryWeeks,
       peakUtilisationPct: levellingResult.peakUtilisationPct,
     })
@@ -794,10 +795,21 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
     )
   )
 
+  // Update Feature.timelineStartWeek for each feature
+  await Promise.all(
+    Array.from(levellingResult.featureStartWeeks.entries()).map(([featureId, startWeek]) =>
+      prisma.feature.update({ where: { id: featureId }, data: { timelineStartWeek: startWeek } })
+    )
+  )
+
   // Re-run scheduler with updated start weeks and materialise timeline
   const updatedEpics = activeEpics.map(e => ({
     ...e,
     timelineStartWeek: levellingResult.epicStartWeeks.get(e.id) ?? e.timelineStartWeek,
+    features: e.features.map(f => ({
+      ...f,
+      timelineStartWeek: levellingResult.featureStartWeeks.get(f.id) ?? f.timelineStartWeek ?? null,
+    })),
   }))
 
   const { featureSchedule, storySchedule } = runScheduler({
@@ -837,6 +849,7 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   res.json({
     epicStartWeeks: Object.fromEntries(levellingResult.epicStartWeeks),
+    featureStartWeeks: Object.fromEntries(levellingResult.featureStartWeeks),
     snapshotId: snap.id,
     totalDeliveryWeeks: levellingResult.totalDeliveryWeeks,
     peakUtilisationPct: levellingResult.peakUtilisationPct,

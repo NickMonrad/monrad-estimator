@@ -38,7 +38,7 @@ function makeFeature(
   stories: SchedulerStory[],
   order = 0,
 ): SchedulerFeature {
-  return { id, order, isActive: null, userStories: stories, dependencies: [] }
+  return { id, order, isActive: null, timelineStartWeek: null, userStories: stories, dependencies: [] }
 }
 
 function makeEpic(
@@ -94,6 +94,7 @@ describe('levelEpicStarts', () => {
     }))
 
     expect(result.epicStartWeeks.get('e1')).toBe(0)
+    expect(result.featureStartWeeks.get('f1')).toBe(0)
     expect(result.totalDeliveryWeeks).toBeGreaterThan(0)
   })
 
@@ -180,5 +181,64 @@ describe('levelEpicStarts', () => {
     // Both can start at week 0 — no resource contention
     expect(startDev).toBe(0)
     expect(startDesign).toBe(0)
+  })
+
+  it('parallel epic features are individually staggered to fill capacity gaps', () => {
+    // RT count=1: only 5 days/week capacity (1 person × 8hpd × 5days = 40h/wk)
+    // 2 parallel epics, each with 3 features, each feature = 40h = 1 week
+    // With count=1 there's only room for 1 feature at a time → 6 sequential weeks
+    // But features should interleave across epics, not block-by-epic
+    const rt = makeRt('rt1', 'Dev', 1, 8)
+
+    const epicA = makeEpic('eA', [
+      makeFeature('fA1', [makeStory('sA1', [makeTask(40, 'rt1')])], 0),
+      makeFeature('fA2', [makeStory('sA2', [makeTask(40, 'rt1')])], 1),
+      makeFeature('fA3', [makeStory('sA3', [makeTask(40, 'rt1')])], 2),
+    ], { order: 0, featureMode: 'parallel' })
+
+    const epicB = makeEpic('eB', [
+      makeFeature('fB1', [makeStory('sB1', [makeTask(40, 'rt1')])], 0),
+      makeFeature('fB2', [makeStory('sB2', [makeTask(40, 'rt1')])], 1),
+      makeFeature('fB3', [makeStory('sB3', [makeTask(40, 'rt1')])], 2),
+    ], { order: 1, featureMode: 'parallel' })
+
+    const result = levelEpicStarts(baseInput({
+      epics: [epicA, epicB],
+      resourceTypes: [rt],
+    }))
+
+    // All 6 features should be staggered (each takes 1 week, only 1 can run at a time)
+    const allStarts = [
+      result.featureStartWeeks.get('fA1')!,
+      result.featureStartWeeks.get('fA2')!,
+      result.featureStartWeeks.get('fA3')!,
+      result.featureStartWeeks.get('fB1')!,
+      result.featureStartWeeks.get('fB2')!,
+      result.featureStartWeeks.get('fB3')!,
+    ]
+
+    // All start weeks should be unique (no two features at same time)
+    const uniqueStarts = new Set(allStarts)
+    expect(uniqueStarts.size).toBe(6)
+
+    // Features should interleave across epics — epicB features should NOT all
+    // start after all epicA features. At least one epicB feature should start
+    // before the last epicA feature.
+    const epicAStarts = [
+      result.featureStartWeeks.get('fA1')!,
+      result.featureStartWeeks.get('fA2')!,
+      result.featureStartWeeks.get('fA3')!,
+    ]
+    const epicBStarts = [
+      result.featureStartWeeks.get('fB1')!,
+      result.featureStartWeeks.get('fB2')!,
+      result.featureStartWeeks.get('fB3')!,
+    ]
+    const maxA = Math.max(...epicAStarts)
+    const minB = Math.min(...epicBStarts)
+    expect(minB).toBeLessThan(maxA)
+
+    // Total delivery should be 6 weeks (6 features × 1 week each, serial)
+    expect(result.totalDeliveryWeeks).toBe(6)
   })
 })

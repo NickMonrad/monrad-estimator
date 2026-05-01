@@ -35,6 +35,7 @@ export interface SchedulerFeature {
   id: string
   order: number
   isActive: boolean | null
+  timelineStartWeek: number | null
   userStories: SchedulerStory[]
   /** FeatureDependency rows where this feature is the dependent */
   dependencies: Array<{ featureId: string; dependsOnId: string }>
@@ -537,7 +538,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       startWeeks.set(fId, sw)
       finishWeeks.set(fId, sw + dur)
     } else {
-      let earliest = epic.timelineStartWeek ?? 0
+      let earliest = f.timelineStartWeek ?? epic.timelineStartWeek ?? 0
       for (const predId of predecessors.get(fId) ?? []) {
         const predFinish = finishWeeks.get(predId) ?? 0
         if (predFinish > earliest) earliest = predFinish
@@ -564,7 +565,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     }
     for (const f of allFeatures) {
       if (startWeeks.has(f.id)) continue
-      let earliest = f.epic.timelineStartWeek ?? 0
+      let earliest = f.timelineStartWeek ?? f.epic.timelineStartWeek ?? 0
       for (const prevEpic of sortedEpics) {
         if (prevEpic.order >= f.epic.order) break
         const prevFinish = epicMaxFinish.get(prevEpic.id) ?? 0
@@ -630,7 +631,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       for (const fId of unfinished) {
         if (simStart.has(fId)) continue
         const f = featureMap.get(fId)!
-        const epicStart = f.epic.timelineStartWeek ?? 0
+        const epicStart = f.timelineStartWeek ?? f.epic.timelineStartWeek ?? 0
         if (t < epicStart) continue
         const predsAllDone = (predecessors.get(fId) ?? []).every(predId => {
           const done = simDone.get(predId)

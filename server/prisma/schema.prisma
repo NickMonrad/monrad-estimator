@@ -186,6 +186,7 @@ model Feature {
   featureMode      String               @default("sequential")
   isActive         Boolean              @default(true)
   timelineColour   String?
+  timelineStartWeek Int?
   epic             Epic                 @relation(fields: [epicId], references: [id], onDelete: Cascade)
   epicId           String
   userStories      UserStory[]
