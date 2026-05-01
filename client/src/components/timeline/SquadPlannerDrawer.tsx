@@ -54,7 +54,7 @@ function utilClass(pct: number) {
   return 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'
 }
 
-function periodLabel(startWeek: number, endWeek: number, periodWeeks: number) {
+function periodLabel(startWeek: number, _endWeek: number, periodWeeks: number) {
   if (periodWeeks === 13) {
     const q = Math.floor(startWeek / 13) + 1
     return `Q${q}`
