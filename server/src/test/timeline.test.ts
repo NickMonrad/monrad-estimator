@@ -572,7 +572,7 @@ describe('getWeeklyCapacity', () => {
     expect(getWeeklyCapacity(rt, 4, 8)).toBe(40)
   })
 
-  it('named resources override count', () => {
+  it('count > namedResources.length: phantom slots fill the remainder', () => {
     const rt = makeRT({
       count: 5,
       namedResources: [
@@ -580,7 +580,8 @@ describe('getWeeklyCapacity', () => {
         makeNR({ id: 'nr2', name: 'Dev 2' }),
       ],
     })
-    // Should use 2 named resources, not count=5 → 2 * 8 * 5 = 80
-    expect(getWeeklyCapacity(rt, 0, 8)).toBe(80)
+    // 2 named (100%) + 3 phantom slots → effective headcount = 5 = count
+    // Total = 5 * 8 * 5 = 200
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(200)
   })
 })

@@ -139,20 +139,28 @@ export function effectiveAllocationPct(
   return 100
 }
 
-/** Compute weekly capacity (hours) for a resource type, accounting for named resource availability. */
+/**
+ * Compute weekly capacity (hours) for a resource type.
+ *
+ * `count` is treated as the true effective headcount. Named resources are
+ * allocation/availability overlays for known team members; any slots beyond
+ * `namedResources.length` are treated as full-availability phantom (T&M) staff.
+ *
+ * weeklyHours = Σ namedResource(active this week, allocation %) +
+ *               max(0, count - namedResources.length) × hpd × 5
+ */
 export function getWeeklyCapacity(
   rt: SchedulerResourceType,
   week: number,
   defaultHoursPerDay: number,
 ): number {
   const hoursPerDay = rt.hoursPerDay ?? defaultHoursPerDay
-  if (rt.namedResources.length === 0) {
-    // No named resources — use aggregate count (existing behaviour)
-    return rt.count * hoursPerDay * 5
-  }
-  // Sum capacity from named resources active this week
+  // Defensive: real Prisma queries always return [] (include: { namedResources: true }),
+  // but some test mocks omit the field entirely. Treat undefined as empty.
+  const namedResources = rt.namedResources ?? []
   let totalHours = 0
-  for (const nr of rt.namedResources) {
+  // Named resources contribute their allocation-respecting capacity for this week
+  for (const nr of namedResources) {
     const start = nr.startWeek ?? 0       // null = project start (week 0)
     const end = nr.endWeek ?? Infinity     // null = project end
     if (week >= start && week <= end) {
@@ -160,6 +168,9 @@ export function getWeeklyCapacity(
       totalHours += (pct / 100) * hoursPerDay * 5
     }
   }
+  // Phantom slots: any count slots beyond namedResources are full-time T&M staff
+  const phantomSlots = Math.max(0, rt.count - namedResources.length)
+  totalHours += phantomSlots * hoursPerDay * 5
   return totalHours
 }
 
@@ -256,16 +267,14 @@ export function computeParallelWarnings(
   }
 
   const featureById = new Map(allFeatures.map(f => [f.id, f]))
-  const rtCountMap = new Map(allResourceTypes.map(rt => [rt.id, rt.count]))
   const rtMap = new Map(allResourceTypes.map(rt => [rt.id, rt]))
 
   for (const [epicId, { epicName, featureIds, startWeek, endWeek }] of parallelEpics) {
     if (featureIds.length < 2) continue
-    const epicSpanDays = (endWeek - startWeek) * 5
 
     const features = featureIds.map(id => featureById.get(id)).filter((f): f is NonNullable<typeof f> => f !== undefined)
 
-    const demandMap = new Map<string, { name: string; days: number; count: number }>()
+    const demandMap = new Map<string, { name: string; days: number }>()
     for (const feature of features) {
       for (const story of feature.userStories) {
         if (story.isActive === false) continue
@@ -277,7 +286,6 @@ export function computeParallelWarnings(
             demandMap.set(rtId, {
               name: task.resourceType?.name ?? 'Unassigned',
               days: 0,
-              count: task.resourceTypeId ? (rtCountMap.get(task.resourceTypeId) ?? 1) : 1,
             })
           }
           demandMap.get(rtId)!.days += days
@@ -285,19 +293,18 @@ export function computeParallelWarnings(
       }
     }
 
-    for (const [rtId, { name, days, count }] of demandMap) {
+    for (const [rtId, { name, days }] of demandMap) {
       const rt = rtMap.get(rtId)
-      let capacityDays: number
-      if (rt && rt.namedResources && rt.namedResources.length > 0) {
-        capacityDays = 0
+      // Capacity over the epic span: integrate getWeeklyCapacity across the span.
+      // For unknown RTs (no entry in rtMap, e.g. _unassigned), treat capacity as 0.
+      let capacityDays = 0
+      if (rt) {
         const hpd = rt.hoursPerDay ?? fallbackHoursPerDay
         for (let w = Math.floor(startWeek); w < Math.ceil(endWeek); w++) {
           const overlap = Math.min(w + 1, endWeek) - Math.max(w, startWeek)
           if (overlap <= 0) continue
           capacityDays += (getWeeklyCapacity(rt, w, fallbackHoursPerDay) / hpd) * overlap
         }
-      } else {
-        capacityDays = count * epicSpanDays
       }
       if (days > capacityDays) {
         warnings.push({
