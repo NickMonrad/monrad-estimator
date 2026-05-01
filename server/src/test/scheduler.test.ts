@@ -387,18 +387,24 @@ describe('runScheduler', () => {
   })
 
   // ── Parallel warnings ────────────────────────────────────────────────────────
-  it('parallel epic with insufficient capacity: generates parallel warning', () => {
+  it('parallel epic with shared RT: floor extends feature durations instead of warning', () => {
+    // With the demand floor, the scheduler extends feature durations to accommodate
+    // shared resource contention rather than generating a warning.
     const rt = makeRt('rt1', 'Dev', 1)  // only 1 dev
-    // Two features in a parallel epic needing 2× capacity
+    // Two features in a parallel epic: total demand = 5+5 = 10 days @ count=1
+    // floor = 10/(1×5) = 2 weeks; individual = 1 week → floored to 2 weeks
     const f1 = makeFeature('f1', [makeStory('s1', [makeTask(40, 'rt1', 'Dev')])], 0)
     const f2 = makeFeature('f2', [makeStory('s2', [makeTask(40, 'rt1', 'Dev')])], 1)
     const epic = makeEpic('e1', [f1, f2], { featureMode: 'parallel' })
 
     const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [rt] }))
 
-    expect(result.parallelWarnings.length).toBeGreaterThan(0)
-    expect(result.parallelWarnings[0].epicId).toBe('e1')
-    expect(result.parallelWarnings[0].resourceTypeName).toBe('Dev')
+    // Floor ensures each feature is at least 2 weeks
+    for (const entry of result.featureSchedule) {
+      expect(entry.durationWeeks).toBeGreaterThanOrEqual(2)
+    }
+    // No parallel warning because floor guarantees capacity ≥ demand
+    expect(result.parallelWarnings.length).toBe(0)
   })
 
   // ── Parallel warnings honour count beyond namedResources (Bug 1 follow-up) ─
@@ -493,5 +499,76 @@ describe('runScheduler', () => {
     const entry2 = result.featureSchedule.find(e => e.featureId === 'f2')!
     // The timelineStartWeek anchor must be respected; inter-epic chaining is skipped
     expect(entry2.startWeek).toBe(5)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parallel demand floor tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parallel demand floor', () => {
+  it('3 features sharing one RT produce durations floored to the shared demand span', () => {
+    // 3 features, each with 30 person-days of effort for rt1 (count=2, hpd=8)
+    // Individual duration without floor: 30/2/5 = 3 weeks each
+    // Floor: totalDemand=90, weeklyCapacity=2×5=10 days/week → floor=9 weeks
+    // Each feature duration should be floored to 9 weeks
+    const rt = makeRt('rt1', 'Dev', 2)
+
+    function makeParallelFeature(id: string) {
+      // 30 person-days = 30 × 8 = 240 hours
+      return makeFeature(id, [makeStory(`s-${id}`, [makeTask(240, 'rt1', 'Dev')])])
+    }
+
+    const epic = makeEpic('e1', [
+      makeParallelFeature('f1'),
+      makeParallelFeature('f2'),
+      makeParallelFeature('f3'),
+    ], { featureMode: 'parallel' })
+
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [rt] }))
+
+    for (const entry of result.featureSchedule) {
+      expect(entry.durationWeeks).toBeGreaterThanOrEqual(9)
+    }
+    // Epic span (all features run in parallel from same start) should be >= 9 weeks
+    const maxEnd = Math.max(...result.featureSchedule.map(e => e.startWeek + e.durationWeeks))
+    const minStart = Math.min(...result.featureSchedule.map(e => e.startWeek))
+    expect(maxEnd - minStart).toBeGreaterThanOrEqual(9)
+  })
+
+  it('higher count reduces the floor proportionally', () => {
+    // Same 3×30 person-days setup but count=3
+    // Floor: totalDemand=90, weeklyCapacity=3×5=15 days/week → floor=6 weeks
+    const rt = makeRt('rt1', 'Dev', 3)
+
+    function makeParallelFeature(id: string) {
+      return makeFeature(id, [makeStory(`s-${id}`, [makeTask(240, 'rt1', 'Dev')])])
+    }
+
+    const epic = makeEpic('e1', [
+      makeParallelFeature('f1'),
+      makeParallelFeature('f2'),
+      makeParallelFeature('f3'),
+    ], { featureMode: 'parallel' })
+
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [rt] }))
+
+    for (const entry of result.featureSchedule) {
+      expect(entry.durationWeeks).toBeGreaterThanOrEqual(6)
+    }
+  })
+
+  it('single feature parallel epic has no floor adjustment', () => {
+    // Only 1 feature — no contention, so no floor should be applied
+    // count=2, demand=30 person-days → individual: 30/2/5 = 3 weeks
+    const rt = makeRt('rt1', 'Dev', 2)
+    const feature = makeFeature('f1', [makeStory('s1', [makeTask(240, 'rt1', 'Dev')])])
+    const epic = makeEpic('e1', [feature], { featureMode: 'parallel' })
+
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [rt] }))
+
+    const entry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    // Individual calc: 30 days / 2 / 5 = 3 weeks; no floor boost expected
+    expect(entry.durationWeeks).toBeCloseTo(3, 1)
   })
 })

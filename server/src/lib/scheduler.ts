@@ -352,6 +352,49 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
   )
   const featureMap = new Map(allFeatures.map(f => [f.id, f]))
 
+  // ── Precompute parallel demand floor per epic ─────────────────────────────
+  // For parallel epics with 2+ features sharing an RT, the features cannot all
+  // complete faster than totalDemand / (count × 5) weeks — raising count adds
+  // capacity but also shortens durations, keeping net capacity flat. This floor
+  // ensures featureDurationWeeks reflects real shared-resource contention.
+  const parallelEpicMinSpan = new Map<string, number>()
+
+  for (const epic of epics) {
+    if (epic.featureMode !== 'parallel') continue
+    const activeFeatures = epic.features.filter(f => f.isActive !== false)
+    if (activeFeatures.length < 2) continue
+
+    // Collect total demand days per RT across all features in this epic
+    const totalDemandByRt = new Map<string, number>()
+    for (const feature of activeFeatures) {
+      const tasks = feature.userStories
+        .filter(s => s.isActive !== false)
+        .flatMap(s => s.tasks)
+      for (const task of tasks) {
+        if (!task.resourceTypeId) continue
+        const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+        const demand = task.durationDays ?? (task.hoursEffort / hpd)
+        totalDemandByRt.set(
+          task.resourceTypeId,
+          (totalDemandByRt.get(task.resourceTypeId) ?? 0) + demand,
+        )
+      }
+    }
+
+    // Floor weeks = max over all RTs of (totalDemand / (count × 5))
+    let minSpan = 0
+    for (const [rtId, totalDemand] of totalDemandByRt) {
+      const count = rtCountMap.get(rtId) ?? 1
+      const weeklyCapacityDays = count * 5
+      const floorWeeks = totalDemand / weeklyCapacityDays
+      if (floorWeeks > minSpan) minSpan = floorWeeks
+    }
+
+    if (minSpan > 0) {
+      parallelEpicMinSpan.set(epic.id, minSpan)
+    }
+  }
+
   // ── Helper: duration in weeks for a feature ───────────────────────────────
   function featureDurationWeeks(feature: typeof allFeatures[0]): number {
     const allTasks = feature.userStories.filter(s => s.isActive !== false).flatMap(s => s.tasks)
@@ -374,7 +417,14 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       const days = personDays / count
       if (days > maxDays) maxDays = days
     }
-    return Math.max(0.2, maxDays / 5)
+    const individualResult = Math.max(0.2, maxDays / 5)
+
+    // Apply parallel demand floor if this feature belongs to a parallel epic
+    const floor = parallelEpicMinSpan.get(feature.epic.id)
+    if (floor !== undefined) {
+      return Math.max(individualResult, floor)
+    }
+    return individualResult
   }
 
   // ── Kahn's topological sort over features ─────────────────────────────────
