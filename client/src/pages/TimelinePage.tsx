@@ -12,6 +12,7 @@ import TimelineTooltip from '../components/timeline/TimelineTooltip'
 import { getEpicColour } from '../lib/epicColours'
 import type { GanttScale } from '../hooks/useGanttLayout'
 import { colWForScale, LABEL_W } from '../hooks/useGanttLayout'
+import TimelineOptimiserDrawer from '../components/timeline/TimelineOptimiserDrawer'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -265,6 +266,7 @@ export default function TimelinePage() {
   const [scheduleStale, setScheduleStale] = useState(false)
   const rlKey = `timeline.resourceLevel.${projectId}`
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
+  const [optimiserOpen, setOptimiserOpen] = useState(false)
 
   const SCALE_KEY = 'gantt-scale'
   const [ganttScale, setGanttScale] = useState<GanttScale>(
@@ -428,6 +430,20 @@ export default function TimelinePage() {
   }, [timeline, project])
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+
+  const handleOptimiserApplied = (snapshotId: string) => {
+    qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    qc.invalidateQueries({ queryKey: ['snapshots', projectId] })
+    setOptimiserOpen(false)
+    alert(`Scenario applied (snapshot ${snapshotId}). Roll back via the History panel if needed.`)
+  }
+
+  // Derived list of resource types for the optimiser (id, name, count)
+  const resourceTypesForOptimiser = (resourceTypes ?? []).map(rt => ({
+    id: rt.id,
+    name: rt.name,
+    count: rt.count,
+  }))
 
   const scheduleTimeline = useMutation({
     mutationFn: (body: { startDate?: string; resourceLevel?: boolean }) =>
@@ -755,6 +771,12 @@ export default function TimelinePage() {
               className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
             >
               {scheduleTimeline.isPending ? 'Scheduling…' : 'Auto-schedule'}
+            </button>
+            <button
+              onClick={() => setOptimiserOpen(true)}
+              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue"
+            >
+              ✨ Optimise
             </button>
             {timeline?.entries && timeline.entries.length > 0 && (
               <button
@@ -1280,6 +1302,13 @@ export default function TimelinePage() {
           )}
         </div>
       </main>
+      <TimelineOptimiserDrawer
+        projectId={projectId!}
+        open={optimiserOpen}
+        onClose={() => setOptimiserOpen(false)}
+        resourceTypes={resourceTypesForOptimiser}
+        onApplied={handleOptimiserApplied}
+      />
   </AppLayout>
   )
 }
