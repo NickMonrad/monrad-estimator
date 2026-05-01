@@ -225,6 +225,10 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
   }
 
   // ── Step 5: Greedy placement ────────────────────────────────────────────
+  // Only the BOTTLENECK RT (the one that drives feature duration) constrains
+  // placement. Non-bottleneck RTs are tracked for utilisation metrics but
+  // don't block placement — this eliminates dead zones where secondary
+  // resources have no work while the primary resource is saturated.
   const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
   const featureStartWeeks = new Map<string, number>()
   const featureFinishWeeks = new Map<string, number>()
@@ -232,9 +236,48 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
 
   const MAX_SEARCH = 200
 
+  // Precompute: for each feature, identify the bottleneck RT(s).
+  // Bottleneck = RT with highest (totalDemand / weeklyCapacity), i.e. the one
+  // that requires the most weeks at full utilisation. We allow a small tolerance
+  // so near-bottleneck RTs also constrain (within 20% of the longest).
+  const featureBottleneckRts = new Map<string, Set<string>>()
+  for (const epic of epics) {
+    for (const feature of epic.features) {
+      const demandByRt = new Map<string, number>()
+      for (const story of feature.userStories) {
+        if (story.isActive === false) continue
+        for (const task of story.tasks) {
+          if (!task.resourceTypeId) continue
+          const rtHpd = task.resourceType?.hoursPerDay ?? hpd
+          const demandDays = task.durationDays ?? (task.hoursEffort / rtHpd)
+          demandByRt.set(task.resourceTypeId, (demandByRt.get(task.resourceTypeId) ?? 0) + demandDays)
+        }
+      }
+      // Compute weeks-to-complete for each RT (at full capacity)
+      let maxWeeks = 0
+      const rtWeeks = new Map<string, number>()
+      for (const [rtId, totalDemand] of demandByRt) {
+        const rt = rtById.get(rtId)
+        if (!rt) continue
+        const capacityDaysPerWeek = getWeeklyCapacity(rt, 0, hpd) / (rt.hoursPerDay ?? hpd)
+        const weeks = capacityDaysPerWeek > 0 ? totalDemand / capacityDaysPerWeek : Infinity
+        rtWeeks.set(rtId, weeks)
+        if (weeks > maxWeeks) maxWeeks = weeks
+      }
+      // Bottleneck = within 20% of the longest RT
+      const threshold = maxWeeks * 0.8
+      const bottlenecks = new Set<string>()
+      for (const [rtId, weeks] of rtWeeks) {
+        if (weeks >= threshold) bottlenecks.add(rtId)
+      }
+      featureBottleneckRts.set(feature.id, bottlenecks)
+    }
+  }
+
   for (const featureId of topoOrder) {
     const dur = featureDurations.get(featureId) ?? 1
     const demandRates = featureDemandRates.get(featureId) ?? new Map()
+    const bottlenecks = featureBottleneckRts.get(featureId) ?? new Set(demandRates.keys())
 
     // Min start = max finish of all predecessors
     let minStart = 0
@@ -244,7 +287,7 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
     }
     minStart = Math.ceil(minStart)
 
-    // Search for earliest integer week that fits
+    // Search for earliest integer week that fits (only checking bottleneck RTs)
     let placedAt: number | null = null
 
     for (let week = minStart; week <= minStart + MAX_SEARCH; week++) {
@@ -252,6 +295,9 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
 
       for (let w = week; w < week + Math.ceil(dur); w++) {
         for (const [rtId, demandRate] of demandRates) {
+          // Only bottleneck RTs constrain placement
+          if (!bottlenecks.has(rtId)) continue
+
           const rt = rtById.get(rtId) as SchedulerResourceType | undefined
           if (!rt) continue
 
@@ -259,7 +305,6 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
           const alreadyUsed = utilisedDays.get(key) ?? 0
           const proposed = alreadyUsed + demandRate
 
-          // Capacity in days for this rt this week
           const capacityDays = getWeeklyCapacity(rt, w, hpd) / (rt.hoursPerDay ?? hpd)
 
           if (proposed > capacityDays + 1e-9) {
@@ -281,7 +326,7 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
     featureStartWeeks.set(featureId, startWeek)
     featureFinishWeeks.set(featureId, startWeek + dur)
 
-    // Update utilisation grid
+    // Update utilisation grid for ALL RTs (not just bottlenecks)
     for (let w = startWeek; w < startWeek + Math.ceil(dur); w++) {
       for (const [rtId, demandRate] of demandRates) {
         const key = `${rtId}|${w}`
