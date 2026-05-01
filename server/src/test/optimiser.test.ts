@@ -33,7 +33,7 @@ function makeTask(hoursEffort: number, rtId: string, rtName = 'Dev', hpd = 8) {
   return {
     resourceTypeId: rtId,
     hoursEffort,
-    durationDays: null as null,
+    durationDays: null as number | null,
     resourceType: { id: rtId, name: rtName, hoursPerDay: hpd },
   }
 }
@@ -623,6 +623,158 @@ describe('runOptimiser', () => {
       expect(run1.candidates[i].resourceTypes).toEqual(run2.candidates[i].resourceTypes)
       expect(run1.candidates[i].score).toBe(run2.candidates[i].score)
     }
+  })
+
+  // ── Parallel-warning infeasibility filter ────────────────────────────────
+  //
+  // Design: need rt-dev count to affect feasibility but NOT the epic span.
+  //
+  // Setup:
+  //   - rt-dev: the RT under test (count varies 1–3)
+  //   - rt-fixed: anchor RT, count=1, NOT in the search range
+  //   - Feature 1 (parallel): rt-fixed task durationDays=10  + rt-dev task durationDays=8
+  //   - Feature 2 (parallel): rt-dev task durationDays=8 (no rt-fixed)
+  //
+  // featureDurationWeeks computes max(taskDays/count) per RT:
+  //   Feature 1: max(8/count_dev, 10/1) → 10 days (rt-fixed dominates for count >= 1)
+  //   Feature 2: 8/count_dev → < 10 days
+  //   Epic span = max(10, 8/count_dev) = 10 days  → constant regardless of count_dev
+  //
+  // computeParallelWarnings uses task.durationDays (fixed):
+  //   rt-fixed demand = 10 days, rt-fixed capacity = 1×10 = 10 → 10>10 false → no warning
+  //   rt-dev demand = 8+8 = 16 days, rt-dev capacity = count × 10
+  //     count=1: 16 > 10 → warning (infeasible)
+  //     count=2: 16 > 20 → no warning (feasible)
+  //     count=3: 16 > 30 → no warning (feasible)
+
+  function makeDurationTask(durationDays: number, rtId: string, rtName: string, hpd = 8) {
+    return {
+      resourceTypeId: rtId,
+      hoursEffort: durationDays * hpd,
+      durationDays,
+      resourceType: { id: rtId, name: rtName, hoursPerDay: hpd },
+    }
+  }
+
+  /** Build a parallel over-load input where:
+   *  - count=1 for rt-dev → infeasible (warning)
+   *  - count=2 or 3 for rt-dev → feasible (no warning)
+   */
+  function parallelOverloadInput(devCount: number): SchedulerInput {
+    const rtDev = makeRt('rt-dev', 'Developer', devCount, 8)
+    const rtFixed = makeRt('rt-fixed', 'Anchor', 1, 8)
+
+    const f1 = makeFeature('pf1', [makeStory('ps1', [
+      makeDurationTask(10, 'rt-fixed', 'Anchor'),
+      makeDurationTask(8, 'rt-dev', 'Developer'),
+    ])])
+    const f2 = makeFeature('pf2', [makeStory('ps2', [
+      makeDurationTask(8, 'rt-dev', 'Developer'),
+    ])])
+    const parallelEpic = makeEpic('pe1', [f1, f2], { featureMode: 'parallel' })
+
+    return {
+      project: { hoursPerDay: 8 },
+      epics: [parallelEpic],
+      resourceTypes: [rtDev, rtFixed],
+      epicDeps: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+      resourceLevel: false,
+    }
+  }
+
+  it('parallel over-allocation: only feasible candidates returned (parallelWarningCount === 0)', () => {
+    // Baseline has count=1 (over-allocated), search range 1–3.
+    // count=1 → infeasible (1 scenario), counts 2 and 3 → feasible (2 scenarios).
+    const input = parallelOverloadInput(1)
+    const result = runOptimiser(input, baseConfig({
+      mode: 'speed',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 3 }],
+        allowRampUp: false,
+      },
+      topN: 10,
+    }))
+
+    // All 3 scenarios evaluated
+    expect(result.searchStats.scenariosEvaluated).toBe(3)
+
+    // count=1 is infeasible; counts 2 and 3 are feasible
+    expect(result.infeasibleCount).toBe(1)
+    expect(result.candidates.length).toBe(2)
+
+    // Every returned candidate must have no parallel warnings
+    for (const c of result.candidates) {
+      expect(c.metrics.parallelWarningCount).toBe(0)
+    }
+
+    // candidatesFound matches the feasible count
+    expect(result.searchStats.candidatesFound).toBe(2)
+  })
+
+  it('parallel over-allocation: all infeasible → candidates empty, infeasibleCount > 0', () => {
+    // 3 rt-dev features in parallel: rt-dev demand = 8+8+8 = 24 days.
+    // Epic span = 10 days (rt-fixed anchor, in feature 1 only).
+    // count=1: capacity=10 < 24 → warning; count=2: capacity=20 < 24 → warning.
+    // All range 1–2 scenarios are infeasible.
+    const rtDev = makeRt('rt-dev', 'Developer', 1, 8)
+    const rtFixed = makeRt('rt-fixed', 'Anchor', 1, 8)
+    const f1 = makeFeature('pf1', [makeStory('ps1', [
+      makeDurationTask(10, 'rt-fixed', 'Anchor'),
+      makeDurationTask(8, 'rt-dev', 'Developer'),
+    ])])
+    const f2 = makeFeature('pf2', [makeStory('ps2', [makeDurationTask(8, 'rt-dev', 'Developer')])])
+    const f3 = makeFeature('pf3', [makeStory('ps3', [makeDurationTask(8, 'rt-dev', 'Developer')])])
+    const parallelEpic = makeEpic('pe1', [f1, f2, f3], { featureMode: 'parallel' })
+    const input: SchedulerInput = {
+      project: { hoursPerDay: 8 },
+      epics: [parallelEpic],
+      resourceTypes: [rtDev, rtFixed],
+      epicDeps: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+      resourceLevel: false,
+    }
+
+    const result = runOptimiser(input, baseConfig({
+      mode: 'speed',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 2 }],
+        allowRampUp: false,
+      },
+      topN: 5,
+    }))
+
+    expect(result.candidates).toHaveLength(0)
+    expect(result.infeasibleCount).toBeGreaterThan(0)
+    expect(result.infeasibleCount).toBe(result.searchStats.scenariosEvaluated)
+    // baseline is always present (represents current state — not filtered)
+    expect(result.baseline).toBeDefined()
+    expect(result.baseline.metrics.parallelWarningCount).toBeGreaterThan(0)
+  })
+
+  it('parallel over-allocation: baseline is always present even when it has warnings', () => {
+    // Range locked to count=1 (infeasible). Only 1 scenario, it's filtered.
+    // Baseline (also count=1) must still be returned.
+    const input = parallelOverloadInput(1)
+
+    const result = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 1 }],
+        allowRampUp: false,
+      },
+      topN: 5,
+    }))
+
+    // Baseline must always be returned regardless of its warning count
+    expect(result.baseline).toBeDefined()
+    expect(result.baseline.resourceTypes.find(r => r.resourceTypeId === 'rt-dev')!.count).toBe(1)
+    // It has warnings (current state is infeasible)
+    expect(result.baseline.metrics.parallelWarningCount).toBeGreaterThan(0)
+    // But candidates array is empty (filter applied to search scenarios, not baseline)
+    expect(result.candidates).toHaveLength(0)
   })
 })
 

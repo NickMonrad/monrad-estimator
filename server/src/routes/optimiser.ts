@@ -317,6 +317,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     candidates: result.candidates.map(serialiseCandidate),
     baseline: serialiseCandidate(result.baseline),
     searchStats: result.searchStats,
+    infeasibleCount: result.infeasibleCount,
     /** Lookup table: id → name for gapWeeksByResourceTypeId consumers */
     resourceTypes: schedulerInput.resourceTypes.map(rt => ({ id: rt.id, name: rt.name })),
   })

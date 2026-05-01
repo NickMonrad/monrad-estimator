@@ -93,6 +93,11 @@ export interface OptimiserResult {
     /** true when search space exceeded MAX_SCENARIOS and random sampling was used */
     sampled: boolean
   }
+  /**
+   * Count of scenarios filtered out specifically because parallelWarningCount > 0.
+   * These are strictly infeasible: a parallel-mode epic exceeded RT capacity.
+   */
+  infeasibleCount: number
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -419,6 +424,7 @@ export function runOptimiser(
 
   const rawCandidates: RawCandidate[] = []
   let scenariosRun = 0
+  let infeasibleCount = 0
 
   for (const scenario of scenarios) {
     scenariosRun++
@@ -445,6 +451,14 @@ export function runOptimiser(
 
     // Apply maxBudget constraint
     if (maxBudget !== undefined && metrics.estimatedCost > maxBudget) continue
+
+    // Strict feasibility: drop any scenario with parallel over-allocation warnings.
+    // PARALLEL_EPICS mode doesn't extend delivery weeks when capacity is exceeded,
+    // so lowering counts looks "free" to the scorer — these scenarios are infeasible.
+    if (metrics.parallelWarningCount > 0) {
+      infeasibleCount++
+      continue
+    }
 
     rawCandidates.push({
       resourceTypes: baseInput.resourceTypes.map(rt => ({
@@ -518,5 +532,6 @@ export function runOptimiser(
       durationMs: _now() - startMs,
       sampled,
     },
+    infeasibleCount,
   }
 }
