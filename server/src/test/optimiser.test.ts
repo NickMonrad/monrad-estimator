@@ -458,6 +458,70 @@ describe('runOptimiser', () => {
     }
   })
 
+  // ── allowRampUp: scoring uses proposed startWeek (apply parity) ───────────
+  it('allowRampUp: scenarios are scored with the proposed namedResource startWeek, not the original', () => {
+    // RT has 1 named resource currently available from week 0 (count==1 → no phantoms).
+    // A feature that uses this RT is pinned to start at week 5 via timelineStartWeek.
+    // Without the fix, the baseline scorer treats the RT as available 0..deliveryWeeks
+    // (6 weeks of capacity for 1 week of demand → very low utilisation).
+    // With the fix, allowRampUp shifts the named resource's startWeek to the first
+    // demand week (5), so capacity matches demand and utilisation approaches 100%.
+    const rt: SchedulerResourceType = {
+      id: 'rt-dev', name: 'Developer', count: 1, hoursPerDay: 8,
+      namedResources: [
+        { id: 'nr1', name: 'Alice', startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      ],
+    }
+    const story = makeStory('s1', [makeTask(40, 'rt-dev', 'Developer')])
+    const feature = makeFeature('f1', [story])
+    // Pin feature start to week 5.
+    const epic: SchedulerEpic = {
+      id: 'e1', name: 'e1', order: 0, isActive: null,
+      featureMode: 'sequential', scheduleMode: 'sequential',
+      timelineStartWeek: 5,
+      features: [feature],
+    }
+    const input: SchedulerInput = {
+      project: { hoursPerDay: 8 },
+      epics: [epic],
+      resourceTypes: [rt],
+      epicDeps: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+      resourceLevel: false,
+    }
+
+    const noRampUp = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 1 }],
+        allowRampUp: false,
+      },
+      topN: 1,
+    }))
+    const rampUp = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 1 }],
+        allowRampUp: true,
+      },
+      topN: 1,
+    }))
+
+    // Baseline candidate carries the suggested ramp-up week
+    const rampUpRt = rampUp.baseline.resourceTypes.find(r => r.resourceTypeId === 'rt-dev')!
+    expect(rampUpRt.suggestedStartWeek).toBe(5)
+
+    // The KEY apply-parity assertion: scoring with the override → utilisation
+    // is materially higher than without the override (because phantom capacity
+    // in weeks 0..4 is removed from the denominator).
+    expect(rampUp.baseline.metrics.avgUtilisationPct).toBeGreaterThan(
+      noRampUp.baseline.metrics.avgUtilisationPct + 10,
+    )
+    // And it should approach 100% (pre-fix value would be ~16-20%).
+    expect(rampUp.baseline.metrics.avgUtilisationPct).toBeGreaterThan(80)
+  })
+
   // ── topN is respected ─────────────────────────────────────────────────────
   it('topN: returns at most topN candidates', () => {
     const input = twoRtInput()

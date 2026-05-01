@@ -401,10 +401,37 @@ export function runOptimiser(
     }
   }
 
+  // When ramp-up is enabled, the apply route shifts namedResources[].startWeek
+  // to the first demand week (only when > 0). Mirror that in scoring so a
+  // candidate's metrics reflect the schedule that will actually be applied;
+  // otherwise a scenario can look feasible here but be infeasible after apply.
+  function applyRampUp(rts: SchedulerResourceType[]): SchedulerResourceType[] {
+    if (!allowRampUp) return rts
+    return rts.map(rt => {
+      const sw = firstDemandWeekByRtId.get(rt.id)
+      if (sw === undefined || sw <= 0) return rt
+      return {
+        ...rt,
+        namedResources: rt.namedResources.map(nr => ({ ...nr, startWeek: sw })),
+      }
+    })
+  }
+
+  // Re-run the baseline with ramp-up overlays so the displayed baseline candidate
+  // matches what would actually ship if the user clicked "apply".
+  const baselineRTs = applyRampUp(baseInput.resourceTypes)
+  const baselineInputForMetrics: SchedulerInput =
+    allowRampUp
+      ? { ...baseInput, resourceTypes: baselineRTs, resourceLevel: false }
+      : { ...baseInput, resourceLevel: false }
+  const baselineOutputForMetrics = allowRampUp
+    ? runScheduler(baselineInputForMetrics)
+    : baselineOutput
+
   const baselineMetrics = computeMetrics(
-    baseInput,
-    baselineOutput.featureSchedule,
-    baselineOutput.parallelWarnings.length,
+    baselineInputForMetrics,
+    baselineOutputForMetrics.featureSchedule,
+    baselineOutputForMetrics.parallelWarnings.length,
     dayRates,
   )
 
@@ -444,7 +471,7 @@ export function runOptimiser(
   for (const scenario of scenarios) {
     scenariosRun++
     const overrideMap = new Map(scenario.map(s => [s.resourceTypeId, s.count]))
-    const newRTs = applyCountOverrides(baseInput.resourceTypes, scenario)
+    const newRTs = applyRampUp(applyCountOverrides(baseInput.resourceTypes, scenario))
     const scenarioInput: SchedulerInput = { ...baseInput, resourceTypes: newRTs, resourceLevel: false }
 
     const output = runScheduler(scenarioInput)
