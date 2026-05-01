@@ -220,6 +220,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Quick wins — dark mode description contrast, project settings tax/onboarding fields, backlog feature mode (sequential/parallel) badges, scope toggle pill redesign, CSV import row colouring, unrated resource warning improvements; Gantt PDF sanitize-html fix + landscape page; pin axios to 1.14.0 (supply chain safety) | #220 |
 | Backlog dependency tracking — EpicDependency schema + API (circular dep detection), epic dep hard constraints in timeline scheduler, epic dep arrows on Timeline Gantt, dep selector UI on backlog epic/feature rows, EpicDependsOn/FeatureDependsOn columns in CSV import/export | #228 |
 | Timeline scale toggle (week/month/quarter/year), cross-epic FeatureDependsOn in CSV, TemplateSize column in backlog CSV for template task auto-expand; Year scale (H1/H2 top row, Q1–Q4 bottom row); allocation mode/% + timeline start/end weeks in Resource Counts; Expand All / Collapse All toggle; dep picker search filter; top scrollbar mirror; full-width Gantt layout; named resource per-person T&M histogram; onboarding/buffer zone calc fix; auto-reschedule prevention on resource changes | #231 |
+| Resource Optimiser — Phase 4 frontend drawer with mode selector (speed/utilisation/balanced), per-RT count constraints, optional budget/duration ceilings, ranked candidate cards with KPI deltas, and apply-with-snapshot rollback | #239 |
 
 ---
 
