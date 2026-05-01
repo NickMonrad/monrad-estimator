@@ -87,6 +87,8 @@ export interface SchedulerInput {
   manualStoryEntries: Array<{ storyId: string; startWeek: number }>
   /** When true, run the resource-levelling simulation */
   resourceLevel: boolean
+  /** Cap parallelism within a single feature (for demand flattening). Optional. */
+  maxParallelismPerFeature?: number
 }
 
 export interface ParallelWarning {

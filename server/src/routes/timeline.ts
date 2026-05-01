@@ -10,7 +10,7 @@ import {
   type SchedulerResourceType,
   type ParallelWarning,
 } from '../lib/scheduler.js'
-import { levelEpicStarts } from '../lib/leveller.js'
+import { runSAPlanner } from '../lib/sa-planner.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
 
@@ -158,11 +158,16 @@ function buildResponse(
   // Build weekly capacity array for EVERY week (0..maxWeek-1) for RTs that have hours
   const rtNamesWithHours = new Set(weeklyDemand.map(d => d.resourceTypeName))
   const weeklyCapacity: { week: number; resourceTypeName: string; capacityDays: number }[] = []
-  if (maxWeek != null) {
+  // Ensure capacity covers at least as far as the maximum demand week
+  const maxDemandWeek = weeklyDemand.length > 0
+    ? Math.max(...weeklyDemand.map(d => d.week))
+    : 0
+  const capacityEndWeek = Math.max(maxWeek != null ? Math.ceil(maxWeek) : 0, maxDemandWeek + 1)
+  if (capacityEndWeek > 0) {
     for (const rt of resourceTypes) {
       if (!rtNamesWithHours.has(rt.name)) continue
       const hpd = rt.hoursPerDay ?? project.hoursPerDay
-      for (let w = 0; w < Math.ceil(maxWeek); w++) {
+      for (let w = 0; w < capacityEndWeek; w++) {
         const capDays = getWeeklyCapacity(rt, w, project.hoursPerDay) / hpd
         weeklyCapacity.push({ week: w, resourceTypeName: rt.name, capacityDays: Math.round(capDays * 10) / 10 })
       }
@@ -760,8 +765,17 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
     resourceLevel: false,
   }
 
-  // ── 2. Run the leveller ───────────────────────────────────────────────────
-  const levellingResult = levelEpicStarts(schedulerInput)
+  // ── 2. Run the SA planner for optimised levelling ──────────────────────────
+  const saResult = runSAPlanner(schedulerInput, {
+    targetDurationWeeks: schedulerInput.epics.length * 13,
+    maxParallelismPerFeature: 2,
+  })
+  const levellingResult = {
+    epicStartWeeks: saResult.epicStartWeeks,
+    featureStartWeeks: saResult.featureStartWeeks,
+    totalDeliveryWeeks: saResult.totalDeliveryWeeks,
+    peakUtilisationPct: saResult.peakUtilisationPct,
+  }
 
   if (dryRun) {
     res.json({

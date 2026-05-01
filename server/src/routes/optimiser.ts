@@ -21,7 +21,7 @@ import {
   type SchedulerInput,
   type SchedulerResourceType,
 } from '../lib/scheduler.js'
-import { levelEpicStarts } from '../lib/leveller.js'
+import { runSAPlanner } from '../lib/sa-planner.js'
 import {
   runOptimiser,
   type OptimiserConfig,
@@ -218,12 +218,23 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   })
 
   // ── 4. Optional: stagger epics to level demand ────────────────────────────
-  let levellingResult: Awaited<ReturnType<typeof levelEpicStarts>> | null = null
+  let levellingResult: { epicStartWeeks: Map<string, number>; featureStartWeeks: Map<string, number>; totalDeliveryWeeks: number; peakUtilisationPct: number } | null = null
 
   if (staggerEpics) {
     // Re-load scheduler input (counts/NRs are now updated in DB)
     const updatedInput = await loadSchedulerInput(projectId, project.hoursPerDay)
-    levellingResult = levelEpicStarts(updatedInput)
+
+    // Use SA planner for optimised staggering
+    const saResult = runSAPlanner(updatedInput, {
+      targetDurationWeeks: updatedInput.epics.length * 13, // reasonable default
+      maxParallelismPerFeature: 2,
+    })
+    levellingResult = {
+      epicStartWeeks: saResult.epicStartWeeks,
+      featureStartWeeks: saResult.featureStartWeeks,
+      totalDeliveryWeeks: saResult.totalDeliveryWeeks,
+      peakUtilisationPct: saResult.peakUtilisationPct,
+    }
 
     // Persist levelled start weeks
     await Promise.all(

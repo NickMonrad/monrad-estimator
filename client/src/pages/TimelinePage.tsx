@@ -14,6 +14,7 @@ import type { GanttScale } from '../hooks/useGanttLayout'
 import { colWForScale, LABEL_W } from '../hooks/useGanttLayout'
 import TimelineOptimiserDrawer from '../components/timeline/TimelineOptimiserDrawer'
 import SquadPlannerDrawer from '../components/timeline/SquadPlannerDrawer'
+import SnapshotHistoryPanel from '../components/SnapshotHistoryPanel'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -269,6 +270,7 @@ export default function TimelinePage() {
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
   const [optimiserOpen, setOptimiserOpen] = useState(false)
   const [squadPlannerOpen, setSquadPlannerOpen] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
 
   const SCALE_KEY = 'gantt-scale'
   const [ganttScale, setGanttScale] = useState<GanttScale>(
@@ -843,6 +845,12 @@ export default function TimelinePage() {
                 <div className="w-px h-7 bg-gray-200" />
               </>
             )}
+            <button
+              onClick={() => setShowHistory(h => !h)}
+              className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
+            >
+              🕐 History
+            </button>
             <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer">
               <input
                 type="checkbox"
@@ -1325,6 +1333,9 @@ export default function TimelinePage() {
             </div>
           )}
         </div>
+        {showHistory && (
+          <SnapshotHistoryPanel projectId={projectId!} />
+        )}
       </main>
       <TimelineOptimiserDrawer
         projectId={projectId!}

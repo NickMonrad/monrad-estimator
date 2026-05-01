@@ -29,6 +29,13 @@ interface CapacityPlanResult {
   peakHeadcount: number
   avgUtilisationPct: number
   periods: Period[]
+  levellingResult?: {
+    epicStartWeeks: Record<string, number>
+    featureStartWeeks: Record<string, number>
+    totalDeliveryWeeks: number
+    peakUtilisationPct: number
+  }
+  plannedResourceTypeIds?: string[]
 }
 
 interface Props {
@@ -104,7 +111,11 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
   const [customMonths, setCustomMonths] = useState<string>('')
   const [periodWeeks, setPeriodWeeks] = useState<4 | 13>(13)
   const [maxDelta, setMaxDelta] = useState(1)
+  const [bufferPct, setBufferPct] = useState<number>(20)
   const [minFloor, setMinFloor] = useState<Record<string, number>>({})
+  const [maxCap, setMaxCap] = useState<Record<string, number>>({})
+  const [maxParallelism, setMaxParallelism] = useState<number>(2)
+  const [maxConcurrentEpics, setMaxConcurrentEpics] = useState<number>(6)
   const [error, setError] = useState<string | null>(null)
 
   const qc = useQueryClient()
@@ -119,6 +130,9 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
       setCustomMonths('')
       setPeriodWeeks(13)
       setMaxDelta(1)
+      setBufferPct(20)
+      setMaxParallelism(2)
+      setMaxConcurrentEpics(6)
       setError(null)
       generate.reset()
 
@@ -127,6 +141,7 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
         floor[rt.id] = 1
       }
       setMinFloor(floor)
+      setMaxCap({})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, resourceTypes])
@@ -153,7 +168,11 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
           targetDurationWeeks: targetWeeks,
           periodWeeks,
           maxDeltaPerPeriod: maxDelta,
+          maxAllocationBufferPct: bufferPct / 100,
+          maxParallelismPerFeature: maxParallelism,
+          maxConcurrentEpics,
           minFloor,
+          maxCap: Object.keys(maxCap).length > 0 ? maxCap : undefined,
         })
         .then(r => r.data as CapacityPlanResult),
     onError: (err: unknown) => {
@@ -187,13 +206,19 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
           })),
           totalCost: plan.totalCost,
           deliveryWeeks: plan.deliveryWeeks,
+          levellingResult: plan.levellingResult,
+          maxParallelismPerFeature: maxParallelism,
           setActive: true,
         })
         .then(r => r.data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    onSuccess: async () => {
+      await Promise.all([
+        qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
+        qc.refetchQueries({ queryKey: ['timeline', projectId] }),
+        qc.refetchQueries({ queryKey: ['resource-types', projectId] }),
+      ])
       onClose()
+      setTimeout(() => alert('✅ Plan applied — timeline and resource counts updated.'), 100)
     },
     onError: (err: unknown) => {
       const msg =
@@ -335,30 +360,112 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
             </div>
           </div>
 
-          {/* Min Floor per RT */}
+          {/* Allocation Buffer */}
           <div>
             <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
-              Min Floor (per RT)
+              Max Over-allocation Buffer
+            </label>
+            <div className="flex items-center gap-2">
+              <select
+                value={bufferPct}
+                onChange={e => setBufferPct(Number(e.target.value))}
+                className="border border-gray-200 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+              >
+                {[10, 15, 20, 25, 30, 40, 50].map(n => (
+                  <option key={n} value={n}>{n}%</option>
+                ))}
+              </select>
+              <span className="text-xs text-gray-500 dark:text-gray-400">above backlog effort per RT</span>
+            </div>
+          </div>
+
+          {/* Max Parallelism per Feature */}
+          <div>
+            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+              Max People per Feature
+            </label>
+            <div className="flex items-center gap-2">
+              <select
+                value={maxParallelism}
+                onChange={e => setMaxParallelism(Number(e.target.value))}
+                className="border border-gray-200 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+              >
+                {[1, 2, 3, 4, 5, 6].map(n => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+              <span className="text-xs text-gray-500 dark:text-gray-400">per RT per feature (flattens demand)</span>
+            </div>
+          </div>
+
+          {/* Max Concurrent Epics */}
+          <div>
+            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+              Max Concurrent Epics
+            </label>
+            <div className="flex items-center gap-2">
+              <select
+                value={maxConcurrentEpics}
+                onChange={e => setMaxConcurrentEpics(Number(e.target.value))}
+                className="border border-gray-200 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+              >
+                {[2, 3, 4, 5, 6, 8, 10, 12].map(n => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+              <span className="text-xs text-gray-500 dark:text-gray-400">epics active at the same time</span>
+            </div>
+          </div>
+
+          {/* RT Constraints (min/max) */}
+          <div>
+            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+              RT Constraints (Min / Max)
             </label>
             <div className="space-y-2">
               {resourceTypes.map(rt => (
-                <div key={rt.id} className="flex items-center gap-3">
+                <div key={rt.id} className="flex items-center gap-2">
                   <span className="flex-1 text-sm text-gray-700 dark:text-gray-300 truncate" title={rt.name}>
                     {rt.name}
                   </span>
                   <input
                     type="number"
                     min={0}
-                    max={10}
+                    max={20}
                     value={minFloor[rt.id] ?? 1}
                     onChange={e =>
                       setMinFloor(prev => ({ ...prev, [rt.id]: Math.max(0, Number(e.target.value)) }))
                     }
-                    className="w-16 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+                    title="Min headcount"
+                    className="w-14 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+                  />
+                  <span className="text-xs text-gray-400">–</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={20}
+                    placeholder="∞"
+                    value={maxCap[rt.id] ?? ''}
+                    onChange={e => {
+                      const val = e.target.value
+                      setMaxCap(prev => {
+                        if (!val || Number(val) <= 0) {
+                          const next = { ...prev }
+                          delete next[rt.id]
+                          return next
+                        }
+                        return { ...prev, [rt.id]: Number(val) }
+                      })
+                    }}
+                    title="Max headcount (blank = no limit)"
+                    className="w-14 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
                   />
                 </div>
               ))}
             </div>
+            <p className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
+              Left = minimum headcount · Right = maximum (blank = no limit)
+            </p>
           </div>
 
           {/* Generate button */}

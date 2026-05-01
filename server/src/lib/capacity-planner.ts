@@ -9,9 +9,9 @@
 import {
   getWeeklyCapacity,
   type SchedulerInput,
-  type SchedulerResourceType,
 } from './scheduler.js'
-import { levelEpicStarts, type LevellingResult } from './leveller.js'
+import { type LevellingResult } from './leveller.js'
+import { runSAPlanner, type SAPlannerConfig } from './sa-planner.js'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -24,8 +24,16 @@ export interface CapacityPlanConfig {
   maxDeltaPerPeriod: number
   /** Minimum headcount floor per RT (rtId → min count). Default 1 for all. */
   minFloor: Map<string, number>
+  /** Maximum headcount cap per RT (rtId → max count). No cap if not specified. */
+  maxCap?: Map<string, number>
   /** Day rates for cost computation (rtId → dayRate) */
   dayRates: Map<string, number>
+  /** Max over-allocation buffer as a fraction (0.2 = 20% above demand). Default 0.2 */
+  maxAllocationBufferPct?: number
+  /** Max people from one RT that can work on a single feature simultaneously. Default 2. */
+  maxParallelismPerFeature?: number
+  /** Maximum number of epics active simultaneously. Default: all (no limit). */
+  maxConcurrentEpics?: number
   /** Optional maximum budget — if exceeded, result includes overflow flag */
   maxBudget?: number
 }
@@ -65,41 +73,37 @@ export function computeCapacityPlan(
   input: SchedulerInput,
   config: CapacityPlanConfig,
 ): CapacityPlanResult {
-  const { targetDurationWeeks, periodWeeks, maxDeltaPerPeriod, minFloor, dayRates, maxBudget } = config
+  const { targetDurationWeeks, periodWeeks, maxDeltaPerPeriod, minFloor, maxCap, dayRates, maxBudget, maxAllocationBufferPct, maxParallelismPerFeature, maxConcurrentEpics } = config
   const hpd = input.project.hoursPerDay
 
-  // ── Step 1: Scale estimation ─────────────────────────────────────────────
-  // Run leveller with current capacity to get baseline delivery
-  let scaledInput = { ...input }
-  let levelResult = levelEpicStarts(scaledInput)
-
-  // If current capacity can't deliver within target, scale up iteratively
-  const MAX_ITERATIONS = 5
-  let iteration = 0
-  while (levelResult.totalDeliveryWeeks > targetDurationWeeks && iteration < MAX_ITERATIONS) {
-    iteration++
-    const scaleFactor = Math.min(
-      levelResult.totalDeliveryWeeks / targetDurationWeeks,
-      2.0, // cap scale factor to avoid unreasonably large teams
-    )
-    // Scale up all resource types
-    const scaledRTs: SchedulerResourceType[] = scaledInput.resourceTypes.map(rt => ({
-      ...rt,
-      count: Math.min(
-        Math.ceil(rt.count * scaleFactor),
-        rt.count * 3, // hard cap at 3× original
-      ),
-    }))
-    scaledInput = { ...scaledInput, resourceTypes: scaledRTs }
-    levelResult = levelEpicStarts(scaledInput)
+  // ── Step 1: Run SA planner for optimised schedule ────────────────────────
+  const saConfig: SAPlannerConfig = {
+    targetDurationWeeks,
+    maxParallelismPerFeature,
+    maxCap,
+    maxConcurrentEpics,
+    iterations: 10000,
+    initialTemp: 100,
+    coolingRate: 0.995,
   }
+
+  const saResult = runSAPlanner(input, saConfig)
+  const levelResult: LevellingResult = {
+    epicStartWeeks: saResult.epicStartWeeks,
+    featureStartWeeks: saResult.featureStartWeeks,
+    totalDeliveryWeeks: saResult.totalDeliveryWeeks,
+    peakUtilisationPct: saResult.peakUtilisationPct,
+  }
+
+  const totalWeeks = Math.ceil(levelResult.totalDeliveryWeeks)
+  const epics = input.epics
+  const resourceTypes = input.resourceTypes
+  const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
+  const rtCountMap = new Map(resourceTypes.map(rt => [rt.id, rt.count]))
+  const parallelEpicIds = new Set(epics.filter(e => e.featureMode === 'parallel').map(e => e.id))
 
   // ── Step 2: Compute demand curve ─────────────────────────────────────────
   // From the levelled schedule, extract per-RT per-week demand
-  const totalWeeks = Math.ceil(levelResult.totalDeliveryWeeks)
-  const epics = scaledInput.epics
-  const resourceTypes = scaledInput.resourceTypes
-  const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
 
   // demandDays[rtId][week] = total person-days of demand in that week
   const demandDays = new Map<string, Float64Array>()
@@ -108,8 +112,6 @@ export function computeCapacityPlan(
   }
 
   // For each feature, spread its demand evenly across its placed duration
-  const rtCountMap = new Map(resourceTypes.map(rt => [rt.id, rt.count]))
-  const parallelEpicIds = new Set(epics.filter(e => e.featureMode === 'parallel').map(e => e.id))
 
   for (const epic of epics) {
     for (const feature of epic.features) {
@@ -151,7 +153,8 @@ export function computeCapacityPlan(
               const rtHpd = t.resourceType?.hoursPerDay ?? hpd
               return sum + (t.durationDays ?? (t.hoursEffort / rtHpd))
             }, 0)
-            const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
+            const rawCount = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
+            const count = maxParallelismPerFeature ? Math.min(rawCount, maxParallelismPerFeature) : rawCount
             const days = personDays / count
             if (days > maxDays) maxDays = days
           }
@@ -231,12 +234,23 @@ export function computeCapacityPlan(
   }
 
   // ── Step 5: Capacity envelope fitting ────────────────────────────────────
-  // Start with ceil(peakFTE) per period per RT
+  // Since the RCPS schedule is already capacity-constrained (demand ≤ capacity
+  // by construction), use ceil(avgFTE) with a small buffer as the headcount
+  // recommendation. This avoids the old problem where one spike week forced
+  // the whole period to peak headcount.
   const capacity = new Map<string, number[]>()
+  const envelopeBuffer = 1.1 // 10% buffer above average demand
 
   for (const rtId of plannedRtIds) {
+    const avgs = avgFTE.get(rtId)!
     const peaks = peakFTE.get(rtId)!
-    const cap = peaks.map(p => Math.ceil(p))
+    // Use the higher of: ceil(avg * buffer) or ceil(peak) — ensures coverage
+    // but since RCPS already constrains peaks, avg-based usually wins
+    const cap = avgs.map((avg, i) => {
+      const fromAvg = Math.ceil(avg * envelopeBuffer)
+      const fromPeak = Math.ceil(peaks[i])
+      return Math.max(fromAvg, fromPeak)
+    })
     capacity.set(rtId, cap)
   }
 
@@ -274,7 +288,7 @@ export function computeCapacityPlan(
       for (let p = 0; p < numPeriods; p++) {
         if (cap[p] < floor) { cap[p] = floor; changed = true }
       }
-      // Ensure capacity covers peak demand (smoothing might have capped it)
+      // Ensure capacity covers peak demand (smoothing might have capped it below actual need)
       const peaks = peakFTE.get(rtId)!
       for (let p = 0; p < numPeriods; p++) {
         const needed = Math.ceil(peaks[p])
@@ -282,6 +296,72 @@ export function computeCapacityPlan(
       }
     }
     if (!changed) break
+  }
+
+  // Apply per-RT max cap
+  if (maxCap) {
+    for (const rtId of plannedRtIds) {
+      const cap = maxCap.get(rtId)
+      if (cap == null) continue
+      const arr = capacity.get(rtId)!
+      for (let p = 0; p < numPeriods; p++) {
+        if (arr[p] > cap) arr[p] = cap
+      }
+    }
+  }
+
+  // ── Step 5b: Cap total allocation per RT ─────────────────────────────────
+  // Prevent over-allocation: total allocated days per RT must not exceed
+  // demand × (1 + bufferPct). Trim from lowest-utilisation periods first.
+  const bufferPct = maxAllocationBufferPct ?? 0.2
+
+  for (const rtId of plannedRtIds) {
+    // Compute total demand days for this RT
+    const arr = demandDays.get(rtId)!
+    let totalDemand = 0
+    for (let w = 0; w < arr.length; w++) totalDemand += arr[w]
+
+    if (totalDemand <= 0) continue
+
+    const maxAllocatedDays = totalDemand * (1 + bufferPct)
+    const cap = capacity.get(rtId)!
+    const floor = minFloor.get(rtId) ?? 1
+
+    // Compute current total allocated days
+    const getAllocatedDays = () => {
+      let total = 0
+      for (let p = 0; p < numPeriods; p++) {
+        const pStart = p * periodWeeks
+        const pEnd = Math.min((p + 1) * periodWeeks, totalWeeks + 1)
+        total += cap[p] * (pEnd - pStart) * 5
+      }
+      return total
+    }
+
+    let currentAllocated = getAllocatedDays()
+    if (currentAllocated <= maxAllocatedDays) continue
+
+    // Reduce headcount in periods with lowest utilisation first
+    // Build period indices sorted by utilisation (ascending)
+    const avgs = avgFTE.get(rtId)!
+    const periodsByUtil = Array.from({ length: numPeriods }, (_, i) => i)
+      .sort((a, b) => {
+        const utilA = cap[a] > 0 ? avgs[a] / cap[a] : 0
+        const utilB = cap[b] > 0 ? avgs[b] / cap[b] : 0
+        return utilA - utilB
+      })
+
+    // Iteratively reduce capacity in lowest-util periods
+    for (const p of periodsByUtil) {
+      if (currentAllocated <= maxAllocatedDays) break
+      const peaks = peakFTE.get(rtId)!
+      const minRequired = Math.max(floor, Math.ceil(peaks[p]))
+
+      while (cap[p] > minRequired && currentAllocated > maxAllocatedDays) {
+        cap[p]--
+        currentAllocated = getAllocatedDays()
+      }
+    }
   }
 
   // ── Step 6: Build output ─────────────────────────────────────────────────
