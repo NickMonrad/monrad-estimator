@@ -162,6 +162,10 @@ function CandidateCard({
           <span className="text-xs text-gray-400 dark:text-gray-500">
             score {candidate.score.toFixed(3)}
           </span>
+          {/* All returned candidates are guaranteed feasible by the optimiser filter */}
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 text-[10px] font-medium">
+            ✓ Feasible
+          </span>
         </div>
       </div>
 
@@ -256,10 +260,25 @@ function BaselineCard({ baseline, showCost }: { baseline: OptimiserCandidate; sh
     (s, v) => s + v,
     0,
   )
+  const warnCount = baseline.metrics.parallelWarningCount
   return (
     <div className="border border-gray-200 dark:border-gray-200/30 rounded-xl p-3 bg-gray-50 dark:bg-gray-700/40 space-y-1">
-      <div className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-2">
-        Current configuration
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-medium text-gray-600 dark:text-gray-300">
+          Current configuration
+        </div>
+        {warnCount === 0 ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 text-[10px] font-medium">
+            ✓ Feasible
+          </span>
+        ) : (
+          <span
+            title="Some parallel-mode epics exceed capacity at this configuration"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[10px] font-medium cursor-help"
+          >
+            ⚠ {warnCount} over-allocation{warnCount > 1 ? 's' : ''}
+          </span>
+        )}
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-700 dark:text-gray-300">
         <span>🗓 {baseline.metrics.deliveryWeeks} weeks delivery</span>
@@ -604,6 +623,23 @@ export default function TimelineOptimiserDrawer({
                   }}
                 />
               ))}
+            </div>
+          )}
+
+          {/* Empty state: run was completed but all scenarios were infeasible */}
+          {lastResult && lastResult.candidates.length === 0 && (
+            <div className="rounded-xl border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-4 space-y-2">
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+                No feasible scenarios found within these constraints.
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+                All evaluated scenarios had parallel-mode over-allocations. Try increasing the max
+                count for under-resourced types, switching some epics to{' '}
+                <em>Features: sequential</em> mode, or relaxing your duration/budget ceilings.
+              </p>
+              <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                {lastResult.infeasibleCount} of {lastResult.searchStats.scenariosEvaluated} scenarios were infeasible.
+              </p>
             </div>
           )}
 

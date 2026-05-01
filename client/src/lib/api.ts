@@ -78,6 +78,8 @@ export interface OptimiserResponse {
     durationMs: number
     sampled: boolean
   }
+  /** Count of scenarios filtered out due to parallel over-allocation warnings */
+  infeasibleCount: number
   resourceTypes: Array<{ id: string; name: string }>
 }
 
