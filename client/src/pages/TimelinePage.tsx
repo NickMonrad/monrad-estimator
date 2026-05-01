@@ -13,6 +13,7 @@ import { getEpicColour } from '../lib/epicColours'
 import type { GanttScale } from '../hooks/useGanttLayout'
 import { colWForScale, LABEL_W } from '../hooks/useGanttLayout'
 import TimelineOptimiserDrawer from '../components/timeline/TimelineOptimiserDrawer'
+import SquadPlannerDrawer from '../components/timeline/SquadPlannerDrawer'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -267,6 +268,7 @@ export default function TimelinePage() {
   const rlKey = `timeline.resourceLevel.${projectId}`
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
   const [optimiserOpen, setOptimiserOpen] = useState(false)
+  const [squadPlannerOpen, setSquadPlannerOpen] = useState(false)
 
   const SCALE_KEY = 'gantt-scale'
   const [ganttScale, setGanttScale] = useState<GanttScale>(
@@ -785,7 +787,13 @@ export default function TimelinePage() {
               onClick={() => setOptimiserOpen(true)}
               className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue"
             >
-              ✨ Optimise
+              🔧 Scenario Finder
+            </button>
+            <button
+              onClick={() => setSquadPlannerOpen(true)}
+              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue"
+            >
+              👥 Squad Planner
             </button>
             <button
               onClick={handleLevel}
@@ -1324,6 +1332,12 @@ export default function TimelinePage() {
         onClose={() => setOptimiserOpen(false)}
         resourceTypes={resourceTypesForOptimiser}
         onApplied={handleOptimiserApplied}
+      />
+      <SquadPlannerDrawer
+        projectId={projectId!}
+        open={squadPlannerOpen}
+        onClose={() => setSquadPlannerOpen(false)}
+        resourceTypes={resourceTypesForOptimiser}
       />
   </AppLayout>
   )

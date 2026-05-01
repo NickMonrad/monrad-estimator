@@ -446,12 +446,12 @@ export default function TimelineOptimiserDrawer({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Optimise resources"
+        aria-label="Scenario Finder"
         className="fixed inset-y-0 right-0 w-[420px] bg-white dark:bg-gray-800 shadow-2xl z-50 flex flex-col"
       >
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">✨ Optimise resources</h2>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">🔧 Scenario Finder</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none"

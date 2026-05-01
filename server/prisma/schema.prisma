@@ -77,6 +77,7 @@ model Project {
   discounts   ProjectDiscount[]
   weeklyDemandCache Json?
   generatedDocuments GeneratedDocument[]
+  capacityPlans      CapacityPlan[]
 }
 
 enum ProjectStatus {
@@ -144,6 +145,7 @@ enum AllocationMode {
   EFFORT
   TIMELINE
   FULL_PROJECT
+  CAPACITY_PLAN
 }
 
 model Epic {
@@ -359,6 +361,47 @@ model NamedResource {
   updatedAt      DateTime     @updatedAt
 
   @@index([resourceTypeId])
+}
+
+model CapacityPlan {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name          String
+  targetWeeks   Int
+  periodWeeks   Int      // 4 = monthly, 13 = quarterly
+  maxDelta      Int      @default(1)
+  isActive      Boolean  @default(false)
+  totalCost     Float?
+  deliveryWeeks Float?
+  createdAt     DateTime @default(now())
+  periods       CapacityPlanPeriod[]
+
+  @@index([projectId])
+}
+
+model CapacityPlanPeriod {
+  id          String   @id @default(cuid())
+  planId      String
+  plan        CapacityPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  periodIndex Int
+  startWeek   Int
+  endWeek     Int
+  entries     CapacityPlanEntry[]
+
+  @@index([planId])
+}
+
+model CapacityPlanEntry {
+  id             String   @id @default(cuid())
+  periodId       String
+  period         CapacityPlanPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  resourceTypeId String
+  headcount      Int
+  demandFTE      Float
+  utilisationPct Float
+
+  @@index([periodId])
 }
 
 model RateCard {

@@ -47,6 +47,9 @@ vi.mock('../lib/prisma.js', () => ({
     organisationMember: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), delete: vi.fn(), update: vi.fn(), upsert: vi.fn(), count: vi.fn() },
     organisationInvite: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
     customer: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), updateMany: vi.fn() },
+    capacityPlan: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), updateMany: vi.fn() },
+    capacityPlanPeriod: { findMany: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
+    capacityPlanEntry: { findMany: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
     $transaction: vi.fn((fn: unknown) => typeof fn === 'function' ? (fn as (tx: unknown) => unknown)({
       rateCard: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), updateMany: vi.fn() },
       rateCardEntry: { deleteMany: vi.fn() },

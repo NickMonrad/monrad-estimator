@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 
-type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT'
+type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -48,6 +48,11 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       },
       timelineEntries: true,
       storyTimelineEntries: { select: { storyId: true, startWeek: true, durationWeeks: true } },
+      capacityPlans: {
+        where: { isActive: true },
+        take: 1,
+        include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
+      },
     },
   })
 
@@ -58,6 +63,19 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
+
+  // Build a map: rtId → total allocated days from the active capacity plan
+  const activePlan = project.capacityPlans?.[0] ?? null
+  const capacityPlanDays = new Map<string, number>()
+  if (activePlan) {
+    for (const period of activePlan.periods) {
+      const periodDays = (period.endWeek - period.startWeek) * 5
+      for (const entry of period.entries) {
+        const current = capacityPlanDays.get(entry.resourceTypeId) ?? 0
+        capacityPlanDays.set(entry.resourceTypeId, current + entry.headcount * periodDays)
+      }
+    }
+  }
 
   // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
   const projectDurationWeeks =
@@ -258,7 +276,11 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           const nrMode = (nr.allocationMode as AllocationMode) ?? 'EFFORT'
           const nrPercent = nr.allocationPercent ?? 100
           let nrAllocatedDays: number
-          if (nrMode === 'EFFORT') {
+          if (nrMode === 'CAPACITY_PLAN') {
+            // For NRs under a capacity plan RT, split the plan's days equally across NRs
+            const planDaysForRt = capacityPlanDays.get(resourceType.id) ?? 0
+            nrAllocatedDays = round2(planDaysForRt / resourceType.namedResources.length)
+          } else if (nrMode === 'EFFORT') {
             // Split effort equally across named resources
             nrAllocatedDays = round2(totalDays / resourceType.namedResources.length)
           } else if (nrMode === 'TIMELINE') {
@@ -287,7 +309,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         allocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
       } else {
         namedResourcesOutput = []
-        if (mode === 'EFFORT') {
+        if (mode === 'CAPACITY_PLAN') {
+          allocatedDays = capacityPlanDays.get(resourceType.id) ?? totalDays
+        } else if (mode === 'EFFORT') {
           allocatedDays = totalDays
         } else if (mode === 'TIMELINE') {
           if (effectiveStartWeek != null && effectiveEndWeek != null) {
