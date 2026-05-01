@@ -631,6 +631,15 @@ export default function TimelinePage() {
     },
   })
 
+  const levelMutation = useMutation({
+    mutationFn: () => api.post(`/projects/${projectId}/timeline/level`, { dryRun: false }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+    },
+  })
+  const handleLevel = () => levelMutation.mutate()
+
   const resetStoryTimeline = useMutation({
     mutationFn: (storyId: string) =>
       api.delete(`/projects/${projectId}/timeline/stories/${storyId}`),
@@ -777,6 +786,13 @@ export default function TimelinePage() {
               className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue"
             >
               ✨ Optimise
+            </button>
+            <button
+              onClick={handleLevel}
+              disabled={levelMutation.isPending}
+              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
+            >
+              {levelMutation.isPending ? 'Levelling…' : '⚖ Level'}
             </button>
             {timeline?.entries && timeline.entries.length > 0 && (
               <button

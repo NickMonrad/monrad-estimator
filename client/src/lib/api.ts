@@ -102,7 +102,11 @@ export const runOptimiser = (projectId: string, body: OptimiserRequest): Promise
 export const applyOptimiserScenario = (
   projectId: string,
   resourceTypes: Array<{ resourceTypeId: string; count: number; suggestedStartWeek: number }>,
+  options?: { staggerEpics?: boolean },
 ): Promise<{ message: string; snapshotId: string }> =>
   api
-    .post<{ message: string; snapshotId: string }>(`/projects/${projectId}/optimise/apply`, { resourceTypes })
+    .post<{ message: string; snapshotId: string }>(`/projects/${projectId}/optimise/apply`, {
+      resourceTypes,
+      staggerEpics: options?.staggerEpics,
+    })
     .then(r => r.data)

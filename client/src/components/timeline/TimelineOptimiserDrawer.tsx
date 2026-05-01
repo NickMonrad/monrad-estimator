@@ -109,9 +109,10 @@ function CandidateCard({
   onApplied: (snapshotId: string) => void
 }) {
   const [applyError, setApplyError] = useState<string | null>(null)
+  const [staggerEpics, setStaggerEpics] = useState(true)
 
   const applyMutation = useMutation({
-    mutationFn: () => applyOptimiserScenario(projectId, candidate.resourceTypes),
+    mutationFn: () => applyOptimiserScenario(projectId, candidate.resourceTypes, { staggerEpics }),
     onSuccess: (data) => {
       onApplied(data.snapshotId)
     },
@@ -237,8 +238,19 @@ function CandidateCard({
         <p className="text-xs text-red-600 dark:text-red-400">{applyError}</p>
       )}
 
-      {/* Apply button */}
-      <div className="flex justify-end pt-1">
+      {/* Apply section */}
+      <div className="flex items-center justify-between pt-1 gap-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={staggerEpics}
+            onChange={e => setStaggerEpics(e.target.checked)}
+            className="rounded"
+          />
+          <span className="text-xs text-gray-600 dark:text-gray-400">
+            Stagger epics to level demand
+          </span>
+        </label>
         <button
           onClick={handleApply}
           disabled={applyMutation.isPending}
