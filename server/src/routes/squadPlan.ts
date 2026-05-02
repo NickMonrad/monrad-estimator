@@ -490,10 +490,11 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       minFloor.set(rtId, floor)
     }
   }
-  // Default floor of 1 for all resource types not explicitly set
+  // Default floor of 0 for all resource types not explicitly set
+  // (users set explicit floors via the UI if they want minimum presence)
   for (const rt of schedulerInput.resourceTypes) {
     if (!minFloor.has(rt.id)) {
-      minFloor.set(rt.id, 1)
+      minFloor.set(rt.id, 0)
     }
   }
 

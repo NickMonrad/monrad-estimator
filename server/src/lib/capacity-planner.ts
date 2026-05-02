@@ -256,7 +256,7 @@ export function computeCapacityPlan(
 
   // Apply minimum floor
   for (const rtId of plannedRtIds) {
-    const floor = minFloor.get(rtId) ?? 1
+    const floor = minFloor.get(rtId) ?? 0
     const cap = capacity.get(rtId)!
     for (let p = 0; p < numPeriods; p++) {
       if (cap[p] < floor) cap[p] = floor
@@ -284,7 +284,7 @@ export function computeCapacityPlan(
         }
       }
       // Re-apply floor (smoothing might have pushed below)
-      const floor = minFloor.get(rtId) ?? 1
+      const floor = minFloor.get(rtId) ?? 0
       for (let p = 0; p < numPeriods; p++) {
         if (cap[p] < floor) { cap[p] = floor; changed = true }
       }
@@ -325,7 +325,7 @@ export function computeCapacityPlan(
 
     const maxAllocatedDays = totalDemand * (1 + bufferPct)
     const cap = capacity.get(rtId)!
-    const floor = minFloor.get(rtId) ?? 1
+    const floor = minFloor.get(rtId) ?? 0
 
     // Compute current total allocated days
     const getAllocatedDays = () => {

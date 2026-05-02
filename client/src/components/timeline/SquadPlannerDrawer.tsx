@@ -432,7 +432,7 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
                     type="number"
                     min={0}
                     max={20}
-                    value={minFloor[rt.id] ?? 1}
+                    value={minFloor[rt.id] ?? 0}
                     onChange={e =>
                       setMinFloor(prev => ({ ...prev, [rt.id]: Math.max(0, Number(e.target.value)) }))
                     }
