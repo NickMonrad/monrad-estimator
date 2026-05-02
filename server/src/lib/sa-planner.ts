@@ -80,8 +80,6 @@ export function runSAPlanner(
     maxParallelismPerFeature = 2,
     maxCap,
     maxConcurrentEpics,
-    iterations = 2000,
-    coolingRate = 0.995,
   } = config
 
   const { epics, resourceTypes, epicDeps } = input
@@ -311,13 +309,15 @@ export function runSAPlanner(
 
   const bestSolution = buildResourceConstrainedSchedule()
 
-  // ── Optional SA compression pass ────────────────────────────────────────
-  // Tries to pull features earlier to compress total delivery time.
-  // Only accepts moves that maintain capacity feasibility.
+  // ── Gap-filling pass ────────────────────────────────────────────────────
+  // After priority-order placement, some RTs have idle gaps because later
+  // features that use those RTs weren't placed yet when the gap existed.
+  // This pass iterates multiple times, trying to pull each feature to its
+  // earliest feasible week (respecting deps, capacity, and concurrency).
 
   let improvements = 0
 
-  if (iterations > 0 && features.length > 0) {
+  if (features.length > 0) {
     // Rebuild weekly usage from the RCPS solution
     const weeklyUsed = new Map<string, Float64Array>()
     for (const [rtId] of rtCapacity) {
@@ -344,125 +344,143 @@ export function runSAPlanner(
       }
     }
 
-    let temperature = config.initialTemp ?? 50
-    const saIterations = Math.min(iterations, 2000)
-
-    for (let iter = 0; iter < saIterations; iter++) {
-      // Pick a random feature and try to pull it earlier
-      const f = features[Math.floor(Math.random() * features.length)]
-      const currentStart = bestSolution.get(f.id) ?? 0
-
-      // Earliest respecting deps
-      let depEarliest = 0
-      for (const predId of f.predecessors) {
-        const predInfo = featureMap.get(predId)
-        if (!predInfo) continue
-        const predEnd = (bestSolution.get(predId) ?? 0) + predInfo.durationWeeks
-        if (predEnd > depEarliest) depEarliest = predEnd
+    // Multi-pass gap filling: sort features by current start (latest first)
+    // and try to pull each one earlier. Repeat until no more improvements.
+    // Precompute per-week epic count for concurrency checks (O(1) lookup)
+    let epicCountPerWeek: Uint16Array | null = null
+    let epicPresence: Map<string, Uint8Array> | null = null
+    if (maxConcurrentEpics) {
+      epicCountPerWeek = new Uint16Array(MAX_WEEKS)
+      epicPresence = new Map<string, Uint8Array>()
+      for (const epic of epics) {
+        epicPresence.set(epic.id, new Uint8Array(MAX_WEEKS))
       }
-
-      // Latest respecting successors (can't start so late that successors break)
-      let latestAllowed = MAX_WEEKS - f.durationWeeks
-      for (const succId of (successors.get(f.id) ?? [])) {
-        const succStart = bestSolution.get(succId) ?? MAX_WEEKS
-        const limit = succStart - f.durationWeeks
-        if (limit < latestAllowed) latestAllowed = limit
+      for (const f of features) {
+        const start = bestSolution.get(f.id) ?? 0
+        const ep = epicPresence.get(f.epicId)!
+        for (let w = start; w < start + f.durationWeeks && w < MAX_WEEKS; w++) {
+          if (ep[w] === 0) { ep[w] = 1; epicCountPerWeek[w]++ }
+        }
       }
+    }
 
-      if (depEarliest > latestAllowed) {
-        temperature *= coolingRate
-        continue
-      }
+    const maxPasses = 5
+    for (let pass = 0; pass < maxPasses; pass++) {
+      let passImprovements = 0
 
-      // Try a new start: bias toward pulling earlier (compress)
-      const range = currentStart - depEarliest
-      if (range <= 0) {
-        temperature *= coolingRate
-        continue
-      }
+      const byStart = [...features].sort((a, b) => {
+        return (bestSolution.get(b.id) ?? 0) - (bestSolution.get(a.id) ?? 0)
+      })
 
-      const newStart = depEarliest + Math.floor(Math.random() * range)
-      if (newStart >= currentStart || newStart < depEarliest || newStart > latestAllowed) {
-        temperature *= coolingRate
-        continue
-      }
+      for (const f of byStart) {
+        const currentStart = bestSolution.get(f.id) ?? 0
 
-      // Check epic concurrency at the new position
-      if (maxConcurrentEpics) {
-        let concurrencyOk = true
-        for (let w = newStart; w < newStart + f.durationWeeks && concurrencyOk; w++) {
-          const activeEpics = new Set<string>()
-          for (const [fId, fStart] of bestSolution) {
-            if (fId === f.id) continue
-            const fInfo = featureMap.get(fId)
-            if (fInfo && fStart <= w && fStart + fInfo.durationWeeks > w) {
-              activeEpics.add(fInfo.epicId)
+        let depEarliest = 0
+        for (const predId of f.predecessors) {
+          const predInfo = featureMap.get(predId)
+          if (!predInfo) continue
+          const predEnd = (bestSolution.get(predId) ?? 0) + predInfo.durationWeeks
+          if (predEnd > depEarliest) depEarliest = predEnd
+        }
+
+        if (depEarliest >= currentStart) continue
+
+        // Remove this feature's usage from the grid
+        for (const [rtId, rate] of f.demandRates) {
+          const used = weeklyUsed.get(rtId)
+          if (!used) continue
+          for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
+            used[w] -= rate
+          }
+        }
+        // Remove from epic presence
+        if (epicCountPerWeek && epicPresence) {
+          const ep = epicPresence.get(f.epicId)!
+          // Check if other features in same epic still cover each week
+          for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
+            const stillCovered = features.some(other =>
+              other.id !== f.id && other.epicId === f.epicId &&
+              (bestSolution.get(other.id) ?? 0) <= w &&
+              (bestSolution.get(other.id) ?? 0) + other.durationWeeks > w
+            )
+            if (!stillCovered && ep[w] === 1) { ep[w] = 0; epicCountPerWeek[w]-- }
+          }
+        }
+
+        let newStart = depEarliest
+        let found = false
+
+        while (newStart < currentStart) {
+          // Epic concurrency check (O(duration) using precomputed arrays)
+          let concurrencyOk = true
+          if (maxConcurrentEpics && epicCountPerWeek && epicPresence) {
+            const ep = epicPresence.get(f.epicId)!
+            for (let w = newStart; w < newStart + f.durationWeeks && concurrencyOk; w++) {
+              if (ep[w] === 0 && epicCountPerWeek[w] >= maxConcurrentEpics) {
+                concurrencyOk = false
+              }
             }
           }
-          activeEpics.delete(f.epicId) // own epic doesn't count
-          if (activeEpics.size >= maxConcurrentEpics) {
-            // Check if our epic is already represented
-            const ownEpicActive = [...bestSolution.entries()].some(([fId, fStart]) => {
-              if (fId === f.id) return false
-              const fInfo = featureMap.get(fId)
-              return fInfo?.epicId === f.epicId && fStart <= w && fStart + fInfo.durationWeeks > w
-            })
-            if (!ownEpicActive && activeEpics.size >= maxConcurrentEpics) {
-              concurrencyOk = false
+
+          if (!concurrencyOk) { newStart++; continue }
+
+          // Capacity feasibility
+          let capacityOk = true
+          for (const [rtId, ratePerWeek] of f.demandRates) {
+            const capacity = rtCapacity.get(rtId) ?? Infinity
+            const used = weeklyUsed.get(rtId)
+            if (!used) continue
+            for (let w = newStart; w < newStart + f.durationWeeks && w < MAX_WEEKS; w++) {
+              if (used[w] + ratePerWeek > capacity + 0.01) {
+                capacityOk = false
+                break
+              }
+            }
+            if (!capacityOk) break
+          }
+
+          if (capacityOk) { found = true; break }
+          newStart++
+        }
+
+        if (found && newStart < currentStart) {
+          bestSolution.set(f.id, newStart)
+          for (const [rtId, rate] of f.demandRates) {
+            const used = weeklyUsed.get(rtId)
+            if (!used) continue
+            for (let w = newStart; w < newStart + f.durationWeeks && w < MAX_WEEKS; w++) {
+              used[w] += rate
+            }
+          }
+          // Update epic presence
+          if (epicCountPerWeek && epicPresence) {
+            const ep = epicPresence.get(f.epicId)!
+            for (let w = newStart; w < newStart + f.durationWeeks && w < MAX_WEEKS; w++) {
+              if (ep[w] === 0) { ep[w] = 1; epicCountPerWeek[w]++ }
+            }
+          }
+          passImprovements++
+          improvements++
+        } else {
+          // Restore original position
+          for (const [rtId, rate] of f.demandRates) {
+            const used = weeklyUsed.get(rtId)
+            if (!used) continue
+            for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
+              used[w] += rate
+            }
+          }
+          // Restore epic presence
+          if (epicCountPerWeek && epicPresence) {
+            const ep = epicPresence.get(f.epicId)!
+            for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
+              if (ep[w] === 0) { ep[w] = 1; epicCountPerWeek[w]++ }
             }
           }
         }
-        if (!concurrencyOk) {
-          temperature *= coolingRate
-          continue
-        }
       }
 
-      // Check capacity feasibility at new position
-      let capacityOk = true
-      for (const [rtId, ratePerWeek] of f.demandRates) {
-        const capacity = rtCapacity.get(rtId) ?? Infinity
-        const used = weeklyUsed.get(rtId)
-        if (!used) continue
-        for (let w = newStart; w < newStart + f.durationWeeks; w++) {
-          // Subtract current feature's contribution (it's being moved)
-          const currentUsed = (w >= currentStart && w < currentStart + f.durationWeeks)
-            ? used[w] - ratePerWeek
-            : used[w]
-          if (currentUsed + ratePerWeek > (capacity + 0.01)) {
-            capacityOk = false
-            break
-          }
-        }
-        if (!capacityOk) break
-      }
-
-      if (!capacityOk) {
-        temperature *= coolingRate
-        continue
-      }
-
-      // Accept the move (always accept since we only pull earlier = compress)
-      // Remove old usage
-      for (const [rtId, ratePerWeek] of f.demandRates) {
-        const used = weeklyUsed.get(rtId)
-        if (!used) continue
-        for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-          used[w] -= ratePerWeek
-        }
-      }
-      // Add new usage
-      for (const [rtId, ratePerWeek] of f.demandRates) {
-        const used = weeklyUsed.get(rtId)
-        if (!used) continue
-        for (let w = newStart; w < newStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-          used[w] += ratePerWeek
-        }
-      }
-      bestSolution.set(f.id, newStart)
-      improvements++
-
-      temperature *= coolingRate
+      if (passImprovements === 0) break
     }
   }
 

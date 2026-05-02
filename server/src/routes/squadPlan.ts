@@ -217,7 +217,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // Update RT counts and allocation mode
+    // Update RT counts and allocation mode for demand RTs
     for (const [rtId, count] of maxHeadcountByRt) {
       await prisma.resourceType.update({
         where: { id: rtId },
@@ -225,10 +225,15 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
     }
 
-    // Update named resources allocation mode too
-    const rtIds = [...maxHeadcountByRt.keys()]
+    // Also set ALL other project RTs to CAPACITY_PLAN (overhead RTs keep their count)
+    await prisma.resourceType.updateMany({
+      where: { projectId, id: { notIn: [...maxHeadcountByRt.keys()] } },
+      data: { allocationMode: 'CAPACITY_PLAN' },
+    })
+
+    // Update ALL named resources allocation mode
     await prisma.namedResource.updateMany({
-      where: { resourceTypeId: { in: rtIds } },
+      where: { resourceType: { projectId } },
       data: { allocationMode: 'CAPACITY_PLAN' },
     })
 
