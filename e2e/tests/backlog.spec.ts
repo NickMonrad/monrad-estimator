@@ -329,7 +329,7 @@ test.describe('Backlog', () => {
   test('History button toggles history panel', async ({ page }) => {
     await page.getByRole('button', { name: /backlog/i }).click()
     await page.getByRole('button', { name: /history/i }).click()
-    await expect(page.getByText(/backlog history/i)).toBeVisible()
+    await expect(page.getByRole('heading', { name: /snapshot history/i })).toBeVisible()
   })
 
   test('drag handle is visible on epics for reordering', async ({ page }) => {
