@@ -41,6 +41,8 @@ export interface OptimiserConfig {
     maxBudget?: number
     /** Candidates with deliveryWeeks > maxDurationWeeks are filtered out. */
     maxDurationWeeks?: number
+    /** Candidates with deliveryWeeks < minDurationWeeks are filtered out. */
+    minDurationWeeks?: number
   }
   /**
    * Day rate per RT (resourceTypeId → dayRate).
@@ -93,6 +95,11 @@ export interface OptimiserResult {
     /** true when search space exceeded MAX_SCENARIOS and random sampling was used */
     sampled: boolean
   }
+  /**
+   * Count of scenarios filtered out specifically because parallelWarningCount > 0.
+   * These are strictly infeasible: a parallel-mode epic exceeded RT capacity.
+   */
+  infeasibleCount: number
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,12 +263,27 @@ function computeMetrics(
   const avgUtilisationPct = rtWithDemandCount > 0 ? totalUtil / rtWithDemandCount : 0
 
   // ── Estimated cost ────────────────────────────────────────────────────────
-  // weeklyRate = count × dayRate × 5 days; totalCost = weeklyRate × deliveryWeeks
+  // Demand-based cost (matches Effort Review / Resource Profile):
+  //   Σ over active tasks: (hoursEffort / hpd) × dayRate
+  // We deliberately do NOT use count × dayRate × deliveryWeeks (capacity-based)
+  // because that bills for idle time and diverges from the rest of the app.
   let estimatedCost = 0
-  if (dayRates && dayRates.size > 0 && deliveryWeeks > 0) {
-    for (const rt of input.resourceTypes) {
-      const dayRate = dayRates.get(rt.id) ?? 0
-      if (dayRate > 0) estimatedCost += rt.count * dayRate * 5 * deliveryWeeks
+  if (dayRates && dayRates.size > 0) {
+    for (const epic of input.epics) {
+      for (const feature of epic.features) {
+        if (feature.isActive === false) continue
+        for (const story of feature.userStories) {
+          if (story.isActive === false) continue
+          for (const task of story.tasks) {
+            if (!task.resourceTypeId) continue
+            const dayRate = dayRates.get(task.resourceTypeId) ?? 0
+            if (dayRate <= 0) continue
+            const rt = input.resourceTypes.find(r => r.id === task.resourceTypeId)
+            const hpd = rt?.hoursPerDay ?? input.project.hoursPerDay
+            estimatedCost += (task.hoursEffort / hpd) * dayRate
+          }
+        }
+      }
     }
   }
 
@@ -351,7 +373,7 @@ export function runOptimiser(
 ): OptimiserResult {
   const startMs = _now()
   const { mode, constraints, dayRates, topN } = config
-  const { countRanges, allowRampUp, maxBudget, maxDurationWeeks } = constraints
+  const { countRanges, allowRampUp, maxBudget, maxDurationWeeks, minDurationWeeks } = constraints
 
   // ── 1. Baseline run (non-levelled, consistent with scenario evaluations) ──
   const baselineOutput = runScheduler({ ...baseInput, resourceLevel: false })
@@ -381,10 +403,37 @@ export function runOptimiser(
     }
   }
 
+  // When ramp-up is enabled, the apply route shifts namedResources[].startWeek
+  // to the first demand week (only when > 0). Mirror that in scoring so a
+  // candidate's metrics reflect the schedule that will actually be applied;
+  // otherwise a scenario can look feasible here but be infeasible after apply.
+  function applyRampUp(rts: SchedulerResourceType[]): SchedulerResourceType[] {
+    if (!allowRampUp) return rts
+    return rts.map(rt => {
+      const sw = firstDemandWeekByRtId.get(rt.id)
+      if (sw === undefined || sw <= 0) return rt
+      return {
+        ...rt,
+        namedResources: rt.namedResources.map(nr => ({ ...nr, startWeek: sw })),
+      }
+    })
+  }
+
+  // Re-run the baseline with ramp-up overlays so the displayed baseline candidate
+  // matches what would actually ship if the user clicked "apply".
+  const baselineRTs = applyRampUp(baseInput.resourceTypes)
+  const baselineInputForMetrics: SchedulerInput =
+    allowRampUp
+      ? { ...baseInput, resourceTypes: baselineRTs, resourceLevel: false }
+      : { ...baseInput, resourceLevel: false }
+  const baselineOutputForMetrics = allowRampUp
+    ? runScheduler(baselineInputForMetrics)
+    : baselineOutput
+
   const baselineMetrics = computeMetrics(
-    baseInput,
-    baselineOutput.featureSchedule,
-    baselineOutput.parallelWarnings.length,
+    baselineInputForMetrics,
+    baselineOutputForMetrics.featureSchedule,
+    baselineOutputForMetrics.parallelWarnings.length,
     dayRates,
   )
 
@@ -419,11 +468,12 @@ export function runOptimiser(
 
   const rawCandidates: RawCandidate[] = []
   let scenariosRun = 0
+  let infeasibleCount = 0
 
   for (const scenario of scenarios) {
     scenariosRun++
     const overrideMap = new Map(scenario.map(s => [s.resourceTypeId, s.count]))
-    const newRTs = applyCountOverrides(baseInput.resourceTypes, scenario)
+    const newRTs = applyRampUp(applyCountOverrides(baseInput.resourceTypes, scenario))
     const scenarioInput: SchedulerInput = { ...baseInput, resourceTypes: newRTs, resourceLevel: false }
 
     const output = runScheduler(scenarioInput)
@@ -436,6 +486,9 @@ export function runOptimiser(
     // Apply maxDurationWeeks constraint
     if (maxDurationWeeks !== undefined && deliveryWeeks > maxDurationWeeks) continue
 
+    // Apply minDurationWeeks constraint
+    if (minDurationWeeks !== undefined && deliveryWeeks < minDurationWeeks) continue
+
     const metrics = computeMetrics(
       scenarioInput,
       output.featureSchedule,
@@ -445,6 +498,14 @@ export function runOptimiser(
 
     // Apply maxBudget constraint
     if (maxBudget !== undefined && metrics.estimatedCost > maxBudget) continue
+
+    // Strict feasibility: drop any scenario with parallel over-allocation warnings.
+    // PARALLEL_EPICS mode doesn't extend delivery weeks when capacity is exceeded,
+    // so lowering counts looks "free" to the scorer — these scenarios are infeasible.
+    if (metrics.parallelWarningCount > 0) {
+      infeasibleCount++
+      continue
+    }
 
     rawCandidates.push({
       resourceTypes: baseInput.resourceTypes.map(rt => ({
@@ -518,5 +579,6 @@ export function runOptimiser(
       durationMs: _now() - startMs,
       sampled,
     },
+    infeasibleCount,
   }
 }

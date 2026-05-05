@@ -12,6 +12,9 @@ import TimelineTooltip from '../components/timeline/TimelineTooltip'
 import { getEpicColour } from '../lib/epicColours'
 import type { GanttScale } from '../hooks/useGanttLayout'
 import { colWForScale, LABEL_W } from '../hooks/useGanttLayout'
+import TimelineOptimiserDrawer from '../components/timeline/TimelineOptimiserDrawer'
+import SquadPlannerDrawer from '../components/timeline/SquadPlannerDrawer'
+import SnapshotHistoryPanel from '../components/SnapshotHistoryPanel'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -102,6 +105,7 @@ function NamedResourcesPanel({
                 const mode = nr.allocationMode ?? 'EFFORT'
                 const modeLabel = mode === 'EFFORT' ? 'T&M'
                   : mode === 'FULL_PROJECT' ? `Full Project · ${nr.allocationPct}%`
+                  : mode === 'CAPACITY_PLAN' ? `Capacity Plan · ${nr.allocationPct}%`
                   : `Timeline · ${nr.allocationPct}%`
                 return (
                   <div
@@ -210,7 +214,7 @@ function NamedResourcesPanel({
                       )
                     }
 
-                    // Fixed allocation (FULL_PROJECT or TIMELINE): flat bar
+                    // Fixed allocation (FULL_PROJECT, TIMELINE or CAPACITY_PLAN): flat bar
                     const barLeft = (start + weekOffset) * colW
                     const barWidth = Math.max((end - start + 1) * colW - 4, 8)
                     return (
@@ -265,6 +269,9 @@ export default function TimelinePage() {
   const [scheduleStale, setScheduleStale] = useState(false)
   const rlKey = `timeline.resourceLevel.${projectId}`
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
+  const [optimiserOpen, setOptimiserOpen] = useState(false)
+  const [squadPlannerOpen, setSquadPlannerOpen] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
 
   const SCALE_KEY = 'gantt-scale'
   const [ganttScale, setGanttScale] = useState<GanttScale>(
@@ -428,6 +435,20 @@ export default function TimelinePage() {
   }, [timeline, project])
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+
+  const handleOptimiserApplied = (snapshotId: string) => {
+    qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    qc.invalidateQueries({ queryKey: ['snapshots', projectId] })
+    setOptimiserOpen(false)
+    alert(`Scenario applied (snapshot ${snapshotId}). Roll back via the History panel if needed.`)
+  }
+
+  // Derived list of resource types for the optimiser (id, name, count)
+  const resourceTypesForOptimiser = (resourceTypes ?? []).map(rt => ({
+    id: rt.id,
+    name: rt.name,
+    count: rt.count,
+  }))
 
   const scheduleTimeline = useMutation({
     mutationFn: (body: { startDate?: string; resourceLevel?: boolean }) =>
@@ -615,6 +636,15 @@ export default function TimelinePage() {
     },
   })
 
+  const levelMutation = useMutation({
+    mutationFn: () => api.post(`/projects/${projectId}/timeline/level`, { dryRun: false }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+    },
+  })
+  const handleLevel = () => levelMutation.mutate()
+
   const resetStoryTimeline = useMutation({
     mutationFn: (storyId: string) =>
       api.delete(`/projects/${projectId}/timeline/stories/${storyId}`),
@@ -756,6 +786,25 @@ export default function TimelinePage() {
             >
               {scheduleTimeline.isPending ? 'Scheduling…' : 'Auto-schedule'}
             </button>
+            <button
+              onClick={() => setOptimiserOpen(true)}
+              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue"
+            >
+              🔧 Scenario Finder
+            </button>
+            <button
+              onClick={() => setSquadPlannerOpen(true)}
+              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue"
+            >
+              👥 Squad Planner
+            </button>
+            <button
+              onClick={handleLevel}
+              disabled={levelMutation.isPending}
+              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
+            >
+              {levelMutation.isPending ? 'Levelling…' : '⚖ Level'}
+            </button>
             {timeline?.entries && timeline.entries.length > 0 && (
               <button
                 onClick={handleSchedule}
@@ -797,6 +846,12 @@ export default function TimelinePage() {
                 <div className="w-px h-7 bg-gray-200" />
               </>
             )}
+            <button
+              onClick={() => setShowHistory(h => !h)}
+              className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
+            >
+              🕐 History
+            </button>
             <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer">
               <input
                 type="checkbox"
@@ -908,6 +963,7 @@ export default function TimelinePage() {
                                           <option value="EFFORT">T&amp;M</option>
                                           <option value="FULL_PROJECT">Full Project</option>
                                           <option value="TIMELINE">Timeline</option>
+                                          <option value="CAPACITY_PLAN">Capacity Plan</option>
                                         </select>
                                       )}
                                       {/* % input — only shown for non-EFFORT modes */}
@@ -1279,7 +1335,23 @@ export default function TimelinePage() {
             </div>
           )}
         </div>
+        {showHistory && (
+          <SnapshotHistoryPanel projectId={projectId!} />
+        )}
       </main>
+      <TimelineOptimiserDrawer
+        projectId={projectId!}
+        open={optimiserOpen}
+        onClose={() => setOptimiserOpen(false)}
+        resourceTypes={resourceTypesForOptimiser}
+        onApplied={handleOptimiserApplied}
+      />
+      <SquadPlannerDrawer
+        projectId={projectId!}
+        open={squadPlannerOpen}
+        onClose={() => setSquadPlannerOpen(false)}
+        resourceTypes={resourceTypesForOptimiser}
+      />
   </AppLayout>
   )
 }

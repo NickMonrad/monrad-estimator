@@ -86,7 +86,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 | CSV export button is visible | "⬇ Export CSV" button present on Backlog page |
 | CSV import modal opens and shows template download link | Modal opens → "Download blank CSV template" link visible |
 | CSV import shows parse errors on bad file | Uploading malformed CSV shows error/validation message |
-| History button toggles history panel | "🕐 History" button reveals Backlog History panel |
+| History button toggles history panel | "🕐 History" button reveals the Snapshot History panel |
 | drag handle is visible on epics for reordering | Hovering an epic row reveals the ⠿ drag handle for DnD reorder |
 
 #### `CSV redesign — Type column and status fields` describe block (3 tests)
@@ -106,7 +106,9 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (4 tests)
+### `timeline.spec.ts` — Timeline (7 tests)
+
+#### `Timeline` describe block (4 tests)
 
 | Test | Description |
 |------|-------------|
@@ -114,6 +116,21 @@ API-level tests using the `request` fixture. No browser UI involved.
 | auto-schedule shows projected end date | Create project with epic+feature, run Auto-schedule, assert "Projected end:" appears |
 | sequential/parallel toggle is visible on epic rows | After scheduling, the mode-toggle button is rendered on every epic header row in the Gantt |
 | feature dependency section visible in inline edit panel | Clicking a feature label opens the inline panel which contains the "Depends on" section and the add-dependency select |
+
+#### `Scenario Finder drawer — open and close` describe block (1 test — Phase 4, issue #233)
+
+| Test | Description |
+|------|-------------|
+| open and close the drawer | Navigates to a Timeline page, clicks `🔧 Scenario Finder`, asserts the drawer dialog with accessible name and heading "Scenario Finder" is visible, clicks the Close (×) button, asserts drawer is removed from the DOM |
+
+#### `Scenario Finder drawer — with resources` describe block (2 tests — Phase 4, issue #233)
+
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import, navigates to Timeline, and runs Auto-schedule. Each test has a 90 s timeout.
+
+| Test | Description |
+|------|-------------|
+| run optimiser and see results | Opens drawer, clicks Run optimiser, waits up to 30 s for the search-stats footer (`Evaluated X scenarios in Ys`), asserts the Baseline card ("Current configuration") and at least one candidate card with an Apply button are visible |
+| apply button is present on candidate cards, dialog is dismissed without mutation | Runs the optimiser, asserts every candidate card has an Apply button, clicks the first Apply, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
 
 ---
 

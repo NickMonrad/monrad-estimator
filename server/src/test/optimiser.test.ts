@@ -33,7 +33,7 @@ function makeTask(hoursEffort: number, rtId: string, rtName = 'Dev', hpd = 8) {
   return {
     resourceTypeId: rtId,
     hoursEffort,
-    durationDays: null as null,
+    durationDays: null as number | null,
     resourceType: { id: rtId, name: rtName, hoursPerDay: hpd },
   }
 }
@@ -48,7 +48,7 @@ function makeFeature(
   order = 0,
   deps: Array<{ featureId: string; dependsOnId: string }> = [],
 ): SchedulerFeature {
-  return { id, order, isActive: null, userStories: stories, dependencies: deps }
+  return { id, order, isActive: null, timelineStartWeek: null, userStories: stories, dependencies: deps }
 }
 
 function makeEpic(
@@ -252,7 +252,10 @@ describe('runOptimiser', () => {
     const input = twoRtInput()
     const dayRates = new Map([['rt-dev', 100], ['rt-des', 80]])
 
-    // No budget constraint: all 4×2 = 8 scenarios pass
+    // Cost is demand-based (Σ task hours / hpd × dayRate), so it does NOT vary
+    // with count. Verify the budget filter still functions:
+    //   - generous budget → all scenarios pass
+    //   - tight budget   → all scenarios filtered out
     const uncapped = runOptimiser(input, baseConfig({
       mode: 'balanced',
       constraints: {
@@ -266,16 +269,16 @@ describe('runOptimiser', () => {
       topN: 10,
     }))
 
-    // Tight budget: only cheap scenarios (few resources) should survive
-    // Set budget to the median cost of the uncapped result set
-    if (uncapped.candidates.length < 2) {
-      // Edge case: skip if not enough candidates
-      return
+    if (uncapped.candidates.length === 0) return // edge case guard
+    const demandCost = uncapped.candidates[0].metrics.estimatedCost
+    expect(demandCost).toBeGreaterThan(0)
+    // All uncapped candidates should share the same demand-based cost.
+    for (const c of uncapped.candidates) {
+      expect(c.metrics.estimatedCost).toBe(demandCost)
     }
-    const costs = uncapped.candidates.map(c => c.metrics.estimatedCost).sort((a, b) => a - b)
-    const medianCost = costs[Math.floor(costs.length / 2)]
 
-    const capped = runOptimiser(input, baseConfig({
+    // Budget tighter than demand cost → every scenario is filtered out.
+    const tooTight = runOptimiser(input, baseConfig({
       mode: 'balanced',
       constraints: {
         countRanges: [
@@ -283,18 +286,61 @@ describe('runOptimiser', () => {
           { resourceTypeId: 'rt-des', min: 1, max: 2 },
         ],
         allowRampUp: false,
-        maxBudget: medianCost,
+        maxBudget: demandCost - 1,
       },
       dayRates,
       topN: 10,
     }))
+    expect(tooTight.candidates.length).toBe(0)
 
-    // All surviving candidates must be within budget
-    for (const c of capped.candidates) {
-      expect(c.metrics.estimatedCost).toBeLessThanOrEqual(medianCost + 0.001)
+    // Budget == demand cost (with epsilon) → all candidates pass.
+    const looseEnough = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [
+          { resourceTypeId: 'rt-dev', min: 1, max: 4 },
+          { resourceTypeId: 'rt-des', min: 1, max: 2 },
+        ],
+        allowRampUp: false,
+        maxBudget: demandCost + 0.01,
+      },
+      dayRates,
+      topN: 10,
+    }))
+    for (const c of looseEnough.candidates) {
+      expect(c.metrics.estimatedCost).toBeLessThanOrEqual(demandCost + 0.01)
     }
-    // Budget filter must have removed at least one scenario (the expensive ones)
-    expect(capped.candidates.length).toBeLessThan(uncapped.candidates.length)
+    expect(looseEnough.candidates.length).toBe(uncapped.candidates.length)
+  })
+
+  // ── Cost is demand-based (matches Effort Review) ─────────────────────────
+  it('estimatedCost is demand-based: independent of count for a given dayRate', () => {
+    const input = twoRtInput()
+    const dayRates = new Map([['rt-dev', 100], ['rt-des', 80]])
+
+    // Expected demand cost: Σ (hoursEffort / hpd) × dayRate, hpd=8
+    //   dev tasks: 80 + 160 = 240h → 30 days × $100 = $3000
+    //   des tasks: 40 + 80  = 120h → 15 days × $80  = $1200
+    //   total = $4200
+    const expected = 4200
+
+    const result = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [
+          { resourceTypeId: 'rt-dev', min: 1, max: 5 },
+          { resourceTypeId: 'rt-des', min: 1, max: 3 },
+        ],
+        allowRampUp: false,
+      },
+      dayRates,
+      topN: 20,
+    }))
+
+    expect(result.baseline.metrics.estimatedCost).toBeCloseTo(expected, 2)
+    for (const c of result.candidates) {
+      expect(c.metrics.estimatedCost).toBeCloseTo(expected, 2)
+    }
   })
 
   // ── Empty project: no epics ───────────────────────────────────────────────
@@ -410,6 +456,70 @@ describe('runOptimiser', () => {
         expect(Number.isInteger(rt.suggestedStartWeek)).toBe(true)
       }
     }
+  })
+
+  // ── allowRampUp: scoring uses proposed startWeek (apply parity) ───────────
+  it('allowRampUp: scenarios are scored with the proposed namedResource startWeek, not the original', () => {
+    // RT has 1 named resource currently available from week 0 (count==1 → no phantoms).
+    // A feature that uses this RT is pinned to start at week 5 via timelineStartWeek.
+    // Without the fix, the baseline scorer treats the RT as available 0..deliveryWeeks
+    // (6 weeks of capacity for 1 week of demand → very low utilisation).
+    // With the fix, allowRampUp shifts the named resource's startWeek to the first
+    // demand week (5), so capacity matches demand and utilisation approaches 100%.
+    const rt: SchedulerResourceType = {
+      id: 'rt-dev', name: 'Developer', count: 1, hoursPerDay: 8,
+      namedResources: [
+        { id: 'nr1', name: 'Alice', startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      ],
+    }
+    const story = makeStory('s1', [makeTask(40, 'rt-dev', 'Developer')])
+    const feature = makeFeature('f1', [story])
+    // Pin feature start to week 5.
+    const epic: SchedulerEpic = {
+      id: 'e1', name: 'e1', order: 0, isActive: null,
+      featureMode: 'sequential', scheduleMode: 'sequential',
+      timelineStartWeek: 5,
+      features: [feature],
+    }
+    const input: SchedulerInput = {
+      project: { hoursPerDay: 8 },
+      epics: [epic],
+      resourceTypes: [rt],
+      epicDeps: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+      resourceLevel: false,
+    }
+
+    const noRampUp = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 1 }],
+        allowRampUp: false,
+      },
+      topN: 1,
+    }))
+    const rampUp = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 1 }],
+        allowRampUp: true,
+      },
+      topN: 1,
+    }))
+
+    // Baseline candidate carries the suggested ramp-up week
+    const rampUpRt = rampUp.baseline.resourceTypes.find(r => r.resourceTypeId === 'rt-dev')!
+    expect(rampUpRt.suggestedStartWeek).toBe(5)
+
+    // The KEY apply-parity assertion: scoring with the override → utilisation
+    // is materially higher than without the override (because phantom capacity
+    // in weeks 0..4 is removed from the denominator).
+    expect(rampUp.baseline.metrics.avgUtilisationPct).toBeGreaterThan(
+      noRampUp.baseline.metrics.avgUtilisationPct + 10,
+    )
+    // And it should approach 100% (pre-fix value would be ~16-20%).
+    expect(rampUp.baseline.metrics.avgUtilisationPct).toBeGreaterThan(80)
   })
 
   // ── topN is respected ─────────────────────────────────────────────────────
@@ -624,6 +734,153 @@ describe('runOptimiser', () => {
       expect(run1.candidates[i].score).toBe(run2.candidates[i].score)
     }
   })
+
+  // ── Parallel-warning infeasibility filter ────────────────────────────────
+  //
+  // Design: need rt-dev count to affect feasibility but NOT the epic span.
+  //
+  // Setup:
+  //   - rt-dev: the RT under test (count varies 1–3)
+  //   - rt-fixed: anchor RT, count=1, NOT in the search range
+  //   - Feature 1 (parallel): rt-fixed task durationDays=10  + rt-dev task durationDays=8
+  //   - Feature 2 (parallel): rt-dev task durationDays=8 (no rt-fixed)
+  //
+  // featureDurationWeeks computes max(taskDays/count) per RT:
+  //   Feature 1: max(8/count_dev, 10/1) → 10 days (rt-fixed dominates for count >= 1)
+  //   Feature 2: 8/count_dev → < 10 days
+  //   Epic span = max(10, 8/count_dev) = 10 days  → constant regardless of count_dev
+  //
+  // computeParallelWarnings uses task.durationDays (fixed):
+  //   rt-fixed demand = 10 days, rt-fixed capacity = 1×10 = 10 → 10>10 false → no warning
+  //   rt-dev demand = 8+8 = 16 days, rt-dev capacity = count × 10
+  //     count=1: 16 > 10 → warning (infeasible)
+  //     count=2: 16 > 20 → no warning (feasible)
+  //     count=3: 16 > 30 → no warning (feasible)
+
+  function makeDurationTask(durationDays: number, rtId: string, rtName: string, hpd = 8) {
+    return {
+      resourceTypeId: rtId,
+      hoursEffort: durationDays * hpd,
+      durationDays,
+      resourceType: { id: rtId, name: rtName, hoursPerDay: hpd },
+    }
+  }
+
+  /** Build a parallel over-load input where:
+   *  - count=1 for rt-dev → infeasible (warning)
+   *  - count=2 or 3 for rt-dev → feasible (no warning)
+   */
+  function parallelOverloadInput(devCount: number): SchedulerInput {
+    const rtDev = makeRt('rt-dev', 'Developer', devCount, 8)
+    const rtFixed = makeRt('rt-fixed', 'Anchor', 1, 8)
+
+    const f1 = makeFeature('pf1', [makeStory('ps1', [
+      makeDurationTask(10, 'rt-fixed', 'Anchor'),
+      makeDurationTask(8, 'rt-dev', 'Developer'),
+    ])])
+    const f2 = makeFeature('pf2', [makeStory('ps2', [
+      makeDurationTask(8, 'rt-dev', 'Developer'),
+    ])])
+    const parallelEpic = makeEpic('pe1', [f1, f2], { featureMode: 'parallel' })
+
+    return {
+      project: { hoursPerDay: 8 },
+      epics: [parallelEpic],
+      resourceTypes: [rtDev, rtFixed],
+      epicDeps: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+      resourceLevel: false,
+    }
+  }
+
+  it('parallel over-allocation: floor eliminates warnings so all scenarios are now feasible', () => {
+    // With the demand floor, the scheduler extends feature durations to fit shared resource
+    // demand. Previously count=1 generated a parallel warning; now the floor prevents it.
+    const input = parallelOverloadInput(1)
+    const result = runOptimiser(input, baseConfig({
+      mode: 'speed',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 3 }],
+        allowRampUp: false,
+      },
+      topN: 10,
+    }))
+
+    // All 3 scenarios evaluated
+    expect(result.searchStats.scenariosEvaluated).toBe(3)
+
+    // Floor ensures demand ≤ capacity for every count — no scenario is infeasible
+    expect(result.infeasibleCount).toBe(0)
+    expect(result.candidates.length).toBe(3)
+
+    // Every returned candidate has no parallel warnings
+    for (const c of result.candidates) {
+      expect(c.metrics.parallelWarningCount).toBe(0)
+    }
+  })
+
+  it('parallel over-allocation: floor extends duration so all scenarios become feasible', () => {
+    // With the demand floor, even count=1 with 3 features sharing rt-dev is feasible
+    // (floor = 24 person-days / (1×5) = 4.8 weeks → capacity = 24 = demand → no warning)
+    const rtDev = makeRt('rt-dev', 'Developer', 1, 8)
+    const rtFixed = makeRt('rt-fixed', 'Anchor', 1, 8)
+    const f1 = makeFeature('pf1', [makeStory('ps1', [
+      makeDurationTask(10, 'rt-fixed', 'Anchor'),
+      makeDurationTask(8, 'rt-dev', 'Developer'),
+    ])])
+    const f2 = makeFeature('pf2', [makeStory('ps2', [makeDurationTask(8, 'rt-dev', 'Developer')])])
+    const f3 = makeFeature('pf3', [makeStory('ps3', [makeDurationTask(8, 'rt-dev', 'Developer')])])
+    const parallelEpic = makeEpic('pe1', [f1, f2, f3], { featureMode: 'parallel' })
+    const input: SchedulerInput = {
+      project: { hoursPerDay: 8 },
+      epics: [parallelEpic],
+      resourceTypes: [rtDev, rtFixed],
+      epicDeps: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+      resourceLevel: false,
+    }
+
+    const result = runOptimiser(input, baseConfig({
+      mode: 'speed',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 2 }],
+        allowRampUp: false,
+      },
+      topN: 5,
+    }))
+
+    // Floor ensures demand ≤ capacity for all counts — all scenarios are feasible
+    expect(result.infeasibleCount).toBe(0)
+    expect(result.candidates.length).toBeGreaterThan(0)
+    expect(result.baseline).toBeDefined()
+    // baseline should also have no parallel warnings
+    expect(result.baseline.metrics.parallelWarningCount).toBe(0)
+  })
+
+  it('parallel over-allocation: baseline is always present regardless of search range', () => {
+    // Range locked to count=1. With floor, count=1 is feasible — baseline has no warnings.
+    // The baseline is always returned even when it's the same as the only candidate.
+    const input = parallelOverloadInput(1)
+
+    const result = runOptimiser(input, baseConfig({
+      mode: 'balanced',
+      constraints: {
+        countRanges: [{ resourceTypeId: 'rt-dev', min: 1, max: 1 }],
+        allowRampUp: false,
+      },
+      topN: 5,
+    }))
+
+    // Baseline must always be returned
+    expect(result.baseline).toBeDefined()
+    expect(result.baseline.resourceTypes.find(r => r.resourceTypeId === 'rt-dev')!.count).toBe(1)
+    // With floor, baseline has no parallel warnings
+    expect(result.baseline.metrics.parallelWarningCount).toBe(0)
+    // count=1 is feasible → 1 candidate returned
+    expect(result.candidates.length).toBe(1)
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -697,5 +954,32 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
 
     expect(res.status).toBe(400)
     expect(res.body.error).toBe('Invalid resourceTypes element')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// minDurationWeeks constraint
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('minDurationWeeks constraint', () => {
+  it('filters all candidates when minDurationWeeks is impossibly high', () => {
+    const input = twoRtInput()
+    const config = baseConfig({
+      mode: 'speed',
+      constraints: {
+        countRanges: [
+          { resourceTypeId: 'rt-dev', min: 1, max: 3 },
+          { resourceTypeId: 'rt-des', min: 1, max: 3 },
+        ],
+        allowRampUp: false,
+        minDurationWeeks: 100_000,
+      },
+      topN: 5,
+    })
+
+    const result = runOptimiser(input, config)
+
+    // No scenario can deliver in 100,000+ weeks so all are filtered
+    expect(result.candidates.length).toBe(0)
   })
 })

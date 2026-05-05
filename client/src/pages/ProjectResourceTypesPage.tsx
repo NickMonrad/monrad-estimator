@@ -141,8 +141,10 @@ export default function ProjectResourceTypesPage() {
     queryFn: () => api.get(`/projects/${id}`).then(r => r.data),
   })
 
+  const resourceTypesQueryKey = ['resource-types', id] as const
+
   const { data: resourceTypes = [], isLoading } = useQuery<ProjectResourceType[]>({
-    queryKey: ['project-resource-types', id],
+    queryKey: resourceTypesQueryKey,
     queryFn: () => api.get(`/projects/${id}/resource-types`).then(r => r.data),
   })
 
@@ -152,7 +154,7 @@ export default function ProjectResourceTypesPage() {
     enabled: showAddModal,
   })
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['project-resource-types', id] })
+  const invalidate = () => qc.invalidateQueries({ queryKey: resourceTypesQueryKey })
 
   const updateType = useMutation({
     mutationFn: ({ rtId, data }: { rtId: string; data: EditRowFormState }) =>

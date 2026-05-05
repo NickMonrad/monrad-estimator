@@ -35,6 +35,7 @@ export interface SchedulerFeature {
   id: string
   order: number
   isActive: boolean | null
+  timelineStartWeek: number | null
   userStories: SchedulerStory[]
   /** FeatureDependency rows where this feature is the dependent */
   dependencies: Array<{ featureId: string; dependsOnId: string }>
@@ -86,6 +87,8 @@ export interface SchedulerInput {
   manualStoryEntries: Array<{ storyId: string; startWeek: number }>
   /** When true, run the resource-levelling simulation */
   resourceLevel: boolean
+  /** Cap parallelism within a single feature (for demand flattening). Optional. */
+  maxParallelismPerFeature?: number
 }
 
 export interface ParallelWarning {
@@ -135,24 +138,33 @@ export function effectiveAllocationPct(
     const wEnd = nr.allocationEndWeek ?? nr.endWeek ?? Infinity
     return week >= wStart && week <= wEnd ? nr.allocationPercent : 0
   }
+  if (nr.allocationMode === 'CAPACITY_PLAN') return nr.allocationPercent
   // EFFORT (T&M) — no fixed allocation; full capacity available
   return 100
 }
 
-/** Compute weekly capacity (hours) for a resource type, accounting for named resource availability. */
+/**
+ * Compute weekly capacity (hours) for a resource type.
+ *
+ * `count` is treated as the true effective headcount. Named resources are
+ * allocation/availability overlays for known team members; any slots beyond
+ * `namedResources.length` are treated as full-availability phantom (T&M) staff.
+ *
+ * weeklyHours = Σ namedResource(active this week, allocation %) +
+ *               max(0, count - namedResources.length) × hpd × 5
+ */
 export function getWeeklyCapacity(
   rt: SchedulerResourceType,
   week: number,
   defaultHoursPerDay: number,
 ): number {
   const hoursPerDay = rt.hoursPerDay ?? defaultHoursPerDay
-  if (rt.namedResources.length === 0) {
-    // No named resources — use aggregate count (existing behaviour)
-    return rt.count * hoursPerDay * 5
-  }
-  // Sum capacity from named resources active this week
+  // Defensive: real Prisma queries always return [] (include: { namedResources: true }),
+  // but some test mocks omit the field entirely. Treat undefined as empty.
+  const namedResources = rt.namedResources ?? []
   let totalHours = 0
-  for (const nr of rt.namedResources) {
+  // Named resources contribute their allocation-respecting capacity for this week
+  for (const nr of namedResources) {
     const start = nr.startWeek ?? 0       // null = project start (week 0)
     const end = nr.endWeek ?? Infinity     // null = project end
     if (week >= start && week <= end) {
@@ -160,6 +172,9 @@ export function getWeeklyCapacity(
       totalHours += (pct / 100) * hoursPerDay * 5
     }
   }
+  // Phantom slots: any count slots beyond namedResources are full-time T&M staff
+  const phantomSlots = Math.max(0, rt.count - namedResources.length)
+  totalHours += phantomSlots * hoursPerDay * 5
   return totalHours
 }
 
@@ -256,16 +271,14 @@ export function computeParallelWarnings(
   }
 
   const featureById = new Map(allFeatures.map(f => [f.id, f]))
-  const rtCountMap = new Map(allResourceTypes.map(rt => [rt.id, rt.count]))
   const rtMap = new Map(allResourceTypes.map(rt => [rt.id, rt]))
 
   for (const [epicId, { epicName, featureIds, startWeek, endWeek }] of parallelEpics) {
     if (featureIds.length < 2) continue
-    const epicSpanDays = (endWeek - startWeek) * 5
 
     const features = featureIds.map(id => featureById.get(id)).filter((f): f is NonNullable<typeof f> => f !== undefined)
 
-    const demandMap = new Map<string, { name: string; days: number; count: number }>()
+    const demandMap = new Map<string, { name: string; days: number }>()
     for (const feature of features) {
       for (const story of feature.userStories) {
         if (story.isActive === false) continue
@@ -277,7 +290,6 @@ export function computeParallelWarnings(
             demandMap.set(rtId, {
               name: task.resourceType?.name ?? 'Unassigned',
               days: 0,
-              count: task.resourceTypeId ? (rtCountMap.get(task.resourceTypeId) ?? 1) : 1,
             })
           }
           demandMap.get(rtId)!.days += days
@@ -285,19 +297,18 @@ export function computeParallelWarnings(
       }
     }
 
-    for (const [rtId, { name, days, count }] of demandMap) {
+    for (const [rtId, { name, days }] of demandMap) {
       const rt = rtMap.get(rtId)
-      let capacityDays: number
-      if (rt && rt.namedResources && rt.namedResources.length > 0) {
-        capacityDays = 0
+      // Capacity over the epic span: integrate getWeeklyCapacity across the span.
+      // For unknown RTs (no entry in rtMap, e.g. _unassigned), treat capacity as 0.
+      let capacityDays = 0
+      if (rt) {
         const hpd = rt.hoursPerDay ?? fallbackHoursPerDay
         for (let w = Math.floor(startWeek); w < Math.ceil(endWeek); w++) {
           const overlap = Math.min(w + 1, endWeek) - Math.max(w, startWeek)
           if (overlap <= 0) continue
           capacityDays += (getWeeklyCapacity(rt, w, fallbackHoursPerDay) / hpd) * overlap
         }
-      } else {
-        capacityDays = count * epicSpanDays
       }
       if (days > capacityDays) {
         warnings.push({
@@ -345,6 +356,49 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
   )
   const featureMap = new Map(allFeatures.map(f => [f.id, f]))
 
+  // ── Precompute parallel demand floor per epic ─────────────────────────────
+  // For parallel epics with 2+ features sharing an RT, the features cannot all
+  // complete faster than totalDemand / (count × 5) weeks — raising count adds
+  // capacity but also shortens durations, keeping net capacity flat. This floor
+  // ensures featureDurationWeeks reflects real shared-resource contention.
+  const parallelEpicMinSpan = new Map<string, number>()
+
+  for (const epic of epics) {
+    if (epic.featureMode !== 'parallel') continue
+    const activeFeatures = epic.features.filter(f => f.isActive !== false)
+    if (activeFeatures.length < 2) continue
+
+    // Collect total demand days per RT across all features in this epic
+    const totalDemandByRt = new Map<string, number>()
+    for (const feature of activeFeatures) {
+      const tasks = feature.userStories
+        .filter(s => s.isActive !== false)
+        .flatMap(s => s.tasks)
+      for (const task of tasks) {
+        if (!task.resourceTypeId) continue
+        const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+        const demand = task.durationDays ?? (task.hoursEffort / hpd)
+        totalDemandByRt.set(
+          task.resourceTypeId,
+          (totalDemandByRt.get(task.resourceTypeId) ?? 0) + demand,
+        )
+      }
+    }
+
+    // Floor weeks = max over all RTs of (totalDemand / (count × 5))
+    let minSpan = 0
+    for (const [rtId, totalDemand] of totalDemandByRt) {
+      const count = rtCountMap.get(rtId) ?? 1
+      const weeklyCapacityDays = count * 5
+      const floorWeeks = totalDemand / weeklyCapacityDays
+      if (floorWeeks > minSpan) minSpan = floorWeeks
+    }
+
+    if (minSpan > 0) {
+      parallelEpicMinSpan.set(epic.id, minSpan)
+    }
+  }
+
   // ── Helper: duration in weeks for a feature ───────────────────────────────
   function featureDurationWeeks(feature: typeof allFeatures[0]): number {
     const allTasks = feature.userStories.filter(s => s.isActive !== false).flatMap(s => s.tasks)
@@ -367,7 +421,14 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       const days = personDays / count
       if (days > maxDays) maxDays = days
     }
-    return Math.max(0.2, maxDays / 5)
+    const individualResult = Math.max(0.2, maxDays / 5)
+
+    // Apply parallel demand floor if this feature belongs to a parallel epic
+    const floor = parallelEpicMinSpan.get(feature.epic.id)
+    if (floor !== undefined) {
+      return Math.max(individualResult, floor)
+    }
+    return individualResult
   }
 
   // ── Kahn's topological sort over features ─────────────────────────────────
@@ -480,7 +541,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       startWeeks.set(fId, sw)
       finishWeeks.set(fId, sw + dur)
     } else {
-      let earliest = epic.timelineStartWeek ?? 0
+      let earliest = f.timelineStartWeek ?? epic.timelineStartWeek ?? 0
       for (const predId of predecessors.get(fId) ?? []) {
         const predFinish = finishWeeks.get(predId) ?? 0
         if (predFinish > earliest) earliest = predFinish
@@ -507,7 +568,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     }
     for (const f of allFeatures) {
       if (startWeeks.has(f.id)) continue
-      let earliest = f.epic.timelineStartWeek ?? 0
+      let earliest = f.timelineStartWeek ?? f.epic.timelineStartWeek ?? 0
       for (const prevEpic of sortedEpics) {
         if (prevEpic.order >= f.epic.order) break
         const prevFinish = epicMaxFinish.get(prevEpic.id) ?? 0
@@ -573,7 +634,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       for (const fId of unfinished) {
         if (simStart.has(fId)) continue
         const f = featureMap.get(fId)!
-        const epicStart = f.epic.timelineStartWeek ?? 0
+        const epicStart = f.timelineStartWeek ?? f.epic.timelineStartWeek ?? 0
         if (t < epicStart) continue
         const predsAllDone = (predecessors.get(fId) ?? []).every(predId => {
           const done = simDone.get(predId)

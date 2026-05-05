@@ -179,6 +179,7 @@ export default function CommercialTab({
                               <option value="EFFORT">T&M (effort only)</option>
                               <option value="TIMELINE">Timeline window</option>
                               <option value="FULL_PROJECT">Full project</option>
+                              <option value="CAPACITY_PLAN">Capacity Plan</option>
                             </select>
                           </div>
                           <div>

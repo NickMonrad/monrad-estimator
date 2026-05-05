@@ -130,6 +130,299 @@ describe('GET /api/projects/:projectId/timeline', () => {
     // durationWeeks=2 => endDate = +14 days
     expect(entry.endDate).toBe('2026-03-15T00:00:00.000Z')
   })
+
+  it('derives CAPACITY_PLAN weekly capacity and named-resource windows from the active plan when persisted windows are stale', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...mockProject,
+      bufferWeeks: 4,
+      weeklyDemandCache: {
+        'Security|4': 2,
+        'Security|5': 2,
+      },
+    } as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
+      id: 'entry-security',
+      projectId: 'proj-1',
+      featureId: 'feat-security',
+      startWeek: 4,
+      durationWeeks: 8,
+      isManual: false,
+      feature: {
+        id: 'feat-security',
+        name: 'Security Work',
+        order: 0,
+        isActive: true,
+        epic: {
+          id: 'epic-1',
+          name: 'Security',
+          order: 0,
+          isActive: true,
+          featureMode: 'SEQUENTIAL',
+          scheduleMode: 'AUTO',
+          timelineStartWeek: null,
+        },
+        userStories: [],
+      },
+    }] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-security',
+      name: 'Security',
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: 8,
+      allocationMode: 'CAPACITY_PLAN',
+      namedResources: [
+        {
+          id: 'nr-security',
+          name: 'Principal Consultant - Security',
+          startWeek: null,
+          endWeek: null,
+          allocationPct: 100,
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      ],
+    }] as any)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue({
+      id: 'plan-1',
+      periods: [
+        { periodIndex: 0, startWeek: 0, endWeek: 4, entries: [{ resourceTypeId: 'rt-security', headcount: 0 }] },
+        { periodIndex: 1, startWeek: 4, endWeek: 8, entries: [{ resourceTypeId: 'rt-security', headcount: 1 }] },
+        { periodIndex: 2, startWeek: 8, endWeek: 12, entries: [{ resourceTypeId: 'rt-security', headcount: 1 }] },
+        { periodIndex: 3, startWeek: 12, endWeek: 16, entries: [{ resourceTypeId: 'rt-security', headcount: 0 }] },
+      ],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const securityCapacity = res.body.weeklyCapacity
+      .filter((row: any) => row.resourceTypeName === 'Security')
+      .reduce((acc: Record<number, number>, row: any) => ({ ...acc, [row.week]: row.capacityDays }), {})
+
+    expect(securityCapacity[0]).toBe(0)
+    expect(securityCapacity[4]).toBe(5)
+    expect(securityCapacity[11]).toBe(5)
+    expect(securityCapacity[12]).toBe(0)
+
+    expect(res.body.namedResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        resourceTypeName: 'Security',
+        name: 'Principal Consultant - Security',
+        allocationMode: 'CAPACITY_PLAN',
+        startWeek: 4,
+        endWeek: 11,
+      }),
+    ]))
+  })
+
+  it('derives fractional weekly capacity from active CAPACITY_PLAN periods for low-demand roles', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...mockProject,
+      bufferWeeks: 0,
+      weeklyDemandCache: {
+        'Security|0': 1.04,
+        'Security|15': 1.04,
+      },
+    } as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
+      id: 'entry-security',
+      projectId: 'proj-1',
+      featureId: 'feat-security',
+      startWeek: 0,
+      durationWeeks: 16,
+      isManual: false,
+      feature: {
+        id: 'feat-security',
+        name: 'Security Work',
+        order: 0,
+        isActive: true,
+        epic: {
+          id: 'epic-1',
+          name: 'Security',
+          order: 0,
+          isActive: true,
+          featureMode: 'SEQUENTIAL',
+          scheduleMode: 'AUTO',
+          timelineStartWeek: null,
+        },
+        userStories: [],
+      },
+    }] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-security',
+      name: 'Security',
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: 8,
+      allocationMode: 'CAPACITY_PLAN',
+      namedResources: [],
+    }] as any)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue({
+      id: 'plan-1',
+      periods: [
+        { periodIndex: 0, startWeek: 0, endWeek: 16, entries: [{ resourceTypeId: 'rt-security', headcount: 0.25 }] },
+      ],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const securityCapacity = res.body.weeklyCapacity
+      .filter((row: any) => row.resourceTypeName === 'Security')
+      .reduce((acc: Record<number, number>, row: any) => ({ ...acc, [row.week]: row.capacityDays }), {})
+
+    expect(securityCapacity[0]).toBe(1.3)
+    expect(securityCapacity[15]).toBe(1.3)
+
+    expect(res.body.namedResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        resourceTypeName: 'Security',
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPct: 25,
+        startWeek: 0,
+        endWeek: 15,
+      }),
+    ]))
+  })
+
+  it('uses materialized CAPACITY_PLAN split capacity for parallel warnings', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...mockProject,
+      bufferWeeks: 0,
+    } as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([
+      {
+        id: 'entry-security-1',
+        projectId: 'proj-1',
+        featureId: 'feat-security-1',
+        startWeek: 0,
+        durationWeeks: 5,
+        isManual: false,
+        feature: {
+          id: 'feat-security-1',
+          name: 'Security Stream A',
+          order: 0,
+          isActive: true,
+          epic: {
+            id: 'epic-security',
+            name: 'Security',
+            order: 0,
+            isActive: true,
+            featureMode: 'parallel',
+            scheduleMode: 'AUTO',
+            timelineStartWeek: null,
+          },
+          userStories: [
+            {
+              isActive: true,
+              tasks: [
+                {
+                  resourceTypeId: 'rt-security',
+                  hoursEffort: 140,
+                  durationDays: null,
+                  resourceType: { id: 'rt-security', name: 'Security', hoursPerDay: 8 },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        id: 'entry-security-2',
+        projectId: 'proj-1',
+        featureId: 'feat-security-2',
+        startWeek: 0,
+        durationWeeks: 5,
+        isManual: false,
+        feature: {
+          id: 'feat-security-2',
+          name: 'Security Stream B',
+          order: 1,
+          isActive: true,
+          epic: {
+            id: 'epic-security',
+            name: 'Security',
+            order: 0,
+            isActive: true,
+            featureMode: 'parallel',
+            scheduleMode: 'AUTO',
+            timelineStartWeek: null,
+          },
+          userStories: [
+            {
+              isActive: true,
+              tasks: [
+                {
+                  resourceTypeId: 'rt-security',
+                  hoursEffort: 140,
+                  durationDays: null,
+                  resourceType: { id: 'rt-security', name: 'Security', hoursPerDay: 8 },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-security',
+      name: 'Security',
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: 8,
+      allocationMode: 'CAPACITY_PLAN',
+      namedResources: [],
+    }] as any)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue({
+      id: 'plan-1',
+      periods: [
+        { periodIndex: 0, startWeek: 0, endWeek: 5, entries: [{ resourceTypeId: 'rt-security', headcount: 1.5 }] },
+      ],
+    } as any)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([])
+    vi.mocked(prisma.featureDependency.findMany).mockResolvedValue([])
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([])
+    vi.mocked(prisma.storyDependency.findMany).mockResolvedValue([])
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.parallelWarnings).toEqual([])
+
+    const securityCapacity = res.body.weeklyCapacity
+      .filter((row: any) => row.resourceTypeName === 'Security')
+      .reduce((acc: Record<number, number>, row: any) => ({ ...acc, [row.week]: row.capacityDays }), {})
+
+    expect(securityCapacity[0]).toBe(7.5)
+    expect(securityCapacity[4]).toBe(7.5)
+    expect(res.body.namedResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        resourceTypeName: 'Security',
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPct: 100,
+        startWeek: 0,
+        endWeek: 4,
+      }),
+      expect.objectContaining({
+        resourceTypeName: 'Security',
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPct: 50,
+        startWeek: 0,
+        endWeek: 4,
+      }),
+    ]))
+  })
 })
 
 describe('POST /api/projects/:projectId/timeline/schedule', () => {
@@ -572,7 +865,7 @@ describe('getWeeklyCapacity', () => {
     expect(getWeeklyCapacity(rt, 4, 8)).toBe(40)
   })
 
-  it('named resources override count', () => {
+  it('count > namedResources.length: phantom slots fill the remainder', () => {
     const rt = makeRT({
       count: 5,
       namedResources: [
@@ -580,7 +873,8 @@ describe('getWeeklyCapacity', () => {
         makeNR({ id: 'nr2', name: 'Dev 2' }),
       ],
     })
-    // Should use 2 named resources, not count=5 → 2 * 8 * 5 = 80
-    expect(getWeeklyCapacity(rt, 0, 8)).toBe(80)
+    // 2 named (100%) + 3 phantom slots → effective headcount = 5 = count
+    // Total = 5 * 8 * 5 = 200
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(200)
   })
 })

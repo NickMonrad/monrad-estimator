@@ -21,6 +21,7 @@ import {
   type SchedulerInput,
   type SchedulerResourceType,
 } from '../lib/scheduler.js'
+import { runSAPlanner } from '../lib/sa-planner.js'
 import {
   runOptimiser,
   type OptimiserConfig,
@@ -105,9 +106,10 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
-  // Expected body: { resourceTypes: [{ resourceTypeId, count, suggestedStartWeek }] }
-  const { resourceTypes: candidateRTs } = req.body as {
+  // Expected body: { resourceTypes: [{ resourceTypeId, count, suggestedStartWeek }], staggerEpics?: boolean }
+  const { resourceTypes: candidateRTs, staggerEpics } = req.body as {
     resourceTypes: Array<{ resourceTypeId: string; count: number; suggestedStartWeek: number }>
+    staggerEpics?: boolean
   }
   if (!Array.isArray(candidateRTs) || candidateRTs.length === 0) {
     res.status(400).json({ error: 'resourceTypes array is required' }); return
@@ -215,10 +217,76 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   })
 
-  res.status(200).json({
+  // ── 4. Optional: stagger epics to level demand ────────────────────────────
+  let levellingResult: { epicStartWeeks: Map<string, number>; featureStartWeeks: Map<string, number>; totalDeliveryWeeks: number; peakUtilisationPct: number } | null = null
+
+  if (staggerEpics) {
+    // Re-load scheduler input (counts/NRs are now updated in DB)
+    const updatedInput = await loadSchedulerInput(projectId, project.hoursPerDay)
+
+    // Use SA planner for optimised staggering
+    const saResult = runSAPlanner(updatedInput, {
+      targetDurationWeeks: updatedInput.epics.length * 13, // reasonable default
+      maxParallelismPerFeature: 2,
+    })
+    levellingResult = {
+      epicStartWeeks: saResult.epicStartWeeks,
+      featureStartWeeks: saResult.featureStartWeeks,
+      totalDeliveryWeeks: saResult.totalDeliveryWeeks,
+      peakUtilisationPct: saResult.peakUtilisationPct,
+    }
+
+    // Persist levelled start weeks
+    await Promise.all(
+      Array.from(levellingResult.epicStartWeeks.entries()).map(([epicId, startWeek]) =>
+        prisma.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
+      )
+    )
+
+    // Re-run scheduler with levelled start weeks and re-materialise
+    const levelledEpics = updatedInput.epics.map(e => ({
+      ...e,
+      timelineStartWeek: levellingResult!.epicStartWeeks.get(e.id) ?? e.timelineStartWeek,
+    }))
+
+    const { featureSchedule: lfs, storySchedule: lss } = runScheduler({
+      ...updatedInput,
+      epics: levelledEpics,
+    })
+
+    await prisma.$transaction(async tx => {
+      await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
+      const fRows = lfs
+        .filter(e => !e.isManual)
+        .map(e => ({ projectId, featureId: e.featureId, startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: false }))
+      if (fRows.length > 0) await tx.timelineEntry.createMany({ data: fRows, skipDuplicates: true })
+
+      await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
+      const sRows = lss
+        .filter(e => !e.isManual)
+        .map(e => ({ projectId, storyId: e.storyId, startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: false }))
+      if (sRows.length > 0) await tx.storyTimelineEntry.createMany({ data: sRows, skipDuplicates: true })
+    })
+  }
+
+  const responseBody: {
+    message: string
+    snapshotId: string
+    levellingResult?: { epicStartWeeks: Record<string, number>; totalDeliveryWeeks: number; peakUtilisationPct: number }
+  } = {
     message: 'Optimiser scenario applied successfully',
     snapshotId: snap.id,
-  })
+  }
+
+  if (levellingResult) {
+    responseBody.levellingResult = {
+      epicStartWeeks: Object.fromEntries(levellingResult.epicStartWeeks),
+      totalDeliveryWeeks: levellingResult.totalDeliveryWeeks,
+      peakUtilisationPct: levellingResult.peakUtilisationPct,
+    }
+  }
+
+  res.status(200).json(responseBody)
 }))
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,6 +306,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       allowRampUp?: boolean
       maxBudget?: number
       maxDurationWeeks?: number
+      minDurationWeeks?: number
     }
     /** JSON object: { [resourceTypeId]: dayRate } */
     dayRates?: Record<string, number>
@@ -293,6 +362,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       allowRampUp: body.constraints?.allowRampUp ?? false,
       maxBudget: body.constraints?.maxBudget,
       maxDurationWeeks: body.constraints?.maxDurationWeeks,
+      minDurationWeeks: body.constraints?.minDurationWeeks,
     },
     dayRates,
     topN,
@@ -317,6 +387,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     candidates: result.candidates.map(serialiseCandidate),
     baseline: serialiseCandidate(result.baseline),
     searchStats: result.searchStats,
+    infeasibleCount: result.infeasibleCount,
     /** Lookup table: id → name for gapWeeksByResourceTypeId consumers */
     resourceTypes: schedulerInput.resourceTypes.map(rt => ({ id: rt.id, name: rt.name })),
   })

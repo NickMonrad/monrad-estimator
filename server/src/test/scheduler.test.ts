@@ -12,12 +12,14 @@ import {
   runScheduler,
   getWeeklyCapacity,
   effectiveAllocationPct,
+  computeParallelWarnings,
   type SchedulerInput,
   type SchedulerEpic,
   type SchedulerFeature,
   type SchedulerStory,
   type SchedulerResourceType,
 } from '../lib/scheduler.js'
+import { deriveSlotSegments } from '../routes/squadPlan.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers to build minimal input objects
@@ -42,7 +44,7 @@ function makeFeature(
   order = 0,
   deps: Array<{ featureId: string; dependsOnId: string }> = [],
 ): SchedulerFeature {
-  return { id, order, isActive: null, userStories: stories, dependencies: deps }
+  return { id, order, isActive: null, timelineStartWeek: null, userStories: stories, dependencies: deps }
 }
 
 function makeEpic(
@@ -112,7 +114,7 @@ describe('getWeeklyCapacity', () => {
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(3 * 8 * 5)
   })
 
-  it('named resources: sums capacity from active members', () => {
+  it('named resources: sums capacity from active members + phantom slots from count', () => {
     const rt: SchedulerResourceType = {
       id: 'rt1', name: 'Dev', count: 2, hoursPerDay: 8,
       namedResources: [
@@ -120,8 +122,46 @@ describe('getWeeklyCapacity', () => {
         { id: 'nr2', name: 'Bob', startWeek: 5, endWeek: 10, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
       ],
     }
+    // count=2, namedResources.length=2 → 0 phantom slots; only named contribute.
     expect(getWeeklyCapacity(rt, 4, 8)).toBe(1 * 8 * 5)   // only Alice active
     expect(getWeeklyCapacity(rt, 5, 8)).toBe(2 * 8 * 5)   // both active
+  })
+
+  it('count > namedResources.length: phantom slots fill the remainder', () => {
+    // 2 named @ 100%, count=4 → 2 named + 2 phantom = 4 × hpd × 5 hours/week
+    const rt: SchedulerResourceType = {
+      id: 'rt1', name: 'Dev', count: 4, hoursPerDay: 8,
+      namedResources: [
+        { id: 'nr1', name: 'Alice', startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+        { id: 'nr2', name: 'Bob',   startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      ],
+    }
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(4 * 8 * 5)
+  })
+
+  it('count < namedResources.length: phantom slots clamp at 0; all named still contribute', () => {
+    // 3 named @ 100%, count=2 → no negative phantom; capacity = 3 named × hpd × 5
+    const rt: SchedulerResourceType = {
+      id: 'rt1', name: 'Dev', count: 2, hoursPerDay: 8,
+      namedResources: [
+        { id: 'nr1', name: 'Alice',   startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+        { id: 'nr2', name: 'Bob',     startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+        { id: 'nr3', name: 'Charlie', startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      ],
+    }
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(3 * 8 * 5)
+  })
+
+  it('mixed allocation: 2 named at 50% + 1 phantom from count=3, hpd=8', () => {
+    // Named: 2 × 0.5 × 8 × 5 = 40; Phantom: max(0, 3-2) × 8 × 5 = 40 → total 80
+    const rt: SchedulerResourceType = {
+      id: 'rt1', name: 'Dev', count: 3, hoursPerDay: 8,
+      namedResources: [
+        { id: 'nr1', name: 'Alice', startWeek: 0, endWeek: null, allocationPct: 50, allocationMode: 'FULL_PROJECT', allocationPercent: 50, allocationStartWeek: null, allocationEndWeek: null },
+        { id: 'nr2', name: 'Bob',   startWeek: 0, endWeek: null, allocationPct: 50, allocationMode: 'FULL_PROJECT', allocationPercent: 50, allocationStartWeek: null, allocationEndWeek: null },
+      ],
+    }
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(80)
   })
 })
 
@@ -348,18 +388,59 @@ describe('runScheduler', () => {
   })
 
   // ── Parallel warnings ────────────────────────────────────────────────────────
-  it('parallel epic with insufficient capacity: generates parallel warning', () => {
+  it('parallel epic with shared RT: floor extends feature durations instead of warning', () => {
+    // With the demand floor, the scheduler extends feature durations to accommodate
+    // shared resource contention rather than generating a warning.
     const rt = makeRt('rt1', 'Dev', 1)  // only 1 dev
-    // Two features in a parallel epic needing 2× capacity
+    // Two features in a parallel epic: total demand = 5+5 = 10 days @ count=1
+    // floor = 10/(1×5) = 2 weeks; individual = 1 week → floored to 2 weeks
     const f1 = makeFeature('f1', [makeStory('s1', [makeTask(40, 'rt1', 'Dev')])], 0)
     const f2 = makeFeature('f2', [makeStory('s2', [makeTask(40, 'rt1', 'Dev')])], 1)
     const epic = makeEpic('e1', [f1, f2], { featureMode: 'parallel' })
 
     const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [rt] }))
 
-    expect(result.parallelWarnings.length).toBeGreaterThan(0)
-    expect(result.parallelWarnings[0].epicId).toBe('e1')
-    expect(result.parallelWarnings[0].resourceTypeName).toBe('Dev')
+    // Floor ensures each feature is at least 2 weeks
+    for (const entry of result.featureSchedule) {
+      expect(entry.durationWeeks).toBeGreaterThanOrEqual(2)
+    }
+    // No parallel warning because floor guarantees capacity ≥ demand
+    expect(result.parallelWarnings.length).toBe(0)
+  })
+
+  // ── Parallel warnings honour count beyond namedResources (Bug 1 follow-up) ─
+  it('computeParallelWarnings: increasing count past namedResources.length reduces capacity shortfall', () => {
+    // Build inputs for computeParallelWarnings directly so we control the span.
+    const taskRT = { id: 'rt1', name: 'Dev', hoursPerDay: 8 }
+    const allFeatures = [
+      { id: 'f1', userStories: [{ isActive: null as boolean | null, tasks: [{ resourceTypeId: 'rt1', resourceType: taskRT, hoursEffort: 40, durationDays: null as number | null }] }] },
+      { id: 'f2', userStories: [{ isActive: null as boolean | null, tasks: [{ resourceTypeId: 'rt1', resourceType: taskRT, hoursEffort: 40, durationDays: null as number | null }] }] },
+    ]
+    // Both features run in parallel from week 0 to week 1 (1-week span pinned).
+    const epicMeta = { id: 'e1', name: 'e1', featureMode: 'parallel' }
+    const entries = [
+      { featureId: 'f1', startWeek: 0, durationWeeks: 1, feature: { epic: epicMeta } },
+      { featureId: 'f2', startWeek: 0, durationWeeks: 1, feature: { epic: epicMeta } },
+    ]
+
+    // 1 named resource only, count=1 → capacity = 1 × 8 × 5 = 40h = 5 days over 1-week span.
+    // Demand = 10 days → warning expected.
+    const tightRt: SchedulerResourceType = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [
+        { id: 'nr1', name: 'Alice', startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      ],
+    }
+    const tightWarnings = computeParallelWarnings(8, entries, allFeatures, [tightRt])
+    expect(tightWarnings.length).toBe(1)
+    expect(tightWarnings[0].demandDays).toBe(10)
+    expect(tightWarnings[0].capacityDays).toBe(5)
+
+    // Same RT, count=2 → 1 named + 1 phantom → 80h/week = 10 days over span. Demand = 10 days. No warning.
+    const widerRt: SchedulerResourceType = { ...tightRt, count: 2 }
+    expect(getWeeklyCapacity(widerRt, 0, 8)).toBe(80)
+    const widerWarnings = computeParallelWarnings(8, entries, allFeatures, [widerRt])
+    expect(widerWarnings.length).toBe(0)
   })
 
   // ── Resource-levelling: consumption map populated ────────────────────────────
@@ -419,5 +500,405 @@ describe('runScheduler', () => {
     const entry2 = result.featureSchedule.find(e => e.featureId === 'f2')!
     // The timelineStartWeek anchor must be respected; inter-epic chaining is skipped
     expect(entry2.startWeek).toBe(5)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parallel demand floor tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parallel demand floor', () => {
+  it('3 features sharing one RT produce durations floored to the shared demand span', () => {
+    // 3 features, each with 30 person-days of effort for rt1 (count=2, hpd=8)
+    // Individual duration without floor: 30/2/5 = 3 weeks each
+    // Floor: totalDemand=90, weeklyCapacity=2×5=10 days/week → floor=9 weeks
+    // Each feature duration should be floored to 9 weeks
+    const rt = makeRt('rt1', 'Dev', 2)
+
+    function makeParallelFeature(id: string) {
+      // 30 person-days = 30 × 8 = 240 hours
+      return makeFeature(id, [makeStory(`s-${id}`, [makeTask(240, 'rt1', 'Dev')])])
+    }
+
+    const epic = makeEpic('e1', [
+      makeParallelFeature('f1'),
+      makeParallelFeature('f2'),
+      makeParallelFeature('f3'),
+    ], { featureMode: 'parallel' })
+
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [rt] }))
+
+    for (const entry of result.featureSchedule) {
+      expect(entry.durationWeeks).toBeGreaterThanOrEqual(9)
+    }
+    // Epic span (all features run in parallel from same start) should be >= 9 weeks
+    const maxEnd = Math.max(...result.featureSchedule.map(e => e.startWeek + e.durationWeeks))
+    const minStart = Math.min(...result.featureSchedule.map(e => e.startWeek))
+    expect(maxEnd - minStart).toBeGreaterThanOrEqual(9)
+  })
+
+  it('higher count reduces the floor proportionally', () => {
+    // Same 3×30 person-days setup but count=3
+    // Floor: totalDemand=90, weeklyCapacity=3×5=15 days/week → floor=6 weeks
+    const rt = makeRt('rt1', 'Dev', 3)
+
+    function makeParallelFeature(id: string) {
+      return makeFeature(id, [makeStory(`s-${id}`, [makeTask(240, 'rt1', 'Dev')])])
+    }
+
+    const epic = makeEpic('e1', [
+      makeParallelFeature('f1'),
+      makeParallelFeature('f2'),
+      makeParallelFeature('f3'),
+    ], { featureMode: 'parallel' })
+
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [rt] }))
+
+    for (const entry of result.featureSchedule) {
+      expect(entry.durationWeeks).toBeGreaterThanOrEqual(6)
+    }
+  })
+
+  it('single feature parallel epic has no floor adjustment', () => {
+    // Only 1 feature — no contention, so no floor should be applied
+    // count=2, demand=30 person-days → individual: 30/2/5 = 3 weeks
+    const rt = makeRt('rt1', 'Dev', 2)
+    const feature = makeFeature('f1', [makeStory('s1', [makeTask(240, 'rt1', 'Dev')])])
+    const epic = makeEpic('e1', [feature], { featureMode: 'parallel' })
+
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [rt] }))
+
+    const entry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    // Individual calc: 30 days / 2 / 5 = 3 weeks; no floor boost expected
+    expect(entry.durationWeeks).toBeCloseTo(3, 1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Squad-plan slot-segment logic (mirrors the apply-route algorithm)
+//
+// These tests validate that the segmented derivation used in the apply route
+// produces the correct startWeek/endWeek per named resource, and that
+// getWeeklyCapacity then reflects per-period headcount changes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Build a SchedulerResourceType with NRs whose windows match the given segments. */
+function rtFromSlotSegments(
+  id: string,
+  name: string,
+  count: number,
+   slotSegments: Array<{ startWeek: number; endWeek: number }>,
+  hpd = 8,
+): SchedulerResourceType {
+  return {
+    id, name, count, hoursPerDay: hpd,
+    namedResources: slotSegments.map((w, i) => ({
+      id: `nr-${i + 1}`,
+      name: `${name} ${i + 1}`,
+      startWeek: w.startWeek,
+      endWeek:   w.endWeek,
+      allocationPct: 100,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })),
+  }
+}
+
+function toWindows(segments: ReturnType<typeof deriveSlotSegments>) {
+  return segments.map(({ startWeek, endWeek }) => ({ startWeek, endWeek }))
+}
+
+describe('squad-plan slot-segment derivation → getWeeklyCapacity', () => {
+  // Ramp-up scenario: 2 → 3 → 4 headcount across 3 periods (weeks 0-3, 4-7, 8-11)
+  it('monotonic ramp-up: capacity increases each period', () => {
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 3,  headcount: 2 },
+      { periodIndex: 1, startWeek: 4, endWeek: 7,  headcount: 3 },
+      { periodIndex: 2, startWeek: 8, endWeek: 11, headcount: 4 },
+    ]
+    const windows = toWindows(deriveSlotSegments(periods))
+    // Slot 1 & 2 start at week 0 (always active)
+    expect(windows[0]).toEqual({ startWeek: 0, endWeek: 11 })
+    expect(windows[1]).toEqual({ startWeek: 0, endWeek: 11 })
+    // Slot 3 only starts at period 1 (week 4)
+    expect(windows[2]).toEqual({ startWeek: 4, endWeek: 11 })
+    // Slot 4 only starts at period 2 (week 8)
+    expect(windows[3]).toEqual({ startWeek: 8, endWeek: 11 })
+
+    const rt = rtFromSlotSegments('rt1', 'Dev', 4, windows)
+    // count=4, namedResources.length=4 → no phantom slots
+    expect(getWeeklyCapacity(rt, 0,  8)).toBe(2 * 8 * 5)  // P0: slots 1-2 active
+    expect(getWeeklyCapacity(rt, 4,  8)).toBe(3 * 8 * 5)  // P1: slots 1-3 active
+    expect(getWeeklyCapacity(rt, 8,  8)).toBe(4 * 8 * 5)  // P2: slots 1-4 active
+    expect(getWeeklyCapacity(rt, 11, 8)).toBe(4 * 8 * 5)  // P2 end: still 4 active
+  })
+
+  // Ramp-down scenario: 4 → 2 → 1 headcount
+  it('monotonic ramp-down: capacity decreases each period', () => {
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 3,  headcount: 4 },
+      { periodIndex: 1, startWeek: 4, endWeek: 7,  headcount: 2 },
+      { periodIndex: 2, startWeek: 8, endWeek: 11, headcount: 1 },
+    ]
+    const windows = toWindows(deriveSlotSegments(periods))
+    // Slot 1 is active through all periods
+    expect(windows[0]).toEqual({ startWeek: 0, endWeek: 11 })
+    // Slot 2: active P0 + P1 → endWeek = 7
+    expect(windows[1]).toEqual({ startWeek: 0, endWeek: 7 })
+    // Slots 3 & 4: only P0 → endWeek = 3
+    expect(windows[2]).toEqual({ startWeek: 0, endWeek: 3 })
+    expect(windows[3]).toEqual({ startWeek: 0, endWeek: 3 })
+
+    const rt = rtFromSlotSegments('rt1', 'Dev', 4, windows)
+    expect(getWeeklyCapacity(rt, 0,  8)).toBe(4 * 8 * 5)  // P0: all 4
+    expect(getWeeklyCapacity(rt, 4,  8)).toBe(2 * 8 * 5)  // P1: slots 1-2
+    expect(getWeeklyCapacity(rt, 8,  8)).toBe(1 * 8 * 5)  // P2: slot 1 only
+  })
+
+  it('non-contiguous 2 → 4 → 2 → 4 plan splits slots into separate segments', () => {
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 3,  headcount: 2 },
+      { periodIndex: 1, startWeek: 4, endWeek: 7,  headcount: 4 },
+      { periodIndex: 2, startWeek: 8, endWeek: 11, headcount: 2 },
+      { periodIndex: 3, startWeek: 12, endWeek: 15, headcount: 4 },
+    ]
+    const windows = toWindows(deriveSlotSegments(periods))
+    expect(windows).toEqual([
+      { startWeek: 0, endWeek: 15 },
+      { startWeek: 0, endWeek: 15 },
+      { startWeek: 4, endWeek: 7 },
+      { startWeek: 12, endWeek: 15 },
+      { startWeek: 4, endWeek: 7 },
+      { startWeek: 12, endWeek: 15 },
+    ])
+
+    const rt = rtFromSlotSegments('rt1', 'Dev', 4, windows)
+    expect(getWeeklyCapacity(rt, 0,  8)).toBe(2 * 8 * 5)
+    expect(getWeeklyCapacity(rt, 4,  8)).toBe(4 * 8 * 5)
+    expect(getWeeklyCapacity(rt, 8,  8)).toBe(2 * 8 * 5)
+    expect(getWeeklyCapacity(rt, 12, 8)).toBe(4 * 8 * 5)
+  })
+
+  it('non-contiguous 1 → 0 → 1 plan drops to zero in the gap', () => {
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 3, headcount: 1 },
+      { periodIndex: 1, startWeek: 4, endWeek: 7, headcount: 0 },
+      { periodIndex: 2, startWeek: 8, endWeek: 11, headcount: 1 },
+    ]
+    const windows = toWindows(deriveSlotSegments(periods))
+    expect(windows).toEqual([
+      { startWeek: 0, endWeek: 3 },
+      { startWeek: 8, endWeek: 11 },
+    ])
+
+    const rt = rtFromSlotSegments('rt1', 'Dev', 1, windows)
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(1 * 8 * 5)
+    expect(getWeeklyCapacity(rt, 4, 8)).toBe(0)
+    expect(getWeeklyCapacity(rt, 8, 8)).toBe(1 * 8 * 5)
+  })
+
+  it('step-up then step-down: contiguous extra slots stay as one segment', () => {
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 3,  headcount: 2 },
+      { periodIndex: 1, startWeek: 4, endWeek: 7,  headcount: 4 },
+      { periodIndex: 2, startWeek: 8, endWeek: 11, headcount: 2 },
+    ]
+    const windows = toWindows(deriveSlotSegments(periods))
+    // Slots 1-2 active in all 3 periods → full span 0..11
+    expect(windows[0]).toEqual({ startWeek: 0, endWeek: 11 })
+    expect(windows[1]).toEqual({ startWeek: 0, endWeek: 11 })
+    // Slots 3-4 only active in P1 → 4..7
+    expect(windows[2]).toEqual({ startWeek: 4, endWeek: 7 })
+    expect(windows[3]).toEqual({ startWeek: 4, endWeek: 7 })
+
+    const rt = rtFromSlotSegments('rt1', 'Dev', 4, windows)
+    expect(getWeeklyCapacity(rt, 0,  8)).toBe(2 * 8 * 5)  // P0
+    expect(getWeeklyCapacity(rt, 4,  8)).toBe(4 * 8 * 5)  // P1 peak
+    expect(getWeeklyCapacity(rt, 7,  8)).toBe(4 * 8 * 5)  // P1 end
+    expect(getWeeklyCapacity(rt, 8,  8)).toBe(2 * 8 * 5)  // P2 back down
+  })
+
+  // Slot entirely inactive in all periods → endWeek = -1 → contributes nothing
+  it('slot never active → endWeek=-1 → does not contribute capacity', () => {
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 7, headcount: 0 },
+    ]
+    const windows = deriveSlotSegments(periods)
+    expect(windows).toHaveLength(0)  // maxSlots=0, no windows
+
+    // Verify directly: a NR with startWeek=-1, endWeek=-1 never contributes
+    const rt: SchedulerResourceType = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [
+        { id: 'nr1', name: 'Dev 1', startWeek: -1, endWeek: -1,
+          allocationPct: 100, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null },
+      ],
+    }
+    // NR has endWeek=-1 so week >= -1 but week <= -1 only at week=-1 which never occurs.
+    // count=1 namedResources.length=1 → 0 phantom slots.
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(0)
+    expect(getWeeklyCapacity(rt, 5, 8)).toBe(0)
+  })
+
+  // Single period flat plan: all slots active the whole period
+  it('single flat period: all slots span full period', () => {
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 12, headcount: 3 },
+    ]
+    const windows = toWindows(deriveSlotSegments(periods))
+    expect(windows).toHaveLength(3)
+    for (const w of windows) {
+      expect(w).toEqual({ startWeek: 0, endWeek: 12 })
+    }
+    const rt = rtFromSlotSegments('rt1', 'Dev', 3, windows)
+    expect(getWeeklyCapacity(rt, 0,  8)).toBe(3 * 8 * 5)
+    expect(getWeeklyCapacity(rt, 12, 8)).toBe(3 * 8 * 5)
+    expect(getWeeklyCapacity(rt, 13, 8)).toBe(0)  // beyond endWeek
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fractional CAPACITY_PLAN apply materialisation
+// Tests that deriveSlotWindowsByResourceType + effectiveAllocationPct produce
+// correct per-NR windows/allocationPercent for fractional headcount.
+// ─────────────────────────────────────────────────────────────────────────────
+import { materializeCapacityPlanResources } from '../lib/capacityPlanMaterialisation.js'
+
+/**
+ * Build a SchedulerResourceType with NRs whose startWeek, endWeek and
+ * allocationPercent come from the materialisation library's slotWindows.
+ */
+function rtFromSlotWindows(
+  id: string,
+  name: string,
+  count: number,
+  slotWindows: Array<{ startWeek: number; endWeek: number; allocationPercent: number }>,
+  hpd = 8,
+): SchedulerResourceType {
+  return {
+    id, name, count, hoursPerDay: hpd,
+    namedResources: slotWindows.map((w, i) => ({
+      id: `nr-${i + 1}`,
+      name: `${name} ${i + 1}`,
+      startWeek: w.startWeek,
+      endWeek: w.endWeek,
+      allocationPct: w.allocationPercent,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: w.allocationPercent,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })),
+  }
+}
+
+/** Derive slot windows for a single RT from a list of simple flat periods. */
+function windowsForSingleRT(
+  periods: Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }>,
+  rtId = 'rt1',
+) {
+  const matPeriods = periods.map(p => ({
+    periodIndex: p.periodIndex,
+    startWeek: p.startWeek,
+    endWeek: p.endWeek,
+    entries: [{ resourceTypeId: rtId, headcount: p.headcount }],
+  }))
+  const mat = materializeCapacityPlanResources(matPeriods)
+  return mat.get(rtId)?.slotWindows ?? []
+}
+
+describe('fractional CAPACITY_PLAN apply materialisation', () => {
+  it('0.25 HC → one window at allocationPercent=25', () => {
+    const windows = windowsForSingleRT([
+      { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 0.25 },
+    ])
+    expect(windows).toHaveLength(1)
+    expect(windows[0].allocationPercent).toBe(25)
+    expect(windows[0].startWeek).toBe(0)
+    expect(windows[0].endWeek).toBe(3)   // inclusive (endWeek - 1)
+  })
+
+  it('0.5 HC → one window at allocationPercent=50', () => {
+    const windows = windowsForSingleRT([
+      { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 0.5 },
+    ])
+    expect(windows).toHaveLength(1)
+    expect(windows[0].allocationPercent).toBe(50)
+  })
+
+  it('1.25 HC → one 100% window + one 25% window, same span', () => {
+    const windows = windowsForSingleRT([
+      { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 1.25 },
+    ])
+    expect(windows).toHaveLength(2)
+    // Sorted: 100% first (descending allocationPercent), then 25%
+    expect(windows[0].allocationPercent).toBe(100)
+    expect(windows[1].allocationPercent).toBe(25)
+    expect(windows[0].startWeek).toBe(windows[1].startWeek)
+    expect(windows[0].endWeek).toBe(windows[1].endWeek)
+  })
+
+  it('effectiveAllocationPct returns allocationPercent for CAPACITY_PLAN', () => {
+    const nr25 = {
+      id: 'nr1', name: 'Dev 1',
+      startWeek: 0, endWeek: 4,
+      allocationPct: 25, allocationMode: 'CAPACITY_PLAN' as const,
+      allocationPercent: 25,
+      allocationStartWeek: null, allocationEndWeek: null,
+    }
+    expect(effectiveAllocationPct(nr25, 2)).toBe(25)
+
+    const nr100 = { ...nr25, allocationPercent: 100, allocationPct: 100 }
+    expect(effectiveAllocationPct(nr100, 2)).toBe(100)
+  })
+
+  it('getWeeklyCapacity respects fractional allocationPercent via CAPACITY_PLAN NRs', () => {
+    const windows = windowsForSingleRT([
+      { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 0.25 },
+    ])
+    const rt = rtFromSlotWindows('rt1', 'Dev', 1, windows)
+    // 25% * 8 hpd * 5 days = 10 hours
+    expect(getWeeklyCapacity(rt, 0, 8)).toBeCloseTo(10)
+    expect(getWeeklyCapacity(rt, 3, 8)).toBeCloseTo(10)
+    expect(getWeeklyCapacity(rt, 4, 8)).toBe(0)  // beyond inclusive endWeek=3
+  })
+
+  it('getWeeklyCapacity: 1.25 HC → 1.25 × hpd × 5 hours per active week', () => {
+    const windows = windowsForSingleRT([
+      { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 1.25 },
+    ])
+    const rt = rtFromSlotWindows('rt1', 'Dev', 2, windows)
+    // 100% + 25% = 125% → 1.25 × 8 × 5 = 50 hours
+    expect(getWeeklyCapacity(rt, 0, 8)).toBeCloseTo(50)
+  })
+
+  it('fractional HC that drops to 0 mid-plan → NR becomes inactive', () => {
+    const windows = windowsForSingleRT([
+      { periodIndex: 0, startWeek: 0, endWeek: 4,  headcount: 0.5 },
+      { periodIndex: 1, startWeek: 4, endWeek: 8,  headcount: 0 },
+      { periodIndex: 2, startWeek: 8, endWeek: 12, headcount: 0.5 },
+    ])
+    expect(windows).toHaveLength(2)
+    expect(windows[0]).toMatchObject({ startWeek: 0, endWeek: 3, allocationPercent: 50 })
+    expect(windows[1]).toMatchObject({ startWeek: 8, endWeek: 11, allocationPercent: 50 })
+
+    const rt = rtFromSlotWindows('rt1', 'Dev', 1, windows)
+    expect(getWeeklyCapacity(rt, 0, 8)).toBeCloseTo(20)  // 50% × 8 × 5
+    expect(getWeeklyCapacity(rt, 4, 8)).toBe(0)
+    expect(getWeeklyCapacity(rt, 8, 8)).toBeCloseTo(20)
+  })
+
+  it('integer 2 HC still works correctly via new path', () => {
+    const windows = windowsForSingleRT([
+      { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 2 },
+    ])
+    expect(windows).toHaveLength(2)
+    expect(windows[0].allocationPercent).toBe(100)
+    expect(windows[1].allocationPercent).toBe(100)
+
+    const rt = rtFromSlotWindows('rt1', 'Dev', 2, windows)
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(2 * 8 * 5)
   })
 })

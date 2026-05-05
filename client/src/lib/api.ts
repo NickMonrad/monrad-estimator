@@ -43,3 +43,70 @@ export const getCustomers = () => api.get('/customers').then(r => r.data)
 export const createCustomer = (data: { name: string; description?: string; accountCode?: string; crmLink?: string; orgId?: string }) => api.post('/customers', data).then(r => r.data)
 export const updateCustomer = (id: string, data: { name?: string; description?: string; accountCode?: string; crmLink?: string; orgId?: string }) => api.put(`/customers/${id}`, data).then(r => r.data)
 export const deleteCustomer = (id: string) => api.delete(`/customers/${id}`).then(r => r.data)
+
+// ---------------------------------------------------------------------------
+// Resource Optimiser
+// ---------------------------------------------------------------------------
+
+export interface OptimiserCandidateRT {
+  resourceTypeId: string
+  count: number
+  suggestedStartWeek: number
+}
+
+export interface OptimiserMetrics {
+  deliveryWeeks: number
+  avgUtilisationPct: number
+  gapWeeksByResourceTypeId: Record<string, number>
+  estimatedCost: number
+  parallelWarningCount: number
+}
+
+export interface OptimiserCandidate {
+  resourceTypes: OptimiserCandidateRT[]
+  metrics: OptimiserMetrics
+  score: number
+  scoreBreakdown: Record<string, number>
+}
+
+export interface OptimiserResponse {
+  candidates: OptimiserCandidate[]
+  baseline: OptimiserCandidate
+  searchStats: {
+    scenariosEvaluated: number
+    candidatesFound: number
+    durationMs: number
+    sampled: boolean
+  }
+  /** Count of scenarios filtered out due to parallel over-allocation warnings */
+  infeasibleCount: number
+  resourceTypes: Array<{ id: string; name: string }>
+}
+
+export interface OptimiserRequest {
+  mode: 'speed' | 'utilisation' | 'balanced'
+  constraints: {
+    countRanges: Array<{ resourceTypeId: string; min: number; max: number }>
+    allowRampUp: boolean
+    maxBudget?: number
+    maxDurationWeeks?: number
+    minDurationWeeks?: number
+  }
+  dayRates?: Record<string, number>
+  topN?: number
+}
+
+export const runOptimiser = (projectId: string, body: OptimiserRequest): Promise<OptimiserResponse> =>
+  api.post<OptimiserResponse>(`/projects/${projectId}/optimise`, body).then(r => r.data)
+
+export const applyOptimiserScenario = (
+  projectId: string,
+  resourceTypes: Array<{ resourceTypeId: string; count: number; suggestedStartWeek: number }>,
+  options?: { staggerEpics?: boolean },
+): Promise<{ message: string; snapshotId: string }> =>
+  api
+    .post<{ message: string; snapshotId: string }>(`/projects/${projectId}/optimise/apply`, {
+      resourceTypes,
+      staggerEpics: options?.staggerEpics,
+    })
+    .then(r => r.data)
