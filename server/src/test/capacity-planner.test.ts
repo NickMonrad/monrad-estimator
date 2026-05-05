@@ -250,6 +250,115 @@ describe('computeCapacityPlan', () => {
     }
   })
 
+  it('aggregates the planner’s real weekly demand curve without drip-feeding', () => {
+    const input = makeInput({
+      numEpics: 1,
+      featuresPerEpic: 1,
+      hoursPerFeature: 160,
+      numRTs: 1,
+      countPerRT: 4,
+    })
+
+    const result = computeCapacityPlan(input, makeConfig({
+      targetDurationWeeks: 8,
+      periodWeeks: 4,
+      maxDeltaPerPeriod: 10,
+      maxParallelismPerFeature: 4,
+    }))
+
+    const firstPeriod = result.periods[0].resources.find(r => r.resourceTypeId === 'rt-0')
+    expect(firstPeriod).toBeTruthy()
+    expect(firstPeriod!.peakDemandFTE).toBe(4)
+    expect(firstPeriod!.avgDemandFTE).toBe(2)
+    expect(firstPeriod!.headcount).toBe(4)
+  })
+
+  it('keeps low-demand monthly roles below 1 headcount when demand is fractional', () => {
+    const input = makeInput({
+      numEpics: 1,
+      featuresPerEpic: 1,
+      hoursPerFeature: 8,
+      numRTs: 1,
+      countPerRT: 4,
+    })
+
+    const result = computeCapacityPlan(input, makeConfig({
+      targetDurationWeeks: 16,
+      periodWeeks: 4,
+      maxDeltaPerPeriod: 10,
+      maxParallelismPerFeature: 4,
+    }))
+
+    const firstPeriod = result.periods[0].resources.find(r => r.resourceTypeId === 'rt-0')
+    expect(firstPeriod).toBeTruthy()
+    expect(firstPeriod!.avgDemandFTE).toBeLessThan(0.2)
+    expect(firstPeriod!.headcount).toBe(0.25)
+  })
+
+  it('reflects full demand when only one dependency-unblocked feature is ready', () => {
+    const input = makeInput({
+      numEpics: 1,
+      featuresPerEpic: 1,
+      hoursPerFeature: 160,
+      numRTs: 1,
+      countPerRT: 4,
+    })
+
+    input.epics[0].featureMode = 'sequential'
+    input.epics[0].features = [
+      {
+        id: 'foundation',
+        order: 0,
+        isActive: true as const,
+        timelineStartWeek: null,
+        userStories: [{
+          id: 'foundation-story',
+          order: 0,
+          isActive: true as const,
+          tasks: [{
+            resourceTypeId: 'rt-0',
+            hoursEffort: 160,
+            durationDays: null,
+            resourceType: { id: 'rt-0', name: 'RT 0', hoursPerDay: 8 },
+          }],
+        }],
+        dependencies: [],
+      },
+      {
+        id: 'follow-on',
+        order: 1,
+        isActive: true as const,
+        timelineStartWeek: null,
+        userStories: [{
+          id: 'follow-on-story',
+          order: 0,
+          isActive: true as const,
+          tasks: [{
+            resourceTypeId: 'rt-0',
+            hoursEffort: 160,
+            durationDays: null,
+            resourceType: { id: 'rt-0', name: 'RT 0', hoursPerDay: 8 },
+          }],
+        }],
+        dependencies: [{ featureId: 'follow-on', dependsOnId: 'foundation' }],
+      },
+    ]
+
+    const result = computeCapacityPlan(input, makeConfig({
+      targetDurationWeeks: 12,
+      periodWeeks: 4,
+      maxDeltaPerPeriod: 10,
+      maxParallelismPerFeature: 4,
+    }))
+
+    const firstPeriod = result.periods[0].resources.find(r => r.resourceTypeId === 'rt-0')
+
+    expect(result.deliveryWeeks).toBe(2)
+    expect(firstPeriod).toBeTruthy()
+    expect(firstPeriod!.peakDemandFTE).toBe(4)
+    expect(firstPeriod!.headcount).toBe(4)
+  })
+
   it('handles large backlog with constrained capacity', () => {
     // Large backlog: 4 epics × 5 features × 80 hours each = 1600 hours
     // With 1 person per RT doing 40h/week, that's ~40 weeks of work
@@ -269,5 +378,96 @@ describe('computeCapacityPlan', () => {
     // Planner should still produce a valid plan with positive delivery weeks
     expect(result.deliveryWeeks).toBeGreaterThan(0)
     expect(result.periods.length).toBeGreaterThan(0)
+  })
+
+  it('exact mode ignores max-delta smoothing limits', () => {
+    const input = makeInput({ numEpics: 1, featuresPerEpic: 1, numRTs: 1, countPerRT: 1 })
+    const bigFeature = {
+      id: 'big-feat',
+      order: 0,
+      isActive: true as const,
+      timelineStartWeek: null,
+      userStories: [{
+        id: 'big-story',
+        order: 0,
+        isActive: true as const,
+        tasks: [{
+          resourceTypeId: 'rt-0',
+          hoursEffort: 400,
+          durationDays: null,
+          resourceType: { id: 'rt-0', name: 'RT 0', hoursPerDay: 8 },
+        }],
+      }],
+      dependencies: [],
+    }
+    const smallFeature = {
+      id: 'small-feat',
+      order: 1,
+      isActive: true as const,
+      timelineStartWeek: null,
+      userStories: [{
+        id: 'small-story',
+        order: 0,
+        isActive: true as const,
+        tasks: [{
+          resourceTypeId: 'rt-0',
+          hoursEffort: 8,
+          durationDays: null,
+          resourceType: { id: 'rt-0', name: 'RT 0', hoursPerDay: 8 },
+        }],
+      }],
+      dependencies: [],
+    }
+    input.epics = [{
+      id: 'epic-0',
+      name: 'Epic 0',
+      order: 0,
+      isActive: true,
+      featureMode: 'sequential',
+      scheduleMode: 'sequential',
+      timelineStartWeek: null,
+      features: [bigFeature, smallFeature],
+    }]
+
+    const tightDelta = computeCapacityPlan(input, makeConfig({
+      targetDurationWeeks: 52,
+      periodWeeks: 4,
+      maxDeltaPerPeriod: 1,
+      smoothingMode: 'exact',
+    }))
+    const looseDelta = computeCapacityPlan(input, makeConfig({
+      targetDurationWeeks: 52,
+      periodWeeks: 4,
+      maxDeltaPerPeriod: 5,
+      smoothingMode: 'exact',
+    }))
+
+    const headcounts = (plan: ReturnType<typeof computeCapacityPlan>) =>
+      plan.periods.map(p => p.resources.find(r => r.resourceTypeId === 'rt-0')?.headcount ?? 0)
+
+    expect(headcounts(tightDelta)).toEqual(headcounts(looseDelta))
+  })
+
+  it('tight mode tracks demand closer than smooth mode', () => {
+    const input = makeInput({ numEpics: 3, featuresPerEpic: 3, numRTs: 1, countPerRT: 1 })
+    const common = {
+      targetDurationWeeks: 52,
+      periodWeeks: 4 as const,
+      maxDeltaPerPeriod: 1,
+    }
+
+    const raw = computeCapacityPlan(input, makeConfig({ ...common, maxDeltaPerPeriod: 100 }))
+    const smooth = computeCapacityPlan(input, makeConfig({ ...common, smoothingMode: 'smooth' }))
+    const tight = computeCapacityPlan(input, makeConfig({ ...common, smoothingMode: 'tight' }))
+
+    const deviation = (plan: ReturnType<typeof computeCapacityPlan>) => {
+      return plan.periods.reduce((sum, p, i) => {
+        const planHeadcount = p.resources.find(r => r.resourceTypeId === 'rt-0')?.headcount ?? 0
+        const rawHeadcount = raw.periods[i]?.resources.find(r => r.resourceTypeId === 'rt-0')?.headcount ?? 0
+        return sum + Math.abs(planHeadcount - rawHeadcount)
+      }, 0)
+    }
+
+    expect(deviation(tight)).toBeLessThanOrEqual(deviation(smooth))
   })
 })

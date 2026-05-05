@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "CapacityPlanEntry" ALTER COLUMN "headcount" SET DATA TYPE DOUBLE PRECISION;

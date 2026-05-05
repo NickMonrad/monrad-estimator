@@ -10,6 +10,11 @@ import {
   type SchedulerResourceType,
   type ParallelWarning,
 } from '../lib/scheduler.js'
+import {
+  materializeCapacityPlanResources,
+  shouldFallbackToActiveCapacityPlan,
+  type MaterializedCapacityPlanResource,
+} from '../lib/capacityPlanMaterialisation.js'
 import { runSAPlanner } from '../lib/sa-planner.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
@@ -24,7 +29,8 @@ router.use(authenticate)
 export { getWeeklyCapacity }
 
 // Alias for internal use within this file
-type ResourceTypeWithNamed = SchedulerResourceType
+type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
+type ResourceTypeWithNamed = SchedulerResourceType & { allocationMode?: AllocationMode | null }
 
 async function ownedProject(projectId: string, userId: string) {
   return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
@@ -58,6 +64,39 @@ function computeResourceBreakdown(
   return Array.from(byRt.values()).map(r => ({ name: r.name, days: Math.round(r.days * 10) / 10 }))
 }
 
+function buildWarningResourceTypes(
+  resourceTypes: ResourceTypeWithNamed[],
+  capacityPlanByRt: Map<string, MaterializedCapacityPlanResource>,
+): ResourceTypeWithNamed[] {
+  return resourceTypes.map(rt => {
+    if ((rt.allocationMode as AllocationMode | null) !== 'CAPACITY_PLAN') return rt
+
+    const materialized = capacityPlanByRt.get(rt.id)
+    const useCapacityPlanFallback =
+      shouldFallbackToActiveCapacityPlan(rt.namedResources ?? [], materialized)
+
+    if (!useCapacityPlanFallback || !materialized) return rt
+
+    return {
+      ...rt,
+      namedResources: materialized.slotWindows.map((window, idx) => {
+        const existing = rt.namedResources[idx]
+        return {
+          id: existing?.id ?? `${rt.id}-capacity-plan-${idx + 1}`,
+          name: existing?.name ?? `${rt.name} ${idx + 1}`,
+          startWeek: window.startWeek,
+          endWeek: window.endWeek,
+          allocationPct: window.allocationPercent,
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: window.allocationPercent,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        }
+      }),
+    }
+  })
+}
+
 function buildResponse(
   project: { id: string; startDate: Date | null; hoursPerDay: number; bufferWeeks?: number | null; onboardingWeeks?: number | null },
   entries: Array<{
@@ -81,6 +120,7 @@ function buildResponse(
   epicDeps: Array<{ epicId: string; dependsOnId: string }> = [],
   resourceTypes: ResourceTypeWithNamed[] = [],
   simulatedDemand?: Map<string, number>,  // key: `${rtName}|${week}` → days consumed
+  capacityPlanByRt: Map<string, MaterializedCapacityPlanResource> = new Map(),
 ) {
   const rawMaxWeek = entries.length > 0
     ? Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
@@ -94,6 +134,15 @@ function buildResponse(
   const rtCountByName = new Map(resourceTypes.map(rt => [rt.name, rt.count]))
   const rtByName = new Map(resourceTypes.map(rt => [rt.name, rt]))
 
+  const capacityDaysForWeek = (rt: ResourceTypeWithNamed, week: number) => {
+    if ((rt.allocationMode as AllocationMode | null) === 'CAPACITY_PLAN') {
+      const materialized = capacityPlanByRt.get(rt.id)
+      if (materialized) return (materialized.weeklyHeadcount.get(week) ?? 0) * 5
+    }
+    const hpd = rt.hoursPerDay ?? project.hoursPerDay
+    return getWeeklyCapacity(rt, week, project.hoursPerDay) / hpd
+  }
+
   // Compute weekly demand across all features
   let weeklyDemand: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
 
@@ -106,7 +155,7 @@ function buildResponse(
         const week = parseInt(key.substring(separatorIdx + 1), 10)
         const rt = rtByName.get(rtName)
         const capacityDays = rt
-          ? getWeeklyCapacity(rt, week, project.hoursPerDay) / (rt.hoursPerDay ?? project.hoursPerDay)
+          ? capacityDaysForWeek(rt, week)
           : 5
         return {
           week,
@@ -136,7 +185,7 @@ function buildResponse(
           const key = `${w}|${name}`
           // Variable capacity: use named resource availability for this week
           const capacityDays = rt
-            ? getWeeklyCapacity(rt, w, project.hoursPerDay) / (rt.hoursPerDay ?? project.hoursPerDay)
+            ? capacityDaysForWeek(rt, w)
             : 5
           const existing = weeklyDemandMap.get(key) ?? { demandDays: 0, capacityDays }
           existing.demandDays += days * (overlap / e.durationWeeks)
@@ -166,9 +215,8 @@ function buildResponse(
   if (capacityEndWeek > 0) {
     for (const rt of resourceTypes) {
       if (!rtNamesWithHours.has(rt.name)) continue
-      const hpd = rt.hoursPerDay ?? project.hoursPerDay
       for (let w = 0; w < capacityEndWeek; w++) {
-        const capDays = getWeeklyCapacity(rt, w, project.hoursPerDay) / hpd
+        const capDays = capacityDaysForWeek(rt, w)
         weeklyCapacity.push({ week: w, resourceTypeName: rt.name, capacityDays: Math.round(capDays * 10) / 10 })
       }
     }
@@ -194,22 +242,60 @@ function buildResponse(
   const namedResourcesList = resourceTypes
     .filter(rt => rt.namedResources && rt.namedResources.length > 0 ? rtNamesWithHours.has(rt.name) : true)
     .flatMap(rt => {
+      // Bug #7: only include if RT has demand
+      if (!rtNamesWithHours.has(rt.name)) return []
+
+      const derivedRt = rtDerivedWeeks.get(rt.name)
+      const capacityPlanMaterialized = capacityPlanByRt.get(rt.id)
+      const useCapacityPlanFallback =
+        (rt.allocationMode as AllocationMode | null) === 'CAPACITY_PLAN' &&
+        shouldFallbackToActiveCapacityPlan(rt.namedResources ?? [], capacityPlanMaterialized)
+
+      if (useCapacityPlanFallback && capacityPlanMaterialized) {
+        return capacityPlanMaterialized.slotWindows.map((window, idx) => {
+          const existing = rt.namedResources[idx]
+          return {
+            id: existing?.id ?? `${rt.id}-capacity-plan-${idx + 1}`,
+            resourceTypeId: rt.id,
+            resourceTypeName: rt.name,
+            name: existing?.name ?? `${rt.name} ${idx + 1}`,
+            startWeek: window.startWeek,
+            endWeek: window.endWeek,
+            allocationPct: window.allocationPercent,
+            allocationMode: 'CAPACITY_PLAN',
+            allocationPercent: window.allocationPercent,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+          }
+        })
+      }
+
       if (rt.namedResources && rt.namedResources.length > 0) {
-        // Bug #7: only include if RT has demand
-        if (!rtNamesWithHours.has(rt.name)) return []
-        const derivedRt = rtDerivedWeeks.get(rt.name)
+
         return rt.namedResources.map(nr => {
-          const isFullProject = nr.allocationMode === 'FULL_PROJECT'
+          const nrMode = (nr.allocationMode as AllocationMode | null) ?? 'EFFORT'
+          const isFullProject = nrMode === 'FULL_PROJECT'
+          const isTimeline = nrMode === 'TIMELINE'
+          const isCapacityPlan = nrMode === 'CAPACITY_PLAN'
           return {
             id: nr.id,
             resourceTypeId: rt.id,
             resourceTypeName: rt.name,
             name: nr.name,
-            // Full Project: leave null so client falls back to projectEndWeek (full span incl. buffer)
-            // Timeline: use manual override first, then demand-derived min/max
-            // Effort (T&M): bar uses demand histogram, so start/end are ignored
-            startWeek: isFullProject ? null : (nr.allocationStartWeek ?? (derivedRt?.start ?? null)),
-            endWeek: isFullProject ? null : (nr.allocationEndWeek ?? (derivedRt?.end ?? null)),
+            startWeek: isFullProject
+              ? null
+              : isTimeline
+                ? (nr.allocationStartWeek ?? (derivedRt?.start ?? null))
+                : isCapacityPlan
+                  ? (nr.startWeek ?? null)
+                  : null,
+            endWeek: isFullProject
+              ? null
+              : isTimeline
+                ? (nr.allocationEndWeek ?? (derivedRt?.end ?? null))
+                : isCapacityPlan
+                  ? (nr.endWeek ?? null)
+                  : null,
             allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
             allocationMode: nr.allocationMode,
             allocationPercent: nr.allocationPercent ?? 100,
@@ -307,10 +393,16 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // Load resource types before computing warnings (passed in to avoid redundant queries)
   const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
+  const activeCapacityPlan = await prisma.capacityPlan.findFirst({
+    where: { projectId: project.id, isActive: true },
+    include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
+  })
+  const capacityPlanByRt = materializeCapacityPlanResources(activeCapacityPlan?.periods ?? [])
+  const warningResourceTypes = buildWarningResourceTypes(resourceTypes, capacityPlanByRt)
 
   // #178: pass pre-loaded features and resource types — no extra DB queries inside
   const activeFeatures = activeEntries.map(e => e.feature)
-  const parallelWarnings = computeParallelWarnings(project.hoursPerDay, activeEntries, activeFeatures, resourceTypes)
+  const parallelWarnings = computeParallelWarnings(project.hoursPerDay, activeEntries, activeFeatures, warningResourceTypes)
 
   const storyTimelineEntries = await prisma.storyTimelineEntry.findMany({
     where: { projectId: project.id },
@@ -344,7 +436,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const simulatedDemand = project.weeklyDemandCache
     ? new Map<string, number>(Object.entries(project.weeklyDemandCache as Record<string, number>))
     : undefined
-  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDependencies, resourceTypes, simulatedDemand))
+  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDependencies, resourceTypes, simulatedDemand, capacityPlanByRt))
 }))
 
 // POST /api/projects/:projectId/timeline/schedule
@@ -397,6 +489,12 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
 
   const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
+  const activeCapacityPlan = await prisma.capacityPlan.findFirst({
+    where: { projectId: project.id, isActive: true },
+    include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
+  })
+  const capacityPlanByRt = materializeCapacityPlanResources(activeCapacityPlan?.periods ?? [])
+  const warningResourceTypes = buildWarningResourceTypes(resourceTypes, capacityPlanByRt)
 
   const existingEntries = await prisma.timelineEntry.findMany({
     where: { projectId: project.id, isManual: true },
@@ -411,7 +509,7 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
 
   // ── 2. Run the pure scheduler ─────────────────────────────────────────────
 
-  const { featureSchedule, storySchedule, weeklyConsumptionMap, parallelWarnings } = runScheduler({
+  const { featureSchedule, storySchedule, weeklyConsumptionMap } = runScheduler({
     project: { hoursPerDay: project.hoursPerDay },
     epics,
     resourceTypes,
@@ -490,7 +588,16 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     isManual: e.isManual,
   }))
 
-  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDependenciesForResponse, resourceTypes, weeklyConsumptionMap))
+  const activeEntries = entries.filter(e => e.feature.isActive !== false && e.feature.epic.isActive !== false)
+  const activeFeatures = activeEntries.map(e => e.feature)
+  const parallelWarnings = computeParallelWarnings(
+    project.hoursPerDay,
+    activeEntries,
+    activeFeatures,
+    warningResourceTypes,
+  )
+
+  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDependenciesForResponse, resourceTypes, weeklyConsumptionMap, capacityPlanByRt))
 }))
 
 // PUT /api/projects/:projectId/timeline/stories/:storyId — manual story timeline override

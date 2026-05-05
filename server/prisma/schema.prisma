@@ -397,7 +397,7 @@ model CapacityPlanEntry {
   periodId       String
   period         CapacityPlanPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
   resourceTypeId String
-  headcount      Int
+  headcount      Float
   demandFTE      Float
   utilisationPct Float
 

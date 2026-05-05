@@ -138,6 +138,7 @@ export function effectiveAllocationPct(
     const wEnd = nr.allocationEndWeek ?? nr.endWeek ?? Infinity
     return week >= wStart && week <= wEnd ? nr.allocationPercent : 0
   }
+  if (nr.allocationMode === 'CAPACITY_PLAN') return nr.allocationPercent
   // EFFORT (T&M) — no fixed allocation; full capacity available
   return 100
 }
