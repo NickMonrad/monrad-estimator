@@ -449,7 +449,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // ── 4. Update RT counts + allocation mode, re-run scheduler ─────────────
   if (shouldActivate) {
-    let refreshedWeeklyDemandCache: Record<string, number> = {}
+    let refreshedWeeklyDemandCache: Record<string, number>
 
     // Compute max headcount per RT across all periods
     const maxHeadcountByRt = new Map<string, number>()
