@@ -20,7 +20,7 @@
     "db:backup": "mkdir -p backups && docker exec monrad-pg pg_dump -U postgres -d monrad_estimator --format=custom -f /tmp/monrad-backup.dump && docker cp monrad-pg:/tmp/monrad-backup.dump \"backups/backup-$(date +%Y%m%d-%H%M%S).dump\" && echo 'Backup saved to backups/'"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^9.2.1"
   },
   "dependencies": {
     "ip-address": "^10.1.0"
