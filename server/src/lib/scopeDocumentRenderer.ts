@@ -99,23 +99,91 @@ interface TimelineData {
   onboardingWeeks: number
 }
 
-function renderGanttSvg(td: TimelineData): string {
-  const ROW_H = 28
-  const LABEL_W = 200
-  const COL_W = 28
-  const HEADER_H = 40
-  const EPIC_HEADER_H = 24
-  const PAD = 2
+const GANTT_DIMS = {
+  ROW_H: 28,
+  LABEL_W: 200,
+  COL_W: 28,
+  HEADER_H: 40,
+  EPIC_HEADER_H: 24,
+  PAD: 2,
+} as const
 
+// A4 landscape printable area in CSS px (Puppeteer default 96dpi):
+//   width  ≈ 297mm ≈ 1123px, minus ~80px horizontal margins ≈ 1043px
+//   height ≈ 210mm ≈  794px, minus ~80px vertical margins   ≈  714px
+// We budget less than the full content height so the page heading and
+// intro paragraph still fit alongside the chart on the first page,
+// and to leave a safety margin against rounding/scaling drift.
+const GANTT_PRINT_WIDTH_PX = 1043
+const GANTT_PRINT_HEIGHT_PX = 600
+
+interface GanttEpicGroup {
+  epicName: string
+  epicOrder: number
+  features: GanttEntry[]
+}
+
+interface GanttChunkGroup {
+  epicName: string
+  features: GanttEntry[]
+  isContinuation: boolean
+}
+
+/**
+ * Split epic groups into page-sized chunks for the PDF Gantt chart.
+ *
+ * The renderer produces one SVG per chunk; each chunk is rendered on its
+ * own A4-landscape page so all epics/features are visible in the export.
+ * If an epic has more features than fit on a single page, it is split
+ * across consecutive pages with continuation pages flagged so the label
+ * can show "(continued)".
+ */
+function chunkEpicGroups(epicsArr: GanttEpicGroup[], rowsPerPage: number): GanttChunkGroup[][] {
+  const chunks: GanttChunkGroup[][] = []
+  let current: GanttChunkGroup[] = []
+  let usedRows = 0
+
+  for (const ep of epicsArr) {
+    let remaining = ep.features.slice()
+    let isContinuation = false
+
+    while (remaining.length > 0) {
+      const epicHeaderCost = 1
+      const available = rowsPerPage - usedRows - epicHeaderCost
+      if (available <= 0) {
+        if (current.length > 0) chunks.push(current)
+        current = []
+        usedRows = 0
+        continue
+      }
+      const take = Math.min(remaining.length, available)
+      current.push({ epicName: ep.epicName, features: remaining.slice(0, take), isContinuation })
+      usedRows += epicHeaderCost + take
+      remaining = remaining.slice(take)
+      isContinuation = true
+      if (remaining.length > 0) {
+        chunks.push(current)
+        current = []
+        usedRows = 0
+      }
+    }
+  }
+  if (current.length > 0) chunks.push(current)
+  return chunks
+}
+
+function renderGanttSvgs(td: TimelineData): string[] {
+  const { ROW_H, LABEL_W, COL_W, HEADER_H, EPIC_HEADER_H, PAD } = GANTT_DIMS
   const entries = td.entries ?? []
-  if (entries.length === 0) return ''
+  if (entries.length === 0) return []
 
-  // Compute total weeks
+  // Compute total weeks once — shared across all chunks so the time header
+  // is identical on every page.
   const maxEnd = Math.max(...entries.map(e => e.startWeek + e.durationWeeks))
   const totalWeeks = Math.max(4, Math.ceil(maxEnd) + 1)
 
   // Group by epic (sorted by epicOrder, features by featureOrder)
-  const epicMap = new Map<string, { epicName: string; epicOrder: number; features: GanttEntry[] }>()
+  const epicMap = new Map<string, GanttEpicGroup>()
   for (const e of entries) {
     if (!epicMap.has(e.epicId)) epicMap.set(e.epicId, { epicName: e.epicName, epicOrder: e.epicOrder, features: [] })
     epicMap.get(e.epicId)!.features.push(e)
@@ -123,12 +191,42 @@ function renderGanttSvg(td: TimelineData): string {
   const epicsArr = [...epicMap.values()].sort((a, b) => a.epicOrder - b.epicOrder)
   for (const ep of epicsArr) ep.features.sort((a, b) => a.featureOrder - b.featureOrder)
 
-  // Compute dimensions
-  const totalRows = epicsArr.reduce((acc, ep) => acc + 1 + ep.features.length, 0)
   const svgW = LABEL_W + totalWeeks * COL_W
+  // Width-fit scale used by the browser when rendering the SVG at width=100%.
+  // Height grows linearly with rows × ROW_H, so once the scaled height exceeds
+  // the printable area the rest is clipped — we chunk to avoid that.
+  const widthScale = Math.min(1, GANTT_PRINT_WIDTH_PX / svgW)
+  const availableContentPx = GANTT_PRINT_HEIGHT_PX / widthScale
+  const rowsPerPage = Math.max(8, Math.floor((availableContentPx - HEADER_H) / ROW_H))
+
+  const chunks = chunkEpicGroups(epicsArr, rowsPerPage)
+  return chunks.map(chunk => renderGanttSvgChunk(td, totalWeeks, chunk, svgW, {
+    ROW_H, LABEL_W, COL_W, HEADER_H, EPIC_HEADER_H, PAD,
+  }))
+}
+
+interface GanttChunkDims {
+  ROW_H: number
+  LABEL_W: number
+  COL_W: number
+  HEADER_H: number
+  EPIC_HEADER_H: number
+  PAD: number
+}
+
+function renderGanttSvgChunk(
+  td: TimelineData,
+  totalWeeks: number,
+  chunk: GanttChunkGroup[],
+  svgW: number,
+  dims: GanttChunkDims,
+): string {
+  const { ROW_H, LABEL_W, COL_W, HEADER_H, EPIC_HEADER_H, PAD } = dims
+
+  // Each group contributes 1 epic-header row + N feature rows.
+  const totalRows = chunk.reduce((acc, g) => acc + 1 + g.features.length, 0)
   const svgH = HEADER_H + totalRows * ROW_H
 
-  // Date helpers
   function weekToDate(week: number): Date | null {
     if (!td.startDate) return null
     const d = new Date(td.startDate)
@@ -206,10 +304,11 @@ function renderGanttSvg(td: TimelineData): string {
   // Render epic groups and feature rows
   let currentY = HEADER_H
 
-  for (const ep of epicsArr) {
+  for (const ep of chunk) {
+    const epicLabel = ep.isContinuation ? `${ep.epicName} (continued)` : ep.epicName
     // Epic header row
     parts.push(`<rect x="0" y="${currentY}" width="${svgW}" height="${EPIC_HEADER_H}" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>`)
-    parts.push(`<text x="8" y="${currentY + EPIC_HEADER_H / 2 + 4}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#374151">${esc(ep.epicName)}</text>`)
+    parts.push(`<text x="8" y="${currentY + EPIC_HEADER_H / 2 + 4}" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#374151">${esc(epicLabel)}</text>`)
     currentY += EPIC_HEADER_H
 
     // Feature rows
@@ -532,14 +631,18 @@ export function renderScopeDocumentHtml(props: ScopeDocumentProps): string {
     const startDateLabel = td.startDate
       ? ` starting ${formatDate(td.startDate)}`
       : ''
-    ganttHtml = `
+    // Render the Gantt as one or more A4-landscape pages so all epics and
+    // features are visible. The first page carries the heading + intro;
+    // subsequent pages just show the next slice of the chart.
+    const svgChunks = renderGanttSvgs(td)
+    ganttHtml = svgChunks.map((svg, i) => `
   <div class="gantt-page-section">
-    <div class="section-heading">Project Timeline</div>
-    <p style="font-size:12px;color:#6b7280;margin-bottom:12px;">
+    <div class="section-heading">Project Timeline${i === 0 ? '' : ' (continued)'}</div>
+    ${i === 0 ? `<p style="font-size:12px;color:#6b7280;margin-bottom:12px;">
       Gantt chart showing feature scheduling across ${totalWeeks} weeks${startDateLabel}.
-    </p>
-    ${renderGanttSvg(td)}
-  </div>`
+    </p>` : ''}
+    ${svg}
+  </div>`).join('')
   }
 
   return `<!DOCTYPE html>
