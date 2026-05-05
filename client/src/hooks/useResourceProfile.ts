@@ -492,6 +492,8 @@ export function useResourceProfile() {
         color: 'bg-blue-100 text-blue-700',
         sub,
       }
+    } else if (row.allocationMode === 'CAPACITY_PLAN') {
+      return { label: 'Capacity Plan', color: 'bg-green-100 text-green-700', sub: null }
     } else {
       const dur = profile?.projectDurationWeeks
       const sub = dur != null ? `Wk 0 → Wk ${Math.floor(dur)}` : null

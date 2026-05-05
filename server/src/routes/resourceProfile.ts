@@ -3,8 +3,12 @@ import { ResourceCategory } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import {
+  materializeCapacityPlanResources,
+  shouldFallbackToActiveCapacityPlan,
+} from '../lib/capacityPlanMaterialisation.js'
 
-type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT'
+type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -48,6 +52,11 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       },
       timelineEntries: true,
       storyTimelineEntries: { select: { storyId: true, startWeek: true, durationWeeks: true } },
+      capacityPlans: {
+        where: { isActive: true },
+        take: 1,
+        include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
+      },
     },
   })
 
@@ -58,6 +67,20 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
+
+  // Build a map: rtId → total allocated days from the active capacity plan
+  const activePlan = project.capacityPlans?.[0] ?? null
+  const capacityPlanDays = new Map<string, number>()
+  const capacityPlanByRt = materializeCapacityPlanResources(activePlan?.periods ?? [])
+  if (activePlan) {
+    for (const period of activePlan.periods) {
+      const periodDays = (period.endWeek - period.startWeek) * 5
+      for (const entry of period.entries) {
+        const current = capacityPlanDays.get(entry.resourceTypeId) ?? 0
+        capacityPlanDays.set(entry.resourceTypeId, current + entry.headcount * periodDays)
+      }
+    }
+  }
 
   // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
   const projectDurationWeeks =
@@ -114,7 +137,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           if (!effectiveHoursPerDay) continue
 
           const hours = task.hoursEffort ?? 0
-          const days = hours / effectiveHoursPerDay
+          const days = task.durationDays ?? (hours / effectiveHoursPerDay)
           if (!resourceAgg.has(resourceType.id)) {
             resourceAgg.set(resourceType.id, {
               resourceTypeId: resourceType.id,
@@ -226,16 +249,44 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       const mode = (resourceType.allocationMode as AllocationMode) ?? 'EFFORT'
       const percent = resourceType.allocationPercent ?? 100
       const count = resourceType.count
+      const capacityPlanMaterialized = capacityPlanByRt.get(resourceType.id)
 
       const weeks = rtWeeks.get(resourceType.id)
-      const derivedStartWeek = weeks && weeks.starts.length > 0 ? Math.min(...weeks.starts) : null
-      const derivedEndWeek = weeks && weeks.ends.length > 0 ? Math.max(...weeks.ends) : null
+      const demandDerivedStartWeek = weeks && weeks.starts.length > 0 ? Math.min(...weeks.starts) : null
+      const demandDerivedEndWeek = weeks && weeks.ends.length > 0 ? Math.max(...weeks.ends) : null
+      const derivedStartWeek =
+        mode === 'CAPACITY_PLAN' && capacityPlanMaterialized?.startWeek != null
+          ? capacityPlanMaterialized.startWeek
+          : demandDerivedStartWeek
+      const derivedEndWeek =
+        mode === 'CAPACITY_PLAN' && capacityPlanMaterialized?.endWeek != null
+          ? capacityPlanMaterialized.endWeek + 1
+          : demandDerivedEndWeek
 
       const effectiveStartWeek = resourceType.allocationStartWeek ?? derivedStartWeek
       const effectiveEndWeek = resourceType.allocationEndWeek ?? derivedEndWeek
 
+      const useCapacityPlanFallback =
+        mode === 'CAPACITY_PLAN' &&
+        shouldFallbackToActiveCapacityPlan(resourceType.namedResources, capacityPlanMaterialized)
+      const namedResourcesSource = useCapacityPlanFallback && capacityPlanMaterialized
+        ? capacityPlanMaterialized.slotWindows.map((window, idx) => {
+            const existing = resourceType.namedResources[idx]
+            return {
+              id: existing?.id ?? `${resourceType.id}-capacity-plan-${idx + 1}`,
+              name: existing?.name ?? `${resourceType.name} ${idx + 1}`,
+              allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: window.allocationPercent,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: window.startWeek,
+              endWeek: window.endWeek,
+            }
+          })
+        : resourceType.namedResources
+
       // If named resources exist, compute per-NR allocatedDays
-      const hasNamedResources = resourceType.namedResources && resourceType.namedResources.length > 0
+      const hasNamedResources = namedResourcesSource.length > 0
 
       let allocatedDays: number
       let namedResourcesOutput: Array<{
@@ -254,13 +305,20 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       if (hasNamedResources) {
         // Compute per-NR allocated days
-        namedResourcesOutput = resourceType.namedResources.map(nr => {
+        namedResourcesOutput = namedResourcesSource.map(nr => {
           const nrMode = (nr.allocationMode as AllocationMode) ?? 'EFFORT'
           const nrPercent = nr.allocationPercent ?? 100
           let nrAllocatedDays: number
-          if (nrMode === 'EFFORT') {
+          if (nrMode === 'CAPACITY_PLAN') {
+            const startWeek = nr.startWeek
+            const endWeek = nr.endWeek
+            const allocationRatio = (nrPercent ?? 100) / 100
+            nrAllocatedDays = startWeek != null && endWeek != null
+              ? round2(Math.max(0, endWeek - startWeek + 1) * 5 * allocationRatio)
+              : 0
+          } else if (nrMode === 'EFFORT') {
             // Split effort equally across named resources
-            nrAllocatedDays = round2(totalDays / resourceType.namedResources.length)
+            nrAllocatedDays = round2(totalDays / namedResourcesSource.length)
           } else if (nrMode === 'TIMELINE') {
             const effectiveStart = nr.allocationStartWeek ?? nr.startWeek ?? derivedStartWeek ?? 0
             const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek ?? derivedEndWeek ?? effectiveStart
@@ -287,7 +345,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         allocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
       } else {
         namedResourcesOutput = []
-        if (mode === 'EFFORT') {
+        if (mode === 'CAPACITY_PLAN') {
+          allocatedDays = capacityPlanDays.get(resourceType.id) ?? totalDays
+        } else if (mode === 'EFFORT') {
           allocatedDays = totalDays
         } else if (mode === 'TIMELINE') {
           if (effectiveStartWeek != null && effectiveEndWeek != null) {
