@@ -184,7 +184,7 @@ test.describe('Timeline', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Resource Optimiser drawer — Phase 4, issue #233
+// Scenario Finder drawer — Phase 4, issue #233
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -252,17 +252,17 @@ async function setupOptimiserTimeline(page: Page): Promise<void> {
 
 // ── Test 1: open & close ──────────────────────────────────────────────────────
 // Uses the lighter setupTimeline (no CSV needed for open/close alone).
-test.describe('Optimiser drawer — open and close', () => {
+test.describe('Scenario Finder drawer — open and close', () => {
   test('open and close the drawer', async ({ page }) => {
     await setupTimeline(page)
 
-    // Click the ✨ Optimise header button
-    await page.getByRole('button', { name: '✨ Optimise' }).click()
+    // Click the header button
+    await page.getByRole('button', { name: /scenario finder/i }).click()
 
     // Drawer heading and dialog role should be visible
-    const drawer = page.getByRole('dialog', { name: /optimise resources/i })
+    const drawer = page.getByRole('dialog', { name: /scenario finder/i })
     await expect(drawer).toBeVisible({ timeout: 8_000 })
-    await expect(drawer.getByRole('heading', { name: /optimise resources/i })).toBeVisible()
+    await expect(drawer.getByRole('heading', { name: /scenario finder/i })).toBeVisible()
 
     // Close via the × button (aria-label="Close")
     await drawer.getByRole('button', { name: 'Close' }).click()
@@ -273,7 +273,7 @@ test.describe('Optimiser drawer — open and close', () => {
 })
 
 // ── Tests 2 & 3: require resource types ──────────────────────────────────────
-test.describe('Optimiser drawer — with resources', () => {
+test.describe('Scenario Finder drawer — with resources', () => {
   test.beforeEach(async ({ page }) => {
     // CSV import + navigation takes ~20-30s; allow 90s total
     test.setTimeout(90_000)
@@ -282,8 +282,8 @@ test.describe('Optimiser drawer — with resources', () => {
 
   test('run optimiser and see results', async ({ page }) => {
     // Open the drawer
-    await page.getByRole('button', { name: '✨ Optimise' }).click()
-    const drawer = page.getByRole('dialog', { name: /optimise resources/i })
+    await page.getByRole('button', { name: /scenario finder/i }).click()
+    const drawer = page.getByRole('dialog', { name: /scenario finder/i })
     await expect(drawer).toBeVisible({ timeout: 8_000 })
 
     // Click Run optimiser
@@ -303,8 +303,8 @@ test.describe('Optimiser drawer — with resources', () => {
 
   test('apply button is present on candidate cards, dialog is dismissed without mutation', async ({ page }) => {
     // Open the drawer and run the optimiser
-    await page.getByRole('button', { name: '✨ Optimise' }).click()
-    const drawer = page.getByRole('dialog', { name: /optimise resources/i })
+    await page.getByRole('button', { name: /scenario finder/i }).click()
+    const drawer = page.getByRole('dialog', { name: /scenario finder/i })
     await expect(drawer).toBeVisible({ timeout: 8_000 })
 
     await drawer.getByRole('button', { name: 'Run optimiser' }).click()

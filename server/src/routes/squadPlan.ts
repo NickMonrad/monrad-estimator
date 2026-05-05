@@ -15,19 +15,119 @@ import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
 import { runScheduler, type SchedulerInput, type SchedulerResourceType } from '../lib/scheduler.js'
 import { levelEpicStarts } from '../lib/leveller.js'
+import { runSAPlanner } from '../lib/sa-planner.js'
 import {
   computeCapacityPlan,
   type CapacityPlanConfig,
 } from '../lib/capacity-planner.js'
+import {
+  materializeCapacityPlanResources,
+  type CapacityPlanSlotWindow,
+  type CapacityPlanPeriodInput,
+} from '../lib/capacityPlanMaterialisation.js'
+
+type ApplyPeriodEntry = {
+  resourceTypeId: string
+  headcount: number
+  demandFTE: number
+  utilisationPct: number
+}
+
+type ApplyPeriod = {
+  periodIndex: number
+  startWeek: number
+  endWeek: number
+  entries: ApplyPeriodEntry[]
+}
+
+type SlotWindow = {
+  startWeek: number
+  endWeek: number
+}
+
+type PlannerInputLoadOptions = {
+  includeCapacityPlanMaterialization?: boolean
+}
+
+type PlannerInputResourceType = SchedulerResourceType & {
+  allocationMode?: string | null
+}
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
+const isNonNegativeFiniteNumber = (value: unknown): value is number =>
+  isFiniteNumber(value) && value >= 0
+
+export function deriveFeatureSpanFromWeeklyAllocations(
+  weeklyAllocations: Map<number, Map<string, number>> | undefined,
+  fallbackStartWeek: number,
+): { startWeek: number; durationWeeks: number } {
+  const allocatedWeeks: number[] = []
+  if (weeklyAllocations) {
+    for (const [week, byRt] of weeklyAllocations.entries()) {
+      let totalAllocation = 0
+      for (const allocation of byRt.values()) {
+        if (Number.isFinite(allocation)) totalAllocation += allocation
+      }
+      if (totalAllocation > 0) allocatedWeeks.push(week)
+    }
+  }
+
+  if (allocatedWeeks.length === 0) {
+    return { startWeek: fallbackStartWeek, durationWeeks: 1 }
+  }
+
+  const startWeek = Math.min(...allocatedWeeks)
+  const endWeek = Math.max(...allocatedWeeks)
+  return { startWeek, durationWeeks: Math.max(1, endWeek - startWeek + 1) }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data loader — same pattern as optimiser.ts
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function loadSchedulerInput(projectId: string, hoursPerDay: number): Promise<SchedulerInput> {
+export function stripCapacityPlanMaterialization(
+  resourceTypes: PlannerInputResourceType[],
+): SchedulerResourceType[] {
+  return resourceTypes.map(resourceType => ({
+    ...resourceType,
+    namedResources: (resourceType.namedResources ?? []).filter(
+      namedResource => namedResource.allocationMode !== 'CAPACITY_PLAN',
+    ),
+  }))
+}
+
+function buildWeeklyDemandCacheFromPlannerResult(
+  weeklyDemandByResourceType: Map<string, number[]>,
+  resourceTypes: SchedulerResourceType[],
+): Record<string, number> {
+  const resourceTypeNameById = new Map(resourceTypes.map(resourceType => [resourceType.id, resourceType.name]))
+  const weeklyDemandCache: Record<string, number> = {}
+
+  for (const [resourceTypeId, weeklyDemand] of weeklyDemandByResourceType.entries()) {
+    const resourceTypeName = resourceTypeNameById.get(resourceTypeId)
+    if (!resourceTypeName) continue
+
+    for (let week = 0; week < weeklyDemand.length; week++) {
+      const demandDays = weeklyDemand[week]
+      if (!Number.isFinite(demandDays) || demandDays <= 0) continue
+      weeklyDemandCache[`${resourceTypeName}|${week}`] = demandDays
+    }
+  }
+
+  return weeklyDemandCache
+}
+
+async function loadSchedulerInput(
+  projectId: string,
+  hoursPerDay: number,
+  options: PlannerInputLoadOptions = {},
+): Promise<SchedulerInput> {
+  const { includeCapacityPlanMaterialization = true } = options
   const [allEpics, resourceTypes, manualFeatures, manualStories, epicDeps] = await Promise.all([
     prisma.epic.findMany({
       where: { projectId },
@@ -68,10 +168,14 @@ async function loadSchedulerInput(projectId: string, hoursPerDay: number): Promi
     .filter(e => e.isActive !== false)
     .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
 
+  const plannerResourceTypes = includeCapacityPlanMaterialization
+    ? resourceTypes as SchedulerResourceType[]
+    : stripCapacityPlanMaterialization(resourceTypes as PlannerInputResourceType[])
+
   return {
     project: { hoursPerDay },
     epics,
-    resourceTypes: resourceTypes as SchedulerResourceType[],
+    resourceTypes: plannerResourceTypes,
     epicDeps,
     manualFeatureEntries: manualFeatures.map(e => ({
       featureId: e.featureId,
@@ -84,6 +188,93 @@ async function loadSchedulerInput(projectId: string, hoursPerDay: number): Promi
     })),
     resourceLevel: false,
   }
+}
+
+export type SlotSegment = {
+  slotIndex: number
+  segmentIndex: number
+  startWeek: number
+  endWeek: number
+}
+
+export function deriveSlotSegments(
+  periods: Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }>,
+): SlotSegment[] {
+  const sortedPeriods = [...periods].sort((a, b) => a.periodIndex - b.periodIndex)
+  const maxSlots = Math.max(0, ...sortedPeriods.map(period => period.headcount))
+  const segments: SlotSegment[] = []
+
+  for (let slot = 1; slot <= maxSlots; slot++) {
+    let currentWindow: SlotWindow | null = null
+    let segmentIndex = 0
+
+    for (const period of sortedPeriods) {
+      const isActive = period.headcount >= slot
+
+      if (!isActive) {
+        if (currentWindow) {
+          segments.push({
+            slotIndex: slot,
+            segmentIndex,
+            startWeek: currentWindow.startWeek,
+            endWeek: currentWindow.endWeek,
+          })
+          currentWindow = null
+          segmentIndex += 1
+        }
+        continue
+      }
+
+      if (!currentWindow) {
+        currentWindow = { startWeek: period.startWeek, endWeek: period.endWeek }
+        continue
+      }
+
+      if (period.startWeek <= currentWindow.endWeek + 1) {
+        currentWindow.endWeek = period.endWeek
+        continue
+      }
+
+      segments.push({
+        slotIndex: slot,
+        segmentIndex,
+        startWeek: currentWindow.startWeek,
+        endWeek: currentWindow.endWeek,
+      })
+      segmentIndex += 1
+      currentWindow = { startWeek: period.startWeek, endWeek: period.endWeek }
+    }
+
+    if (currentWindow) {
+      segments.push({
+        slotIndex: slot,
+        segmentIndex,
+        startWeek: currentWindow.startWeek,
+        endWeek: currentWindow.endWeek,
+      })
+    }
+  }
+
+  return segments
+}
+
+/**
+ * Derive slot windows per resource type using the shared fractional-aware
+ * materialisation library.  Each window carries { startWeek, endWeek,
+ * allocationPercent } so that 0.25 HC produces one window at 25%, 1.25 HC
+ * produces a 100% window plus a 25% window, etc.
+ *
+ * This replaces deriveSlotSegmentsByResourceType in the apply path.
+ */
+function deriveSlotWindowsByResourceType(periods: ApplyPeriod[]): Map<string, CapacityPlanSlotWindow[]> {
+  // ApplyPeriod is a superset of CapacityPlanPeriodInput — extra entry fields
+  // (demandFTE, utilisationPct) are simply ignored by the materialisation lib.
+  const materialized = materializeCapacityPlanResources(periods as unknown as CapacityPlanPeriodInput[])
+  const result = new Map<string, CapacityPlanSlotWindow[]>()
+  for (const [rtId, mat] of materialized) {
+    result.set(rtId, mat.slotWindows)
+  }
+  return result
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,22 +298,13 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     setActive,
     levellingResult: clientLevellingResult,
     maxParallelismPerFeature: clientMaxParallelism,
+    maxConcurrentEpics: clientMaxConcurrentEpics,
   } = req.body as {
     name: string
     targetWeeks: number
     periodWeeks: number
     maxDelta: number
-    periods: Array<{
-      periodIndex: number
-      startWeek: number
-      endWeek: number
-      entries: Array<{
-        resourceTypeId: string
-        headcount: number
-        demandFTE: number
-        utilisationPct: number
-      }>
-    }>
+    periods: ApplyPeriod[]
     totalCost?: number
     deliveryWeeks?: number
     setActive?: boolean
@@ -133,6 +315,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       peakUtilisationPct: number
     }
     maxParallelismPerFeature?: number
+    maxConcurrentEpics?: number
   }
 
   // ── Validation ──────────────────────────────────────────────────────────
@@ -150,6 +333,64 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
   if (!Array.isArray(periods) || periods.length === 0) {
     res.status(400).json({ error: 'periods array is required' }); return
+  }
+  if (totalCost != null && !isNonNegativeFiniteNumber(totalCost)) {
+    res.status(400).json({ error: 'totalCost must be a finite number >= 0' }); return
+  }
+  if (deliveryWeeks != null && !isNonNegativeFiniteNumber(deliveryWeeks)) {
+    res.status(400).json({ error: 'deliveryWeeks must be a finite number >= 0' }); return
+  }
+  if (clientMaxParallelism != null && (!Number.isInteger(clientMaxParallelism) || clientMaxParallelism < 1)) {
+    res.status(400).json({ error: 'maxParallelismPerFeature must be an integer >= 1' }); return
+  }
+  if (clientMaxConcurrentEpics != null && (!Number.isInteger(clientMaxConcurrentEpics) || clientMaxConcurrentEpics < 1)) {
+    res.status(400).json({ error: 'maxConcurrentEpics must be an integer >= 1' }); return
+  }
+
+  const projectResourceTypes = await prisma.resourceType.findMany({
+    where: { projectId },
+    select: { id: true },
+  })
+  const projectResourceTypeIds = new Set(projectResourceTypes.map(rt => rt.id))
+
+  const normalisedPeriods = [...periods].sort((a, b) => a.periodIndex - b.periodIndex)
+  let previousEndWeek = -Infinity
+  for (let idx = 0; idx < normalisedPeriods.length; idx++) {
+    const period = normalisedPeriods[idx]
+    if (!Number.isInteger(period.periodIndex) || period.periodIndex !== idx) {
+      res.status(400).json({ error: 'periods must have contiguous integer periodIndex values starting at 0' }); return
+    }
+    if (!Number.isInteger(period.startWeek) || !Number.isInteger(period.endWeek)) {
+      res.status(400).json({ error: 'period startWeek and endWeek must be integers' }); return
+    }
+    if (period.startWeek < 0 || period.endWeek <= period.startWeek) {
+      res.status(400).json({ error: 'period ranges must be non-negative with endWeek > startWeek' }); return
+    }
+    if (period.startWeek < previousEndWeek) {
+      res.status(400).json({ error: 'period ranges must be ordered and non-overlapping' }); return
+    }
+    previousEndWeek = period.endWeek
+    if (!Array.isArray(period.entries)) {
+      res.status(400).json({ error: 'period entries are required' }); return
+    }
+
+    for (const entry of period.entries) {
+      if (!entry?.resourceTypeId || typeof entry.resourceTypeId !== 'string') {
+        res.status(400).json({ error: 'period entry resourceTypeId is required' }); return
+      }
+      if (!projectResourceTypeIds.has(entry.resourceTypeId)) {
+        res.status(400).json({ error: `Unknown resourceTypeId in periods: ${entry.resourceTypeId}` }); return
+      }
+      if (!isNonNegativeFiniteNumber(entry.headcount)) {
+        res.status(400).json({ error: 'period entry headcount must be a finite number >= 0' }); return
+      }
+      if (!isNonNegativeFiniteNumber(entry.demandFTE)) {
+        res.status(400).json({ error: 'period entry demandFTE must be a finite number >= 0' }); return
+      }
+      if (!isNonNegativeFiniteNumber(entry.utilisationPct)) {
+        res.status(400).json({ error: 'period entry utilisationPct must be a finite number >= 0' }); return
+      }
+    }
   }
 
   const shouldActivate = setActive ?? true
@@ -188,7 +429,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       totalCost,
       deliveryWeeks,
       periods: {
-        create: periods.map(p => ({
+        create: normalisedPeriods.map(p => ({
           periodIndex: p.periodIndex,
           startWeek: p.startWeek,
           endWeek: p.endWeek,
@@ -208,9 +449,11 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // ── 4. Update RT counts + allocation mode, re-run scheduler ─────────────
   if (shouldActivate) {
+    let refreshedWeeklyDemandCache: Record<string, number> = {}
+
     // Compute max headcount per RT across all periods
     const maxHeadcountByRt = new Map<string, number>()
-    for (const p of periods) {
+    for (const p of normalisedPeriods) {
       for (const e of p.entries) {
         const current = maxHeadcountByRt.get(e.resourceTypeId) ?? 0
         maxHeadcountByRt.set(e.resourceTypeId, Math.max(current, e.headcount))
@@ -221,7 +464,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     for (const [rtId, count] of maxHeadcountByRt) {
       await prisma.resourceType.update({
         where: { id: rtId },
-        data: { count, allocationMode: 'CAPACITY_PLAN' },
+        data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
       })
     }
 
@@ -237,15 +480,25 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       data: { allocationMode: 'CAPACITY_PLAN' },
     })
 
-    // Auto-create missing Named Resources to match new RT counts
-    for (const [rtId, targetCount] of maxHeadcountByRt) {
+    // ── Compute fractional-aware slot windows per RT ──────────────────────────
+    // Uses the shared materialisation library so fractional headcount (e.g. 0.25,
+    // 1.25) produces the correct number of NR windows with the right
+    // allocationPercent values (e.g. 0.25 HC → one window at 25%).
+    const slotWindowsByRt = deriveSlotWindowsByResourceType(normalisedPeriods)
+
+    // ── Auto-create missing NRs then assign slot windows ────────────────────
+    for (const [rtId] of maxHeadcountByRt) {
+      const slotWindows = slotWindowsByRt.get(rtId) ?? []
+
+      // Fetch existing NRs with stable ordering (oldest first = lowest id)
       const existingNRs = await prisma.namedResource.findMany({
         where: { resourceTypeId: rtId },
+        orderBy: { id: 'asc' },
         select: { id: true },
       })
-      const missing = targetCount - existingNRs.length
+
+      const missing = Math.max(0, slotWindows.length - existingNRs.length)
       if (missing > 0) {
-        // Get RT name for naming convention
         const rt = await prisma.resourceType.findUnique({
           where: { id: rtId },
           select: { name: true },
@@ -256,17 +509,60 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
           resourceTypeId: rtId,
           name: `${baseName} ${startIndex + i}`,
           allocationMode: 'CAPACITY_PLAN' as const,
-          startWeek: 0,
+          startWeek: 0,   // placeholder; updated immediately below
         }))
         await prisma.namedResource.createMany({ data: newNRs })
       }
+
+      // Re-fetch all NRs (including any just created) with stable ordering
+      const allNRs = await prisma.namedResource.findMany({
+        where: { resourceTypeId: rtId },
+        orderBy: { id: 'asc' },
+        select: { id: true },
+      })
+
+      // Assign each NR one slot window (startWeek, endWeek, allocationPercent).
+      // Surplus NRs become inactive (startWeek=-1, endWeek=-1, allocationPercent=100).
+      await Promise.all(
+        allNRs.map((nr, idx) => {
+          const win = slotWindows[idx] ?? { startWeek: -1, endWeek: -1, allocationPercent: 100 }
+          return prisma.namedResource.update({
+            where: { id: nr.id },
+            data: {
+              startWeek: win.startWeek,
+              endWeek: win.endWeek,
+              allocationPercent: win.allocationPercent,
+              allocationMode: 'CAPACITY_PLAN',
+            },
+          })
+        })
+      )
     }
 
     // ── 5. Materialise timeline using the projected schedule ───────────────
 
     if (clientLevellingResult?.featureStartWeeks && Object.keys(clientLevellingResult.featureStartWeeks).length > 0) {
-      // ── Direct persistence path: use SA's featureStartWeeks as-is ──────
+      // ── Direct persistence path: derive spans from planner allocations ───
       const maxParallelism = clientMaxParallelism ?? 2
+      const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay, {
+        includeCapacityPlanMaterialization: false,
+      })
+      const plannerMaxCap = new Map<string, number>()
+      for (const [rtId, headcount] of maxHeadcountByRt.entries()) {
+        if (isNonNegativeFiniteNumber(headcount)) {
+          plannerMaxCap.set(rtId, headcount)
+        }
+      }
+      const plannerResult = runSAPlanner(schedulerInput, {
+        targetDurationWeeks: targetWeeks,
+        maxParallelismPerFeature: maxParallelism,
+        maxCap: plannerMaxCap,
+        maxConcurrentEpics: clientMaxConcurrentEpics,
+      })
+      refreshedWeeklyDemandCache = buildWeeklyDemandCacheFromPlannerResult(
+        plannerResult.weeklyDemandByResourceType,
+        schedulerInput.resourceTypes,
+      )
 
       // Persist epic start weeks
       const epicStartWeeks = new Map(
@@ -292,11 +588,9 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         },
       })
 
-      const resourceTypes = await prisma.resourceType.findMany({ where: { projectId } })
-      const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
       const hpd = project.hoursPerDay
 
-      // Compute feature durations using the same formula as the SA planner
+      // Compute feature spans from actual weekly allocations produced by planner
       const featureStartWeeks = clientLevellingResult.featureStartWeeks
       const featureRows: Array<{
         projectId: string; featureId: string; startWeek: number; durationWeeks: number; isManual: false
@@ -308,8 +602,15 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       for (const epic of allEpics) {
         for (const feature of epic.features) {
           if (feature.isActive === false) continue
-          const startWeek = featureStartWeeks[feature.id]
-          if (startWeek == null) continue
+          const fallbackStartWeek = Number(
+            featureStartWeeks[feature.id]
+              ?? plannerResult.featureStartWeeks.get(feature.id)
+              ?? 0,
+          )
+          const span = deriveFeatureSpanFromWeeklyAllocations(
+            plannerResult.weeklyAllocationsByFeature.get(feature.id),
+            fallbackStartWeek,
+          )
 
           // Compute demand per RT (same as sa-planner.ts lines 104-112)
           const demandByRt = new Map<string, number>()
@@ -323,22 +624,11 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             }
           }
 
-          // Duration = max across RTs of (totalDays / min(count, maxParallelism) / 5)
-          let maxWeeks = 0.2
-          for (const [rtId, totalDays] of demandByRt) {
-            const rt = rtById.get(rtId)
-            if (!rt) continue
-            const parallelism = Math.min(rt.count, maxParallelism)
-            const weeks = totalDays / parallelism / 5
-            if (weeks > maxWeeks) maxWeeks = weeks
-          }
-          const durationWeeks = Math.max(1, Math.ceil(maxWeeks))
-
           featureRows.push({
             projectId,
             featureId: feature.id,
-            startWeek: Number(startWeek),
-            durationWeeks,
+            startWeek: span.startWeek,
+            durationWeeks: span.durationWeeks,
             isManual: false as const,
           })
 
@@ -353,11 +643,11 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
               storyDays += task.durationDays ?? (task.hoursEffort / rtHpd)
             }
             const proportion = totalFeatureDays > 0 ? storyDays / totalFeatureDays : 0
-            const storyDuration = Math.max(1, Math.ceil(durationWeeks * proportion))
+            const storyDuration = Math.max(1, Math.ceil(span.durationWeeks * proportion))
             storyRows.push({
               projectId,
               storyId: story.id,
-              startWeek: Number(startWeek),
+              startWeek: span.startWeek,
               durationWeeks: storyDuration,
               isManual: false as const,
             })
@@ -402,10 +692,11 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       }))
 
       // Run scheduler with levelled start weeks
-      const { featureSchedule, storySchedule } = runScheduler({
+      const { featureSchedule, storySchedule, weeklyConsumptionMap } = runScheduler({
         ...schedulerInput,
         epics: levelledEpics,
       })
+      refreshedWeeklyDemandCache = Object.fromEntries(weeklyConsumptionMap)
 
       // Materialise timeline entries
       await prisma.$transaction(async tx => {
@@ -438,6 +729,11 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         }
       })
     }
+
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: refreshedWeeklyDemandCache },
+    })
   }
 
   res.status(201).json(plan)
@@ -456,6 +752,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     targetDurationWeeks?: number
     periodWeeks?: number
     maxDeltaPerPeriod?: number
+    smoothingMode?: 'smooth' | 'tight' | 'exact'
     minFloor?: Record<string, number>
     maxCap?: Record<string, number>
     maxBudget?: number
@@ -466,7 +763,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // ── Validation ──────────────────────────────────────────────────────────
   const targetDurationWeeks = body.targetDurationWeeks
-  if (typeof targetDurationWeeks !== 'number' || targetDurationWeeks <= 0) {
+  if (!isFiniteNumber(targetDurationWeeks) || targetDurationWeeks <= 0) {
     res.status(400).json({ error: 'targetDurationWeeks is required and must be > 0' }); return
   }
 
@@ -480,13 +777,39 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'maxDeltaPerPeriod must be an integer >= 1' }); return
   }
 
+  const smoothingMode = body.smoothingMode ?? 'smooth'
+  if (smoothingMode !== 'smooth' && smoothingMode !== 'tight' && smoothingMode !== 'exact') {
+    res.status(400).json({ error: 'smoothingMode must be smooth, tight, or exact' }); return
+  }
+  if (body.maxBudget != null && !isNonNegativeFiniteNumber(body.maxBudget)) {
+    res.status(400).json({ error: 'maxBudget must be a finite number >= 0' }); return
+  }
+  if (body.maxAllocationBufferPct != null && (!isFiniteNumber(body.maxAllocationBufferPct) || body.maxAllocationBufferPct < 0)) {
+    res.status(400).json({ error: 'maxAllocationBufferPct must be a finite number >= 0' }); return
+  }
+  if (body.maxParallelismPerFeature != null && (!Number.isInteger(body.maxParallelismPerFeature) || body.maxParallelismPerFeature < 1)) {
+    res.status(400).json({ error: 'maxParallelismPerFeature must be an integer >= 1' }); return
+  }
+  if (body.maxConcurrentEpics != null && (!Number.isInteger(body.maxConcurrentEpics) || body.maxConcurrentEpics < 1)) {
+    res.status(400).json({ error: 'maxConcurrentEpics must be an integer >= 1' }); return
+  }
+
   // ── Load scheduler input ────────────────────────────────────────────────
-  const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay)
+  const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay, {
+    includeCapacityPlanMaterialization: false,
+  })
+  const projectRtIds = new Set(schedulerInput.resourceTypes.map(rt => rt.id))
 
   // ── Build minFloor map ──────────────────────────────────────────────────
   const minFloor = new Map<string, number>()
   if (body.minFloor) {
     for (const [rtId, floor] of Object.entries(body.minFloor)) {
+      if (!projectRtIds.has(rtId)) {
+        res.status(400).json({ error: `Unknown resourceTypeId in minFloor: ${rtId}` }); return
+      }
+      if (!isNonNegativeFiniteNumber(floor)) {
+        res.status(400).json({ error: `minFloor for ${rtId} must be a finite number >= 0` }); return
+      }
       minFloor.set(rtId, floor)
     }
   }
@@ -495,6 +818,23 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   for (const rt of schedulerInput.resourceTypes) {
     if (!minFloor.has(rt.id)) {
       minFloor.set(rt.id, 0)
+    }
+  }
+
+  const maxCap = new Map<string, number>()
+  if (body.maxCap) {
+    for (const [rtId, cap] of Object.entries(body.maxCap)) {
+      if (!projectRtIds.has(rtId)) {
+        res.status(400).json({ error: `Unknown resourceTypeId in maxCap: ${rtId}` }); return
+      }
+      if (!isNonNegativeFiniteNumber(cap)) {
+        res.status(400).json({ error: `maxCap for ${rtId} must be a finite number >= 0` }); return
+      }
+      const floor = minFloor.get(rtId) ?? 0
+      if (cap < floor) {
+        res.status(400).json({ error: `maxCap for ${rtId} must be >= minFloor` }); return
+      }
+      maxCap.set(rtId, cap)
     }
   }
 
@@ -515,8 +855,9 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     targetDurationWeeks,
     periodWeeks,
     maxDeltaPerPeriod,
+    smoothingMode,
     minFloor,
-    maxCap: body.maxCap ? new Map(Object.entries(body.maxCap).map(([k, v]) => [k, Number(v)])) : undefined,
+    maxCap: maxCap.size > 0 ? maxCap : undefined,
     dayRates,
     maxBudget: body.maxBudget,
     maxAllocationBufferPct: body.maxAllocationBufferPct,

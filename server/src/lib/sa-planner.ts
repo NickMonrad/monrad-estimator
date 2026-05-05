@@ -1,14 +1,9 @@
 /**
- * sa-planner.ts — Resource-Constrained Priority Scheduler (RCPS).
+ * sa-planner.ts — Deterministic weekly fractional staffing planner.
  *
- * Schedules features into available capacity without exceeding it,
- * like manually filling an Excel resource calendar. Features are
- * placed in epic-priority order (by epic.order, then feature.order),
- * each slotted into the earliest week where capacity is available
- * across all required resource types.
- *
- * An optional SA compression pass tries to pull features earlier
- * to minimise total delivery weeks while maintaining feasibility.
+ * Schedules feature work as week-by-week resource flow instead of fixed blocks.
+ * Each week, ready features receive fractional RT capacity in priority order,
+ * capped per feature to avoid unrealistic single-feature staffing spikes.
  *
  * Pure function: no I/O, no Prisma, no side effects.
  */
@@ -16,6 +11,7 @@
 import {
   getWeeklyCapacity,
   type SchedulerInput,
+  type SchedulerResourceType,
 } from './scheduler.js'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -29,21 +25,17 @@ export interface SAPlannerConfig {
   maxCap?: Map<string, number>
   /** Maximum number of epics active simultaneously. Default: all (no limit). */
   maxConcurrentEpics?: number
-  /** Number of SA iterations. Default 5000. */
+  /** Legacy compatibility only; ignored by the deterministic allocator. */
   iterations?: number
-  /** Initial temperature. Default 100. */
+  /** Legacy compatibility only; ignored by the deterministic allocator. */
   initialTemp?: number
-  /** Cooling rate (0-1). Default 0.995. */
+  /** Legacy compatibility only; ignored by the deterministic allocator. */
   coolingRate?: number
 
-  // Fitness weights (all default to 1.0)
-  /** Weight for resource utilisation variance penalty */
+  // Legacy compatibility only; ignored by the deterministic allocator.
   weightUtilVariance?: number
-  /** Weight for over-allocation penalty (exceeding RT capacity) */
   weightOverAllocation?: number
-  /** Weight for duration exceeding target */
   weightDurationPenalty?: number
-  /** Weight for idle gaps (weeks with 0 demand for an active RT) */
   weightGapPenalty?: number
 }
 
@@ -57,6 +49,10 @@ export interface SAPlannerResult {
   bestFitness: number
   /** Number of iterations that improved the solution */
   improvements: number
+  /** Actual weekly demand curve by RT (days/week) */
+  weeklyDemandByResourceType: Map<string, number[]>
+  /** Actual per-feature weekly RT allocations (days/week) */
+  weeklyAllocationsByFeature: Map<string, Map<number, Map<string, number>>>
 }
 
 // ─── Internal types ──────────────────────────────────────────────────────────
@@ -64,10 +60,17 @@ export interface SAPlannerResult {
 interface FeatureInfo {
   id: string
   epicId: string
-  durationWeeks: number
-  demandRates: Map<string, number> // rtId → days/week demand
-  predecessors: Set<string>        // featureId predecessors
+  epicOrder: number
+  featureOrder: number
+  remainingDaysByRt: Map<string, number>
+  totalDaysByRt: Map<string, number>
+  predecessors: Set<string>
+  startedWeek?: number
+  completedWeek?: number
+  hasDemand: boolean
 }
+
+const EPSILON = 1e-6
 
 // ─── Main entry ──────────────────────────────────────────────────────────────
 
@@ -85,79 +88,68 @@ export function runSAPlanner(
   const { epics, resourceTypes, epicDeps } = input
   const hpd = input.project.hoursPerDay
 
-  // ── Precompute data structures ──────────────────────────────────────────
-
-  const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
   const features: FeatureInfo[] = []
   const featureMap = new Map<string, FeatureInfo>()
-  const epicFeatures = new Map<string, string[]>() // epicId → featureIds
+  const featuresByEpic = new Map<string, FeatureInfo[]>()
+  const epicById = new Map(epics.map(epic => [epic.id, epic]))
+  const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
 
-  // Compute feature durations with parallelism cap
+  const effectiveRtCount = new Map<string, number>()
+  for (const rt of resourceTypes) {
+    const capCount = maxCap?.get(rt.id)
+    effectiveRtCount.set(rt.id, Math.max(0, Math.min(rt.count, capCount ?? rt.count)))
+  }
+
   for (const epic of epics) {
-    const fIds: string[] = []
-    for (const feature of epic.features) {
-      fIds.push(feature.id)
+    const epicFeatures: FeatureInfo[] = []
 
-      // Compute demand per RT
-      const demandByRt = new Map<string, number>()
+    for (const feature of epic.features) {
+      const totalDaysByRt = new Map<string, number>()
+
       for (const story of feature.userStories) {
         if (story.isActive === false) continue
         for (const task of story.tasks) {
           if (!task.resourceTypeId) continue
           const rtHpd = task.resourceType?.hoursPerDay ?? hpd
           const days = task.durationDays ?? (task.hoursEffort / rtHpd)
-          demandByRt.set(task.resourceTypeId, (demandByRt.get(task.resourceTypeId) ?? 0) + days)
+          totalDaysByRt.set(task.resourceTypeId, (totalDaysByRt.get(task.resourceTypeId) ?? 0) + days)
         }
-      }
-
-      // Duration = max across RTs of (totalDays / min(count, maxParallelism) / 5)
-      let maxWeeks = 0.2
-      for (const [rtId, totalDays] of demandByRt) {
-        const rt = rtById.get(rtId)
-        if (!rt) continue
-        const parallelism = Math.min(rt.count, maxParallelismPerFeature)
-        const weeks = totalDays / parallelism / 5
-        if (weeks > maxWeeks) maxWeeks = weeks
-      }
-      const durationWeeks = Math.max(1, Math.ceil(maxWeeks))
-
-      // Demand rates = totalDays / durationWeeks per RT
-      const demandRates = new Map<string, number>()
-      for (const [rtId, totalDays] of demandByRt) {
-        demandRates.set(rtId, totalDays / durationWeeks)
       }
 
       const info: FeatureInfo = {
         id: feature.id,
         epicId: epic.id,
-        durationWeeks,
-        demandRates,
+        epicOrder: epic.order,
+        featureOrder: feature.order,
+        remainingDaysByRt: new Map(totalDaysByRt),
+        totalDaysByRt,
         predecessors: new Set(),
+        hasDemand: totalDaysByRt.size > 0,
       }
+
       features.push(info)
       featureMap.set(feature.id, info)
+      epicFeatures.push(info)
     }
-    epicFeatures.set(epic.id, fIds)
+
+    featuresByEpic.set(epic.id, epicFeatures)
   }
 
-  // Build dependency graph
-  const epicById = new Map(epics.map(e => [e.id, e]))
-
-  // Explicit feature deps
   for (const epic of epics) {
     for (const feature of epic.features) {
+      const info = featureMap.get(feature.id)
+      if (!info) continue
       for (const dep of feature.dependencies ?? []) {
-        const info = featureMap.get(feature.id)
-        if (info) info.predecessors.add(dep.dependsOnId)
+        info.predecessors.add(dep.dependsOnId)
       }
     }
   }
 
-  // Epic deps → all features in dependent epic depend on all in predecessor
   for (const dep of epicDeps) {
     const fromEpic = epicById.get(dep.dependsOnId)
     const toEpic = epicById.get(dep.epicId)
     if (!fromEpic || !toEpic) continue
+
     for (const toFeature of toEpic.features) {
       const info = featureMap.get(toFeature.id)
       if (!info) continue
@@ -167,376 +159,300 @@ export function runSAPlanner(
     }
   }
 
-  // Sequential intra-epic deps
   for (const epic of epics) {
     if ((epic.featureMode ?? 'sequential') !== 'sequential') continue
-    const sorted = [...epic.features].sort((a, b) => a.order - b.order)
-    for (let i = 1; i < sorted.length; i++) {
-      const info = featureMap.get(sorted[i].id)
-      if (info) info.predecessors.add(sorted[i - 1].id)
+    const sortedFeatures = [...epic.features].sort((a, b) => a.order - b.order)
+    for (let i = 1; i < sortedFeatures.length; i++) {
+      const info = featureMap.get(sortedFeatures[i].id)
+      if (info) info.predecessors.add(sortedFeatures[i - 1].id)
     }
   }
 
-  // RT capacity per week (days) — use max across all project weeks
-  const rtCapacity = new Map<string, number>()
-  for (const rt of resourceTypes) {
-    let maxCap2 = 0
-    for (let w = 0; w < targetDurationWeeks; w++) {
-      const capW = getWeeklyCapacity(rt, w, hpd) / (rt.hoursPerDay ?? hpd)
-      if (capW > maxCap2) maxCap2 = capW
+  const weeklyDemandByResourceType = new Map<string, number[]>()
+  const weeklyAllocationsByFeature = new Map<string, Map<number, Map<string, number>>>()
+
+  for (const rt of resourceTypes) weeklyDemandByResourceType.set(rt.id, [])
+  for (const feature of features) weeklyAllocationsByFeature.set(feature.id, new Map())
+
+  const featureWeeklyCapByRt = new Map<string, Map<string, number>>()
+  for (const feature of features) {
+    const capByRt = new Map<string, number>()
+    for (const rtId of feature.totalDaysByRt.keys()) {
+      const allowedPeople = Math.min(
+        maxParallelismPerFeature,
+        effectiveRtCount.get(rtId) ?? (rtById.get(rtId)?.count ?? maxParallelismPerFeature),
+      )
+      capByRt.set(rtId, Math.max(0, allowedPeople * 5))
     }
-    // Fallback: count × 5 days/week if still 0
-    if (maxCap2 === 0) maxCap2 = rt.count * 5
-    // Apply maxCap if set
-    const maxCount = maxCap?.get(rt.id)
-    if (maxCount != null) {
-      const perPerson = maxCap2 / rt.count
-      rtCapacity.set(rt.id, perPerson * Math.min(rt.count, maxCount))
-    } else {
-      rtCapacity.set(rt.id, maxCap2)
+    featureWeeklyCapByRt.set(feature.id, capByRt)
+  }
+
+  const totalDemandByRt = new Map<string, number>()
+  for (const feature of features) {
+    for (const [rtId, days] of feature.totalDaysByRt) {
+      totalDemandByRt.set(rtId, (totalDemandByRt.get(rtId) ?? 0) + days)
     }
   }
 
-  // ── Resource-Constrained Priority Scheduler ─────────────────────────────
-
-  const MAX_WEEKS = 300 // safety bound
-
-  /**
-   * Build a capacity-feasible schedule by placing features one-by-one
-   * in priority order (epic.order → feature.order) into the earliest
-   * week where (a) dependencies are met, (b) epic concurrency allows,
-   * and (c) all required RT capacity is available.
-   */
-  function buildResourceConstrainedSchedule(): Map<string, number> {
-    const scheduled = new Map<string, number>()
-
-    // Weekly usage arrays: rtId → Float64Array of days used per week
-    const weeklyUsed = new Map<string, Float64Array>()
-    for (const [rtId] of rtCapacity) {
-      weeklyUsed.set(rtId, new Float64Array(MAX_WEEKS))
+  const roughDurationWeeks = (() => {
+    let maxWeeks = 0
+    for (const rt of resourceTypes) {
+      const demand = totalDemandByRt.get(rt.id) ?? 0
+      if (demand <= EPSILON) continue
+      const people = Math.max(1, effectiveRtCount.get(rt.id) ?? rt.count ?? 1)
+      const weeks = demand / (people * 5)
+      if (weeks > maxWeeks) maxWeeks = weeks
     }
+    return maxWeeks
+  })()
 
-    // Build priority-ordered feature list:
-    //   Primary: epic.order (sort epics from input by their order field)
-    //   Secondary: preserve feature input order within the epic
-    const sortedEpics = [...epics].sort((a, b) => a.order - b.order)
-    const epicPriority = new Map(sortedEpics.map((e, i) => [e.id, i]))
+  const MAX_WEEKS = Math.max(
+    52,
+    Math.ceil(targetDurationWeeks * 3),
+    Math.ceil(roughDurationWeeks * 4) + features.length + 12,
+  )
 
-    const sortedFeatures = [...features].sort((a, b) => {
-      const epicA = epicPriority.get(a.epicId) ?? 999
-      const epicB = epicPriority.get(b.epicId) ?? 999
-      if (epicA !== epicB) return epicA - epicB
-      // Preserve input order within same epic (features array is already in
-      // epic-feature insertion order, so indexOf gives stable ordering)
-      return features.indexOf(a) - features.indexOf(b)
-    })
+  let completedFeatureCount = 0
+  let lastAllocationWeek = -1
 
-    // Pre-build successor map for efficient concurrency tracking
-    // epicId → Set of featureIds (for quick epic-activity lookup)
-    const scheduledByEpic = new Map<string, string[]>()
-    for (const [epicId] of epicFeatures) {
-      scheduledByEpic.set(epicId, [])
+  function isFeatureComplete(feature: FeatureInfo): boolean {
+    for (const remaining of feature.remainingDaysByRt.values()) {
+      if (remaining > EPSILON) return false
     }
-
-    for (const feature of sortedFeatures) {
-      // 1. Find earliest start respecting dependencies
-      let earliest = 0
-      for (const predId of feature.predecessors) {
-        const predStart = scheduled.get(predId)
-        if (predStart !== undefined) {
-          const predInfo = featureMap.get(predId)
-          const predEnd = predStart + (predInfo?.durationWeeks ?? 0)
-          if (predEnd > earliest) earliest = predEnd
-        }
-      }
-
-      // 2. Check max concurrent epics constraint
-      if (maxConcurrentEpics) {
-        while (earliest < MAX_WEEKS) {
-          const activeEpics = new Set<string>()
-          for (const [epicId, fIds] of scheduledByEpic) {
-            if (epicId === feature.epicId) continue // own epic doesn't count
-            for (const fId of fIds) {
-              const fStart = scheduled.get(fId)!
-              const fInfo = featureMap.get(fId)!
-              if (fStart <= earliest && fStart + fInfo.durationWeeks > earliest) {
-                activeEpics.add(epicId)
-                break // one active feature is enough to mark epic active
-              }
-            }
-          }
-          if (activeEpics.size < maxConcurrentEpics) break
-          earliest++
-        }
-      }
-
-      // 3. Find earliest week where capacity is available for ALL required RTs
-      //    across the full feature duration
-      let startWeek = earliest
-      while (startWeek + feature.durationWeeks <= MAX_WEEKS) {
-        let fits = true
-        for (const [rtId, ratePerWeek] of feature.demandRates) {
-          const capacity = rtCapacity.get(rtId) ?? Infinity
-          const used = weeklyUsed.get(rtId)
-          if (!used) continue
-          for (let w = startWeek; w < startWeek + feature.durationWeeks; w++) {
-            if (used[w] + ratePerWeek > capacity + 0.01) { // epsilon for float
-              fits = false
-              break
-            }
-          }
-          if (!fits) break
-        }
-        if (fits) break
-        startWeek++
-      }
-
-      // 4. Schedule the feature and update weekly usage
-      scheduled.set(feature.id, startWeek)
-      scheduledByEpic.get(feature.epicId)?.push(feature.id)
-
-      for (const [rtId, ratePerWeek] of feature.demandRates) {
-        const used = weeklyUsed.get(rtId)
-        if (!used) continue
-        for (let w = startWeek; w < startWeek + feature.durationWeeks && w < MAX_WEEKS; w++) {
-          used[w] += ratePerWeek
-        }
-      }
-    }
-
-    return scheduled
+    return true
   }
 
-  const bestSolution = buildResourceConstrainedSchedule()
-
-  // ── Gap-filling pass ────────────────────────────────────────────────────
-  // After priority-order placement, some RTs have idle gaps because later
-  // features that use those RTs weren't placed yet when the gap existed.
-  // This pass iterates multiple times, trying to pull each feature to its
-  // earliest feasible week (respecting deps, capacity, and concurrency).
-
-  let improvements = 0
-
-  if (features.length > 0) {
-    // Rebuild weekly usage from the RCPS solution
-    const weeklyUsed = new Map<string, Float64Array>()
-    for (const [rtId] of rtCapacity) {
-      weeklyUsed.set(rtId, new Float64Array(MAX_WEEKS))
+  function isFeatureReady(feature: FeatureInfo, week: number): boolean {
+    if (feature.completedWeek !== undefined) return false
+    for (const predId of feature.predecessors) {
+      const pred = featureMap.get(predId)
+      if (!pred || pred.completedWeek === undefined || pred.completedWeek >= week) return false
     }
-    for (const f of features) {
-      const start = bestSolution.get(f.id) ?? 0
-      for (const [rtId, rate] of f.demandRates) {
-        const used = weeklyUsed.get(rtId)
-        if (!used) continue
-        for (let w = start; w < start + f.durationWeeks && w < MAX_WEEKS; w++) {
-          used[w] += rate
-        }
-      }
-    }
+    return true
+  }
 
-    // Build successor lookup: featureId → list of dependent featureIds
-    const successors = new Map<string, string[]>()
-    for (const f of features) {
-      for (const predId of f.predecessors) {
-        let list = successors.get(predId)
-        if (!list) { list = []; successors.set(predId, list) }
-        list.push(f.id)
-      }
+  function getEpicStartedWeek(epicId: string): number | undefined {
+    const epicFeatures = featuresByEpic.get(epicId) ?? []
+    let minWeek: number | undefined
+    for (const feature of epicFeatures) {
+      if (feature.startedWeek === undefined) continue
+      if (minWeek === undefined || feature.startedWeek < minWeek) minWeek = feature.startedWeek
     }
+    return minWeek
+  }
 
-    // Multi-pass gap filling: sort features by current start (latest first)
-    // and try to pull each one earlier. Repeat until no more improvements.
-    // Precompute per-week epic count for concurrency checks (O(1) lookup)
-    let epicCountPerWeek: Uint16Array | null = null
-    let epicPresence: Map<string, Uint8Array> | null = null
-    if (maxConcurrentEpics) {
-      epicCountPerWeek = new Uint16Array(MAX_WEEKS)
-      epicPresence = new Map<string, Uint8Array>()
-      for (const epic of epics) {
-        epicPresence.set(epic.id, new Uint8Array(MAX_WEEKS))
-      }
-      for (const f of features) {
-        const start = bestSolution.get(f.id) ?? 0
-        const ep = epicPresence.get(f.epicId)!
-        for (let w = start; w < start + f.durationWeeks && w < MAX_WEEKS; w++) {
-          if (ep[w] === 0) { ep[w] = 1; epicCountPerWeek[w]++ }
-        }
-      }
+  function isEpicComplete(epicId: string): boolean {
+    const epicFeatures = featuresByEpic.get(epicId) ?? []
+    return epicFeatures.length > 0 && epicFeatures.every(feature => feature.completedWeek !== undefined)
+  }
+
+  function isEpicActive(epicId: string): boolean {
+    return getEpicStartedWeek(epicId) !== undefined && !isEpicComplete(epicId)
+  }
+
+  function canStartFeature(feature: FeatureInfo): boolean {
+    if (!maxConcurrentEpics) return true
+    if (getEpicStartedWeek(feature.epicId) !== undefined) return true
+
+    let activeEpicCount = 0
+    for (const epic of epics) {
+      if (isEpicActive(epic.id)) activeEpicCount++
     }
 
-    const maxPasses = 5
-    for (let pass = 0; pass < maxPasses; pass++) {
-      let passImprovements = 0
+    return activeEpicCount < maxConcurrentEpics
+  }
 
-      const byStart = [...features].sort((a, b) => {
-        return (bestSolution.get(b.id) ?? 0) - (bestSolution.get(a.id) ?? 0)
-      })
+  function getWeeklyCapacityDays(rt: SchedulerResourceType, week: number): number {
+    const hoursPerDay = rt.hoursPerDay ?? hpd
+    if (hoursPerDay <= 0) return 0
 
-      for (const f of byStart) {
-        const currentStart = bestSolution.get(f.id) ?? 0
+    let capacityDays = getWeeklyCapacity(rt, week, hpd) / hoursPerDay
+    if (!Number.isFinite(capacityDays) || capacityDays <= 0) return 0
 
-        let depEarliest = 0
-        for (const predId of f.predecessors) {
-          const predInfo = featureMap.get(predId)
-          if (!predInfo) continue
-          const predEnd = (bestSolution.get(predId) ?? 0) + predInfo.durationWeeks
-          if (predEnd > depEarliest) depEarliest = predEnd
-        }
+    const capCount = maxCap?.get(rt.id)
+    if (capCount != null && rt.count > 0 && capCount < rt.count) {
+      capacityDays *= capCount / rt.count
+    }
 
-        if (depEarliest >= currentStart) continue
+    return Math.max(0, capacityDays)
+  }
 
-        // Remove this feature's usage from the grid
-        for (const [rtId, rate] of f.demandRates) {
-          const used = weeklyUsed.get(rtId)
-          if (!used) continue
-          for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-            used[w] -= rate
-          }
-        }
-        // Remove from epic presence
-        if (epicCountPerWeek && epicPresence) {
-          const ep = epicPresence.get(f.epicId)!
-          // Check if other features in same epic still cover each week
-          for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-            const stillCovered = features.some(other =>
-              other.id !== f.id && other.epicId === f.epicId &&
-              (bestSolution.get(other.id) ?? 0) <= w &&
-              (bestSolution.get(other.id) ?? 0) + other.durationWeeks > w
-            )
-            if (!stillCovered && ep[w] === 1) { ep[w] = 0; epicCountPerWeek[w]-- }
-          }
-        }
+  function compareFeatures(a: FeatureInfo, b: FeatureInfo): number {
+    if (a.epicOrder !== b.epicOrder) return a.epicOrder - b.epicOrder
 
-        let newStart = depEarliest
-        let found = false
+    const aStarted = a.startedWeek !== undefined ? 0 : 1
+    const bStarted = b.startedWeek !== undefined ? 0 : 1
+    if (aStarted !== bStarted) return aStarted - bStarted
 
-        while (newStart < currentStart) {
-          // Epic concurrency check (O(duration) using precomputed arrays)
-          let concurrencyOk = true
-          if (maxConcurrentEpics && epicCountPerWeek && epicPresence) {
-            const ep = epicPresence.get(f.epicId)!
-            for (let w = newStart; w < newStart + f.durationWeeks && concurrencyOk; w++) {
-              if (ep[w] === 0 && epicCountPerWeek[w] >= maxConcurrentEpics) {
-                concurrencyOk = false
-              }
-            }
-          }
+    if (a.featureOrder !== b.featureOrder) return a.featureOrder - b.featureOrder
+    return a.id.localeCompare(b.id)
+  }
 
-          if (!concurrencyOk) { newStart++; continue }
+  function recordAllocation(feature: FeatureInfo, rtId: string, week: number, days: number) {
+    const byWeek = weeklyAllocationsByFeature.get(feature.id)
+    if (!byWeek) return
 
-          // Capacity feasibility
-          let capacityOk = true
-          for (const [rtId, ratePerWeek] of f.demandRates) {
-            const capacity = rtCapacity.get(rtId) ?? Infinity
-            const used = weeklyUsed.get(rtId)
-            if (!used) continue
-            for (let w = newStart; w < newStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-              if (used[w] + ratePerWeek > capacity + 0.01) {
-                capacityOk = false
-                break
-              }
-            }
-            if (!capacityOk) break
-          }
+    let byRt = byWeek.get(week)
+    if (!byRt) {
+      byRt = new Map<string, number>()
+      byWeek.set(week, byRt)
+    }
 
-          if (capacityOk) { found = true; break }
-          newStart++
-        }
+    byRt.set(rtId, (byRt.get(rtId) ?? 0) + days)
 
-        if (found && newStart < currentStart) {
-          bestSolution.set(f.id, newStart)
-          for (const [rtId, rate] of f.demandRates) {
-            const used = weeklyUsed.get(rtId)
-            if (!used) continue
-            for (let w = newStart; w < newStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-              used[w] += rate
-            }
-          }
-          // Update epic presence
-          if (epicCountPerWeek && epicPresence) {
-            const ep = epicPresence.get(f.epicId)!
-            for (let w = newStart; w < newStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-              if (ep[w] === 0) { ep[w] = 1; epicCountPerWeek[w]++ }
-            }
-          }
-          passImprovements++
-          improvements++
-        } else {
-          // Restore original position
-          for (const [rtId, rate] of f.demandRates) {
-            const used = weeklyUsed.get(rtId)
-            if (!used) continue
-            for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-              used[w] += rate
-            }
-          }
-          // Restore epic presence
-          if (epicCountPerWeek && epicPresence) {
-            const ep = epicPresence.get(f.epicId)!
-            for (let w = currentStart; w < currentStart + f.durationWeeks && w < MAX_WEEKS; w++) {
-              if (ep[w] === 0) { ep[w] = 1; epicCountPerWeek[w]++ }
-            }
-          }
-        }
-      }
-
-      if (passImprovements === 0) break
+    const weeklyDemand = weeklyDemandByResourceType.get(rtId)
+    if (weeklyDemand) {
+      weeklyDemand[week] = (weeklyDemand[week] ?? 0) + days
     }
   }
 
-  // ── Build result ─────────────────────────────────────────────────────
+  for (let week = 0; week < MAX_WEEKS && completedFeatureCount < features.length; week++) {
+    const readyFeatures = features
+      .filter(feature => isFeatureReady(feature, week) && canStartFeature(feature))
+      .sort(compareFeatures)
 
-  // Derive epic start weeks
+    if (readyFeatures.length === 0) continue
+
+    for (const feature of readyFeatures) {
+      if (feature.startedWeek !== undefined || feature.hasDemand) continue
+      feature.startedWeek = week
+      feature.completedWeek = week
+      completedFeatureCount++
+    }
+
+    for (const rt of resourceTypes) {
+      let availableCapacity = getWeeklyCapacityDays(rt, week)
+      if (availableCapacity <= EPSILON) continue
+
+      const candidates = readyFeatures
+        .filter(feature => (feature.remainingDaysByRt.get(rt.id) ?? 0) > EPSILON)
+        .sort(compareFeatures)
+
+      if (candidates.length === 0) continue
+
+      const baselineAllocations = new Map<string, number>()
+      const weeksLeftToTarget = Math.max(1, targetDurationWeeks - week)
+
+      for (const feature of candidates) {
+        if (availableCapacity <= EPSILON) break
+
+        const remaining = feature.remainingDaysByRt.get(rt.id) ?? 0
+        const perFeatureCap = Math.min(
+          remaining,
+          featureWeeklyCapByRt.get(feature.id)?.get(rt.id) ?? remaining,
+        )
+        if (perFeatureCap <= EPSILON) continue
+
+        const smoothedTarget = week < targetDurationWeeks
+          ? Math.min(perFeatureCap, remaining / weeksLeftToTarget)
+          : perFeatureCap
+
+        const allocation = Math.min(availableCapacity, smoothedTarget)
+        if (allocation <= EPSILON) continue
+
+        baselineAllocations.set(feature.id, allocation)
+        availableCapacity -= allocation
+      }
+
+      // Baseline allocation smooths work toward the target window, but any
+      // remaining idle RT capacity should still be consumed by ready work up to
+      // the per-feature cap. Withholding spare capacity when only one feature
+      // is ready creates artificial dribble schedules, low utilisation, and
+      // distorted headcount envelopes.
+      if (availableCapacity > EPSILON) {
+        for (const feature of candidates) {
+          if (availableCapacity <= EPSILON) break
+
+          const remaining = feature.remainingDaysByRt.get(rt.id) ?? 0
+          const existing = baselineAllocations.get(feature.id) ?? 0
+          const perFeatureCap = Math.min(
+            remaining,
+            featureWeeklyCapByRt.get(feature.id)?.get(rt.id) ?? remaining,
+          )
+          const extraRoom = perFeatureCap - existing
+          if (extraRoom <= EPSILON) continue
+
+          const extra = Math.min(availableCapacity, extraRoom)
+          baselineAllocations.set(feature.id, existing + extra)
+          availableCapacity -= extra
+        }
+      }
+
+      for (const feature of candidates) {
+        const allocation = baselineAllocations.get(feature.id) ?? 0
+        if (allocation <= EPSILON) continue
+
+        const remaining = feature.remainingDaysByRt.get(rt.id) ?? 0
+        const nextRemaining = Math.max(0, remaining - allocation)
+        feature.remainingDaysByRt.set(rt.id, nextRemaining)
+
+        if (feature.startedWeek === undefined) feature.startedWeek = week
+
+        recordAllocation(feature, rt.id, week, allocation)
+        lastAllocationWeek = Math.max(lastAllocationWeek, week)
+      }
+    }
+
+    for (const feature of readyFeatures) {
+      if (feature.completedWeek !== undefined) continue
+      if (!isFeatureComplete(feature)) continue
+
+      feature.completedWeek = week
+      if (feature.startedWeek === undefined) feature.startedWeek = week
+      completedFeatureCount++
+    }
+  }
+
+  for (const feature of features) {
+    if (feature.completedWeek !== undefined) continue
+    if (!isFeatureComplete(feature)) {
+      throw new Error(`Fractional planner could not finish feature ${feature.id} within ${MAX_WEEKS} weeks`)
+    }
+
+    const fallbackWeek = feature.startedWeek ?? 0
+    feature.startedWeek = fallbackWeek
+    feature.completedWeek = fallbackWeek
+    completedFeatureCount++
+  }
+
+  const featureStartWeeks = new Map<string, number>()
+  for (const feature of features) {
+    featureStartWeeks.set(feature.id, feature.startedWeek ?? 0)
+  }
+
   const epicStartWeeks = new Map<string, number>()
   for (const epic of epics) {
-    let minW = Infinity
-    for (const f of epic.features) {
-      const fw = bestSolution.get(f.id)
-      if (fw !== undefined && fw < minW) minW = fw
-    }
-    epicStartWeeks.set(epic.id, minW === Infinity ? 0 : minW)
-  }
-
-  // Compute total delivery weeks
-  let totalDeliveryWeeks = 0
-  for (const f of features) {
-    const start = bestSolution.get(f.id) ?? 0
-    const end = start + f.durationWeeks
-    if (end > totalDeliveryWeeks) totalDeliveryWeeks = end
-  }
-
-  // Peak utilisation
-  let peakUtilisationPct = 0
-  const weeklyDemand = new Map<string, Map<number, number>>()
-  for (const rt of resourceTypes) weeklyDemand.set(rt.id, new Map())
-  for (const f of features) {
-    const start = bestSolution.get(f.id) ?? 0
-    for (const [rtId, rate] of f.demandRates) {
-      const rtD = weeklyDemand.get(rtId)!
-      for (let w = start; w < start + f.durationWeeks; w++) {
-        rtD.set(w, (rtD.get(w) ?? 0) + rate)
+    let minWeek = Infinity
+    for (const feature of featuresByEpic.get(epic.id) ?? []) {
+      if (feature.startedWeek !== undefined && feature.startedWeek < minWeek) {
+        minWeek = feature.startedWeek
       }
     }
+    epicStartWeeks.set(epic.id, minWeek === Infinity ? 0 : minWeek)
   }
+
+  const totalDeliveryWeeks = lastAllocationWeek >= 0 ? lastAllocationWeek + 1 : 0
+
+  let peakUtilisationPct = 0
   for (const rt of resourceTypes) {
-    const cap = rtCapacity.get(rt.id) ?? 1
-    for (const [, demand] of weeklyDemand.get(rt.id)!) {
-      const pct = cap > 0 ? (demand / cap) * 100 : 0
-      if (pct > peakUtilisationPct) peakUtilisationPct = pct
+    const weeklyDemand = weeklyDemandByResourceType.get(rt.id) ?? []
+    for (let week = 0; week < weeklyDemand.length; week++) {
+      const demand = weeklyDemand[week] ?? 0
+      if (demand <= EPSILON) continue
+      const capacity = getWeeklyCapacityDays(rt, week)
+      const utilisation = capacity > EPSILON ? (demand / capacity) * 100 : 0
+      if (utilisation > peakUtilisationPct) peakUtilisationPct = utilisation
     }
   }
-
-  // bestFitness = total delivery weeks (for compatibility)
-  const bestFitness = totalDeliveryWeeks
-
-  console.log(`[RCPS] features=${features.length} totalWeeks=${totalDeliveryWeeks} peakUtil=${Math.round(peakUtilisationPct)}% compressionImprovements=${improvements}`)
 
   return {
     epicStartWeeks,
-    featureStartWeeks: bestSolution,
+    featureStartWeeks,
     totalDeliveryWeeks,
     peakUtilisationPct: Math.round(peakUtilisationPct * 10) / 10,
-    bestFitness,
-    improvements,
+    bestFitness: totalDeliveryWeeks,
+    improvements: 0,
+    weeklyDemandByResourceType,
+    weeklyAllocationsByFeature,
   }
 }

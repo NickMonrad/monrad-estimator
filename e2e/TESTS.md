@@ -117,13 +117,13 @@ API-level tests using the `request` fixture. No browser UI involved.
 | sequential/parallel toggle is visible on epic rows | After scheduling, the mode-toggle button is rendered on every epic header row in the Gantt |
 | feature dependency section visible in inline edit panel | Clicking a feature label opens the inline panel which contains the "Depends on" section and the add-dependency select |
 
-#### `Optimiser drawer — open and close` describe block (1 test — Phase 4, issue #233)
+#### `Scenario Finder drawer — open and close` describe block (1 test — Phase 4, issue #233)
 
 | Test | Description |
 |------|-------------|
-| open and close the drawer | Navigates to a Timeline page, clicks `✨ Optimise`, asserts the drawer dialog with heading "✨ Optimise resources" is visible, clicks the Close (×) button, asserts drawer is removed from the DOM |
+| open and close the drawer | Navigates to a Timeline page, clicks `🔧 Scenario Finder`, asserts the drawer dialog with accessible name and heading "Scenario Finder" is visible, clicks the Close (×) button, asserts drawer is removed from the DOM |
 
-#### `Optimiser drawer — with resources` describe block (2 tests — Phase 4, issue #233)
+#### `Scenario Finder drawer — with resources` describe block (2 tests — Phase 4, issue #233)
 
 `beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import, navigates to Timeline, and runs Auto-schedule. Each test has a 90 s timeout.
 

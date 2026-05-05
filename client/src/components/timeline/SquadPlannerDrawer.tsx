@@ -38,6 +38,21 @@ interface CapacityPlanResult {
   plannedResourceTypeIds?: string[]
 }
 
+type SmoothingMode = 'smooth' | 'tight' | 'exact'
+
+interface PersistedPlannerSettings {
+  targetMonths?: number
+  customMonths?: string
+  periodWeeks?: 4 | 13
+  smoothingMode?: SmoothingMode
+  maxDelta?: number
+  bufferPct?: number
+  minFloor?: Record<string, number>
+  maxCap?: Record<string, number>
+  maxParallelism?: number
+  maxConcurrentEpics?: number
+}
+
 interface Props {
   projectId: string
   open: boolean
@@ -68,6 +83,10 @@ function periodLabel(startWeek: number, _endWeek: number, periodWeeks: number) {
   }
   const m = Math.floor(startWeek / 4) + 1
   return `M${m}`
+}
+
+function formatHeadcount(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '')
 }
 
 function exportCsv(result: CapacityPlanResult, periodWeeks: number) {
@@ -101,6 +120,45 @@ function exportCsv(result: CapacityPlanResult, periodWeeks: number) {
   URL.revokeObjectURL(url)
 }
 
+function settingsStorageKey(projectId: string) {
+  return `squad-planner-settings:${projectId}`
+}
+
+function mergePerResourceSettings(
+  values: Record<string, number> | undefined,
+  resourceTypes: Props['resourceTypes'],
+  fallback: (resourceTypeId: string) => number | undefined,
+) {
+  const next: Record<string, number> = {}
+
+  for (const rt of resourceTypes) {
+    const value = values?.[rt.id]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      next[rt.id] = value
+      continue
+    }
+
+    const defaultValue = fallback(rt.id)
+    if (defaultValue !== undefined) {
+      next[rt.id] = defaultValue
+    }
+  }
+
+  return next
+}
+
+function loadPersistedSettings(projectId: string): PersistedPlannerSettings | null {
+  try {
+    const raw = window.localStorage.getItem(settingsStorageKey(projectId))
+    if (!raw) return null
+
+    const parsed = JSON.parse(raw) as PersistedPlannerSettings
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -110,6 +168,7 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
   const [targetMonths, setTargetMonths] = useState<number>(18)
   const [customMonths, setCustomMonths] = useState<string>('')
   const [periodWeeks, setPeriodWeeks] = useState<4 | 13>(13)
+  const [smoothingMode, setSmoothingMode] = useState<SmoothingMode>('smooth')
   const [maxDelta, setMaxDelta] = useState(1)
   const [bufferPct, setBufferPct] = useState<number>(20)
   const [minFloor, setMinFloor] = useState<Record<string, number>>({})
@@ -123,28 +182,70 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
   const effectiveMonths = customMonths ? Number(customMonths) : targetMonths
   const targetWeeks = Math.round(effectiveMonths * 4.33)
 
-  // ── reset state when drawer opens ────────────────────────────────────────
+  // ── restore state when drawer opens ──────────────────────────────────────
   useEffect(() => {
-    if (open) {
-      setTargetMonths(18)
-      setCustomMonths('')
-      setPeriodWeeks(13)
-      setMaxDelta(1)
-      setBufferPct(20)
-      setMaxParallelism(2)
-      setMaxConcurrentEpics(6)
-      setError(null)
-      generate.reset()
+    if (!open) return
 
-      const floor: Record<string, number> = {}
-      for (const rt of resourceTypes) {
-        floor[rt.id] = 1
-      }
-      setMinFloor(floor)
-      setMaxCap({})
-    }
+    const saved = loadPersistedSettings(projectId)
+
+    setTargetMonths(saved?.targetMonths ?? 18)
+    setCustomMonths(saved?.customMonths ?? '')
+    setPeriodWeeks(saved?.periodWeeks === 4 ? 4 : 13)
+    setSmoothingMode(
+      saved?.smoothingMode === 'tight' || saved?.smoothingMode === 'exact' ? saved.smoothingMode : 'smooth',
+    )
+    setMaxDelta(saved?.maxDelta ?? 1)
+    setBufferPct(saved?.bufferPct ?? 20)
+    setMaxParallelism(saved?.maxParallelism ?? 2)
+    setMaxConcurrentEpics(saved?.maxConcurrentEpics ?? 6)
+    setMinFloor(mergePerResourceSettings(saved?.minFloor, resourceTypes, () => 0))
+    setMaxCap(mergePerResourceSettings(saved?.maxCap, resourceTypes, () => undefined))
+    setError(null)
+    generate.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, resourceTypes])
+  }, [open, projectId])
+
+  useEffect(() => {
+    setMinFloor(prev => mergePerResourceSettings(prev, resourceTypes, rtId => prev[rtId] ?? 0))
+    setMaxCap(prev => mergePerResourceSettings(prev, resourceTypes, rtId => prev[rtId]))
+  }, [resourceTypes])
+
+  useEffect(() => {
+    if (!open) return
+
+    try {
+      window.localStorage.setItem(
+        settingsStorageKey(projectId),
+        JSON.stringify({
+          targetMonths,
+          customMonths,
+          periodWeeks,
+          smoothingMode,
+          maxDelta,
+          bufferPct,
+          minFloor,
+          maxCap,
+          maxParallelism,
+          maxConcurrentEpics,
+        } satisfies PersistedPlannerSettings),
+      )
+    } catch {
+      // Ignore storage failures and keep the drawer functional.
+    }
+  }, [
+    open,
+    projectId,
+    targetMonths,
+    customMonths,
+    periodWeeks,
+    smoothingMode,
+    maxDelta,
+    bufferPct,
+    minFloor,
+    maxCap,
+    maxParallelism,
+    maxConcurrentEpics,
+  ])
 
   // ── ESC to close ────────────────────────────────────────────────────────
   const handleKeyDown = useCallback(
@@ -167,6 +268,7 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
         .post(`/projects/${projectId}/squad-plan`, {
           targetDurationWeeks: targetWeeks,
           periodWeeks,
+          smoothingMode,
           maxDeltaPerPeriod: maxDelta,
           maxAllocationBufferPct: bufferPct / 100,
           maxParallelismPerFeature: maxParallelism,
@@ -350,14 +452,46 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
               <select
                 value={maxDelta}
                 onChange={e => setMaxDelta(Number(e.target.value))}
+                disabled={smoothingMode === 'exact'}
                 className="border border-gray-200 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-lab3-blue"
               >
                 {[1, 2, 3, 4, 5].map(n => (
                   <option key={n} value={n}>{n}</option>
                 ))}
               </select>
-              <span className="text-xs text-gray-500 dark:text-gray-400">people per RT per period</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {smoothingMode === 'exact' ? 'not used in exact mode' : 'people per RT per period'}
+              </span>
             </div>
+          </div>
+
+          {/* Smoothing Mode */}
+          <div>
+            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+              Capacity Tracking
+            </label>
+            <div className="flex rounded-lg border border-gray-200 dark:border-gray-600 overflow-hidden">
+              {([
+                { value: 'smooth' as const, label: 'Smooth' },
+                { value: 'tight' as const, label: 'Tight' },
+                { value: 'exact' as const, label: 'Exact' },
+              ]).map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setSmoothingMode(opt.value)}
+                  className={`flex-1 py-1.5 text-sm font-medium transition-colors ${
+                    smoothingMode === opt.value
+                      ? 'bg-lab3-navy text-white'
+                      : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Smooth = stable, Tight = closer to demand, Exact = no smoothing.
+            </p>
           </div>
 
           {/* Allocation Buffer */}
@@ -555,9 +689,9 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
                               <td
                                 key={p.periodIndex}
                                 className={`text-center px-2 py-1.5 font-medium ${utilClass(cell.utilisationPct)}`}
-                                title={`${cell.headcount} HC · ${cell.utilisationPct.toFixed(0)}% util`}
+                                title={`${formatHeadcount(cell.headcount)} HC · ${cell.utilisationPct.toFixed(0)}% util`}
                               >
-                                {cell.headcount}
+                                {formatHeadcount(cell.headcount)}
                               </td>
                             )
                           })}

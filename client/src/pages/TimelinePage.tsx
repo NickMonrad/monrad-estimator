@@ -105,6 +105,7 @@ function NamedResourcesPanel({
                 const mode = nr.allocationMode ?? 'EFFORT'
                 const modeLabel = mode === 'EFFORT' ? 'T&M'
                   : mode === 'FULL_PROJECT' ? `Full Project · ${nr.allocationPct}%`
+                  : mode === 'CAPACITY_PLAN' ? `Capacity Plan · ${nr.allocationPct}%`
                   : `Timeline · ${nr.allocationPct}%`
                 return (
                   <div
@@ -213,7 +214,7 @@ function NamedResourcesPanel({
                       )
                     }
 
-                    // Fixed allocation (FULL_PROJECT or TIMELINE): flat bar
+                    // Fixed allocation (FULL_PROJECT, TIMELINE or CAPACITY_PLAN): flat bar
                     const barLeft = (start + weekOffset) * colW
                     const barWidth = Math.max((end - start + 1) * colW - 4, 8)
                     return (
@@ -962,6 +963,7 @@ export default function TimelinePage() {
                                           <option value="EFFORT">T&amp;M</option>
                                           <option value="FULL_PROJECT">Full Project</option>
                                           <option value="TIMELINE">Timeline</option>
+                                          <option value="CAPACITY_PLAN">Capacity Plan</option>
                                         </select>
                                       )}
                                       {/* % input — only shown for non-EFFORT modes */}
