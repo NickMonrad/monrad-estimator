@@ -86,7 +86,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 | CSV export button is visible | "⬇ Export CSV" button present on Backlog page |
 | CSV import modal opens and shows template download link | Modal opens → "Download blank CSV template" link visible |
 | CSV import shows parse errors on bad file | Uploading malformed CSV shows error/validation message |
-| History button toggles history panel | "🕐 History" button reveals Backlog History panel |
+| History button toggles history panel | "🕐 History" button reveals the Snapshot History panel |
 | drag handle is visible on epics for reordering | Hovering an epic row reveals the ⠿ drag handle for DnD reorder |
 
 #### `CSV redesign — Type column and status fields` describe block (3 tests)
