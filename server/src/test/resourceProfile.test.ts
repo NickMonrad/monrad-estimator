@@ -285,4 +285,104 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       }),
     ])
   })
+
+  it('includes derived actual assignment weeks for named resources', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: {
+        'Security|12': 3.6,
+      },
+      resourceTypes: [
+        {
+          id: 'rt-security',
+          name: 'Security',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-security',
+              name: 'Principal Consultant - Security',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Security',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Security Design',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Threat model',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      hoursEffort: 28.8,
+                      resourceTypeId: 'rt-security',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 12, durationWeeks: 1 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const securityRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-security')
+    expect(securityRow.namedResources).toEqual([
+      expect.objectContaining({
+        name: 'Principal Consultant - Security',
+        actualAllocatedDays: 3.6,
+        actualAllocationStartWeek: 12,
+        actualAllocationEndWeek: 12,
+        actualAllocatedWeeks: [
+          expect.objectContaining({
+            week: 12,
+            days: 3.6,
+            capacityDays: 5,
+          }),
+        ],
+      }),
+    ])
+  })
 })

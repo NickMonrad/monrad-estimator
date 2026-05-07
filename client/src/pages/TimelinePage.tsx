@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toPng } from 'html-to-image'
 import { api } from '../lib/api'
+import type { OptimiserCandidate } from '../lib/api'
 import { useIsDark } from '../hooks/useIsDark'
 import AppLayout from '../components/layout/AppLayout'
 import type { Project, ResourceType, TimelineSummary, TimelineEntry, NamedResourceEntry } from '../types/backlog'
@@ -14,6 +15,11 @@ import type { GanttScale } from '../hooks/useGanttLayout'
 import { colWForScale, LABEL_W } from '../hooks/useGanttLayout'
 import TimelineOptimiserDrawer from '../components/timeline/TimelineOptimiserDrawer'
 import SquadPlannerDrawer from '../components/timeline/SquadPlannerDrawer'
+import {
+  getTimelineRecommendation,
+  getSquadPlannerSeedSettings,
+  type SquadPlannerSeedSettings,
+} from '../components/timeline/timelineUx'
 import SnapshotHistoryPanel from '../components/SnapshotHistoryPanel'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
@@ -40,6 +46,23 @@ const RESOURCE_COLOURS = [
   'bg-indigo-200', 'bg-emerald-200', 'bg-amber-200', 'bg-sky-200',
   'bg-rose-200', 'bg-violet-200', 'bg-teal-200', 'bg-orange-200',
 ]
+
+function formatWeekLabel(week: number) {
+  return `W${week + 1}`
+}
+
+function formatAllocationSummary(resource: NamedResourceEntry) {
+  const segments = resource.actualAllocationSegments ?? []
+  if (segments.length === 0) return 'No assigned weeks'
+  return segments
+    .slice(0, 2)
+    .map(segment => (
+      segment.startWeek === segment.endWeek
+        ? `${formatWeekLabel(segment.startWeek)} (${segment.days.toFixed(1)}d)`
+        : `${formatWeekLabel(segment.startWeek)}-${formatWeekLabel(segment.endWeek)} (${segment.days.toFixed(1)}d)`
+    ))
+    .join(', ') + (segments.length > 2 ? ` +${segments.length - 2} more` : '')
+}
 
 function NamedResourcesPanel({
   namedResources,
@@ -115,7 +138,7 @@ function NamedResourcesPanel({
                   >
                     <span className="text-xs text-gray-700 dark:text-gray-300 truncate">{nr.name}</span>
                     <span className="text-[10px] text-gray-400 dark:text-gray-500">
-                      {modeLabel}
+                      {formatAllocationSummary(nr)} · {modeLabel}
                     </span>
                   </div>
                 )
@@ -159,64 +182,9 @@ function NamedResourcesPanel({
                     const start = nr.startWeek ?? 0
                     const end = nr.endWeek ?? projectEndWeek
                     const colour = RESOURCE_COLOURS[(colourIdx++) % RESOURCE_COLOURS.length]
-                    const isEffort = (nr.allocationMode ?? 'EFFORT') === 'EFFORT'
+                    const actualAllocatedWeeks = nr.actualAllocatedWeeks ?? []
+                    const actualAllocationSegments = nr.actualAllocationSegments ?? []
                     const rtDemand = demandByRt.get(rtName)
-
-                    if (isEffort && rtDemand) {
-                      // T&M: render a demand-following mini histogram per person.
-                      // weeklyDemand tracks the whole resource type pool, so divide by
-                      // the number of named resources to get each person's share.
-                      const personCount = Math.max(people.length, 1)
-                      const ROW_H = 28
-                      const maxCap = Math.max(...Array.from(rtDemand.values()).map(d => d.capacity / personCount), 1)
-                      return (
-                        <div
-                          key={`${rtName}-${nr.name}-${i}`}
-                          className="relative border-b border-gray-50 dark:border-gray-700"
-                          style={{ height: 36 }}
-                        >
-                          <svg
-                            width={totalWeeks * colW}
-                            height={36}
-                            className="absolute inset-0"
-                          >
-                            {Array.from({ length: totalWeeks }, (_, w) => {
-                              const d = rtDemand.get(w)
-                              if (!d || d.demand <= 0) return null
-                              const personDemand = d.demand / personCount
-                              const personCap = d.capacity / personCount
-                              const pct = Math.min(personDemand / maxCap, 1)
-                              const barH = Math.max(Math.round(pct * ROW_H), 2)
-                              return (
-                                <g key={w}>
-                                  <rect
-                                    x={(w + weekOffset) * colW + 2}
-                                    y={36 - barH - 4}
-                                    width={colW - 4}
-                                    height={barH}
-                                    rx={2}
-                                    fill="#6366f1"
-                                    opacity={0.55}
-                                    onMouseEnter={(e) => setTooltip({
-                                      x: e.clientX,
-                                      y: e.clientY,
-                                      content: `${nr.name} · T&M\nWk ${w}: ${personDemand.toFixed(1)} / ${personCap.toFixed(1)} days (${Math.round(personDemand / personCap * 100)}%)`,
-                                    })}
-                                    onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
-                                    onMouseLeave={() => setTooltip(null)}
-                                    style={{ cursor: 'default' }}
-                                  />
-                                </g>
-                              )
-                            })}
-                          </svg>
-                        </div>
-                      )
-                    }
-
-                    // Fixed allocation (FULL_PROJECT, TIMELINE or CAPACITY_PLAN): flat bar
-                    const barLeft = (start + weekOffset) * colW
-                    const barWidth = Math.max((end - start + 1) * colW - 4, 8)
                     return (
                       <div
                         key={`${rtName}-${nr.name}-${i}`}
@@ -224,18 +192,64 @@ function NamedResourcesPanel({
                         style={{ height: 36 }}
                       >
                         <div
-                          className={`absolute top-1 ${colour} rounded h-[28px] flex items-center px-2 text-[10px] font-medium text-gray-700 truncate cursor-default`}
-                          style={{ left: barLeft + 2, width: barWidth }}
-                          onMouseEnter={(e) => setTooltip({
-                            x: e.clientX,
-                            y: e.clientY,
-                            content: `${nr.name} · W${Math.floor(start + weekOffset) + 1}–W${Math.floor(end + weekOffset) + 1} · ${nr.allocationPct}%`,
-                          })}
-                          onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
-                          onMouseLeave={() => setTooltip(null)}
+                          className="absolute top-1 h-[28px] rounded border border-dashed border-gray-300/80 dark:border-gray-600/80 bg-transparent"
+                          style={{
+                            left: (start + weekOffset) * colW + 2,
+                            width: Math.max((end - start + 1) * colW - 4, 8),
+                          }}
+                        />
+                        {actualAllocationSegments.map((segment, segmentIndex) => (
+                          <div
+                            key={`${nr.id ?? nr.name}-segment-${segmentIndex}`}
+                            className={`absolute top-1 ${colour} rounded h-[28px] flex items-center px-2 text-[10px] font-medium text-gray-700 truncate cursor-default`}
+                            style={{
+                              left: (segment.startWeek + weekOffset) * colW + 2,
+                              width: Math.max((segment.endWeek - segment.startWeek + 1) * colW - 4, 8),
+                            }}
+                            onMouseEnter={(e) => setTooltip({
+                              x: e.clientX,
+                              y: e.clientY,
+                              content: `${nr.name} · ${formatWeekLabel(segment.startWeek)}-${formatWeekLabel(segment.endWeek)} · ${segment.days.toFixed(1)} assigned days`,
+                            })}
+                            onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
+                            onMouseLeave={() => setTooltip(null)}
+                          >
+                            {segment.days.toFixed(1)}d
+                          </div>
+                        ))}
+                        <svg
+                          width={totalWeeks * colW}
+                          height={36}
+                          className="absolute inset-0"
                         >
-                          {nr.name} — {nr.allocationPct}%
-                        </div>
+                          {actualAllocatedWeeks.map((allocation) => {
+                            const demand = rtDemand?.get(allocation.week)
+                            const fillPct = allocation.capacityDays > 0
+                              ? Math.min(allocation.days / allocation.capacityDays, 1)
+                              : 0
+                            const barH = Math.max(Math.round(fillPct * 18), 4)
+                            return (
+                              <rect
+                                key={`${nr.id ?? nr.name}-week-${allocation.week}`}
+                                x={(allocation.week + weekOffset) * colW + 4}
+                                y={32 - barH}
+                                width={Math.max(colW - 8, 2)}
+                                height={barH}
+                                rx={2}
+                                fill="#1d4ed8"
+                                opacity={0.85}
+                                onMouseEnter={(e) => setTooltip({
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  content: `${nr.name} · ${formatWeekLabel(allocation.week)}: ${allocation.days.toFixed(1)} / ${allocation.capacityDays.toFixed(1)} assigned days${demand ? ` · role demand ${demand.demand.toFixed(1)} / ${demand.capacity.toFixed(1)}` : ''}`,
+                                })}
+                                onMouseMove={(e) => setTooltip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
+                                onMouseLeave={() => setTooltip(null)}
+                                style={{ cursor: 'default' }}
+                              />
+                            )
+                          })}
+                        </svg>
                       </div>
                     )
                   })}
@@ -271,6 +285,7 @@ export default function TimelinePage() {
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
   const [optimiserOpen, setOptimiserOpen] = useState(false)
   const [squadPlannerOpen, setSquadPlannerOpen] = useState(false)
+  const [squadPlannerSeedSettings, setSquadPlannerSeedSettings] = useState<SquadPlannerSeedSettings | null>(null)
   const [showHistory, setShowHistory] = useState(false)
 
   const SCALE_KEY = 'gantt-scale'
@@ -440,8 +455,14 @@ export default function TimelinePage() {
     qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     qc.invalidateQueries({ queryKey: ['snapshots', projectId] })
     setOptimiserOpen(false)
-    alert(`Scenario applied (snapshot ${snapshotId}). Roll back via the History panel if needed.`)
+    alert(`Starting team applied (snapshot ${snapshotId}). Roll back via the History panel if needed.`)
   }
+
+  const openSquadPlanner = useCallback(() => {
+    setSquadPlannerSeedSettings(null)
+    setOptimiserOpen(false)
+    setSquadPlannerOpen(true)
+  }, [])
 
   // Derived list of resource types for the optimiser (id, name, count)
   const resourceTypesForOptimiser = (resourceTypes ?? []).map(rt => ({
@@ -736,6 +757,56 @@ export default function TimelinePage() {
     return Array.from(map.entries())
   }, [resourceTypes, timeline])
 
+  const hasTimelineEntries = (timeline?.entries?.length ?? 0) > 0
+  const hasManualOverrides = !!timeline?.entries?.some(e => e.isManual)
+  const demandBearingResourceTypeIds = useMemo(() => {
+    if (!resourceTypes || resourceTypes.length === 0) return []
+
+    const rtNamesWithDemand = new Set<string>()
+    for (const row of timeline?.weeklyDemand ?? []) {
+      if (row.demandDays > 0) rtNamesWithDemand.add(row.resourceTypeName)
+    }
+    if (rtNamesWithDemand.size === 0) return []
+
+    return resourceTypes.filter(rt => rtNamesWithDemand.has(rt.name)).map(rt => rt.id)
+  }, [resourceTypes, timeline?.weeklyDemand])
+  const demandBearingResourceTypeCount = useMemo(() => {
+    const rtNamesWithDemand = new Set<string>()
+    for (const row of timeline?.weeklyDemand ?? []) {
+      if (row.demandDays > 0) rtNamesWithDemand.add(row.resourceTypeName)
+    }
+    return rtNamesWithDemand.size
+  }, [timeline?.weeklyDemand])
+  const quickScheduleLabel = hasTimelineEntries ? 'Quick schedule again' : 'Quick schedule'
+  const quickScheduleDescription = hasTimelineEntries
+    ? 'Refresh the current timeline from the latest backlog and resourcing inputs.'
+    : 'Generate a fast baseline timeline from the current backlog.'
+  const handleOptimiserRefine = useCallback(
+    (
+      candidate: OptimiserCandidate,
+      options: { allowRampUp: boolean; seedResourceTypeIds: string[] },
+    ) => {
+      setSquadPlannerSeedSettings(
+        getSquadPlannerSeedSettings(candidate.resourceTypes, {
+          allowRampUp: options.allowRampUp,
+          seedResourceTypeIds: options.seedResourceTypeIds,
+        }),
+      )
+      setOptimiserOpen(false)
+      setSquadPlannerOpen(true)
+    },
+    [],
+  )
+  const timelineRecommendation = getTimelineRecommendation({
+    hasEntries: hasTimelineEntries,
+    scheduleStale,
+    parallelWarningCount: timeline?.parallelWarnings?.length ?? 0,
+    demandBearingResourceTypeCount,
+    scheduledFeatureCount: timeline?.entries?.length ?? 0,
+    storyCount: timeline?.storyEntries?.length ?? 0,
+    hasManualOverrides,
+  })
+
   // Map named resources from timeline by resourceTypeId (for the Resource Counts panel)
   const rtNRMap = useMemo(() => {
     const map = new Map<string, NamedResourceEntry[]>()
@@ -767,128 +838,176 @@ export default function TimelinePage() {
 
         {/* Setup bar */}
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500 dark:text-gray-400">Project start date</label>
-              <input
-                type="date"
-                value={startDateInput}
-                onChange={e => setStartDateInput(e.target.value)}
-                onBlur={handleStartDateBlur}
-                className="border border-gray-200 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
-              />
-            </div>
-            <div className="w-px h-7 bg-gray-200" />
-            <button
-              onClick={handleSchedule}
-              disabled={scheduleTimeline.isPending}
-              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
-            >
-              {scheduleTimeline.isPending ? 'Scheduling…' : 'Auto-schedule'}
-            </button>
-            <button
-              onClick={() => setOptimiserOpen(true)}
-              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue"
-            >
-              🔧 Scenario Finder
-            </button>
-            <button
-              onClick={() => setSquadPlannerOpen(true)}
-              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue"
-            >
-              👥 Squad Planner
-            </button>
-            <button
-              onClick={handleLevel}
-              disabled={levelMutation.isPending}
-              className="bg-lab3-navy text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
-            >
-              {levelMutation.isPending ? 'Levelling…' : '⚖ Level'}
-            </button>
-            {timeline?.entries && timeline.entries.length > 0 && (
-              <button
-                onClick={handleSchedule}
-                disabled={scheduleTimeline.isPending}
-                className="border border-gray-200 dark:border-gray-700 px-4 py-1.5 rounded text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-                title="Re-runs the scheduler — use this after updating tasks or resources in the backlog"
-              >
-                ↺ Re-run scheduler
-              </button>
-            )}
-            {timeline?.entries?.some(e => e.isManual) && (
-              <button
-                onClick={() => resetAllManual.mutate()}
-                disabled={resetAllManual.isPending}
-                className="border border-blue-200 text-blue-600 px-4 py-1.5 rounded text-sm hover:bg-blue-50 disabled:opacity-50"
-                title="Remove all manual position overrides and let the scheduler place everything automatically"
-              >
-                {resetAllManual.isPending ? 'Clearing…' : '✕ Clear all overrides'}
-              </button>
-            )}
-            <div className="w-px h-7 bg-gray-200" />
-            {/* Export buttons */}
-            {timeline?.entries && timeline.entries.length > 0 && (
-              <>
-                <button
-                  onClick={handleExportCsv}
-                  className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
-                  title="Export timeline data as CSV"
-                >
-                  ↓ CSV
-                </button>
-                <button
-                  onClick={handleExportPng}
-                  className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
-                  title="Export Gantt chart as PNG image"
-                >
-                  ↓ PNG
-                </button>
-                <div className="w-px h-7 bg-gray-200" />
-              </>
-            )}
-            <button
-              onClick={() => setShowHistory(h => !h)}
-              className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
-            >
-              🕐 History
-            </button>
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={resourceLevel}
-                onChange={e => { setResourceLevel(e.target.checked); localStorage.setItem(rlKey, String(e.target.checked)) }}
-                className="rounded"
-              />
-              Resource leveling
-            </label>
-            {timeline?.projectedEndDate && (
-              <div className="text-sm text-gray-600 dark:text-gray-400">
-                <span className="text-gray-400 dark:text-gray-500">Projected end:</span>{' '}
-                <span className="font-medium">{new Date(timeline.projectedEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                {(project?.bufferWeeks ?? 0) > 0 && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 ml-2">
-                    +{project!.bufferWeeks}w buffer
-                  </span>
-                )}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-gray-500 dark:text-gray-400">Project start date</label>
+                <input
+                  type="date"
+                  value={startDateInput}
+                  onChange={e => setStartDateInput(e.target.value)}
+                  onBlur={handleStartDateBlur}
+                  className="border border-gray-200 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue"
+                />
               </div>
-            )}
-            {timeline?.startDate && (
-              <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">
-                Last scheduled: {formatDate(timeline.startDate)}
-              </span>
-            )}
-            {!timeline?.startDate && (
-              <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">Not yet scheduled</span>
-            )}
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={resourceLevel}
+                  onChange={e => { setResourceLevel(e.target.checked); localStorage.setItem(rlKey, String(e.target.checked)) }}
+                  className="rounded"
+                />
+                Resource leveling
+              </label>
+              {timeline?.projectedEndDate && (
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  <span className="text-gray-400 dark:text-gray-500">Projected end:</span>{' '}
+                  <span className="font-medium">{new Date(timeline.projectedEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                  {(project?.bufferWeeks ?? 0) > 0 && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 ml-2">
+                      +{project!.bufferWeeks}w buffer
+                    </span>
+                  )}
+                </div>
+              )}
+              {timeline?.startDate ? (
+                <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">
+                  Current plan starts: {formatDate(timeline.startDate)}
+                </span>
+              ) : (
+                <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">No timeline generated yet</span>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-red-200 bg-red-50/60 dark:border-red-900/40 dark:bg-red-900/10 p-4">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="space-y-3">
+                  <div className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-red-700 dark:bg-gray-800 dark:text-red-300">
+                    {timelineRecommendation.badge}
+                  </div>
+                  <div>
+                    <h2 className="text-base font-semibold text-gray-900 dark:text-white">{timelineRecommendation.title}</h2>
+                    <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{timelineRecommendation.summary}</p>
+                  </div>
+                  <ul className="space-y-1">
+                    {(timelineRecommendation.rationale.length > 0
+                      ? timelineRecommendation.rationale
+                      : ['Use the action below as your starting point, then move into the other tools if you need more control.']
+                    ).map(reason => (
+                      <li key={reason} className="text-sm text-gray-700 dark:text-gray-300">
+                        • {reason}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{timelineRecommendation.secondarySummary}</p>
+                </div>
+
+                <div className="w-full max-w-sm space-y-2">
+                  {timelineRecommendation.recommendedAction === 'quick-schedule' ? (
+                    <button
+                      onClick={handleSchedule}
+                      disabled={scheduleTimeline.isPending}
+                      className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {scheduleTimeline.isPending ? 'Scheduling…' : quickScheduleLabel}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={openSquadPlanner}
+                      className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-red-700"
+                    >
+                      👥 Open Squad Planner
+                    </button>
+                  )}
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {timelineRecommendation.recommendedAction === 'quick-schedule'
+                      ? quickScheduleDescription
+                      : 'Shape the demand-bearing team first, then apply the plan back to the timeline.'}
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {timelineRecommendation.recommendedAction === 'quick-schedule' ? (
+                      <button
+                        onClick={openSquadPlanner}
+                        className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700"
+                      >
+                        👥 Squad Planner
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleSchedule}
+                        disabled={scheduleTimeline.isPending}
+                        className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
+                      >
+                        {quickScheduleLabel}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setOptimiserOpen(true)}
+                      className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700"
+                    >
+                      🔧 Starting Team Finder
+                    </button>
+                    <button
+                      onClick={handleLevel}
+                      disabled={levelMutation.isPending}
+                      className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
+                    >
+                      {levelMutation.isPending ? 'Levelling…' : '⚖ Level current timeline'}
+                    </button>
+                    {hasManualOverrides && (
+                      <button
+                        onClick={() => resetAllManual.mutate()}
+                        disabled={resetAllManual.isPending}
+                        className="border border-blue-200 text-blue-600 px-3 py-2 rounded-lg text-sm hover:bg-blue-50 disabled:opacity-50"
+                        title="Remove all manual position overrides and let Quick schedule place everything automatically"
+                      >
+                        {resetAllManual.isPending ? 'Clearing…' : '✕ Clear overrides'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {timeline?.entries && timeline.entries.length > 0 && (
+                <>
+                  <button
+                    onClick={handleExportCsv}
+                    className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
+                    title="Export timeline data as CSV"
+                    aria-label="Export timeline CSV"
+                  >
+                    ↓ Timeline CSV
+                  </button>
+                  <button
+                    onClick={handleExportPng}
+                    className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
+                    title="Export timeline chart as PNG image"
+                    aria-label="Export timeline PNG"
+                  >
+                    ↓ Timeline PNG
+                  </button>
+                </>
+              )}
+              <button
+                onClick={() => setShowHistory(h => !h)}
+                className="border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
+              >
+                🕐 History
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Stale schedule banner */}
         {scheduleStale && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
-            <span className="text-amber-800">⚠ Schedule may be stale (dependencies, epic mode, or resourcing changed) — re-run <strong>Auto-schedule</strong> to apply.</span>
+            <span className="text-amber-800">
+              ⚠ Timeline inputs changed (dependencies, sequencing, or resourcing). Refresh with <strong>Quick schedule</strong> for a fast baseline, or reopen <strong>Squad Planner</strong> if the team shape now needs rework.
+            </span>
             <button onClick={handleSchedule} className="bg-amber-500 text-white px-3 py-1 rounded text-xs font-medium hover:bg-amber-600">
-              Auto-schedule now
+              Quick schedule now
             </button>
           </div>
         )}
@@ -896,10 +1015,13 @@ export default function TimelinePage() {
         {/* Parallel over-allocation warnings */}
         {(timeline?.parallelWarnings ?? []).length > 0 && (
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 space-y-1">
-            <p className="text-sm font-medium text-red-800">⚠ Resource over-allocation in parallel epics</p>
+            <p className="text-sm font-medium text-red-800">⚠ Parallel demand is outrunning the current team</p>
+            <p className="text-xs text-red-700">
+              Use <strong>Starting Team Finder</strong> to choose a better opening squad, or go straight to <strong>Squad Planner</strong> to reshape demand-bearing roles.
+            </p>
             {(timeline!.parallelWarnings!).map((w, i) => (
               <p key={i} className="text-xs text-red-700">
-                <span className="font-medium">{w.epicName}</span> — {w.resourceTypeName}: {w.demandDays.toFixed(1)} person-days needed, only {w.capacityDays.toFixed(1)} days available at current headcount. Increase count or switch to "Features: sequential" mode.
+                <span className="font-medium">{w.epicName}</span> — {w.resourceTypeName}: {w.demandDays.toFixed(1)} person-days needed, only {w.capacityDays.toFixed(1)} days available at current headcount. Increase count, reduce overlap, or switch to "Features: sequential" mode.
               </p>
             ))}
           </div>
@@ -911,7 +1033,7 @@ export default function TimelinePage() {
             onClick={() => setResourcesOpen(o => !o)}
             className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
           >
-            <span>Resource Counts — adjust before scheduling</span>
+            <span>Resource Counts — adjust before Quick schedule or Squad Planner</span>
             <span className="text-gray-400 dark:text-gray-500">{resourcesOpen ? '▲' : '▼'}</span>
           </button>
           {resourcesOpen && (
@@ -1083,7 +1205,7 @@ export default function TimelinePage() {
 
           {!isLoading && (!timeline?.entries || timeline.entries.length === 0) && (
             <div className="p-8 text-center text-gray-400 dark:text-gray-500 text-sm">
-              Set a start date and click <strong>Auto-schedule</strong> to generate your timeline
+              Set a start date, then use <strong>Quick schedule</strong> for a fast baseline or open <strong>Squad Planner</strong> for a more deliberate team plan.
             </div>
           )}
 
@@ -1242,12 +1364,12 @@ export default function TimelinePage() {
                       Cancel
                     </button>
                     {entry.isManual && (
-                      <button
-                        onClick={() => resetManual.mutate(entry.featureId)}
-                        disabled={resetManual.isPending}
-                        title="Clear manual override and re-run auto-schedule"
-                        className="px-3 py-0.5 rounded text-xs text-orange-600 border border-orange-200 hover:bg-orange-50 disabled:opacity-50"
-                      >
+                        <button
+                          onClick={() => resetManual.mutate(entry.featureId)}
+                          disabled={resetManual.isPending}
+                          title="Clear manual override and re-run Quick schedule"
+                          className="px-3 py-0.5 rounded text-xs text-orange-600 border border-orange-200 hover:bg-orange-50 disabled:opacity-50"
+                        >
                         {resetManual.isPending ? 'Resetting…' : '↺ Reset to auto'}
                       </button>
                     )}
@@ -1344,13 +1466,20 @@ export default function TimelinePage() {
         open={optimiserOpen}
         onClose={() => setOptimiserOpen(false)}
         resourceTypes={resourceTypesForOptimiser}
+        fallbackPlannedResourceTypeIds={demandBearingResourceTypeIds}
         onApplied={handleOptimiserApplied}
+        onRefineScenario={handleOptimiserRefine}
       />
       <SquadPlannerDrawer
         projectId={projectId!}
         open={squadPlannerOpen}
-        onClose={() => setSquadPlannerOpen(false)}
+        onClose={() => {
+          setSquadPlannerOpen(false)
+          setSquadPlannerSeedSettings(null)
+        }}
         resourceTypes={resourceTypesForOptimiser}
+        fallbackPlannedResourceTypeIds={demandBearingResourceTypeIds}
+        seedSettings={squadPlannerSeedSettings}
       />
   </AppLayout>
   )

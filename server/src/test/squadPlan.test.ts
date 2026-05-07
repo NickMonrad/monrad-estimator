@@ -376,4 +376,145 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       data: { weeklyDemandCache: { 'Developer|0': 2 } },
     })
   })
+
+  it('replays applied reduced-period capacity into weeklyDemandCache', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany)
+      .mockResolvedValueOnce([{ id: 'rt-dev' }] as never)
+      .mockResolvedValueOnce([
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN',
+          namedResources: [
+            {
+              id: 'nr-dev-1',
+              name: 'Developer 1',
+              startWeek: 52,
+              endWeek: 60,
+              allocationPct: 100,
+              allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+            },
+          ],
+        },
+      ] as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([
+      {
+        id: 'epic-1',
+        name: 'Epic 1',
+        order: 0,
+        isActive: true,
+        featureMode: 'sequential',
+        scheduleMode: 'sequential',
+        timelineStartWeek: null,
+        features: [
+          {
+            id: 'feature-1',
+            name: 'Feature 1',
+            order: 0,
+            isActive: true,
+            timelineStartWeek: null,
+            userStories: [
+              {
+                id: 'story-1',
+                order: 0,
+                isActive: true,
+                tasks: [
+                  {
+                    id: 'task-1',
+                    resourceTypeId: 'rt-dev',
+                    hoursEffort: 240,
+                    durationDays: null,
+                    resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+                  },
+                ],
+                dependencies: [],
+              },
+            ],
+            dependencies: [],
+          },
+        ],
+      },
+    ] as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.backlogSnapshot.create).mockResolvedValue({ id: 'snapshot-1' } as never)
+    vi.mocked(prisma.capacityPlan.updateMany).mockResolvedValue({ count: 0 } as never)
+    vi.mocked(prisma.capacityPlan.create).mockResolvedValue({
+      id: 'plan-1',
+      projectId: 'proj-1',
+      isActive: true,
+      periods: [],
+    } as never)
+    vi.mocked(prisma.resourceType.update).mockResolvedValue({} as never)
+    vi.mocked(prisma.resourceType.updateMany).mockResolvedValue({ count: 0 } as never)
+    vi.mocked(prisma.namedResource.updateMany).mockResolvedValue({ count: 1 } as never)
+    vi.mocked(prisma.namedResource.findMany)
+      .mockResolvedValueOnce([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }] as never)
+      .mockResolvedValueOnce([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }] as never)
+    vi.mocked(prisma.namedResource.update).mockResolvedValue({} as never)
+    vi.mocked(prisma.epic.update).mockResolvedValue({} as never)
+    vi.mocked(prisma.project.update).mockResolvedValue({
+      ...mockProject,
+      weeklyDemandCache: {},
+    } as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send({
+        name: 'Applied plan with taper',
+        targetWeeks: 8,
+        periodWeeks: 4,
+        maxDelta: 1,
+        setActive: true,
+        periods: [
+          {
+            periodIndex: 0,
+            startWeek: 0,
+            endWeek: 4,
+            entries: [
+              {
+                resourceTypeId: 'rt-dev',
+                headcount: 1,
+                demandFTE: 1,
+                utilisationPct: 100,
+              },
+            ],
+          },
+          {
+            periodIndex: 1,
+            startWeek: 4,
+            endWeek: 8,
+            entries: [
+              {
+                resourceTypeId: 'rt-dev',
+                headcount: 0.5,
+                demandFTE: 0.5,
+                utilisationPct: 100,
+              },
+            ],
+          },
+        ],
+        levellingResult: {
+          epicStartWeeks: { 'epic-1': 0 },
+          featureStartWeeks: { 'feature-1': 0 },
+          totalDeliveryWeeks: 8,
+          peakUtilisationPct: 100,
+        },
+      })
+
+    expect(res.status).toBe(201)
+    const projectUpdateArg = vi.mocked(prisma.project.update).mock.calls.at(-1)?.[0]
+    const weeklyDemandCache = projectUpdateArg?.data?.weeklyDemandCache as Record<string, number>
+    expect(weeklyDemandCache['Developer|0']).toBeCloseTo(5, 6)
+    expect(weeklyDemandCache['Developer|4']).toBeCloseTo(2.5, 6)
+    expect(weeklyDemandCache['Developer|4']).toBeLessThan(5)
+  })
 })

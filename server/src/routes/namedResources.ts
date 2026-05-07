@@ -3,6 +3,7 @@ import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -44,6 +45,10 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rt = await verifyResourceType(rtId, projectId)
   if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
 
+  if (rt.allocationMode === 'CAPACITY_PLAN') {
+    await exitCapacityPlanForManualScheduling(rt.id)
+  }
+
   const { name: rawName, startWeek, endWeek, allocationPct, pricingModel } = req.body
 
   // Auto-generate a numbered name if none provided or generic
@@ -62,7 +67,12 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   // If RT's allocationMode is not EFFORT, copy the RT's allocation settings as defaults for the new NR
-  const rtAllocationMode = rt.allocationMode as AllocationMode
+  const rtAllocationMode = rt.allocationMode === 'CAPACITY_PLAN'
+    ? 'TIMELINE'
+    : rt.allocationMode as AllocationMode
+  const rtAllocationPercent = rt.allocationMode === 'CAPACITY_PLAN' ? 100 : (rt.allocationPercent ?? 100)
+  const rtAllocationStartWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationStartWeek ?? null)
+  const rtAllocationEndWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationEndWeek ?? null)
   const inheritAllocation = rtAllocationMode !== 'EFFORT'
 
   const resource = await prisma.namedResource.create({
@@ -75,9 +85,9 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       ...(pricingModel !== undefined && { pricingModel }),
       ...(inheritAllocation && {
         allocationMode: rtAllocationMode,
-        allocationPercent: rt.allocationPercent ?? 100,
-        allocationStartWeek: rt.allocationStartWeek ?? null,
-        allocationEndWeek: rt.allocationEndWeek ?? null,
+        allocationPercent: rtAllocationPercent,
+        allocationStartWeek: rtAllocationStartWeek,
+        allocationEndWeek: rtAllocationEndWeek,
       }),
     },
   })
@@ -162,6 +172,10 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   // Verify the named resource belongs to this resource type
   const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
+
+  if (rt.allocationMode === 'CAPACITY_PLAN') {
+    await exitCapacityPlanForManualScheduling(rt.id)
+  }
 
   await prisma.namedResource.delete({ where: { id } })
 

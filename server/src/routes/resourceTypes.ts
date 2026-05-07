@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
+import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -55,6 +56,14 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const { name, category, count, proposedName, hoursPerDay, dayRate, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
 
+  const existing = await prisma.resourceType.findFirst({
+    where: {
+      id: req.params.id as string,
+      projectId: req.params.projectId as string,
+    },
+  })
+  if (!existing) { res.status(404).json({ error: 'Resource type not found' }); return }
+
   // Validate new allocation fields
   if (allocationMode !== undefined && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode)) {
     res.status(400).json({ error: 'Invalid allocationMode' }); return
@@ -73,10 +82,39 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if ('allocationStartWeek' in req.body) data.allocationStartWeek = allocationStartWeek ?? null
   if ('allocationEndWeek' in req.body) data.allocationEndWeek = allocationEndWeek ?? null
 
+  const shouldExitCapacityPlan =
+    existing.allocationMode === 'CAPACITY_PLAN' &&
+    allocationMode === undefined &&
+    count !== undefined
+
+  if (shouldExitCapacityPlan) {
+    data.allocationMode = 'TIMELINE'
+    data.allocationPercent = 100
+    data.allocationStartWeek = null
+    data.allocationEndWeek = null
+  }
+
   const rt = await prisma.resourceType.update({
     where: { id: req.params.id as string },
     data,
   })
+  if (shouldExitCapacityPlan) {
+    await prisma.namedResource.updateMany({
+      where: {
+        resourceTypeId: existing.id,
+        allocationMode: 'CAPACITY_PLAN',
+      },
+      data: {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        allocationPct: 100,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+  }
   res.json(rt)
 }))
 
@@ -93,6 +131,15 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rt = await prisma.resourceType.findFirst({ where: { id: req.params.id as string, projectId: req.params.projectId as string } })
   if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
 
+  const defaultAllocationMode = rt.allocationMode === 'CAPACITY_PLAN' ? 'TIMELINE' : rt.allocationMode
+  const defaultAllocationPercent = rt.allocationMode === 'CAPACITY_PLAN' ? 100 : (rt.allocationPercent ?? 100)
+  const defaultAllocationStartWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationStartWeek ?? null)
+  const defaultAllocationEndWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationEndWeek ?? null)
+
+  if (rt.allocationMode === 'CAPACITY_PLAN') {
+    await exitCapacityPlanForManualScheduling(rt.id)
+  }
+
   const currentNRs = await prisma.namedResource.findMany({
     where: { resourceTypeId: rt.id },
     orderBy: { createdAt: 'asc' },
@@ -104,7 +151,17 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     // Add new anonymous named resources for each new slot
     for (let n = currentCount + 1; n <= count; n++) {
       await prisma.namedResource.create({
-        data: { name: `${rt.name} ${n}`, resourceTypeId: rt.id, allocationPct: 100 },
+        data: {
+          name: `${rt.name} ${n}`,
+          resourceTypeId: rt.id,
+          allocationPct: 100,
+          ...(defaultAllocationMode !== 'EFFORT' && {
+            allocationMode: defaultAllocationMode,
+            allocationPercent: defaultAllocationPercent,
+            allocationStartWeek: defaultAllocationStartWeek,
+            allocationEndWeek: defaultAllocationEndWeek,
+          }),
+        },
       })
     }
   } else if (count < currentCount) {

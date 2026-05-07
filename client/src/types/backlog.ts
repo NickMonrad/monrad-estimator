@@ -183,6 +183,20 @@ export interface NamedResourceEntry {
   allocationPercent?: number
   allocationStartWeek?: number | null
   allocationEndWeek?: number | null
+  actualAllocatedDays?: number
+  actualAllocationStartWeek?: number | null
+  actualAllocationEndWeek?: number | null
+  actualAllocatedWeeks?: Array<{
+    week: number
+    days: number
+    capacityDays: number
+  }>
+  actualAllocationSegments?: Array<{
+    startWeek: number
+    endWeek: number
+    days: number
+  }>
+  synthetic?: boolean
 }
 
 export interface TimelineSummary {
@@ -266,6 +280,20 @@ export interface ResourceProfileRow {
     allocatedDays: number
     derivedStartWeek: number | null
     derivedEndWeek: number | null
+    actualAllocatedDays: number
+    actualAllocationStartWeek: number | null
+    actualAllocationEndWeek: number | null
+    actualAllocatedWeeks: Array<{
+      week: number
+      days: number
+      capacityDays: number
+    }>
+    actualAllocationSegments: Array<{
+      startWeek: number
+      endWeek: number
+      days: number
+    }>
+    synthetic: boolean
   }>
 }
 

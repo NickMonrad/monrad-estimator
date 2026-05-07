@@ -15,6 +15,7 @@ import {
   shouldFallbackToActiveCapacityPlan,
   type MaterializedCapacityPlanResource,
 } from '../lib/capacityPlanMaterialisation.js'
+import { deriveNamedResourceAssignments } from '../lib/namedResourceAssignments.js'
 import { runSAPlanner } from '../lib/sa-planner.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
@@ -31,6 +32,7 @@ export { getWeeklyCapacity }
 // Alias for internal use within this file
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 type ResourceTypeWithNamed = SchedulerResourceType & { allocationMode?: AllocationMode | null }
+type WeeklyDemandRow = { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }
 
 async function ownedProject(projectId: string, userId: string) {
   return prisma.project.findFirst({ where: { id: projectId, ownerId: userId } })
@@ -143,30 +145,18 @@ function buildResponse(
     return getWeeklyCapacity(rt, week, project.hoursPerDay) / hpd
   }
 
-  // Compute weekly demand across all features
-  let weeklyDemand: { week: number; resourceTypeName: string; demandDays: number; capacityDays: number }[]
+  const weeklyDemandKey = (week: number, resourceTypeName: string) => `${week}|${resourceTypeName}`
+  const weeklyDemandSort = (a: WeeklyDemandRow, b: WeeklyDemandRow) =>
+    a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName)
+  const parseSimulatedDemandKey = (key: string) => {
+    const separatorIdx = key.lastIndexOf('|')
+    return {
+      resourceTypeName: key.substring(0, separatorIdx),
+      week: parseInt(key.substring(separatorIdx + 1), 10),
+    }
+  }
 
-  if (simulatedDemand && simulatedDemand.size > 0) {
-    // Use actual consumption from simulation — accurate, never exceeds capacity
-    weeklyDemand = Array.from(simulatedDemand.entries())
-      .map(([key, days]) => {
-        const separatorIdx = key.lastIndexOf('|')
-        const rtName = key.substring(0, separatorIdx)
-        const week = parseInt(key.substring(separatorIdx + 1), 10)
-        const rt = rtByName.get(rtName)
-        const capacityDays = rt
-          ? capacityDaysForWeek(rt, week)
-          : 5
-        return {
-          week,
-          resourceTypeName: rtName,
-          demandDays: Math.round(days * 100) / 100,
-          capacityDays,
-        }
-      })
-      .filter(d => d.demandDays > 0)
-      .sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
-  } else {
+  const buildFallbackWeeklyDemand = (): WeeklyDemandRow[] => {
     // Fallback: uniform spread (used by GET route with saved entries)
     const weeklyDemandMap = new Map<string, { demandDays: number; capacityDays: number }>()
     for (const e of entries) {
@@ -182,7 +172,7 @@ function buildResponse(
           // Only count the fraction of this integer week the feature actually occupies
           const overlap = Math.min(w + 1, featureEnd) - Math.max(w, featureStart)
           if (overlap <= 0) continue
-          const key = `${w}|${name}`
+          const key = weeklyDemandKey(w, name)
           // Variable capacity: use named resource availability for this week
           const capacityDays = rt
             ? capacityDaysForWeek(rt, w)
@@ -193,7 +183,7 @@ function buildResponse(
         }
       }
     }
-    weeklyDemand = Array.from(weeklyDemandMap.entries()).map(([key, { demandDays, capacityDays }]) => {
+    return Array.from(weeklyDemandMap.entries()).map(([key, { demandDays, capacityDays }]) => {
       const [weekStr, ...nameParts] = key.split('|')
       return {
         week: parseInt(weekStr, 10),
@@ -201,7 +191,54 @@ function buildResponse(
         demandDays: Math.round(demandDays * 10) / 10,
         capacityDays,
       }
-    }).sort((a, b) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName))
+    }).sort(weeklyDemandSort)
+  }
+
+  // Compute weekly demand across all features
+  let weeklyDemand: WeeklyDemandRow[]
+
+  if (simulatedDemand && simulatedDemand.size > 0) {
+    // Use actual consumption from simulation where present. For RTs with cached demand,
+    // missing weeks up to the project's global cached horizon are treated as zero demand
+    // rather than being reintroduced from fallback spread.
+    const fallbackDemand = buildFallbackWeeklyDemand()
+    const cachedResourceTypes = new Set<string>()
+    let globalCachedMaxWeek = Number.NEGATIVE_INFINITY
+
+    for (const key of simulatedDemand.keys()) {
+      const { resourceTypeName, week } = parseSimulatedDemandKey(key)
+      cachedResourceTypes.add(resourceTypeName)
+      globalCachedMaxWeek = Math.max(globalCachedMaxWeek, week)
+    }
+
+    const mergedDemand = new Map<string, WeeklyDemandRow>()
+
+    for (const row of fallbackDemand) {
+      const hasCachedDemand = cachedResourceTypes.has(row.resourceTypeName)
+      if (hasCachedDemand && row.week <= globalCachedMaxWeek) continue
+
+      mergedDemand.set(weeklyDemandKey(row.week, row.resourceTypeName), row)
+    }
+
+    for (const [key, days] of simulatedDemand.entries()) {
+      const { resourceTypeName: rtName, week } = parseSimulatedDemandKey(key)
+      const rt = rtByName.get(rtName)
+      const capacityDays = rt
+        ? capacityDaysForWeek(rt, week)
+        : 5
+      mergedDemand.set(weeklyDemandKey(week, rtName), {
+        week,
+        resourceTypeName: rtName,
+        demandDays: Math.round(days * 100) / 100,
+        capacityDays,
+      })
+    }
+
+    weeklyDemand = Array.from(mergedDemand.values())
+      .filter(d => d.demandDays > 0)
+      .sort(weeklyDemandSort)
+  } else {
+    weeklyDemand = buildFallbackWeeklyDemand()
   }
 
   // Build weekly capacity array for EVERY week (0..maxWeek-1) for RTs that have hours
@@ -222,101 +259,37 @@ function buildResponse(
     }
   }
 
-  // Build derived weeks per RT for display (Bug #8)
-  const rtDerivedWeeks = new Map<string, { start: number; end: number }>()
-  for (const d of weeklyDemand) {
-    const rtName = d.resourceTypeName
-    const week = d.week
-    const existing = rtDerivedWeeks.get(rtName)
-    if (!existing) {
-      rtDerivedWeeks.set(rtName, { start: week, end: week })
-    } else {
-      existing.start = Math.min(existing.start, week)
-      existing.end = Math.max(existing.end, week)
-    }
-  }
+  const namedResourceAssignments = deriveNamedResourceAssignments({
+    resourceTypes,
+    weeklyDemand,
+    capacityPlanByRt,
+  })
 
-  // Build named resources list from resource types, auto-generating numbered
-  // entries for RTs with count > 0 but no named resources that have demand.
-  // Bug #7: filter to only include NRs where the RT actually has demand
   const namedResourcesList = resourceTypes
-    .filter(rt => rt.namedResources && rt.namedResources.length > 0 ? rtNamesWithHours.has(rt.name) : true)
-    .flatMap(rt => {
-      // Bug #7: only include if RT has demand
-      if (!rtNamesWithHours.has(rt.name)) return []
-
-      const derivedRt = rtDerivedWeeks.get(rt.name)
-      const capacityPlanMaterialized = capacityPlanByRt.get(rt.id)
-      const useCapacityPlanFallback =
-        (rt.allocationMode as AllocationMode | null) === 'CAPACITY_PLAN' &&
-        shouldFallbackToActiveCapacityPlan(rt.namedResources ?? [], capacityPlanMaterialized)
-
-      if (useCapacityPlanFallback && capacityPlanMaterialized) {
-        return capacityPlanMaterialized.slotWindows.map((window, idx) => {
-          const existing = rt.namedResources[idx]
-          return {
-            id: existing?.id ?? `${rt.id}-capacity-plan-${idx + 1}`,
-            resourceTypeId: rt.id,
-            resourceTypeName: rt.name,
-            name: existing?.name ?? `${rt.name} ${idx + 1}`,
-            startWeek: window.startWeek,
-            endWeek: window.endWeek,
-            allocationPct: window.allocationPercent,
-            allocationMode: 'CAPACITY_PLAN',
-            allocationPercent: window.allocationPercent,
-            allocationStartWeek: null,
-            allocationEndWeek: null,
-          }
-        })
-      }
-
-      if (rt.namedResources && rt.namedResources.length > 0) {
-
-        return rt.namedResources.map(nr => {
-          const nrMode = (nr.allocationMode as AllocationMode | null) ?? 'EFFORT'
-          const isFullProject = nrMode === 'FULL_PROJECT'
-          const isTimeline = nrMode === 'TIMELINE'
-          const isCapacityPlan = nrMode === 'CAPACITY_PLAN'
-          return {
-            id: nr.id,
-            resourceTypeId: rt.id,
-            resourceTypeName: rt.name,
-            name: nr.name,
-            startWeek: isFullProject
-              ? null
-              : isTimeline
-                ? (nr.allocationStartWeek ?? (derivedRt?.start ?? null))
-                : isCapacityPlan
-                  ? (nr.startWeek ?? null)
-                  : null,
-            endWeek: isFullProject
-              ? null
-              : isTimeline
-                ? (nr.allocationEndWeek ?? (derivedRt?.end ?? null))
-                : isCapacityPlan
-                  ? (nr.endWeek ?? null)
-                  : null,
-            allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
-            allocationMode: nr.allocationMode,
-            allocationPercent: nr.allocationPercent ?? 100,
-            allocationStartWeek: nr.allocationStartWeek ?? null,
-            allocationEndWeek: nr.allocationEndWeek ?? null,
-          }
-        })
-      }
-      // Auto-generate synthetic named resources when RT has count > 0 and demand
-      if (rt.count > 0 && rtNamesWithHours.has(rt.name)) {
-        return Array.from({ length: rt.count }, (_, i) => ({
-          resourceTypeName: rt.name,
-          name: `${rt.name} ${i + 1}`,
-          startWeek: null as number | null,
-          endWeek: null as number | null,
-          allocationPct: 100,
-          allocationMode: 'EFFORT' as string,
-        }))
-      }
-      return []
-    })
+    .filter(rt => rtNamesWithHours.has(rt.name))
+    .flatMap(rt => (
+      namedResourceAssignments.get(rt.id)?.namedResources.map(namedResource => ({
+        id: namedResource.id,
+        resourceTypeId: rt.id,
+        resourceTypeName: rt.name,
+        name: namedResource.name,
+        startWeek: namedResource.startWeek,
+        endWeek: namedResource.endWeek,
+        allocationPct: namedResource.allocationMode === 'EFFORT'
+          ? 100
+          : Math.round(namedResource.allocationPercent),
+        allocationMode: namedResource.allocationMode,
+        allocationPercent: namedResource.allocationPercent,
+        allocationStartWeek: namedResource.allocationStartWeek,
+        allocationEndWeek: namedResource.allocationEndWeek,
+        actualAllocatedDays: namedResource.actualAllocatedDays,
+        actualAllocationStartWeek: namedResource.actualAllocationStartWeek,
+        actualAllocationEndWeek: namedResource.actualAllocationEndWeek,
+        actualAllocatedWeeks: namedResource.actualAllocatedWeeks,
+        actualAllocationSegments: namedResource.actualAllocationSegments,
+        synthetic: namedResource.synthetic,
+      })) ?? []
+    ))
 
   return {
     projectId: project.id,

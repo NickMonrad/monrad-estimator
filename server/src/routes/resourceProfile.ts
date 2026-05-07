@@ -7,6 +7,7 @@ import {
   materializeCapacityPlanResources,
   shouldFallbackToActiveCapacityPlan,
 } from '../lib/capacityPlanMaterialisation.js'
+import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
 
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
@@ -67,6 +68,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
+  const resourceTypeNameById = new Map(project.resourceTypes.map(rt => [rt.id, rt.name]))
 
   // Build a map: rtId → total allocated days from the active capacity plan
   const activePlan = project.capacityPlans?.[0] ?? null
@@ -208,6 +210,74 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
+  const weeklyDemandMap = new Map<string, number>()
+  const addWeeklyDemand = (week: number, resourceTypeName: string, demandDays: number) => {
+    if (!Number.isFinite(demandDays) || demandDays <= 0) return
+    const key = `${week}|${resourceTypeName}`
+    weeklyDemandMap.set(key, round2((weeklyDemandMap.get(key) ?? 0) + demandDays))
+  }
+
+  for (const epic of project.epics) {
+    if (epic.isActive === false) continue
+    for (const feature of epic.features) {
+      if (feature.isActive === false) continue
+      for (const story of feature.userStories) {
+        if (story.isActive === false) continue
+        const storyEntry = storyEntryMap.get(story.id)
+        const featureEntry = featureEntryMap.get(feature.id)
+        const entry = storyEntry ?? featureEntry
+        if (!entry || entry.durationWeeks <= 0) continue
+
+        for (const task of story.tasks) {
+          if (!task.resourceTypeId) continue
+          const resourceTypeName = resourceTypeNameById.get(task.resourceTypeId)
+          if (!resourceTypeName) continue
+          const resourceType = resourceTypeById.get(task.resourceTypeId)
+          const effectiveHoursPerDay =
+            resourceType?.hoursPerDay && resourceType.hoursPerDay > 0
+              ? resourceType.hoursPerDay
+              : fallbackHoursPerDay
+          if (!effectiveHoursPerDay) continue
+
+          const demandDays = task.durationDays ?? ((task.hoursEffort ?? 0) / effectiveHoursPerDay)
+          const startWeek = entry.startWeek
+          const endWeek = entry.startWeek + entry.durationWeeks
+          for (let week = Math.floor(startWeek); week < Math.ceil(endWeek); week += 1) {
+            const overlap = Math.min(week + 1, endWeek) - Math.max(week, startWeek)
+            if (overlap <= 0) continue
+            addWeeklyDemand(week, resourceTypeName, demandDays * (overlap / entry.durationWeeks))
+          }
+        }
+      }
+    }
+  }
+
+  if (project.weeklyDemandCache && Object.keys(project.weeklyDemandCache as Record<string, number>).length > 0) {
+    for (const [key, demandDays] of Object.entries(project.weeklyDemandCache as Record<string, number>)) {
+      const separatorIdx = key.lastIndexOf('|')
+      if (separatorIdx === -1) continue
+      const resourceTypeName = key.substring(0, separatorIdx)
+      const week = Number(key.substring(separatorIdx + 1))
+      if (!Number.isFinite(week) || !Number.isFinite(demandDays) || demandDays <= 0) continue
+      weeklyDemandMap.set(`${week}|${resourceTypeName}`, round2(demandDays))
+    }
+  }
+
+  const weeklyDemand: WeeklyDemandLike[] = Array.from(weeklyDemandMap.entries()).map(([key, demandDays]) => {
+    const separatorIdx = key.indexOf('|')
+    return {
+      week: Number(key.substring(0, separatorIdx)),
+      resourceTypeName: key.substring(separatorIdx + 1),
+      demandDays,
+    }
+  })
+
+  const namedResourceAssignments = deriveNamedResourceAssignments({
+    resourceTypes: project.resourceTypes,
+    weeklyDemand,
+    capacityPlanByRt,
+  })
+
   const categoryIndex = (category: ResourceCategory) => {
     const idx = CATEGORY_ORDER.indexOf(category)
     return idx === -1 ? CATEGORY_ORDER.length : idx
@@ -301,11 +371,20 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         allocatedDays: number
         derivedStartWeek: number | null
         derivedEndWeek: number | null
+        actualAllocatedDays: number
+        actualAllocationStartWeek: number | null
+        actualAllocationEndWeek: number | null
+        actualAllocatedWeeks: Array<{ week: number; days: number; capacityDays: number }>
+        actualAllocationSegments: Array<{ startWeek: number; endWeek: number; days: number }>
+        synthetic: boolean
       }>
 
       if (hasNamedResources) {
         // Compute per-NR allocated days
         namedResourcesOutput = namedResourcesSource.map(nr => {
+          const actualNamedResource = namedResourceAssignments
+            .get(resourceType.id)
+            ?.namedResources.find(actual => actual.id === nr.id || actual.name === nr.name)
           const nrMode = (nr.allocationMode as AllocationMode) ?? 'EFFORT'
           const nrPercent = nr.allocationPercent ?? 100
           let nrAllocatedDays: number
@@ -339,8 +418,37 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             allocatedDays: nrAllocatedDays,
             derivedStartWeek,
             derivedEndWeek,
+            actualAllocatedDays: actualNamedResource?.actualAllocatedDays ?? 0,
+            actualAllocationStartWeek: actualNamedResource?.actualAllocationStartWeek ?? null,
+            actualAllocationEndWeek: actualNamedResource?.actualAllocationEndWeek ?? null,
+            actualAllocatedWeeks: actualNamedResource?.actualAllocatedWeeks ?? [],
+            actualAllocationSegments: actualNamedResource?.actualAllocationSegments ?? [],
+            synthetic: actualNamedResource?.synthetic ?? false,
           }
         })
+        const existingIds = new Set(namedResourcesOutput.map(nr => nr.id))
+        const syntheticAssignments = namedResourceAssignments
+          .get(resourceType.id)
+          ?.namedResources.filter(actual => !existingIds.has(actual.id)) ?? []
+        namedResourcesOutput.push(...syntheticAssignments.map(actual => ({
+          id: actual.id,
+          name: actual.name,
+          allocationMode: actual.allocationMode,
+          allocationPercent: actual.allocationPercent,
+          allocationStartWeek: actual.allocationStartWeek,
+          allocationEndWeek: actual.allocationEndWeek,
+          startWeek: actual.startWeek,
+          endWeek: actual.endWeek,
+          allocatedDays: actual.actualAllocatedDays,
+          derivedStartWeek,
+          derivedEndWeek,
+          actualAllocatedDays: actual.actualAllocatedDays,
+          actualAllocationStartWeek: actual.actualAllocationStartWeek,
+          actualAllocationEndWeek: actual.actualAllocationEndWeek,
+          actualAllocatedWeeks: actual.actualAllocatedWeeks,
+          actualAllocationSegments: actual.actualAllocationSegments,
+          synthetic: actual.synthetic,
+        })))
         // Total RT allocatedDays = sum of NR allocatedDays
         allocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
       } else {

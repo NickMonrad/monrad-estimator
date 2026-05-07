@@ -294,6 +294,332 @@ describe('GET /api/projects/:projectId/timeline', () => {
     ]))
   })
 
+  it('derives actual named-resource assignment weeks from role demand without exceeding weekly capacity', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...mockProject,
+      weeklyDemandCache: {
+        'Senior Engineer - Cloud & DevOps|56': 5.9,
+      },
+    } as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
+      id: 'entry-cloud',
+      projectId: 'proj-1',
+      featureId: 'feat-cloud',
+      startWeek: 56,
+      durationWeeks: 1,
+      isManual: false,
+      feature: {
+        id: 'feat-cloud',
+        name: 'Cloud Work',
+        order: 0,
+        isActive: true,
+        epic: {
+          id: 'epic-1',
+          name: 'Cloud',
+          order: 0,
+          isActive: true,
+          featureMode: 'SEQUENTIAL',
+          scheduleMode: 'AUTO',
+          timelineStartWeek: null,
+        },
+        userStories: [],
+      },
+    }] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-cloud',
+      name: 'Senior Engineer - Cloud & DevOps',
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: 8,
+      allocationMode: 'EFFORT',
+      namedResources: [
+        {
+          id: 'nr-cloud',
+          name: 'Taylor',
+          startWeek: null,
+          endWeek: null,
+          allocationPct: 100,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      ],
+    }] as any)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    expect(res.body.namedResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        resourceTypeName: 'Senior Engineer - Cloud & DevOps',
+        name: 'Taylor',
+        actualAllocatedDays: 5,
+        actualAllocationStartWeek: 56,
+        actualAllocationEndWeek: 56,
+        actualAllocatedWeeks: [
+          expect.objectContaining({
+            week: 56,
+            days: 5,
+            capacityDays: 5,
+          }),
+        ],
+      }),
+    ]))
+  })
+
+  it('backfills weeklyDemand beyond cached horizon from scheduled entries', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...mockProject,
+      weeklyDemandCache: {
+        'Developer|0': 1.25,
+      },
+    } as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
+      id: 'entry-long-tail',
+      projectId: 'proj-1',
+      featureId: 'feat-long-tail',
+      startWeek: 60,
+      durationWeeks: 10,
+      isManual: false,
+      feature: {
+        id: 'feat-long-tail',
+        name: 'Long Tail Work',
+        order: 0,
+        isActive: true,
+        epic: {
+          id: 'epic-1',
+          name: 'Late Epic',
+          order: 0,
+          isActive: true,
+          featureMode: 'SEQUENTIAL',
+          scheduleMode: 'AUTO',
+          timelineStartWeek: null,
+        },
+        userStories: [{
+          isActive: true,
+          tasks: [{
+            resourceTypeId: 'rt-1',
+            hoursEffort: 400,
+            durationDays: null,
+            resourceType: { id: 'rt-1', name: 'Developer', hoursPerDay: 8 },
+          }],
+        }],
+      },
+    }] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-1',
+      name: 'Developer',
+      category: 'ENGINEERING',
+      count: 2,
+      hoursPerDay: 8,
+      allocationMode: 'EFFORT',
+      namedResources: [],
+    }] as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const developerDemand = res.body.weeklyDemand.filter((row: any) => row.resourceTypeName === 'Developer')
+    const weeks = developerDemand.map((row: any) => row.week)
+    const uniqueKeys = new Set(developerDemand.map((row: any) => `${row.week}|${row.resourceTypeName}`))
+
+    expect(weeks).toContain(65)
+    expect(weeks).toContain(69)
+    expect(uniqueKeys.size).toBe(developerDemand.length)
+  })
+
+  it('does not backfill a missing interior cached week, but still backfills beyond the cached horizon', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...mockProject,
+      weeklyDemandCache: {
+        'Developer|55': 2.5,
+        'Developer|57': 2.5,
+      },
+    } as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
+      id: 'entry-cached-gap',
+      projectId: 'proj-1',
+      featureId: 'feat-cached-gap',
+      startWeek: 55,
+      durationWeeks: 5,
+      isManual: false,
+      feature: {
+        id: 'feat-cached-gap',
+        name: 'Cached Gap Work',
+        order: 0,
+        isActive: true,
+        epic: {
+          id: 'epic-1',
+          name: 'Delivery',
+          order: 0,
+          isActive: true,
+          featureMode: 'SEQUENTIAL',
+          scheduleMode: 'AUTO',
+          timelineStartWeek: null,
+        },
+        userStories: [{
+          isActive: true,
+          tasks: [{
+            resourceTypeId: 'rt-1',
+            hoursEffort: 200,
+            durationDays: null,
+            resourceType: { id: 'rt-1', name: 'Developer', hoursPerDay: 8 },
+          }],
+        }],
+      },
+    }] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-1',
+      name: 'Developer',
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: 8,
+      allocationMode: 'EFFORT',
+      namedResources: [],
+    }] as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const developerDemand = res.body.weeklyDemand
+      .filter((row: any) => row.resourceTypeName === 'Developer')
+      .reduce((acc: Record<number, number>, row: any) => ({ ...acc, [row.week]: row.demandDays }), {})
+
+    expect(developerDemand[55]).toBe(2.5)
+    expect(developerDemand[56]).toBeUndefined()
+    expect(developerDemand[57]).toBe(2.5)
+    expect(developerDemand[58]).toBe(5)
+    expect(developerDemand[59]).toBe(5)
+  })
+
+  it('does not backfill a cached role before the global cached horizon ends, but still backfills after it', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...mockProject,
+      weeklyDemandCache: {
+        'Principal Consultant - Security|10': 2.5,
+        'Principal Consultant - Security|11': 2.5,
+        'Developer|10': 1.5,
+        'Developer|14': 1.5,
+      },
+    } as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([
+      {
+        id: 'entry-security-tail',
+        projectId: 'proj-1',
+        featureId: 'feat-security-tail',
+        startWeek: 10,
+        durationWeeks: 7,
+        isManual: false,
+        feature: {
+          id: 'feat-security-tail',
+          name: 'Security Tail Work',
+          order: 0,
+          isActive: true,
+          epic: {
+            id: 'epic-1',
+            name: 'Security',
+            order: 0,
+            isActive: true,
+            featureMode: 'SEQUENTIAL',
+            scheduleMode: 'AUTO',
+            timelineStartWeek: null,
+          },
+          userStories: [{
+            isActive: true,
+            tasks: [{
+              resourceTypeId: 'rt-security',
+              hoursEffort: 280,
+              durationDays: null,
+              resourceType: { id: 'rt-security', name: 'Principal Consultant - Security', hoursPerDay: 8 },
+            }],
+          }],
+        },
+      },
+      {
+        id: 'entry-cache-anchor',
+        projectId: 'proj-1',
+        featureId: 'feat-cache-anchor',
+        startWeek: 10,
+        durationWeeks: 5,
+        isManual: false,
+        feature: {
+          id: 'feat-cache-anchor',
+          name: 'Developer Cache Anchor',
+          order: 1,
+          isActive: true,
+          epic: {
+            id: 'epic-1',
+            name: 'Platform',
+            order: 1,
+            isActive: true,
+            featureMode: 'SEQUENTIAL',
+            scheduleMode: 'AUTO',
+            timelineStartWeek: null,
+          },
+          userStories: [{
+            isActive: true,
+            tasks: [{
+              resourceTypeId: 'rt-1',
+              hoursEffort: 200,
+              durationDays: null,
+              resourceType: { id: 'rt-1', name: 'Developer', hoursPerDay: 8 },
+            }],
+          }],
+        },
+      },
+    ] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
+      {
+        id: 'rt-security',
+        name: 'Principal Consultant - Security',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        namedResources: [],
+      },
+      {
+        id: 'rt-1',
+        name: 'Developer',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        namedResources: [],
+      },
+    ] as any)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const securityDemand = res.body.weeklyDemand
+      .filter((row: any) => row.resourceTypeName === 'Principal Consultant - Security')
+      .reduce((acc: Record<number, number>, row: any) => ({ ...acc, [row.week]: row.demandDays }), {})
+
+    expect(securityDemand[10]).toBe(2.5)
+    expect(securityDemand[11]).toBe(2.5)
+    expect(securityDemand[12]).toBeUndefined()
+    expect(securityDemand[13]).toBeUndefined()
+    expect(securityDemand[14]).toBeUndefined()
+    expect(securityDemand[15]).toBe(5)
+    expect(securityDemand[16]).toBe(5)
+  })
+
   it('uses materialized CAPACITY_PLAN split capacity for parallel warnings', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,

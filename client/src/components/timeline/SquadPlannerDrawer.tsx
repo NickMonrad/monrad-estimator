@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
+import { getPlannerResourceTypeVisibility, type SquadPlannerSeedSettings } from './timelineUx'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,6 +59,8 @@ interface Props {
   open: boolean
   onClose: () => void
   resourceTypes: Array<{ id: string; name: string; count: number }>
+  fallbackPlannedResourceTypeIds?: string[]
+  seedSettings?: SquadPlannerSeedSettings | null
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +127,24 @@ function settingsStorageKey(projectId: string) {
   return `squad-planner-settings:${projectId}`
 }
 
+function areSettingsAtDefaults(settings: PersistedPlannerSettings) {
+  const hasCustomMinFloor = Object.values(settings.minFloor ?? {}).some(value => value !== 0)
+  const hasCustomMaxCap = Object.keys(settings.maxCap ?? {}).length > 0
+
+  return (
+    settings.targetMonths === 18 &&
+    settings.customMonths === '' &&
+    settings.periodWeeks === 13 &&
+    settings.smoothingMode === 'smooth' &&
+    settings.maxDelta === 1 &&
+    settings.bufferPct === 20 &&
+    !hasCustomMinFloor &&
+    !hasCustomMaxCap &&
+    settings.maxParallelism === 2 &&
+    settings.maxConcurrentEpics === 6
+  )
+}
+
 function mergePerResourceSettings(
   values: Record<string, number> | undefined,
   resourceTypes: Props['resourceTypes'],
@@ -163,7 +184,14 @@ function loadPersistedSettings(projectId: string): PersistedPlannerSettings | nu
 // Component
 // ---------------------------------------------------------------------------
 
-export default function SquadPlannerDrawer({ projectId, open, onClose, resourceTypes }: Props) {
+export default function SquadPlannerDrawer({
+  projectId,
+  open,
+  onClose,
+  resourceTypes,
+  fallbackPlannedResourceTypeIds,
+  seedSettings,
+}: Props) {
   // ── state ────────────────────────────────────────────────────────────────
   const [targetMonths, setTargetMonths] = useState<number>(18)
   const [customMonths, setCustomMonths] = useState<string>('')
@@ -175,9 +203,12 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
   const [maxCap, setMaxCap] = useState<Record<string, number>>({})
   const [maxParallelism, setMaxParallelism] = useState<number>(2)
   const [maxConcurrentEpics, setMaxConcurrentEpics] = useState<number>(6)
+  const [showAllResourceTypes, setShowAllResourceTypes] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [seedBanner, setSeedBanner] = useState<string | null>(null)
 
   const qc = useQueryClient()
+  const skipNextPersistRef = useRef(false)
 
   const effectiveMonths = customMonths ? Number(customMonths) : targetMonths
   const targetWeeks = Math.round(effectiveMonths * 4.33)
@@ -187,6 +218,10 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
     if (!open) return
 
     const saved = loadPersistedSettings(projectId)
+    const nextMinFloor = mergePerResourceSettings(saved?.minFloor, resourceTypes, () => 0)
+    const nextMaxCap = mergePerResourceSettings(saved?.maxCap, resourceTypes, () => undefined)
+
+    skipNextPersistRef.current = true
 
     setTargetMonths(saved?.targetMonths ?? 18)
     setCustomMonths(saved?.customMonths ?? '')
@@ -198,12 +233,18 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
     setBufferPct(saved?.bufferPct ?? 20)
     setMaxParallelism(saved?.maxParallelism ?? 2)
     setMaxConcurrentEpics(saved?.maxConcurrentEpics ?? 6)
-    setMinFloor(mergePerResourceSettings(saved?.minFloor, resourceTypes, () => 0))
-    setMaxCap(mergePerResourceSettings(saved?.maxCap, resourceTypes, () => undefined))
+    setMinFloor(seedSettings ? { ...nextMinFloor, ...seedSettings.minFloor } : nextMinFloor)
+    setMaxCap(seedSettings ? { ...nextMaxCap, ...seedSettings.maxCap } : nextMaxCap)
+    setShowAllResourceTypes(false)
     setError(null)
+    setSeedBanner(
+      seedSettings && seedSettings.seededResourceTypeIds.length > 0
+        ? 'Seeded from Starting Team Finder. Adjust these bounds to refine the candidate squad.'
+        : null,
+    )
     generate.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, projectId])
+  }, [open, projectId, resourceTypes, seedSettings])
 
   useEffect(() => {
     setMinFloor(prev => mergePerResourceSettings(prev, resourceTypes, rtId => prev[rtId] ?? 0))
@@ -213,22 +254,30 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
   useEffect(() => {
     if (!open) return
 
+    if (skipNextPersistRef.current) {
+      skipNextPersistRef.current = false
+      return
+    }
+
     try {
-      window.localStorage.setItem(
-        settingsStorageKey(projectId),
-        JSON.stringify({
-          targetMonths,
-          customMonths,
-          periodWeeks,
-          smoothingMode,
-          maxDelta,
-          bufferPct,
-          minFloor,
-          maxCap,
-          maxParallelism,
-          maxConcurrentEpics,
-        } satisfies PersistedPlannerSettings),
-      )
+      const settings = {
+        targetMonths,
+        customMonths,
+        periodWeeks,
+        smoothingMode,
+        maxDelta,
+        bufferPct,
+        minFloor,
+        maxCap,
+        maxParallelism,
+        maxConcurrentEpics,
+      } satisfies PersistedPlannerSettings
+
+      if (areSettingsAtDefaults(settings)) {
+        window.localStorage.removeItem(settingsStorageKey(projectId))
+      } else {
+        window.localStorage.setItem(settingsStorageKey(projectId), JSON.stringify(settings))
+      }
     } catch {
       // Ignore storage failures and keep the drawer functional.
     }
@@ -310,6 +359,7 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
           deliveryWeeks: plan.deliveryWeeks,
           levellingResult: plan.levellingResult,
           maxParallelismPerFeature: maxParallelism,
+          maxConcurrentEpics,
           setActive: true,
         })
         .then(r => r.data),
@@ -329,6 +379,28 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
       setError(msg)
     },
   })
+
+  const resetToDefaults = () => {
+    setTargetMonths(18)
+    setCustomMonths('')
+    setPeriodWeeks(13)
+    setSmoothingMode('smooth')
+    setMaxDelta(1)
+    setBufferPct(20)
+    setMinFloor(mergePerResourceSettings(undefined, resourceTypes, () => 0))
+    setMaxCap({})
+    setMaxParallelism(2)
+    setMaxConcurrentEpics(6)
+    setShowAllResourceTypes(false)
+    setError(null)
+    setSeedBanner(null)
+    generate.reset()
+    try {
+      window.localStorage.removeItem(settingsStorageKey(projectId))
+    } catch {
+      // Ignore storage failures and keep the drawer functional.
+    }
+  }
 
   if (!open) return null
 
@@ -351,6 +423,18 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
   }
 
   const presetMonths = [12, 18, 24] as const
+  const effectivePlannedResourceTypeIds =
+    result?.plannedResourceTypeIds ?? fallbackPlannedResourceTypeIds
+  const defaultVisibility = getPlannerResourceTypeVisibility(
+    resourceTypes,
+    effectivePlannedResourceTypeIds,
+    false,
+  )
+  const { visibleResourceTypes, isFiltered } = getPlannerResourceTypeVisibility(
+    resourceTypes,
+    effectivePlannedResourceTypeIds,
+    showAllResourceTypes,
+  )
 
   return (
     <>
@@ -371,17 +455,30 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">👥 Squad Planner</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none"
-            aria-label="Close"
-          >
-            ×
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={resetToDefaults}
+              className="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+            >
+              Reset settings
+            </button>
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         {/* ── Scrollable body ── */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
+          {seedBanner && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+              {seedBanner}
+            </div>
+          )}
 
           {/* Target Duration */}
           <div>
@@ -553,11 +650,24 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
 
           {/* RT Constraints (min/max) */}
           <div>
-            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
-              RT Constraints (Min / Max)
-            </label>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 block">
+                RT Constraints (Min / Max)
+              </label>
+              {defaultVisibility.hiddenResourceTypes.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllResourceTypes(prev => !prev)}
+                  className="text-[11px] font-medium text-lab3-navy dark:text-lab3-blue hover:underline"
+                >
+                  {showAllResourceTypes
+                    ? `Show demand-bearing only (${defaultVisibility.visibleResourceTypes.length})`
+                    : `Show all RTs (+${defaultVisibility.hiddenResourceTypes.length} zero-demand)`}
+                </button>
+              )}
+            </div>
             <div className="space-y-2">
-              {resourceTypes.map(rt => (
+              {visibleResourceTypes.map(rt => (
                 <div key={rt.id} className="flex items-center gap-2">
                   <span className="flex-1 text-sm text-gray-700 dark:text-gray-300 truncate" title={rt.name}>
                     {rt.name}
@@ -600,6 +710,11 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
             <p className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
               Left = minimum headcount · Right = maximum (blank = no limit)
             </p>
+            {isFiltered && defaultVisibility.hiddenResourceTypes.length > 0 && (
+              <p className="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
+                Showing only demand-bearing RTs by default. Hidden until expanded: {defaultVisibility.hiddenResourceTypes.map(rt => rt.name).join(', ')}.
+              </p>
+            )}
           </div>
 
           {/* Generate button */}
@@ -615,6 +730,16 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
           {error && (
             <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-sm text-red-700 dark:text-red-300">
               {error}
+              <div className="mt-1 text-xs">
+                If this looks like an impossible plan,{' '}
+                <button
+                  onClick={resetToDefaults}
+                  className="underline font-medium hover:no-underline"
+                >
+                  reset planner settings
+                </button>{' '}
+                to try the defaults.
+              </div>
             </div>
           )}
 
@@ -634,7 +759,7 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
                     <div className="text-sm font-semibold text-gray-900 dark:text-white">📅 {result.deliveryWeeks} weeks</div>
                   </div>
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-2">
-                    <div className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Cost</div>
+                    <div className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Planned squad cost</div>
                     <div className="text-sm font-semibold text-gray-900 dark:text-white">💰 {fmtCost(result.totalCost)}</div>
                   </div>
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-2">
@@ -642,6 +767,9 @@ export default function SquadPlannerDrawer({ projectId, open, onClose, resourceT
                     <div className="text-sm font-semibold text-gray-900 dark:text-white">📈 {result.avgUtilisationPct.toFixed(0)}%</div>
                   </div>
                 </div>
+                <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
+                  Headline cost reflects planned squad capacity only. Project overhead items stay outside this total.
+                </p>
               </div>
 
               {/* Capacity Plan Table */}
