@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { login, createProject } from './helpers'
+import { login, createProject, openStartingTeamFinder, quickSchedule } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -7,7 +7,7 @@ import os from 'os'
 /**
  * Shared setup for timeline tests 2-4.
  * Creates a project with one epic + one feature, navigates to Timeline, sets the
- * start date to 2026-06-01, clicks Auto-schedule, and waits for Gantt entries
+ * start date to 2026-06-01, clicks Quick schedule, and waits for Gantt entries
  * (the sequential/parallel toggle on the epic header row is the earliest reliable
  * signal that at least one entry has been rendered).
  */
@@ -48,16 +48,16 @@ async function setupTimeline(page: Page): Promise<{ projectName: string; epicNam
   await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 8_000 })
 
   // Set start date — fill triggers React onChange which updates startDateInput state.
-  // Wait for the DOM value to stabilise before clicking Auto-schedule so that
+  // Wait for the DOM value to stabilise before clicking Quick schedule so that
   // handleSchedule reads the correct startDateInput value.
   const dateInput = page.locator('input[type="date"]')
   await expect(dateInput).toBeVisible({ timeout: 8_000 })
   await dateInput.fill('2026-06-01')
   await expect(dateInput).toHaveValue('2026-06-01')
 
-  // Auto-schedule — the server assigns 1-week default duration to features with no tasks,
+  // Quick schedule — the server assigns 1-week default duration to features with no tasks,
   // so even a fresh epic/feature will produce Gantt entries.
-  await page.getByRole('button', { name: /auto-schedule/i }).click()
+  await quickSchedule(page)
 
   // Wait until the Gantt has at least one entry. The sequential/parallel toggle button
   // on the epic header row only renders after epicGroups is populated.
@@ -145,11 +145,11 @@ test.describe('Timeline', () => {
     })
   })
 
-  test('auto-schedule shows projected end date', async ({ page }) => {
+  test('quick schedule shows projected end date', async ({ page }) => {
     await setupTimeline(page)
 
     // After setupTimeline the Gantt entries are already visible. The projectedEndDate
-    // field is rendered next to the Auto-schedule button whenever timeline?.projectedEndDate
+    // field is rendered next to the Quick schedule action whenever timeline?.projectedEndDate
     // is truthy. It should appear shortly after scheduling completes.
     await expect(page.getByText(/projected end:/i)).toBeVisible({ timeout: 15_000 })
   })
@@ -184,7 +184,7 @@ test.describe('Timeline', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Scenario Finder drawer — Phase 4, issue #233
+// Starting Team Finder drawer — Phase 4, issue #233
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -203,8 +203,8 @@ const OPTIMISER_CSV = [
 
 /**
  * Creates a fresh project, seeds it with resource types via CSV import,
- * navigates to the Timeline page, and runs Auto-schedule.
- * Resources (Developer + Tech Lead) are required for the Run optimiser
+ * navigates to the Timeline page, and runs Quick schedule.
+ * Resources (Developer + Tech Lead) are required for the finder action
  * button to be enabled.
  */
 async function setupOptimiserTimeline(page: Page): Promise<void> {
@@ -239,12 +239,12 @@ async function setupOptimiserTimeline(page: Page): Promise<void> {
   await page.getByRole('button', { name: /timeline/i }).click()
   await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 8_000 })
 
-  // Set a start date and run Auto-schedule so the scheduler has produced entries
+  // Set a start date and run Quick schedule so the scheduler has produced entries
   const dateInput = page.locator('input[type="date"]')
   await expect(dateInput).toBeVisible({ timeout: 8_000 })
   await dateInput.fill('2026-06-01')
   await expect(dateInput).toHaveValue('2026-06-01')
-  await page.getByRole('button', { name: /auto-schedule/i }).click()
+  await quickSchedule(page)
   await expect(
     page.getByRole('button', { name: /sequential|parallel/i }).first()
   ).toBeVisible({ timeout: 15_000 })
@@ -252,17 +252,12 @@ async function setupOptimiserTimeline(page: Page): Promise<void> {
 
 // ── Test 1: open & close ──────────────────────────────────────────────────────
 // Uses the lighter setupTimeline (no CSV needed for open/close alone).
-test.describe('Scenario Finder drawer — open and close', () => {
+test.describe('Starting Team Finder drawer — open and close', () => {
   test('open and close the drawer', async ({ page }) => {
     await setupTimeline(page)
 
-    // Click the header button
-    await page.getByRole('button', { name: /scenario finder/i }).click()
-
-    // Drawer heading and dialog role should be visible
-    const drawer = page.getByRole('dialog', { name: /scenario finder/i })
-    await expect(drawer).toBeVisible({ timeout: 8_000 })
-    await expect(drawer.getByRole('heading', { name: /scenario finder/i })).toBeVisible()
+    const drawer = await openStartingTeamFinder(page)
+    await expect(drawer.getByRole('heading', { name: /starting team finder/i })).toBeVisible()
 
     // Close via the × button (aria-label="Close")
     await drawer.getByRole('button', { name: 'Close' }).click()
@@ -273,7 +268,7 @@ test.describe('Scenario Finder drawer — open and close', () => {
 })
 
 // ── Tests 2 & 3: require resource types ──────────────────────────────────────
-test.describe('Scenario Finder drawer — with resources', () => {
+test.describe('Starting Team Finder drawer — with resources', () => {
   test.beforeEach(async ({ page }) => {
     // CSV import + navigation takes ~20-30s; allow 90s total
     test.setTimeout(90_000)
@@ -281,38 +276,32 @@ test.describe('Scenario Finder drawer — with resources', () => {
   })
 
   test('run optimiser and see results', async ({ page }) => {
-    // Open the drawer
-    await page.getByRole('button', { name: /scenario finder/i }).click()
-    const drawer = page.getByRole('dialog', { name: /scenario finder/i })
-    await expect(drawer).toBeVisible({ timeout: 8_000 })
+    const drawer = await openStartingTeamFinder(page)
 
-    // Click Run optimiser
-    await drawer.getByRole('button', { name: 'Run optimiser' }).click()
+    // Click the finder CTA
+    await drawer.getByRole('button', { name: /find starting teams/i }).click()
 
     // Wait for search stats footer (up to 30s for the optimiser to complete)
-    // Rendered as: "Evaluated X scenarios in Y.Zs"
-    await expect(drawer.getByText(/Evaluated [\d,]+ scenarios/)).toBeVisible({ timeout: 30_000 })
+    // Rendered as: "Evaluated X team options in Y.Zs"
+    await expect(drawer.getByText(/Evaluated [\d,]+ team options/)).toBeVisible({ timeout: 30_000 })
 
     // Baseline card must be visible
-    await expect(drawer.getByText('Current configuration')).toBeVisible()
+    await expect(drawer.getByText('Current starting point')).toBeVisible()
 
-    // At least one candidate card — "Top scenarios" heading + at least one Apply button
-    await expect(drawer.getByText('Top scenarios')).toBeVisible()
-    await expect(drawer.getByRole('button', { name: 'Apply' }).first()).toBeVisible()
+    // At least one candidate card — "Starting team options" heading + at least one Apply directly button
+    await expect(drawer.getByText('Starting team options')).toBeVisible()
+    await expect(drawer.getByRole('button', { name: /apply directly/i }).first()).toBeVisible()
   })
 
   test('apply button is present on candidate cards, dialog is dismissed without mutation', async ({ page }) => {
-    // Open the drawer and run the optimiser
-    await page.getByRole('button', { name: /scenario finder/i }).click()
-    const drawer = page.getByRole('dialog', { name: /scenario finder/i })
-    await expect(drawer).toBeVisible({ timeout: 8_000 })
+    const drawer = await openStartingTeamFinder(page)
 
-    await drawer.getByRole('button', { name: 'Run optimiser' }).click()
-    await expect(drawer.getByText(/Evaluated [\d,]+ scenarios/)).toBeVisible({ timeout: 30_000 })
-    await expect(drawer.getByText('Top scenarios')).toBeVisible()
+    await drawer.getByRole('button', { name: /find starting teams/i }).click()
+    await expect(drawer.getByText(/Evaluated [\d,]+ team options/)).toBeVisible({ timeout: 30_000 })
+    await expect(drawer.getByText('Starting team options')).toBeVisible()
 
-    // Each candidate card has a visible Apply button
-    const applyButtons = drawer.getByRole('button', { name: 'Apply' })
+    // Each candidate card has a visible Apply directly button
+    const applyButtons = drawer.getByRole('button', { name: /apply directly/i })
     const count = await applyButtons.count()
     expect(count).toBeGreaterThan(0)
 
