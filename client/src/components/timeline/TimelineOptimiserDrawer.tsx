@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import {
   runOptimiser,
@@ -34,6 +34,32 @@ interface Props {
 }
 
 type Mode = 'speed' | 'utilisation' | 'balanced'
+
+function buildResourceTypesKey(resourceTypes: Props['resourceTypes']) {
+  return resourceTypes.map(rt => `${rt.id}:${rt.name}:${rt.count}`).join('|')
+}
+
+function buildIdListKey(ids?: string[]) {
+  return (ids ?? []).join('|')
+}
+
+function buildDefaultCountRanges(
+  resourceTypes: Props['resourceTypes'],
+  fallbackPlannedResourceTypeIds?: string[],
+) {
+  const defaultVisibility = getPlannerResourceTypeVisibility(
+    resourceTypes,
+    fallbackPlannedResourceTypeIds,
+    false,
+  )
+  const ranges = new Map<string, CountRange>()
+
+  for (const rt of defaultVisibility.visibleResourceTypes) {
+    ranges.set(rt.id, getStartingTeamFinderDefaultRange(rt.count))
+  }
+
+  return ranges
+}
 
 const MODE_LABELS: Record<Mode, string> = {
   speed: 'Speed',
@@ -349,19 +375,11 @@ export default function TimelineOptimiserDrawer({
   const [lastResult, setLastResult] = useState<OptimiserResponse | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
   const [showAllResourceTypes, setShowAllResourceTypes] = useState(false)
+  const wasOpenRef = useRef(false)
+  const lastRestoreSeedRef = useRef<string | null>(null)
+  const restoreSeed = `${projectId}::${buildResourceTypesKey(resourceTypes)}::${buildIdListKey(fallbackPlannedResourceTypeIds)}`
 
   const resetSettings = useCallback(() => {
-    const defaultVisibility = getPlannerResourceTypeVisibility(
-      resourceTypes,
-      fallbackPlannedResourceTypeIds,
-      false,
-    )
-    const ranges = new Map<string, CountRange>()
-
-    for (const rt of defaultVisibility.visibleResourceTypes) {
-      ranges.set(rt.id, getStartingTeamFinderDefaultRange(rt.count))
-    }
-
     setMode('balanced')
     setAllowRampUp(false)
     setMaxBudget('')
@@ -371,13 +389,25 @@ export default function TimelineOptimiserDrawer({
     setRunError(null)
     setLastResult(null)
     setShowAllResourceTypes(false)
-    setCountRanges(ranges)
+    setCountRanges(buildDefaultCountRanges(resourceTypes, fallbackPlannedResourceTypeIds))
   }, [fallbackPlannedResourceTypeIds, resourceTypes])
 
   // ── initialise / reset when drawer opens ─────────────────────────────────
   useEffect(() => {
-    if (open) resetSettings()
-  }, [open, resetSettings])
+    const opened = open && !wasOpenRef.current
+    const restoreSeedChanged = open && wasOpenRef.current && lastRestoreSeedRef.current !== restoreSeed
+
+    if (opened || restoreSeedChanged) {
+      resetSettings()
+      lastRestoreSeedRef.current = restoreSeed
+    }
+
+    if (!open) {
+      lastRestoreSeedRef.current = restoreSeed
+    }
+
+    wasOpenRef.current = open
+  }, [open, resetSettings, restoreSeed])
 
   // ── ESC to close ──────────────────────────────────────────────────────────
   const handleKeyDown = useCallback(
@@ -479,7 +509,7 @@ export default function TimelineOptimiserDrawer({
   // ── count range helpers ───────────────────────────────────────────────────
   function setRange(rtId: string, field: 'min' | 'max', raw: string) {
     const v = parseInt(raw, 10)
-    if (isNaN(v) || v < 0) return
+    if (isNaN(v) || v < 1) return
     setCountRanges(prev => {
       const next = new Map(prev)
       const resourceType = resourceTypes.find(rt => rt.id === rtId)
@@ -580,7 +610,7 @@ export default function TimelineOptimiserDrawer({
             </div>
             <p className="mb-3 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
               Defaults are intentionally broad to surface candidate squads for Squad Planner:
-              start at 0, then search up to the larger of current + 4 or 2× current, capped at 12.
+              start at 1, then search up to the larger of current + 4 or 2× current, capped at 12.
             </p>
             <div className="space-y-2">
               {visibleResourceTypes.map(rt => {
@@ -594,7 +624,7 @@ export default function TimelineOptimiserDrawer({
                       <label className="text-xs text-gray-500 dark:text-gray-400">min</label>
                       <input
                         type="number"
-                        min={0}
+                        min={1}
                         value={range.min}
                         onChange={e => setRange(rt.id, 'min', e.target.value)}
                         className="w-14 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-lab3-blue"

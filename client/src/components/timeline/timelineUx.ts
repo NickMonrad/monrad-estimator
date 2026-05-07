@@ -135,7 +135,7 @@ export function getStartingTeamFinderDefaultRange(currentCount: number): Startin
   const safeCurrentCount = Number.isFinite(currentCount) ? Math.max(0, Math.floor(currentCount)) : 0
 
   return {
-    min: 0,
+    min: 1,
     max: Math.min(12, Math.max(6, safeCurrentCount + 4, Math.ceil(safeCurrentCount * 2))),
   }
 }

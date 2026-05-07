@@ -75,15 +75,15 @@ describe('getPlannerResourceTypeVisibility', () => {
 })
 
 describe('getStartingTeamFinderDefaultRange', () => {
-  it('starts at zero and searches broadly around the current count', () => {
-    expect(getStartingTeamFinderDefaultRange(1)).toEqual({ min: 0, max: 6 })
-    expect(getStartingTeamFinderDefaultRange(3)).toEqual({ min: 0, max: 7 })
-    expect(getStartingTeamFinderDefaultRange(5)).toEqual({ min: 0, max: 10 })
+  it('starts at one and searches broadly around the current count', () => {
+    expect(getStartingTeamFinderDefaultRange(1)).toEqual({ min: 1, max: 6 })
+    expect(getStartingTeamFinderDefaultRange(3)).toEqual({ min: 1, max: 7 })
+    expect(getStartingTeamFinderDefaultRange(5)).toEqual({ min: 1, max: 10 })
   })
 
   it('caps the search range at twelve people', () => {
-    expect(getStartingTeamFinderDefaultRange(8)).toEqual({ min: 0, max: 12 })
-    expect(getStartingTeamFinderDefaultRange(20)).toEqual({ min: 0, max: 12 })
+    expect(getStartingTeamFinderDefaultRange(8)).toEqual({ min: 1, max: 12 })
+    expect(getStartingTeamFinderDefaultRange(20)).toEqual({ min: 1, max: 12 })
   })
 })
 

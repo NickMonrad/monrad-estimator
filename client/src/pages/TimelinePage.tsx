@@ -105,7 +105,7 @@ function NamedResourcesPanel({
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b))
   }, [namedResources])
 
-  const projectEndWeek = totalWeeks - 1
+  const scheduleEndWeek = Math.max(totalWeeks - weekOffset - 1, 0)
 
   return (
     <div className="border-t border-gray-200 dark:border-gray-700">
@@ -179,11 +179,18 @@ function NamedResourcesPanel({
                   <div className="border-b border-gray-100 dark:border-gray-700" style={{ height: 30 }} />
                   {/* Person bars */}
                   {people.map((nr, i) => {
-                    const start = nr.startWeek ?? 0
-                    const end = nr.endWeek ?? projectEndWeek
+                    const start = Math.min(Math.max(nr.startWeek ?? 0, 0), scheduleEndWeek)
+                    const end = Math.min(Math.max(nr.endWeek ?? scheduleEndWeek, start), scheduleEndWeek)
                     const colour = RESOURCE_COLOURS[(colourIdx++) % RESOURCE_COLOURS.length]
-                    const actualAllocatedWeeks = nr.actualAllocatedWeeks ?? []
-                    const actualAllocationSegments = nr.actualAllocationSegments ?? []
+                    const actualAllocatedWeeks = (nr.actualAllocatedWeeks ?? [])
+                      .filter(allocation => allocation.week >= 0 && allocation.week <= scheduleEndWeek)
+                    const actualAllocationSegments = (nr.actualAllocationSegments ?? [])
+                      .map(segment => ({
+                        ...segment,
+                        startWeek: Math.min(Math.max(segment.startWeek, 0), scheduleEndWeek),
+                        endWeek: Math.min(Math.max(segment.endWeek, 0), scheduleEndWeek),
+                      }))
+                      .filter(segment => segment.endWeek >= segment.startWeek)
                     const rtDemand = demandByRt.get(rtName)
                     return (
                       <div
@@ -465,11 +472,14 @@ export default function TimelinePage() {
   }, [])
 
   // Derived list of resource types for the optimiser (id, name, count)
-  const resourceTypesForOptimiser = (resourceTypes ?? []).map(rt => ({
-    id: rt.id,
-    name: rt.name,
-    count: rt.count,
-  }))
+  const resourceTypesForOptimiser = useMemo(
+    () => (resourceTypes ?? []).map(rt => ({
+      id: rt.id,
+      name: rt.name,
+      count: rt.count,
+    })),
+    [resourceTypes],
+  )
 
   const scheduleTimeline = useMutation({
     mutationFn: (body: { startDate?: string; resourceLevel?: boolean }) =>

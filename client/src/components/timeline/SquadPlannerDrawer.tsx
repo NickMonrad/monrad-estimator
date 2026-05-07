@@ -180,6 +180,25 @@ function loadPersistedSettings(projectId: string): PersistedPlannerSettings | nu
   }
 }
 
+function buildResourceTypesKey(resourceTypes: Props['resourceTypes']) {
+  return resourceTypes.map(rt => `${rt.id}:${rt.name}:${rt.count}`).join('|')
+}
+
+function buildSeedSettingsKey(seedSettings?: SquadPlannerSeedSettings | null) {
+  if (!seedSettings) return ''
+
+  const minFloor = Object.entries(seedSettings.minFloor)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([resourceTypeId, value]) => `${resourceTypeId}:${value}`)
+    .join('|')
+  const maxCap = Object.entries(seedSettings.maxCap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([resourceTypeId, value]) => `${resourceTypeId}:${value}`)
+    .join('|')
+
+  return `${seedSettings.seededResourceTypeIds.join('|')}::${minFloor}::${maxCap}`
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -209,42 +228,12 @@ export default function SquadPlannerDrawer({
 
   const qc = useQueryClient()
   const skipNextPersistRef = useRef(false)
+  const wasOpenRef = useRef(false)
+  const lastRestoreSeedRef = useRef<string | null>(null)
+  const restoreSeed = `${projectId}::${buildResourceTypesKey(resourceTypes)}::${buildSeedSettingsKey(seedSettings)}`
 
   const effectiveMonths = customMonths ? Number(customMonths) : targetMonths
   const targetWeeks = Math.round(effectiveMonths * 4.33)
-
-  // ── restore state when drawer opens ──────────────────────────────────────
-  useEffect(() => {
-    if (!open) return
-
-    const saved = loadPersistedSettings(projectId)
-    const nextMinFloor = mergePerResourceSettings(saved?.minFloor, resourceTypes, () => 0)
-    const nextMaxCap = mergePerResourceSettings(saved?.maxCap, resourceTypes, () => undefined)
-
-    skipNextPersistRef.current = true
-
-    setTargetMonths(saved?.targetMonths ?? 18)
-    setCustomMonths(saved?.customMonths ?? '')
-    setPeriodWeeks(saved?.periodWeeks === 4 ? 4 : 13)
-    setSmoothingMode(
-      saved?.smoothingMode === 'tight' || saved?.smoothingMode === 'exact' ? saved.smoothingMode : 'smooth',
-    )
-    setMaxDelta(saved?.maxDelta ?? 1)
-    setBufferPct(saved?.bufferPct ?? 20)
-    setMaxParallelism(saved?.maxParallelism ?? 2)
-    setMaxConcurrentEpics(saved?.maxConcurrentEpics ?? 6)
-    setMinFloor(seedSettings ? { ...nextMinFloor, ...seedSettings.minFloor } : nextMinFloor)
-    setMaxCap(seedSettings ? { ...nextMaxCap, ...seedSettings.maxCap } : nextMaxCap)
-    setShowAllResourceTypes(false)
-    setError(null)
-    setSeedBanner(
-      seedSettings && seedSettings.seededResourceTypeIds.length > 0
-        ? 'Seeded from Starting Team Finder. Adjust these bounds to refine the candidate squad.'
-        : null,
-    )
-    generate.reset()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, projectId, resourceTypes, seedSettings])
 
   useEffect(() => {
     setMinFloor(prev => mergePerResourceSettings(prev, resourceTypes, rtId => prev[rtId] ?? 0))
@@ -334,6 +323,52 @@ export default function SquadPlannerDrawer({
     },
     onSuccess: () => setError(null),
   })
+
+  const restoreSettings = useCallback(() => {
+    const saved = loadPersistedSettings(projectId)
+    const nextMinFloor = mergePerResourceSettings(saved?.minFloor, resourceTypes, () => 0)
+    const nextMaxCap = mergePerResourceSettings(saved?.maxCap, resourceTypes, () => undefined)
+
+    skipNextPersistRef.current = true
+
+    setTargetMonths(saved?.targetMonths ?? 18)
+    setCustomMonths(saved?.customMonths ?? '')
+    setPeriodWeeks(saved?.periodWeeks === 4 ? 4 : 13)
+    setSmoothingMode(
+      saved?.smoothingMode === 'tight' || saved?.smoothingMode === 'exact' ? saved.smoothingMode : 'smooth',
+    )
+    setMaxDelta(saved?.maxDelta ?? 1)
+    setBufferPct(saved?.bufferPct ?? 20)
+    setMaxParallelism(saved?.maxParallelism ?? 2)
+    setMaxConcurrentEpics(saved?.maxConcurrentEpics ?? 6)
+    setMinFloor(seedSettings ? { ...nextMinFloor, ...seedSettings.minFloor } : nextMinFloor)
+    setMaxCap(seedSettings ? { ...nextMaxCap, ...seedSettings.maxCap } : nextMaxCap)
+    setShowAllResourceTypes(false)
+    setError(null)
+    setSeedBanner(
+      seedSettings && seedSettings.seededResourceTypeIds.length > 0
+        ? 'Seeded from Starting Team Finder. Adjust these bounds to refine the candidate squad.'
+        : null,
+    )
+    generate.reset()
+  }, [generate, projectId, resourceTypes, seedSettings])
+
+  // ── restore state when drawer opens ──────────────────────────────────────
+  useEffect(() => {
+    const opened = open && !wasOpenRef.current
+    const restoreSeedChanged = open && wasOpenRef.current && lastRestoreSeedRef.current !== restoreSeed
+
+    if (opened || restoreSeedChanged) {
+      restoreSettings()
+      lastRestoreSeedRef.current = restoreSeed
+    }
+
+    if (!open) {
+      lastRestoreSeedRef.current = restoreSeed
+    }
+
+    wasOpenRef.current = open
+  }, [open, restoreSeed, restoreSettings])
 
   // ── apply mutation ──────────────────────────────────────────────────────
   const apply = useMutation({

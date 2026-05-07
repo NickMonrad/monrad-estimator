@@ -546,9 +546,8 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     include: { story: { select: { name: true, featureId: true } } },
   })
   const allFeatureIds = entries.map(e => e.featureId)
-  const [featureDependencies, epicDependenciesForResponse, storyDependencies] = await Promise.all([
+  const [featureDependencies, storyDependencies] = await Promise.all([
     prisma.featureDependency.findMany({ where: { featureId: { in: allFeatureIds } }, select: { featureId: true, dependsOnId: true } }),
-    prisma.epicDependency.findMany({ where: { epic: { projectId: project.id } }, select: { epicId: true, dependsOnId: true } }),
     prisma.storyDependency.findMany({ where: { storyId: { in: storyTimelineEntries.map(e => e.storyId) } }, select: { storyId: true, dependsOnId: true } }),
   ])
 
@@ -570,7 +569,7 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     warningResourceTypes,
   )
 
-  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDependenciesForResponse, resourceTypes, weeklyConsumptionMap, capacityPlanByRt))
+  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDeps, resourceTypes, weeklyConsumptionMap, capacityPlanByRt))
 }))
 
 // PUT /api/projects/:projectId/timeline/stories/:storyId — manual story timeline override
