@@ -288,8 +288,9 @@ test.describe('Starting Team Finder drawer — with resources', () => {
     // Baseline card must be visible
     await expect(drawer.getByText('Current starting point')).toBeVisible()
 
-    // At least one candidate card — "Starting team options" heading + at least one Apply directly button
-    await expect(drawer.getByText('Starting team options')).toBeVisible()
+    // At least one candidate card — the exact "Starting team options" section label + at least one Apply directly button
+    const startingTeamOptions = drawer.locator('div').filter({ hasText: /^Starting team options$/ }).first()
+    await expect(startingTeamOptions).toBeVisible()
     await expect(drawer.getByRole('button', { name: /apply directly/i }).first()).toBeVisible()
   })
 
@@ -298,7 +299,8 @@ test.describe('Starting Team Finder drawer — with resources', () => {
 
     await drawer.getByRole('button', { name: /find starting teams/i }).click()
     await expect(drawer.getByText(/Evaluated [\d,]+ team options/)).toBeVisible({ timeout: 30_000 })
-    await expect(drawer.getByText('Starting team options')).toBeVisible()
+    const startingTeamOptions = drawer.locator('div').filter({ hasText: /^Starting team options$/ }).first()
+    await expect(startingTeamOptions).toBeVisible()
 
     // Each candidate card has a visible Apply directly button
     const applyButtons = drawer.getByRole('button', { name: /apply directly/i })

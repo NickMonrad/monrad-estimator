@@ -129,8 +129,8 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 | Test | Description |
 |------|-------------|
-| run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point") and at least one candidate card with an `Apply directly` button are visible |
-| apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts every candidate card has an `Apply directly` button, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
+| run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
+| apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts the exact `Starting team options` section label and that candidate cards expose `Apply directly` buttons, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
 
 ---
 
