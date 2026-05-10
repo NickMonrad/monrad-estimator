@@ -178,11 +178,14 @@ function weeklyCapacityForNamedResource(
   if (mode === 'EFFORT') return 5
   if (mode === 'FULL_PROJECT' || mode === 'CAPACITY_PLAN') return 5 * (allocationPercent / 100)
 
-  const effectiveStartWeek = namedResource.allocationStartWeek ?? namedResource.startWeek ?? 0
-  const effectiveEndWeek =
-    namedResource.allocationEndWeek ??
-    namedResource.endWeek ??
-    effectiveStartWeek
+  const hasExplicitAllocationWindow =
+    namedResource.allocationStartWeek != null ||
+    namedResource.allocationEndWeek != null
+
+  if (!hasExplicitAllocationWindow) return 5 * (allocationPercent / 100)
+
+  const effectiveStartWeek = namedResource.allocationStartWeek ?? -Infinity
+  const effectiveEndWeek = namedResource.allocationEndWeek ?? Infinity
 
   if (week < effectiveStartWeek || week > effectiveEndWeek) return 0
   return 5 * (allocationPercent / 100)
