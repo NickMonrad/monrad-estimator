@@ -385,4 +385,117 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       }),
     ])
   })
+
+  it('uses actual named-resource assignment coverage when it exceeds the derived timeline window', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: {
+        'Data, AI & IoT|0': 5,
+        'Data, AI & IoT|1': 5,
+        'Data, AI & IoT|2': 5,
+        'Data, AI & IoT|3': 5,
+        'Data, AI & IoT|4': 5,
+        'Data, AI & IoT|5': 5,
+        'Data, AI & IoT|6': 5,
+        'Data, AI & IoT|7': 5,
+        'Data, AI & IoT|8': 5,
+        'Data, AI & IoT|9': 5,
+        'Data, AI & IoT|10': 5,
+        'Data, AI & IoT|11': 5,
+        'Data, AI & IoT|12': 1,
+      },
+      resourceTypes: [
+        {
+          id: 'rt-data',
+          name: 'Data, AI & IoT',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-data',
+              name: 'Senior Engineer - Data, AI & IoT',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Platform',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Delivery',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Implement',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      hoursEffort: 488,
+                      durationDays: 61,
+                      resourceTypeId: 'rt-data',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 4.327272727272727, durationWeeks: 8.072727272727272 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const dataRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-data')
+    expect(dataRow).toMatchObject({
+      allocationMode: 'TIMELINE',
+      allocatedDays: 61,
+      derivedStartWeek: 0,
+      derivedEndWeek: 12,
+    })
+    expect(dataRow.namedResources).toEqual([
+      expect.objectContaining({
+        name: 'Senior Engineer - Data, AI & IoT',
+        allocatedDays: 40.36,
+        actualAllocatedDays: 61,
+        actualAllocationStartWeek: 0,
+        actualAllocationEndWeek: 12,
+      }),
+    ])
+  })
 })

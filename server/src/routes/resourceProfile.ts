@@ -354,11 +354,27 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             }
           })
         : resourceType.namedResources
+      const actualNamedResourceAssignment = namedResourceAssignments.get(resourceType.id)
+      const actualNamedResourcesForType = actualNamedResourceAssignment?.namedResources ?? []
+      const actualNamedResourceStartWeeks = actualNamedResourcesForType
+        .map(namedResource => namedResource.actualAllocationStartWeek)
+        .filter((week): week is number => week != null)
+      const actualNamedResourceEndWeeks = actualNamedResourcesForType
+        .map(namedResource => namedResource.actualAllocationEndWeek)
+        .filter((week): week is number => week != null)
+      const actualDerivedStartWeek = actualNamedResourceStartWeeks.length > 0
+        ? Math.min(...actualNamedResourceStartWeeks)
+        : null
+      const actualDerivedEndWeek = actualNamedResourceEndWeeks.length > 0
+        ? Math.max(...actualNamedResourceEndWeeks)
+        : null
 
       // If named resources exist, compute per-NR allocatedDays
       const hasNamedResources = namedResourcesSource.length > 0
 
       let allocatedDays: number
+      let rowDerivedStartWeek = derivedStartWeek
+      let rowDerivedEndWeek = derivedEndWeek
       let namedResourcesOutput: Array<{
         id: string
         name: string
@@ -382,9 +398,8 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       if (hasNamedResources) {
         // Compute per-NR allocated days
         namedResourcesOutput = namedResourcesSource.map(nr => {
-          const actualNamedResource = namedResourceAssignments
-            .get(resourceType.id)
-            ?.namedResources.find(actual => actual.id === nr.id || actual.name === nr.name)
+          const actualNamedResource = actualNamedResourcesForType
+            .find(actual => actual.id === nr.id || actual.name === nr.name)
           const nrMode = (nr.allocationMode as AllocationMode) ?? 'EFFORT'
           const nrPercent = nr.allocationPercent ?? 100
           let nrAllocatedDays: number
@@ -427,9 +442,8 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           }
         })
         const existingIds = new Set(namedResourcesOutput.map(nr => nr.id))
-        const syntheticAssignments = namedResourceAssignments
-          .get(resourceType.id)
-          ?.namedResources.filter(actual => !existingIds.has(actual.id)) ?? []
+        const syntheticAssignments = actualNamedResourcesForType
+          .filter(actual => !existingIds.has(actual.id))
         namedResourcesOutput.push(...syntheticAssignments.map(actual => ({
           id: actual.id,
           name: actual.name,
@@ -449,8 +463,23 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           actualAllocationSegments: actual.actualAllocationSegments,
           synthetic: actual.synthetic,
         })))
-        // Total RT allocatedDays = sum of NR allocatedDays
-        allocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
+        const plannedAllocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
+        const actualAllocatedDays = round2(actualNamedResourceAssignment?.actualAllocatedDays ?? 0)
+        const shouldUseActualAssignmentWindow =
+          actualDerivedStartWeek != null &&
+          actualDerivedEndWeek != null &&
+          (
+            derivedStartWeek == null ||
+            actualDerivedStartWeek < derivedStartWeek ||
+            derivedEndWeek == null ||
+            actualDerivedEndWeek > derivedEndWeek
+          )
+
+        allocatedDays = round2(Math.max(plannedAllocatedDays, actualAllocatedDays))
+        if (shouldUseActualAssignmentWindow) {
+          rowDerivedStartWeek = actualDerivedStartWeek
+          rowDerivedEndWeek = actualDerivedEndWeek
+        }
       } else {
         namedResourcesOutput = []
         if (mode === 'CAPACITY_PLAN') {
@@ -487,8 +516,8 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         allocationPercent: percent,
         allocationStartWeek: resourceType.allocationStartWeek ?? null,
         allocationEndWeek: resourceType.allocationEndWeek ?? null,
-        derivedStartWeek,
-        derivedEndWeek,
+        derivedStartWeek: rowDerivedStartWeek,
+        derivedEndWeek: rowDerivedEndWeek,
         estimatedCost,
         epics,
         namedResources: namedResourcesOutput,

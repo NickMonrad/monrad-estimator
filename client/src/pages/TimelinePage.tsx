@@ -21,6 +21,10 @@ import {
   type SquadPlannerSeedSettings,
 } from '../components/timeline/timelineUx'
 import SnapshotHistoryPanel from '../components/SnapshotHistoryPanel'
+import {
+  invalidateResourceTypeDerivedQueries,
+  invalidateTimelineDerivedQueries,
+} from '../lib/timelineQueryInvalidation'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -456,10 +460,10 @@ export default function TimelinePage() {
     }
   }, [timeline, project])
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+  const invalidate = () => invalidateTimelineDerivedQueries(qc, projectId)
 
   const handleOptimiserApplied = (snapshotId: string) => {
-    qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+    invalidateTimelineDerivedQueries(qc, projectId)
     qc.invalidateQueries({ queryKey: ['snapshots', projectId] })
     setOptimiserOpen(false)
     alert(`Starting team applied (snapshot ${snapshotId}). Roll back via the History panel if needed.`)
@@ -487,6 +491,7 @@ export default function TimelinePage() {
     onSuccess: (data) => {
       qc.setQueryData(['timeline', projectId], data)
       qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
     },
   })
 
@@ -525,7 +530,7 @@ export default function TimelinePage() {
       // Refresh both the dep list (sidebar badges) and the timeline (Gantt arrows).
       // Do NOT call updateEntry here — that would set isManual=true as a side effect.
       qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
       setScheduleStale(true)
     },
   })
@@ -535,7 +540,7 @@ export default function TimelinePage() {
       api.delete(`/projects/${projectId}/feature-dependencies/${featureId}/${dependsOnId}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
       setScheduleStale(true)
     },
   })
@@ -551,7 +556,7 @@ export default function TimelinePage() {
       api.post(`/projects/${projectId}/epic-dependencies`, { epicId, dependsOnId }).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
       setScheduleStale(true)
     },
   })
@@ -561,7 +566,7 @@ export default function TimelinePage() {
       api.delete(`/projects/${projectId}/epic-dependencies/${epicId}/${dependsOnId}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
       setScheduleStale(true)
     },
   })
@@ -587,7 +592,7 @@ export default function TimelinePage() {
   const updateEpicMode = useMutation({
     mutationFn: ({ epicId, featureMode }: { epicId: string; featureMode: string }) =>
       api.put(`/projects/${projectId}/epics/${epicId}`, { featureMode }).then(r => r.data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['timeline', projectId] }); setScheduleStale(true) },
+    onSuccess: () => { invalidateTimelineDerivedQueries(qc, projectId); setScheduleStale(true) },
   })
 
   const updateEpicScheduleMode = useMutation({
@@ -595,7 +600,7 @@ export default function TimelinePage() {
       api.put(`/projects/${projectId}/epics/${epicId}`, { scheduleMode }).then(r => r.data),
     onSuccess: () => {
       setScheduleStale(true)
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
     },
   })
 
@@ -607,7 +612,7 @@ export default function TimelinePage() {
       if (data.dayRate !== undefined) payload.dayRate = data.dayRate
       return api.put(`/projects/${projectId}/resource-types/${id}`, payload).then(r => r.data)
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['resource-types', projectId] }); setScheduleStale(true) },
+    onSuccess: () => { invalidateResourceTypeDerivedQueries(qc, projectId); setScheduleStale(true) },
   })
 
   const addNamedResource = useMutation({
@@ -617,7 +622,7 @@ export default function TimelinePage() {
         allocationPct: 100,
       }).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
       setScheduleStale(true)
     },
   })
@@ -626,7 +631,7 @@ export default function TimelinePage() {
     mutationFn: ({ rtId, nrId }: { rtId: string; nrId: string }) =>
       api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
       setScheduleStale(true)
     },
   })
@@ -635,7 +640,7 @@ export default function TimelinePage() {
     mutationFn: ({ rtId, nrId, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }: { rtId: string; nrId: string; allocationMode: string; allocationPercent: number; allocationStartWeek?: number | null; allocationEndWeek?: number | null }) =>
       api.patch(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`, { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
       setScheduleStale(true)
     },
   })
@@ -670,7 +675,7 @@ export default function TimelinePage() {
   const levelMutation = useMutation({
     mutationFn: () => api.post(`/projects/${projectId}/timeline/level`, { dryRun: false }).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
       qc.invalidateQueries({ queryKey: ['project', projectId] })
     },
   })
@@ -689,7 +694,7 @@ export default function TimelinePage() {
       api.patch(`/projects/${projectId}/reorder/epics`, { items }).then(r => r.data),
     onSuccess: () => {
       setScheduleStale(true)
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
     },
   })
 
@@ -698,7 +703,7 @@ export default function TimelinePage() {
       api.patch(`/projects/${projectId}/reorder/features`, { items }).then(r => r.data),
     onSuccess: () => {
       setScheduleStale(true)
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
+      invalidateTimelineDerivedQueries(qc, projectId)
     },
   })
 
