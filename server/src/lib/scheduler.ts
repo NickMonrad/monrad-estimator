@@ -123,6 +123,8 @@ export interface SchedulerOutput {
   parallelWarnings: ParallelWarning[]
 }
 
+const PARALLEL_WARNING_EPSILON_DAYS = 1e-9
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure helpers (previously in routes/timeline.ts)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -310,7 +312,7 @@ export function computeParallelWarnings(
           capacityDays += (getWeeklyCapacity(rt, w, fallbackHoursPerDay) / hpd) * overlap
         }
       }
-      if (days > capacityDays) {
+      if ((days - capacityDays) > PARALLEL_WARNING_EPSILON_DAYS) {
         warnings.push({
           epicId,
           epicName,
