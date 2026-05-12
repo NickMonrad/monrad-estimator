@@ -498,4 +498,432 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       }),
     ])
   })
+
+  it('treats cached demand as authoritative for the same resource type within the cached horizon', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: {
+        'Developer|0': 5,
+        'Developer|2': 5,
+      },
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-dev',
+              name: 'Taylor',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Delivery',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Build',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Implement',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      hoursEffort: 120,
+                      durationDays: 15,
+                      resourceTypeId: 'rt-dev',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 0, durationWeeks: 3 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    expect(devRow.namedResources).toEqual([
+      expect.objectContaining({
+        id: 'nr-dev',
+        actualAllocatedDays: 10,
+        actualAllocatedWeeks: [
+          expect.objectContaining({ week: 0, days: 5 }),
+          expect.objectContaining({ week: 2, days: 5 }),
+        ],
+      }),
+    ])
+    expect(devRow.namedResources[0].actualAllocatedWeeks.map((week: any) => week.week)).toEqual([0, 2])
+  })
+
+  it('keeps fallback demand for resource types that are absent from cache', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: {
+        'Developer|0': 5,
+      },
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-dev',
+              name: 'Taylor',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+        {
+          id: 'rt-qa',
+          name: 'QA',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-qa',
+              name: 'Morgan',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Delivery',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Build',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Implement',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      hoursEffort: 40,
+                      durationDays: 5,
+                      resourceTypeId: 'rt-dev',
+                    },
+                    {
+                      id: 'task-2',
+                      hoursEffort: 40,
+                      durationDays: 5,
+                      resourceTypeId: 'rt-qa',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 0, durationWeeks: 1 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const qaRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-qa')
+    expect(qaRow.namedResources).toEqual([
+      expect.objectContaining({
+        id: 'nr-qa',
+        actualAllocatedDays: 5,
+        actualAllocatedWeeks: [
+          expect.objectContaining({ week: 0, days: 5 }),
+        ],
+      }),
+    ])
+  })
+
+  it('does not cross-bind actual allocations when named resources share the same name', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: {
+        'Developer|0': 5,
+      },
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 2,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-1',
+              name: 'Alex',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+            {
+              id: 'nr-2',
+              name: 'Alex',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Delivery',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Build',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Implement',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      hoursEffort: 40,
+                      durationDays: 5,
+                      resourceTypeId: 'rt-dev',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 0, durationWeeks: 1 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    const byId = Object.fromEntries(devRow.namedResources.map((nr: any) => [nr.id, nr]))
+    expect(byId['nr-1']).toMatchObject({
+      name: 'Alex',
+      actualAllocatedDays: 5,
+    })
+    expect(byId['nr-2']).toMatchObject({
+      name: 'Alex',
+      actualAllocatedDays: 0,
+      actualAllocatedWeeks: [],
+    })
+  })
+
+  it('still appends synthetic actual assignments that have no persisted named resource', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: {
+        'Developer|0': 10,
+      },
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 2,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-1',
+              name: 'Taylor',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Delivery',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Build',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Implement',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      hoursEffort: 80,
+                      durationDays: 10,
+                      resourceTypeId: 'rt-dev',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 0, durationWeeks: 1 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    expect(devRow.namedResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'nr-1',
+        actualAllocatedDays: 5,
+      }),
+      expect.objectContaining({
+        id: 'rt-dev-synthetic-2',
+        name: 'Developer 2',
+        synthetic: true,
+        actualAllocatedDays: 5,
+      }),
+    ]))
+  })
 })

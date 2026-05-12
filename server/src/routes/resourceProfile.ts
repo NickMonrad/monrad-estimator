@@ -16,6 +16,7 @@ router.use(authenticate)
 
 const CATEGORY_ORDER: ResourceCategory[] = ['ENGINEERING', 'GOVERNANCE', 'PROJECT_MANAGEMENT']
 const round2 = (value: number) => Math.round(value * 100) / 100
+const weeklyDemandKey = (week: number, resourceTypeName: string) => `${week}|${resourceTypeName}`
 
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
@@ -210,11 +211,11 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
-  const weeklyDemandMap = new Map<string, number>()
+  const fallbackWeeklyDemandMap = new Map<string, number>()
   const addWeeklyDemand = (week: number, resourceTypeName: string, demandDays: number) => {
     if (!Number.isFinite(demandDays) || demandDays <= 0) return
-    const key = `${week}|${resourceTypeName}`
-    weeklyDemandMap.set(key, round2((weeklyDemandMap.get(key) ?? 0) + demandDays))
+    const key = weeklyDemandKey(week, resourceTypeName)
+    fallbackWeeklyDemandMap.set(key, round2((fallbackWeeklyDemandMap.get(key) ?? 0) + demandDays))
   }
 
   for (const epic of project.epics) {
@@ -252,14 +253,39 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
+  const weeklyDemandMap = new Map<string, number>(fallbackWeeklyDemandMap)
+
   if (project.weeklyDemandCache && Object.keys(project.weeklyDemandCache as Record<string, number>).length > 0) {
+    const cachedResourceTypes = new Set<string>()
+    let globalCachedMaxWeek = Number.NEGATIVE_INFINITY
+
+    for (const [key, demandDays] of Object.entries(project.weeklyDemandCache as Record<string, number>)) {
+      const separatorIdx = key.lastIndexOf('|')
+      if (separatorIdx === -1) continue
+      const resourceTypeName = key.substring(0, separatorIdx)
+      const week = Number(key.substring(separatorIdx + 1))
+      if (!Number.isFinite(week) || !Number.isFinite(demandDays)) continue
+      cachedResourceTypes.add(resourceTypeName)
+      globalCachedMaxWeek = Math.max(globalCachedMaxWeek, week)
+    }
+
+    for (const key of Array.from(weeklyDemandMap.keys())) {
+      const separatorIdx = key.indexOf('|')
+      if (separatorIdx === -1) continue
+      const week = Number(key.substring(0, separatorIdx))
+      const resourceTypeName = key.substring(separatorIdx + 1)
+      if (cachedResourceTypes.has(resourceTypeName) && week <= globalCachedMaxWeek) {
+        weeklyDemandMap.delete(key)
+      }
+    }
+
     for (const [key, demandDays] of Object.entries(project.weeklyDemandCache as Record<string, number>)) {
       const separatorIdx = key.lastIndexOf('|')
       if (separatorIdx === -1) continue
       const resourceTypeName = key.substring(0, separatorIdx)
       const week = Number(key.substring(separatorIdx + 1))
       if (!Number.isFinite(week) || !Number.isFinite(demandDays) || demandDays <= 0) continue
-      weeklyDemandMap.set(`${week}|${resourceTypeName}`, round2(demandDays))
+      weeklyDemandMap.set(weeklyDemandKey(week, resourceTypeName), round2(demandDays))
     }
   }
 
@@ -270,7 +296,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       resourceTypeName: key.substring(separatorIdx + 1),
       demandDays,
     }
-  })
+  }).filter(row => row.demandDays > 0)
 
   const namedResourceAssignments = deriveNamedResourceAssignments({
     resourceTypes: project.resourceTypes,
@@ -399,7 +425,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         // Compute per-NR allocated days
         namedResourcesOutput = namedResourcesSource.map(nr => {
           const actualNamedResource = actualNamedResourcesForType
-            .find(actual => actual.id === nr.id || actual.name === nr.name)
+            .find(actual => actual.id === nr.id)
           const nrMode = (nr.allocationMode as AllocationMode) ?? 'EFFORT'
           const nrPercent = nr.allocationPercent ?? 100
           let nrAllocatedDays: number

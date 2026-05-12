@@ -94,27 +94,32 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     data.allocationEndWeek = null
   }
 
-  const rt = await prisma.resourceType.update({
-    where: { id: req.params.id as string },
-    data,
-  })
-  if (shouldExitCapacityPlan) {
-    await prisma.namedResource.updateMany({
-      where: {
-        resourceTypeId: existing.id,
-        allocationMode: 'CAPACITY_PLAN',
-      },
-      data: {
-        allocationMode: 'TIMELINE',
-        allocationPercent: 100,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        allocationPct: 100,
-        startWeek: null,
-        endWeek: null,
-      },
+  const rt = await prisma.$transaction(async tx => {
+    const updated = await tx.resourceType.update({
+      where: { id: req.params.id as string },
+      data,
     })
-  }
+
+    if (shouldExitCapacityPlan) {
+      await tx.namedResource.updateMany({
+        where: {
+          resourceTypeId: existing.id,
+          allocationMode: 'CAPACITY_PLAN',
+        },
+        data: {
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          allocationPct: 100,
+          startWeek: null,
+          endWeek: null,
+        },
+      })
+    }
+
+    return updated
+  })
   res.json(rt)
 }))
 
@@ -136,55 +141,67 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const defaultAllocationStartWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationStartWeek ?? null)
   const defaultAllocationEndWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationEndWeek ?? null)
 
-  if (rt.allocationMode === 'CAPACITY_PLAN') {
-    await exitCapacityPlanForManualScheduling(rt.id)
-  }
-
-  const currentNRs = await prisma.namedResource.findMany({
-    where: { resourceTypeId: rt.id },
-    orderBy: { createdAt: 'asc' },
-  })
-  const currentCount = currentNRs.length
-  const warnings: string[] = []
-
-  if (count > currentCount) {
-    // Add new anonymous named resources for each new slot
-    for (let n = currentCount + 1; n <= count; n++) {
-      await prisma.namedResource.create({
-        data: {
-          name: `${rt.name} ${n}`,
-          resourceTypeId: rt.id,
-          allocationPct: 100,
-          ...(defaultAllocationMode !== 'EFFORT' && {
-            allocationMode: defaultAllocationMode,
-            allocationPercent: defaultAllocationPercent,
-            allocationStartWeek: defaultAllocationStartWeek,
-            allocationEndWeek: defaultAllocationEndWeek,
-          }),
-        },
-      })
+  const { updated, warnings } = await prisma.$transaction(async tx => {
+    if (rt.allocationMode === 'CAPACITY_PLAN') {
+      await exitCapacityPlanForManualScheduling(rt.id, tx)
     }
-  } else if (count < currentCount) {
-    // Remove last N named resources (highest createdAt) if they have no custom settings
-    const toConsider = [...currentNRs].reverse().slice(0, currentCount - count)
-    let removed = 0
-    for (const nr of toConsider) {
-      if (nr.startWeek !== null || nr.endWeek !== null || nr.allocationPct !== 100) {
-        warnings.push(`Skipped removal of "${nr.name}" — has custom settings`)
-        continue
+
+    const currentNRs = await tx.namedResource.findMany({
+      where: { resourceTypeId: rt.id },
+      orderBy: { createdAt: 'asc' },
+    })
+    const currentCount = currentNRs.length
+    const nextWarnings: string[] = []
+
+    if (count > currentCount) {
+      // Add new anonymous named resources for each new slot
+      for (let n = currentCount + 1; n <= count; n++) {
+        await tx.namedResource.create({
+          data: {
+            name: `${rt.name} ${n}`,
+            resourceTypeId: rt.id,
+            allocationPct: 100,
+            ...(defaultAllocationMode !== 'EFFORT' && {
+              allocationMode: defaultAllocationMode,
+              allocationPercent: defaultAllocationPercent,
+              allocationStartWeek: defaultAllocationStartWeek,
+              allocationEndWeek: defaultAllocationEndWeek,
+            }),
+          },
+        })
       }
-      await prisma.namedResource.delete({ where: { id: nr.id } })
-      removed++
-    }
-    // Recompute actual count after removals
-    const actualCount = currentCount - removed
-    await prisma.resourceType.update({ where: { id: rt.id }, data: { count: actualCount } })
-    const updated = await prisma.resourceType.findUnique({ where: { id: rt.id } })
-    res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })
-    return
-  }
 
-  const updated = await prisma.resourceType.update({ where: { id: rt.id }, data: { count } })
+      return {
+        updated: await tx.resourceType.update({ where: { id: rt.id }, data: { count } }),
+        warnings: nextWarnings,
+      }
+    }
+
+    if (count < currentCount) {
+      // Remove last N named resources (highest createdAt) if they have no custom settings
+      const toConsider = [...currentNRs].reverse().slice(0, currentCount - count)
+      let removed = 0
+      for (const nr of toConsider) {
+        if (nr.startWeek !== null || nr.endWeek !== null || nr.allocationPct !== 100) {
+          nextWarnings.push(`Skipped removal of "${nr.name}" — has custom settings`)
+          continue
+        }
+        await tx.namedResource.delete({ where: { id: nr.id } })
+        removed++
+      }
+
+      const actualCount = currentCount - removed
+      return {
+        updated: await tx.resourceType.update({ where: { id: rt.id }, data: { count: actualCount } }),
+        warnings: nextWarnings,
+      }
+    }
+
+    return {
+      updated: await tx.resourceType.update({ where: { id: rt.id }, data: { count } }),
+      warnings: nextWarnings,
+    }
+  })
   res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })
 }))
 
