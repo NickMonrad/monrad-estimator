@@ -960,6 +960,9 @@ router.put('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) =
   }
 
   const featureId = req.params.featureId as string
+  const feature = await prisma.feature.findFirst({ where: { id: featureId, epic: { projectId: project.id } } })
+  if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
+
   const entry = await prisma.timelineEntry.upsert({
     where: { featureId },
     create: { projectId: project.id, featureId, startWeek, durationWeeks, isManual: true },

@@ -877,6 +877,7 @@ describe('PUT /api/projects/:projectId/timeline/:featureId', () => {
 
   it('overrides a feature startWeek and durationWeeks with isManual=true', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.feature.findFirst).mockResolvedValue({ id: 'feat-1', epicId: 'epic-1' } as any)
     vi.mocked(prisma.timelineEntry.upsert).mockResolvedValue({
       id: 'entry-1',
       projectId: 'proj-1',
@@ -896,6 +897,20 @@ describe('PUT /api/projects/:projectId/timeline/:featureId', () => {
     expect(res.body.startWeek).toBe(2)
     expect(res.body.durationWeeks).toBe(3)
     expect(res.body.isManual).toBe(true)
+  })
+
+  it('returns 404 when the feature belongs to another project (cross-tenant write)', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    // Feature ownership scoped to the authorised project — foreign feature not found
+    vi.mocked(prisma.feature.findFirst).mockResolvedValue(null)
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/timeline/feat-foreign')
+      .set('Authorization', authHeader)
+      .send({ startWeek: 2, durationWeeks: 3 })
+
+    expect(res.status).toBe(404)
+    expect(prisma.timelineEntry.upsert).not.toHaveBeenCalled()
   })
 
   it('returns 400 when startWeek or durationWeeks missing', async () => {

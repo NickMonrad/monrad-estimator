@@ -45,10 +45,6 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rt = await verifyResourceType(rtId, projectId)
   if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
 
-  if (rt.allocationMode === 'CAPACITY_PLAN') {
-    await exitCapacityPlanForManualScheduling(rt.id)
-  }
-
   const { name: rawName, startWeek, endWeek, allocationPct, pricingModel } = req.body
 
   // Auto-generate a numbered name if none provided or generic
@@ -75,26 +71,34 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rtAllocationEndWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationEndWeek ?? null)
   const inheritAllocation = rtAllocationMode !== 'EFFORT'
 
-  const resource = await prisma.namedResource.create({
-    data: {
-      name,
-      resourceTypeId: rtId,
-      ...(startWeek !== undefined && { startWeek }),
-      ...(endWeek !== undefined && { endWeek }),
-      ...(allocationPct !== undefined && { allocationPct }),
-      ...(pricingModel !== undefined && { pricingModel }),
-      ...(inheritAllocation && {
-        allocationMode: rtAllocationMode,
-        allocationPercent: rtAllocationPercent,
-        allocationStartWeek: rtAllocationStartWeek,
-        allocationEndWeek: rtAllocationEndWeek,
-      }),
-    },
-  })
+  const resource = await prisma.$transaction(async tx => {
+    if (rt.allocationMode === 'CAPACITY_PLAN') {
+      await exitCapacityPlanForManualScheduling(rt.id, tx)
+    }
 
-  // Sync resource type count to match total named resources
-  const total = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
-  await prisma.resourceType.update({ where: { id: rtId }, data: { count: total } })
+    const created = await tx.namedResource.create({
+      data: {
+        name,
+        resourceTypeId: rtId,
+        ...(startWeek !== undefined && { startWeek }),
+        ...(endWeek !== undefined && { endWeek }),
+        ...(allocationPct !== undefined && { allocationPct }),
+        ...(pricingModel !== undefined && { pricingModel }),
+        ...(inheritAllocation && {
+          allocationMode: rtAllocationMode,
+          allocationPercent: rtAllocationPercent,
+          allocationStartWeek: rtAllocationStartWeek,
+          allocationEndWeek: rtAllocationEndWeek,
+        }),
+      },
+    })
+
+    // Sync resource type count to match total named resources
+    const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
+    await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
+
+    return created
+  })
 
   res.status(201).json(resource)
 }))
@@ -173,15 +177,17 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
 
-  if (rt.allocationMode === 'CAPACITY_PLAN') {
-    await exitCapacityPlanForManualScheduling(rt.id)
-  }
+  await prisma.$transaction(async tx => {
+    if (rt.allocationMode === 'CAPACITY_PLAN') {
+      await exitCapacityPlanForManualScheduling(rt.id, tx)
+    }
 
-  await prisma.namedResource.delete({ where: { id } })
+    await tx.namedResource.delete({ where: { id } })
 
-  // Sync resource type count (can reach 0 when all named resources are deleted)
-  const total = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
-  await prisma.resourceType.update({ where: { id: rtId }, data: { count: total } })
+    // Sync resource type count (can reach 0 when all named resources are deleted)
+    const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
+    await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
+  })
 
   res.status(204).send()
 }))
