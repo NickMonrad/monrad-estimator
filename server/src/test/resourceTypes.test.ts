@@ -294,6 +294,8 @@ describe('resource type manual scheduling regression', () => {
       },
       namedResource: {
         updateMany: vi.fn().mockResolvedValue({ count: 2 }),
+        delete: vi.fn().mockResolvedValue({}),
+        count: vi.fn().mockResolvedValue(1),
       },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(exitTx))
@@ -331,9 +333,45 @@ describe('resource type manual scheduling regression', () => {
         endWeek: null,
       },
     })
-    expect(prisma.resourceType.update).toHaveBeenCalledWith({
+    expect(exitTx.namedResource.delete).toHaveBeenCalledWith({ where: { id: 'nr-2' } })
+    expect(exitTx.resourceType.update).toHaveBeenCalledWith({
       where: { id: 'rt-1' },
       data: { count: 1 },
+    })
+  })
+})
+
+describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
+  it('deletes a resource type scoped to the project', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.deleteMany).mockResolvedValue({ count: 1 } as never)
+
+    const res = await request(app)
+      .delete('/api/projects/proj-1/resource-types/rt-1')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ message: 'Deleted' })
+    // Delete must be scoped to the project, not a bare primary-key delete
+    expect(prisma.resourceType.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'rt-1', projectId: 'proj-1' },
+    })
+  })
+
+  it('returns 404 when the resource type belongs to another project (cross-tenant delete)', async () => {
+    // Caller owns proj-1, but rt-99 lives in another tenant's project, so the
+    // project-scoped deleteMany affects 0 rows.
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.deleteMany).mockResolvedValue({ count: 0 } as never)
+
+    const res = await request(app)
+      .delete('/api/projects/proj-1/resource-types/rt-99')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Resource type not found' })
+    expect(prisma.resourceType.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'rt-99', projectId: 'proj-1' },
     })
   })
 })

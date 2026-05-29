@@ -209,7 +209,8 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  await prisma.resourceType.delete({ where: { id: req.params.id as string } })
+  const result = await prisma.resourceType.deleteMany({ where: { id: req.params.id as string, projectId: req.params.projectId as string } })
+  if (result.count === 0) { res.status(404).json({ error: 'Resource type not found' }); return }
   res.json({ message: 'Deleted' })
 }))
 
