@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { clearAuthSession, getStoredToken } from './authSession'
 
 const baseURL = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
@@ -7,7 +8,7 @@ const baseURL = import.meta.env.VITE_API_URL
 export const api = axios.create({ baseURL, timeout: 30000 })
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
+  const token = getStoredToken()
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
@@ -17,8 +18,10 @@ api.interceptors.response.use(
   (err) => {
     const isAuthRoute = err.config?.url?.startsWith('/auth/')
     if (err.response?.status === 401 && !isAuthRoute) {
-      localStorage.removeItem('token')
-      window.location.href = '/login'
+      clearAuthSession()
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(err)
   }
