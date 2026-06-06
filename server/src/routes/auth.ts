@@ -133,22 +133,29 @@ router.post('/reset-password', validate(resetPasswordSchema), asyncHandler(async
 
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
 
-  // Atomic update: only succeeds if usedAt IS NULL (prevents race condition)
-  const resetToken = await prisma.passwordResetToken.update({
-    where: { tokenHash, usedAt: null },
-    data: { usedAt: new Date() },
-  }).catch(() => null)
+  // Fetch the token record
+  const resetToken = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash },
+  })
 
-  if (!resetToken || resetToken.expiresAt < new Date()) {
+  if (!resetToken || resetToken.usedAt !== null || resetToken.expiresAt < new Date()) {
     res.status(400).json({ error: 'Invalid or expired reset token' })
     return
   }
 
   const hashed = await bcrypt.hash(password, 10)
 
-  await prisma.user.update({
-    where: { id: resetToken.userId },
-    data: { password: hashed },
+  // Mark token as used and update password atomically
+  await prisma.$transaction(async (tx) => {
+    await tx.passwordResetToken.update({
+      where: { tokenHash },
+      data: { usedAt: new Date() },
+    })
+
+    await tx.user.update({
+      where: { id: resetToken.userId },
+      data: { password: hashed },
+    })
   })
 
   await Promise.resolve(loginLimiter.resetKey(getLoginLimiterKey(req))).catch((error: unknown) => {
