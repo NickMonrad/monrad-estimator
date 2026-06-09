@@ -23,6 +23,6 @@
     "concurrently": "^8.2.2"
   },
   "dependencies": {
-    "ip-address": "^10.1.0"
+    "ip-address": "^10.2.0"
   }
 }
