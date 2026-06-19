@@ -955,6 +955,65 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
     expect(res.status).toBe(400)
     expect(res.body.error).toBe('Invalid resourceTypes element')
   })
+
+  it('returns 400 before snapshotting when a candidate resource type is outside the project', async () => {
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-1' }] as never)
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [
+          { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 },
+          { resourceTypeId: 'rt-foreign', count: 1, suggestedStartWeek: 2 },
+        ],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('All candidate resource types must belong to this project')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/projects/:projectId/optimise — count range validation', () => {
+  beforeEach(() => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
+      { id: 'rt-1', name: 'Developer', count: 2, hoursPerDay: 8, namedResources: [] },
+    ] as never)
+  })
+
+  it('returns 400 when a count range min is zero', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise`)
+      .set('Authorization', authHeader)
+      .send({
+        constraints: {
+          countRanges: [{ resourceTypeId: 'rt-1', min: 0, max: 4 }],
+        },
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid constraints.countRanges')
+  })
+
+  it('returns 400 when a count range max is below min', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise`)
+      .set('Authorization', authHeader)
+      .send({
+        constraints: {
+          countRanges: [{ resourceTypeId: 'rt-1', min: 3, max: 2 }],
+        },
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid constraints.countRanges')
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

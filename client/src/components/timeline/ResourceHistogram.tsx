@@ -280,7 +280,7 @@ export default function ResourceHistogram({
                           setTooltip({
                             x: e.clientX,
                             y: e.clientY,
-                            content: `Week ${w} · ${rt.name}: ${demand.toFixed(1)} / ${cap.toFixed(1)} days${pct}`,
+                            content: `Week ${w + 1} · ${rt.name}: ${demand.toFixed(1)} / ${cap.toFixed(1)} days${pct}`,
                           })
                         }}
                         onMouseMove={(e) => {

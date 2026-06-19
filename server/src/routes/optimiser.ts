@@ -29,6 +29,18 @@ import {
   type OptimiserCandidate,
 } from '../lib/optimiser.js'
 
+interface ApplyCandidateResourceType {
+  resourceTypeId: string
+  count: number
+  suggestedStartWeek: number
+}
+
+interface RequestedCountRange {
+  resourceTypeId: string
+  min: number
+  max: number
+}
+
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
@@ -96,6 +108,52 @@ async function loadSchedulerInput(projectId: string, hoursPerDay: number): Promi
   }
 }
 
+function buildDefaultCountRanges(
+  resourceTypes: SchedulerResourceType[],
+): RequestedCountRange[] {
+  return resourceTypes.map(rt => ({
+    resourceTypeId: rt.id,
+    min: Math.max(1, rt.count - 2),
+    max: Math.min(6, rt.count + 2),
+  }))
+}
+
+function sanitiseCountRanges(
+  requestedRanges: RequestedCountRange[] | undefined,
+  resourceTypes: SchedulerResourceType[],
+): RequestedCountRange[] | null {
+  if (!requestedRanges) {
+    return buildDefaultCountRanges(resourceTypes)
+  }
+
+  const validResourceTypeIds = new Set(resourceTypes.map(rt => rt.id))
+  const seenIds = new Set<string>()
+  const sanitised: RequestedCountRange[] = []
+
+  for (const range of requestedRanges) {
+    if (
+      typeof range?.resourceTypeId !== 'string'
+      || seenIds.has(range.resourceTypeId)
+      || !validResourceTypeIds.has(range.resourceTypeId)
+      || !Number.isInteger(range.min)
+      || !Number.isInteger(range.max)
+      || range.min < 1
+      || range.max < range.min
+    ) {
+      return null
+    }
+
+    seenIds.add(range.resourceTypeId)
+    sanitised.push({
+      resourceTypeId: range.resourceTypeId,
+      min: range.min,
+      max: range.max,
+    })
+  }
+
+  return sanitised
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/projects/:projectId/optimise/apply
 // Register BEFORE the root POST to avoid path ambiguity.
@@ -108,7 +166,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // Expected body: { resourceTypes: [{ resourceTypeId, count, suggestedStartWeek }], staggerEpics?: boolean }
   const { resourceTypes: candidateRTs, staggerEpics } = req.body as {
-    resourceTypes: Array<{ resourceTypeId: string; count: number; suggestedStartWeek: number }>
+    resourceTypes: ApplyCandidateResourceType[]
     staggerEpics?: boolean
   }
   if (!Array.isArray(candidateRTs) || candidateRTs.length === 0) {
@@ -123,6 +181,23 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   )
   if (invalid) {
     res.status(400).json({ error: 'Invalid resourceTypes element' }); return
+  }
+
+  const candidateIds = candidateRTs.map(rt => rt.resourceTypeId)
+  if (new Set(candidateIds).size !== candidateIds.length) {
+    res.status(400).json({ error: 'Duplicate resourceTypeId in resourceTypes array' }); return
+  }
+
+  const projectResourceTypes = await prisma.resourceType.findMany({
+    where: {
+      projectId,
+      id: { in: candidateIds },
+    },
+    select: { id: true },
+  })
+
+  if (projectResourceTypes.length !== candidateIds.length) {
+    res.status(400).json({ error: 'All candidate resource types must belong to this project' }); return
   }
 
   // ── 1. Create pre-apply snapshot for undo support ─────────────────────────
@@ -150,7 +225,10 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   await prisma.$transaction(async tx => {
     // 3a. Update ResourceType counts
     for (const [rtId, count] of countMap) {
-      await tx.resourceType.update({ where: { id: rtId }, data: { count } })
+      await tx.resourceType.updateMany({
+        where: { id: rtId, projectId },
+        data: { count },
+      })
     }
 
     // 3b. Update NamedResource.startWeek for ramp-up (only when > 0 to avoid
@@ -158,7 +236,10 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     for (const [rtId, startWeek] of startWeekMap) {
       if (startWeek > 0) {
         await tx.namedResource.updateMany({
-          where: { resourceTypeId: rtId },
+          where: {
+            resourceTypeId: rtId,
+            resourceType: { projectId },
+          },
           data: { startWeek },
         })
       }
@@ -217,6 +298,13 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   })
 
+  // Scheduler rewrite invalidates cached demand — clear to force recompute
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { weeklyDemandCache: {} },
+  })
+
+
   // ── 4. Optional: stagger epics to level demand ────────────────────────────
   let levellingResult: { epicStartWeeks: Map<string, number>; featureStartWeeks: Map<string, number>; totalDeliveryWeeks: number; peakUtilisationPct: number } | null = null
 
@@ -253,7 +341,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       ...updatedInput,
       epics: levelledEpics,
     })
-
     await prisma.$transaction(async tx => {
       await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
       const fRows = lfs
@@ -267,7 +354,14 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         .map(e => ({ projectId, storyId: e.storyId, startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: false }))
       if (sRows.length > 0) await tx.storyTimelineEntry.createMany({ data: sRows, skipDuplicates: true })
     })
+
+    // Staggered level rewrite invalidates cached demand
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: {} },
+    })
   }
+
 
   const responseBody: {
     message: string
@@ -324,13 +418,10 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay)
 
   // ── 3. Build countRanges (from request or sensible defaults: current ± 2, min 1, max 6) ──
-  const countRanges: Array<{ resourceTypeId: string; min: number; max: number }> =
-    body.constraints?.countRanges ??
-    schedulerInput.resourceTypes.map(rt => ({
-      resourceTypeId: rt.id,
-      min: Math.max(1, rt.count - 2),
-      max: Math.min(6, rt.count + 2),
-    }))
+  const countRanges = sanitiseCountRanges(body.constraints?.countRanges, schedulerInput.resourceTypes)
+  if (!countRanges) {
+    res.status(400).json({ error: 'Invalid constraints.countRanges' }); return
+  }
 
   // ── 4. Build day rates ────────────────────────────────────────────────────
   // Phase 3: use ResourceType.dayRate directly (each RT stores its own rate).

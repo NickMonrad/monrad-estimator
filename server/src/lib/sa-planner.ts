@@ -194,22 +194,110 @@ export function runSAPlanner(
     }
   }
 
-  const roughDurationWeeks = (() => {
+  function getSizingCapacityDays(rt: SchedulerResourceType, week: number): number {
+    const hoursPerDay = rt.hoursPerDay ?? hpd
+    if (hoursPerDay <= 0) return 0
+
+    let capacityDays = getWeeklyCapacity(rt, week, hpd) / hoursPerDay
+    if (!Number.isFinite(capacityDays) || capacityDays <= 0) return 0
+
+    const capCount = maxCap?.get(rt.id)
+    if (capCount != null && rt.count > 0 && capCount < rt.count) {
+      capacityDays *= capCount / rt.count
+    }
+
+    return Math.max(0, capacityDays)
+  }
+
+  function estimateAvailabilityProbeWeeks(rt: SchedulerResourceType, durationWeeks: number): number {
+    const latestNamedWindowWeek = (rt.namedResources ?? []).reduce((latest, nr) => {
+      return Math.max(
+        latest,
+        nr.startWeek ?? 0,
+        nr.endWeek ?? 0,
+        nr.allocationStartWeek ?? 0,
+        nr.allocationEndWeek ?? 0,
+      )
+    }, 0)
+
+    return Math.max(
+      52,
+      Math.ceil(targetDurationWeeks * 3),
+      Math.ceil(durationWeeks * 4) + features.length + 12,
+      latestNamedWindowWeek + Math.ceil(targetDurationWeeks * 2) + 12,
+    )
+  }
+
+  function estimateFeatureDurationWeeks(
+    daysByRt: Map<string, number>,
+    capByRt?: Map<string, number>,
+  ): number {
+    let durationWeeks = 0
+    for (const [rtId, days] of daysByRt) {
+      if (days <= EPSILON) continue
+      const weeklyCap = capByRt?.get(rtId) ?? days
+      if (weeklyCap <= EPSILON) continue
+      durationWeeks = Math.max(durationWeeks, days / weeklyCap)
+    }
+
+    return Math.max(1, durationWeeks)
+  }
+
+  const serialFeatureDurationWeeks = features.reduce((total, feature) => {
+    if (!feature.hasDemand) return total
+    const capByRt = featureWeeklyCapByRt.get(feature.id)
+    return total + estimateFeatureDurationWeeks(feature.totalDaysByRt, capByRt)
+  }, 0)
+
+  const bottleneckFeatureDurationWeeks = features.reduce((maxWeeks, feature) => {
+    if (!feature.hasDemand) return maxWeeks
+    const capByRt = featureWeeklyCapByRt.get(feature.id)
+    return Math.max(maxWeeks, estimateFeatureDurationWeeks(feature.totalDaysByRt, capByRt))
+  }, 0)
+
+  const aggregateDurationWithDelayWeeks = (() => {
     let maxWeeks = 0
+    let maxAvailabilityDelayWeeks = 0
     for (const rt of resourceTypes) {
       const demand = totalDemandByRt.get(rt.id) ?? 0
       if (demand <= EPSILON) continue
-      const people = Math.max(1, effectiveRtCount.get(rt.id) ?? rt.count ?? 1)
-      const weeks = demand / (people * 5)
+      const people = effectiveRtCount.get(rt.id) ?? rt.count ?? 0
+      if (people <= EPSILON) continue
+
+      const demandDurationWeeks = demand / (people * 5)
+      const sizingDurationWeeks = Math.max(
+        demandDurationWeeks,
+        bottleneckFeatureDurationWeeks,
+        serialFeatureDurationWeeks,
+      )
+      const probeWeeks = estimateAvailabilityProbeWeeks(rt, sizingDurationWeeks)
+      let availabilityDelayWeeks = probeWeeks
+
+      for (let week = 0; week <= probeWeeks; week++) {
+        if (getSizingCapacityDays(rt, week) > EPSILON) {
+          availabilityDelayWeeks = week
+          break
+        }
+      }
+
+      const weeks = demandDurationWeeks + availabilityDelayWeeks
       if (weeks > maxWeeks) maxWeeks = weeks
+      if (availabilityDelayWeeks > maxAvailabilityDelayWeeks) {
+        maxAvailabilityDelayWeeks = availabilityDelayWeeks
+      }
     }
-    return maxWeeks
+
+    return Math.max(
+      maxWeeks,
+      serialFeatureDurationWeeks + maxAvailabilityDelayWeeks,
+      bottleneckFeatureDurationWeeks + maxAvailabilityDelayWeeks,
+    )
   })()
 
   const MAX_WEEKS = Math.max(
     52,
     Math.ceil(targetDurationWeeks * 3),
-    Math.ceil(roughDurationWeeks * 4) + features.length + 12,
+    Math.ceil(aggregateDurationWithDelayWeeks * 4) + features.length + 12,
   )
 
   let completedFeatureCount = 0
@@ -288,6 +376,11 @@ export function runSAPlanner(
     return a.id.localeCompare(b.id)
   }
 
+  function estimateFeatureRemainingWeeks(feature: FeatureInfo): number {
+    const capByRt = featureWeeklyCapByRt.get(feature.id)
+    return estimateFeatureDurationWeeks(feature.remainingDaysByRt, capByRt)
+  }
+
   function recordAllocation(feature: FeatureInfo, rtId: string, week: number, days: number) {
     const byWeek = weeklyAllocationsByFeature.get(feature.id)
     if (!byWeek) return
@@ -324,6 +417,11 @@ export function runSAPlanner(
       let availableCapacity = getWeeklyCapacityDays(rt, week)
       if (availableCapacity <= EPSILON) continue
 
+      const estimatedFeatureWeeks = new Map<string, number>()
+      for (const feature of readyFeatures) {
+        estimatedFeatureWeeks.set(feature.id, estimateFeatureRemainingWeeks(feature))
+      }
+
       const candidates = readyFeatures
         .filter(feature => (feature.remainingDaysByRt.get(rt.id) ?? 0) > EPSILON)
         .sort(compareFeatures)
@@ -343,9 +441,11 @@ export function runSAPlanner(
         )
         if (perFeatureCap <= EPSILON) continue
 
-        const smoothedTarget = week < targetDurationWeeks
-          ? Math.min(perFeatureCap, remaining / weeksLeftToTarget)
-          : perFeatureCap
+        const featureRemainingWeeks = estimatedFeatureWeeks.get(feature.id) ?? 1
+        const pacingWeeks = week < targetDurationWeeks
+          ? Math.max(1, Math.min(weeksLeftToTarget, featureRemainingWeeks))
+          : 1
+        const smoothedTarget = Math.min(perFeatureCap, remaining / pacingWeeks)
 
         const allocation = Math.min(availableCapacity, smoothedTarget)
         if (allocation <= EPSILON) continue
@@ -354,12 +454,12 @@ export function runSAPlanner(
         availableCapacity -= allocation
       }
 
-      // Baseline allocation smooths work toward the target window, but any
-      // remaining idle RT capacity should still be consumed by ready work up to
-      // the per-feature cap. Withholding spare capacity when only one feature
-      // is ready creates artificial dribble schedules, low utilisation, and
-      // distorted headcount envelopes.
-      if (availableCapacity > EPSILON) {
+      // Continuity-aware pacing deliberately avoids spending all spare RT
+      // capacity whenever multiple features compete for the same role. This
+      // keeps smaller role slices on long-running features from disappearing
+      // early while the feature remains active. We still top up when there is
+      // only one ready candidate so blockers can clear quickly.
+      if (availableCapacity > EPSILON && candidates.length === 1) {
         for (const feature of candidates) {
           if (availableCapacity <= EPSILON) break
 

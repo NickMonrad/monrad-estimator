@@ -349,6 +349,9 @@ export default function GanttChart({
       {/* Right SVG area — horizontally scrollable */}
       <div className="overflow-x-auto flex-1" ref={rightPanelRef} onScroll={onRightPanelScroll}>
         <svg width={totalWeeks * colW} height={totalHeight} style={{ display: 'block' }}>
+          {/* Background fill */}
+          <rect x={0} y={0} width={totalWeeks * colW} height={totalHeight} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
+
           <GanttDependencyArrows
             featureDependencies={featureDependencies}
             storyDependencies={storyDependencies}
@@ -361,9 +364,6 @@ export default function GanttChart({
             colW={colW}
             dragging={dragging}
           />
-
-          {/* Background fill */}
-          <rect x={0} y={0} width={totalWeeks * colW} height={totalHeight} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
 
           {/* Onboarding zone */}
           {weekOffset > 0 && (

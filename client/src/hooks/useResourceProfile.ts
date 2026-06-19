@@ -26,6 +26,170 @@ export const formatNumber = (value: number, fractionDigits = 2) =>
 
 export { type CommercialRow, type OverheadType }
 
+const asciiSafe = (value: string) => value
+  .replace(/[–—]/g, '-')
+  .replace(/×/g, 'x')
+
+export const toCsvValue = (value: string | number | null | undefined) => {
+  if (value === null || value === undefined) return ''
+  const str = asciiSafe(typeof value === 'number' ? value.toString() : value)
+  if (/[",\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`
+  }
+  return str
+}
+
+function formatWeekLabel(week: number) {
+  return `W${week + 1}`
+}
+
+function formatNamedResourceSegments(namedResource: NonNullable<ResourceProfile['resourceRows'][number]['namedResources']>[number]) {
+  const segments = namedResource.actualAllocationSegments ?? []
+  if (segments.length === 0) return ''
+  return segments
+    .map(segment => (
+      segment.startWeek === segment.endWeek
+        ? `${formatWeekLabel(segment.startWeek)} (${segment.days.toFixed(2)}d)`
+        : `${formatWeekLabel(segment.startWeek)}-${formatWeekLabel(segment.endWeek)} (${segment.days.toFixed(2)}d)`
+    ))
+    .join('; ')
+}
+
+function formatNamedResourceWeeks(namedResource: NonNullable<ResourceProfile['resourceRows'][number]['namedResources']>[number]) {
+  const weeks = namedResource.actualAllocatedWeeks ?? []
+  return weeks
+    .map(week => `${formatWeekLabel(week.week)}=${week.days.toFixed(2)}`)
+    .join('; ')
+}
+
+export const buildProfileCsv = (profileData: ResourceProfile) => {
+  const rows: Array<Array<string | number>> = [[
+    'Section',
+    'Role',
+    'NamedResource',
+    'SyntheticSlot',
+    'Category',
+    'Count',
+    'HoursPerDay',
+    'RoleDays',
+    'PlannedDays',
+    'AssignedDays',
+    'DayRate',
+    'Cost',
+    'AvailabilityStartWeek',
+    'AvailabilityEndWeek',
+    'AssignedStartWeek',
+    'AssignedEndWeek',
+    'AssignedSpans',
+    'WeekAllocations',
+    'PricingModel',
+  ]]
+
+  profileData.resourceRows.forEach(row => {
+    if (row.namedResources && row.namedResources.length > 0) {
+      row.namedResources.forEach(namedResource => {
+        rows.push([
+          'Resource',
+          row.name,
+          namedResource.name,
+          namedResource.synthetic ? 'Yes' : 'No',
+          row.category,
+          row.count,
+          row.hoursPerDay,
+          row.effortDays,
+          namedResource.allocatedDays,
+          namedResource.actualAllocatedDays,
+          row.dayRate ?? '',
+          row.dayRate != null ? (namedResource.actualAllocatedDays * row.dayRate).toFixed(2) : '',
+          namedResource.startWeek != null ? formatWeekLabel(namedResource.startWeek) : '',
+          namedResource.endWeek != null ? formatWeekLabel(namedResource.endWeek) : '',
+          namedResource.actualAllocationStartWeek != null ? formatWeekLabel(namedResource.actualAllocationStartWeek) : '',
+          namedResource.actualAllocationEndWeek != null ? formatWeekLabel(namedResource.actualAllocationEndWeek) : '',
+          formatNamedResourceSegments(namedResource),
+          formatNamedResourceWeeks(namedResource),
+          namedResource.pricingModel ?? 'ACTUAL_DAYS',
+        ])
+      })
+      return
+    }
+
+    rows.push([
+      'Resource',
+      row.name,
+      '',
+      '',
+      row.category,
+      row.count,
+      row.hoursPerDay,
+      row.effortDays,
+      row.totalDays,
+      row.allocatedDays,
+      row.dayRate ?? '',
+      row.estimatedCost ?? '',
+      row.allocationStartWeek != null ? formatWeekLabel(row.allocationStartWeek) : '',
+      row.allocationEndWeek != null ? formatWeekLabel(row.allocationEndWeek) : '',
+      '',
+      '',
+      '',
+      '',
+      '',
+    ])
+  })
+
+  profileData.overheadRows.forEach(row => {
+    const description = row.type === 'PERCENTAGE'
+      ? `${row.value}% of task days`
+      : row.type === 'DAYS_PER_WEEK'
+        ? `${row.value} days/week x ${profileData.projectDurationWeeks} weeks`
+        : `${row.value} fixed days`
+    rows.push([
+      'Overhead',
+      row.name,
+      '',
+      '',
+      'Overhead',
+      '',
+      '',
+      row.computedDays,
+      row.computedDays,
+      row.computedDays,
+      row.dayRate ?? '',
+      row.estimatedCost ?? '',
+      '',
+      '',
+      '',
+      '',
+      description,
+      '',
+      '',
+    ])
+  })
+
+  rows.push([
+    'Summary',
+    'Total',
+    '',
+    '',
+    '',
+    '',
+    '',
+    profileData.summary.totalDays,
+    profileData.summary.totalDays,
+    profileData.summary.totalDays,
+    '',
+    profileData.summary.totalCost ?? '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+  ])
+
+  return rows.map(row => row.map(toCsvValue).join(',')).join('\n')
+}
+
 /**
  * All data-fetching, state management, mutations, and business-logic handlers
  * for the Resource Profile page — extracted from ResourceProfilePage.tsx.
@@ -230,7 +394,7 @@ export function useResourceProfile() {
     onSuccess: (_data, rtId) => {
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
-      qc.invalidateQueries({ queryKey: ['named-resources'] })
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
       // Auto-expand named resources panel so the user sees the people
       setExpandedNamedResources(prev => new Set([...prev, rtId]))
     },
@@ -240,14 +404,14 @@ export function useResourceProfile() {
     mutationFn: async (rtId: string) => {
       const res = await api.get(`/projects/${projectId}/resource-types/${rtId}/named-resources`)
       const resources = res.data as NamedResourceEntry[]
-      if (resources.length > 1) {
+      if (resources.length > 0) {
         await api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${resources[resources.length - 1].id}`)
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, rtId) => {
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
-      qc.invalidateQueries({ queryKey: ['named-resources'] })
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
   })
 
@@ -320,60 +484,7 @@ export function useResourceProfile() {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'project'
 
-  const toCsvValue = (value: string | number | null | undefined) => {
-    if (value === null || value === undefined) return ''
-    const str = typeof value === 'number' ? value.toString() : value
-    if (/[",\n]/.test(str)) {
-      return `"${str.replace(/"/g, '""')}"`
-    }
-    return str
-  }
-
-  const buildProfileCsv = (profileData: ResourceProfile) => {
-    const rows: Array<Array<string | number>> = [[
-      'Role', 'Category', 'Count', 'HoursPerDay', 'Hours', 'Days', 'DayRate', 'Cost',
-    ]]
-    profileData.resourceRows.forEach(row => {
-      rows.push([
-        row.name,
-        row.category,
-        row.count,
-        row.hoursPerDay,
-        row.totalHours,
-        row.totalDays,
-        row.dayRate ?? '',
-        row.estimatedCost ?? '',
-      ])
-    })
-    profileData.overheadRows.forEach(row => {
-      const description = row.type === 'PERCENTAGE'
-        ? `${row.value}% of task days`
-        : row.type === 'DAYS_PER_WEEK'
-          ? `${row.value} days/week × ${profileData.projectDurationWeeks} weeks`
-          : `${row.value} fixed days`
-      rows.push([
-        row.name,
-        'Overhead',
-        '',
-        `— ${description}`,
-        '',
-        row.computedDays,
-        row.dayRate ?? '',
-        row.estimatedCost ?? '',
-      ])
-    })
-    rows.push([
-      'Total',
-      '',
-      '',
-      '',
-      profileData.summary.totalHours,
-      profileData.summary.totalDays,
-      '',
-      profileData.summary.totalCost ?? '',
-    ])
-    return rows.map(r => r.map(toCsvValue).join(',')).join('\n')
-  }
+  const createCsvBlob = (csv: string) => new Blob([csv], { type: 'text/csv;charset=utf-8' })
 
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob)
@@ -387,7 +498,7 @@ export function useResourceProfile() {
   const handleExportProfile = () => {
     if (!profile) return
     const csv = buildProfileCsv(profile)
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const blob = createCsvBlob(csv)
     const safeName = slugify(project?.name ?? 'project')
     downloadBlob(blob, `${safeName}-resource-profile.csv`)
   }
@@ -399,8 +510,12 @@ export function useResourceProfile() {
       const safeName = slugify(project?.name ?? 'project')
       const zip = new JSZip()
       zip.file(`${safeName}-resource-profile.csv`, csv)
-      const backlogRes = await api.get(`/projects/${projectId}/backlog/export-csv`, { responseType: 'blob' })
+      const [backlogRes, timelineRes] = await Promise.all([
+        api.get(`/projects/${projectId}/backlog/export-csv`, { responseType: 'blob' }),
+        api.get(`/projects/${projectId}/timeline/export/csv`, { responseType: 'blob' }),
+      ])
       zip.file(`${safeName}-backlog.csv`, backlogRes.data)
+      zip.file(`${safeName}-timeline.csv`, timelineRes.data)
       const blob = await zip.generateAsync({ type: 'blob' })
       downloadBlob(blob, `${safeName}-project-export.zip`)
     } catch (err) {
@@ -540,7 +655,7 @@ export function useResourceProfile() {
     createOverhead, updateOverhead, deleteOverhead,
     handleFormSubmit, handleEdit, handleDelete,
     resetForm,
-    slugify, toCsvValue, buildProfileCsv, downloadBlob,
+    slugify, toCsvValue, buildProfileCsv, createCsvBlob, downloadBlob,
     handleExportProfile, handleExportFull,
     handleDiscountSubmit, handleApplyRateCard,
     startEditAllocation, getAllocationBadge,

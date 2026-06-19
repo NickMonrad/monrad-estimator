@@ -106,48 +106,54 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (7 tests)
+### `timeline.spec.ts` — Timeline (8 tests)
 
 #### `Timeline` describe block (4 tests)
 
 | Test | Description |
 |------|-------------|
 | start date persists after navigation (bug #44) | Sets a start date, navigates away, returns — date is still present |
-| auto-schedule shows projected end date | Create project with epic+feature, run Auto-schedule, assert "Projected end:" appears |
+| quick schedule shows projected end date | Create project with epic+feature, run Quick schedule, assert "Projected end:" appears |
 | sequential/parallel toggle is visible on epic rows | After scheduling, the mode-toggle button is rendered on every epic header row in the Gantt |
 | feature dependency section visible in inline edit panel | Clicking a feature label opens the inline panel which contains the "Depends on" section and the add-dependency select |
 
-#### `Scenario Finder drawer — open and close` describe block (1 test — Phase 4, issue #233)
+#### `Starting Team Finder drawer — open and close` describe block (1 test — Phase 4, issue #233)
 
 | Test | Description |
 |------|-------------|
-| open and close the drawer | Navigates to a Timeline page, clicks `🔧 Scenario Finder`, asserts the drawer dialog with accessible name and heading "Scenario Finder" is visible, clicks the Close (×) button, asserts drawer is removed from the DOM |
+| open and close the drawer | Navigates to a Timeline page, clicks `🔧 Starting Team Finder`, asserts the drawer dialog with accessible name and heading "Starting Team Finder" is visible, clicks the Close (×) button, asserts drawer is removed from the DOM |
 
-#### `Scenario Finder drawer — with resources` describe block (2 tests — Phase 4, issue #233)
+#### `Starting Team Finder drawer — with resources` describe block (2 tests — Phase 4, issue #233)
 
-`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import, navigates to Timeline, and runs Auto-schedule. Each test has a 90 s timeout.
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import, navigates to Timeline, and runs Quick schedule. Each test has a 90 s timeout.
 
 | Test | Description |
 |------|-------------|
-| run optimiser and see results | Opens drawer, clicks Run optimiser, waits up to 30 s for the search-stats footer (`Evaluated X scenarios in Ys`), asserts the Baseline card ("Current configuration") and at least one candidate card with an Apply button are visible |
-| apply button is present on candidate cards, dialog is dismissed without mutation | Runs the optimiser, asserts every candidate card has an Apply button, clicks the first Apply, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
+| run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
+| apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts the exact `Starting team options` section label and that candidate cards expose `Apply directly` buttons, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
+
+#### `Timeline — cache invalidation` describe block (1 test)
+
+| Test | Description |
+|------|-------------|
+| manual feature override clears demand cache | Seeds Developer + Tech Lead tasks via CSV, schedules, manually overrides a feature's start week, navigates to Resource Profile — asserts both resource type rows render with formatted person-day values and Commercial tab cost summary loads (regression: stale `weeklyDemandCache` would cause error/blank page) |
 
 ---
 
 ### `gantt.spec.ts` — Gantt Chart (4 tests)
 
-Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each test calls `setupTimeline()` which logs in, creates a project with 1 epic + 1 feature, navigates to the Timeline page, fills the start date, runs Auto-schedule, and waits for the "X features scheduled" footer.
+Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each test calls `setupTimeline()` which logs in, creates a project with 1 epic + 1 feature, navigates to the Timeline page, fills the start date, runs Quick schedule, and waits for the "X features scheduled" footer.
 
 | Test | Description |
 |------|-------------|
-| auto-schedule renders feature bars in the Gantt grid | After auto-schedule the SVG contains at least one `<rect>` element (feature bar) |
+| quick schedule renders feature bars in the Gantt grid | After Quick schedule the SVG contains at least one `<rect>` element (feature bar) |
 | epic feature-mode button toggles between sequential and parallel | Clicks the button with `aria-label="sequential"`, asserts it switches to `aria-label="parallel"` |
 | clicking a feature bar opens the inline edit panel | Clicks `[title="{featureName}"]` (a `<span>`), asserts Start week + duration inputs appear |
 | saving a manual start week shows the ✏ override indicator | Sets start week to 2, saves, asserts the "↺ Reset to auto" button appears (only rendered when `isManual=true`) |
 
 ---
 
-### `resource-profile.spec.ts` — Resource Profile & Commercial (7 tests)
+### `resource-profile.spec.ts` — Resource Profile & Commercial (8 tests)
 
 #### `Resource Profile` describe block (1 test — original)
 
@@ -164,6 +170,12 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | resource count display shows formatted values | Checks that the Developer resource type row text contains values formatted with 2 decimal places (e.g. `24.00`) |
 | named resources — add person | Clicks the Developer resource name to expand the named resources panel; verifies "Named Resources" heading appears; clicks "+ Add person" button; asserts a new input with value "New person" appears |
 | commercial tab — discount management | Switches to Commercial tab; verifies "Cost Summary" and "Project Discounts" headings; clicks "+ Add Discount"; asserts the discount form appears with label input and type dropdown |
+
+#### `Resource Profile — cache invalidation from Timeline` describe block (1 test)
+
+| Test | Description |
+|------|-------------|
+| both resource types show fallback demand after manual feature override | Seeds Developer + Tech Lead via CSV, schedules on Timeline, manually overrides feature start week, navigates to Resource Profile — asserts both resource type rows render with formatted hours and Commercial tab cost summary loads (regression: per-RT cache horizon bug would suppress one RT's fallback) |
 
 #### `Rate Cards` describe block (1 test)
 
