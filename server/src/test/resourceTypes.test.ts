@@ -36,6 +36,9 @@ describe('resource type manual scheduling regression', () => {
       namedResource: {
         updateMany: vi.fn().mockResolvedValue({ count: 2 }),
       },
+      project: {
+        update: vi.fn().mockResolvedValue({}),
+      },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
 
@@ -90,6 +93,9 @@ describe('resource type manual scheduling regression', () => {
       },
       namedResource: {
         updateMany: vi.fn(),
+      },
+      project: {
+        update: vi.fn().mockResolvedValue({}),
       },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -373,5 +379,96 @@ describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
     expect(prisma.resourceType.deleteMany).toHaveBeenCalledWith({
       where: { id: 'rt-99', projectId: 'proj-1' },
     })
+  })
+})
+
+describe('weeklyDemandCache invalidation', () => {
+  it('clears cache on PUT rename', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: 'rt-1', projectId: 'proj-1', name: 'Old Role',
+      allocationMode: 'TIMELINE', allocationPercent: 100,
+      allocationStartWeek: null, allocationEndWeek: null,
+    } as never)
+    const tx = {
+      resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'New Role' }) },
+      project: { update: vi.fn().mockResolvedValue({}) },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1')
+      .set('Authorization', authHeader)
+      .send({ name: 'New Role' })
+
+    expect(res.status).toBe(200)
+    expect(tx.resourceType.update).toHaveBeenCalledWith({
+      where: { id: 'rt-1' },
+      data: { name: 'New Role' },
+    })
+    expect(tx.project.update).toHaveBeenCalledWith({
+      where: { id: 'proj-1' },
+      data: { weeklyDemandCache: {} },
+    })
+  })
+
+  it('clears cache on PATCH count sync', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: 'rt-1', projectId: 'proj-1', name: 'Developer',
+      allocationMode: 'TIMELINE', allocationPercent: 100,
+      allocationStartWeek: null, allocationEndWeek: null,
+    } as never)
+    const tx = {
+      namedResource: {
+        findMany: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockResolvedValue({}),
+      },
+      resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 2 }) },
+      project: { update: vi.fn().mockResolvedValue({}) },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .patch('/api/projects/proj-1/resource-types/rt-1')
+      .set('Authorization', authHeader)
+      .send({ count: 2 })
+
+    expect(res.status).toBe(200)
+    expect(tx.project.update).toHaveBeenCalledWith({
+      where: { id: 'proj-1' },
+      data: { weeklyDemandCache: {} },
+    })
+  })
+
+  it('clears cache on DELETE after successful scoped delete', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.deleteMany).mockResolvedValue({ count: 1 } as never)
+    vi.mocked(prisma.project.update).mockResolvedValue({} as never)
+
+    const res = await request(app)
+      .delete('/api/projects/proj-1/resource-types/rt-1')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(prisma.resourceType.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'rt-1', projectId: 'proj-1' },
+    })
+    expect(prisma.project.update).toHaveBeenCalledWith({
+      where: { id: 'proj-1' },
+      data: { weeklyDemandCache: {} },
+    })
+  })
+
+  it('does not clear cache when DELETE returns 404 (wrong project)', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.deleteMany).mockResolvedValue({ count: 0 } as never)
+
+    const res = await request(app)
+      .delete('/api/projects/proj-1/resource-types/rt-99')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(404)
+    expect(prisma.project.update).not.toHaveBeenCalled()
   })
 })
