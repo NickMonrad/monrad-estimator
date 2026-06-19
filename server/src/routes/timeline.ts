@@ -200,23 +200,27 @@ function buildResponse(
 
   if (simulatedDemand && simulatedDemand.size > 0) {
     // Use actual consumption from simulation where present. For RTs with cached demand,
-    // missing weeks up to the project's global cached horizon are treated as zero demand
+    // missing weeks up to that RT's cached horizon are treated as zero demand
     // rather than being reintroduced from fallback spread.
     const fallbackDemand = buildFallbackWeeklyDemand()
     const cachedResourceTypes = new Set<string>()
-    let globalCachedMaxWeek = Number.NEGATIVE_INFINITY
+    const cachedMaxWeekByRt = new Map<string, number>()
 
     for (const key of simulatedDemand.keys()) {
       const { resourceTypeName, week } = parseSimulatedDemandKey(key)
       cachedResourceTypes.add(resourceTypeName)
-      globalCachedMaxWeek = Math.max(globalCachedMaxWeek, week)
+      const prev = cachedMaxWeekByRt.get(resourceTypeName) ?? Number.NEGATIVE_INFINITY
+      cachedMaxWeekByRt.set(resourceTypeName, Math.max(prev, week))
     }
 
     const mergedDemand = new Map<string, WeeklyDemandRow>()
 
     for (const row of fallbackDemand) {
       const hasCachedDemand = cachedResourceTypes.has(row.resourceTypeName)
-      if (hasCachedDemand && row.week <= globalCachedMaxWeek) continue
+      if (hasCachedDemand) {
+        const rtMaxWeek = cachedMaxWeekByRt.get(row.resourceTypeName)
+        if (rtMaxWeek != null && row.week <= rtMaxWeek) continue
+      }
 
       mergedDemand.set(weeklyDemandKey(row.week, row.resourceTypeName), row)
     }
@@ -599,6 +603,12 @@ router.put('/stories/:storyId', asyncHandler(async (req: AuthRequest, res: Respo
     update: { startWeek, durationWeeks, isManual: true },
   })
 
+  // Manual story timeline change invalidates cached scheduler demand
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { weeklyDemandCache: {} },
+  })
+
   res.json({
     storyId: entry.storyId,
     storyName: story.name,
@@ -619,6 +629,13 @@ router.delete('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     prisma.timelineEntry.deleteMany({ where: { projectId: project.id, isManual: true } }),
     prisma.storyTimelineEntry.deleteMany({ where: { projectId: project.id, isManual: true } }),
   ])
+
+  // Clearing manual overrides invalidates cached scheduler demand
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { weeklyDemandCache: {} },
+  })
+
   res.status(204).end()
 }))
 
@@ -630,8 +647,16 @@ router.delete('/stories/:storyId', asyncHandler(async (req: AuthRequest, res: Re
   await prisma.storyTimelineEntry.deleteMany({
     where: { storyId: req.params.storyId as string, projectId: project.id },
   })
+
+  // Deleting a manual story override invalidates cached demand
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { weeklyDemandCache: {} },
+  })
+
   res.status(204).end()
 }))
+
 
 // GET /api/projects/:projectId/timeline/export/csv
 router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -942,6 +967,12 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   })
 
+  // Resource levelling rewrites timeline entries — clear cached demand
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { weeklyDemandCache: {} },
+  })
+
   res.json({
     epicStartWeeks: Object.fromEntries(levellingResult.epicStartWeeks),
     featureStartWeeks: Object.fromEntries(levellingResult.featureStartWeeks),
@@ -965,6 +996,13 @@ router.put('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) =
   const feature = await prisma.feature.findFirst({ where: { id: featureId, epic: { projectId: project.id } } })
   if (!feature) { res.status(404).json({ error: 'Feature not found' }); return }
 
+
+  // Manual feature timeline change invalidates cached scheduler demand
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { weeklyDemandCache: {} },
+  })
+
   const entry = await prisma.timelineEntry.upsert({
     where: { featureId },
     create: { projectId: project.id, featureId, startWeek, durationWeeks, isManual: true },
@@ -987,6 +1025,7 @@ router.put('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) =
   })
 }))
 
+
 // DELETE /api/projects/:projectId/timeline/:featureId — clear manual override
 router.delete('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
@@ -995,8 +1034,16 @@ router.delete('/:featureId', asyncHandler(async (req: AuthRequest, res: Response
   await prisma.timelineEntry.deleteMany({
     where: { featureId: req.params.featureId as string, projectId: project.id },
   })
+
+  // Clearing a feature manual override invalidates cached demand
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { weeklyDemandCache: {} },
+  })
+
   res.status(204).end()
 }))
+
 
 // PATCH /api/projects/:projectId/timeline/start-date
 router.patch('/start-date', asyncHandler(async (req: AuthRequest, res: Response) => {

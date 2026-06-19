@@ -725,6 +725,133 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     ])
   })
 
+  it('uses per-resource-type cached horizon: fallback re-emerges for an RT after its own cache max week, even when another RT has a longer horizon', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: {
+        'Developer|0': 5,
+        'Developer|1': 5,
+        'QA|0': 5,
+      },
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-dev',
+              name: 'Taylor',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+        {
+          id: 'rt-qa',
+          name: 'QA',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-qa',
+              name: 'Morgan',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Delivery',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Build',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Implement',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      hoursEffort: 40,
+                      durationDays: 5,
+                      resourceTypeId: 'rt-dev',
+                    },
+                    {
+                      id: 'task-2',
+                      hoursEffort: 80,
+                      durationDays: 10,
+                      resourceTypeId: 'rt-qa',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 0, durationWeeks: 2 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    const qaRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-qa')
+
+    // Developer is cached for weeks 0-1, so fallback at week 0-1 is suppressed
+    expect(devRow.namedResources[0].actualAllocatedWeeks.map((w: any) => w.week)).toEqual([0, 1])
+
+    // QA is only cached for week 0, so fallback at week 1 is NOT suppressed
+    // (per-RT max is 0, so week 1 > 0 and fallback re-emerges)
+    expect(qaRow.namedResources[0].actualAllocatedWeeks.map((w: any) => w.week)).toEqual([0, 1])
+  })
+
   it('does not cross-bind actual allocations when named resources share the same name', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       id: 'proj-1',

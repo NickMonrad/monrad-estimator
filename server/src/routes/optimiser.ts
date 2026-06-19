@@ -298,6 +298,13 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   })
 
+  // Scheduler rewrite invalidates cached demand — clear to force recompute
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { weeklyDemandCache: {} },
+  })
+
+
   // ── 4. Optional: stagger epics to level demand ────────────────────────────
   let levellingResult: { epicStartWeeks: Map<string, number>; featureStartWeeks: Map<string, number>; totalDeliveryWeeks: number; peakUtilisationPct: number } | null = null
 
@@ -334,7 +341,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       ...updatedInput,
       epics: levelledEpics,
     })
-
     await prisma.$transaction(async tx => {
       await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
       const fRows = lfs
@@ -348,7 +354,14 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         .map(e => ({ projectId, storyId: e.storyId, startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: false }))
       if (sRows.length > 0) await tx.storyTimelineEntry.createMany({ data: sRows, skipDuplicates: true })
     })
+
+    // Staggered level rewrite invalidates cached demand
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: {} },
+    })
   }
+
 
   const responseBody: {
     message: string

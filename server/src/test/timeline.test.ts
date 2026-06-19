@@ -503,7 +503,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
     expect(developerDemand[59]).toBe(5)
   })
 
-  it('does not backfill a cached role before the global cached horizon ends, but still backfills after it', async () => {
+  it('uses per-resource-type cached horizon: cached demand suppresses fallback only for the same RT within its own cache range', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,
       weeklyDemandCache: {
@@ -611,11 +611,12 @@ describe('GET /api/projects/:projectId/timeline', () => {
       .filter((row: any) => row.resourceTypeName === 'Principal Consultant - Security')
       .reduce((acc: Record<number, number>, row: any) => ({ ...acc, [row.week]: row.demandDays }), {})
 
+    // Security is only cached for weeks 10-11, so fallback re-emerges at week 12
     expect(securityDemand[10]).toBe(2.5)
     expect(securityDemand[11]).toBe(2.5)
-    expect(securityDemand[12]).toBeUndefined()
-    expect(securityDemand[13]).toBeUndefined()
-    expect(securityDemand[14]).toBeUndefined()
+    expect(securityDemand[12]).toBe(5)
+    expect(securityDemand[13]).toBe(5)
+    expect(securityDemand[14]).toBe(5)
     expect(securityDemand[15]).toBe(5)
     expect(securityDemand[16]).toBe(5)
   })
@@ -920,6 +921,33 @@ describe('PUT /api/projects/:projectId/timeline/:featureId', () => {
       .set('Authorization', authHeader)
       .send({ startWeek: 2 })
     expect(res.status).toBe(400)
+  })
+
+  it('clears weeklyDemandCache on manual feature timeline override', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.feature.findFirst).mockResolvedValue({ id: 'feat-1', epicId: 'epic-1' } as any)
+    vi.mocked(prisma.timelineEntry.upsert).mockResolvedValue({
+      id: 'entry-1',
+      projectId: 'proj-1',
+      featureId: 'feat-1',
+      startWeek: 5,
+      durationWeeks: 2,
+      isManual: true,
+      feature: { name: 'Login', epic: { id: 'epic-1', name: 'Authentication' } },
+    } as any)
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/timeline/feat-1')
+      .set('Authorization', authHeader)
+      .send({ startWeek: 5, durationWeeks: 2 })
+
+    expect(res.status).toBe(200)
+    const updateCalls = vi.mocked(prisma.project.update).mock.calls
+    const cacheClearCall = updateCalls.find(c => {
+      const args = c[0] as { where: { id: string }; data: { weeklyDemandCache: unknown } }
+      return args?.where?.id === 'proj-1' && args?.data && typeof args.data.weeklyDemandCache === 'object'
+    })
+    expect(cacheClearCall).toBeTruthy()
   })
 })
 

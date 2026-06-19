@@ -257,16 +257,17 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   if (project.weeklyDemandCache && Object.keys(project.weeklyDemandCache as Record<string, number>).length > 0) {
     const cachedResourceTypes = new Set<string>()
-    let globalCachedMaxWeek = Number.NEGATIVE_INFINITY
+    const cachedMaxWeekByRt = new Map<string, number>()
 
-    for (const [key, demandDays] of Object.entries(project.weeklyDemandCache as Record<string, number>)) {
+    for (const [key] of Object.entries(project.weeklyDemandCache as Record<string, number>)) {
       const separatorIdx = key.lastIndexOf('|')
       if (separatorIdx === -1) continue
       const resourceTypeName = key.substring(0, separatorIdx)
       const week = Number(key.substring(separatorIdx + 1))
-      if (!Number.isFinite(week) || !Number.isFinite(demandDays)) continue
+      if (!Number.isFinite(week)) continue
       cachedResourceTypes.add(resourceTypeName)
-      globalCachedMaxWeek = Math.max(globalCachedMaxWeek, week)
+      const prev = cachedMaxWeekByRt.get(resourceTypeName) ?? Number.NEGATIVE_INFINITY
+      cachedMaxWeekByRt.set(resourceTypeName, Math.max(prev, week))
     }
 
     for (const key of Array.from(weeklyDemandMap.keys())) {
@@ -274,8 +275,11 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       if (separatorIdx === -1) continue
       const week = Number(key.substring(0, separatorIdx))
       const resourceTypeName = key.substring(separatorIdx + 1)
-      if (cachedResourceTypes.has(resourceTypeName) && week <= globalCachedMaxWeek) {
-        weeklyDemandMap.delete(key)
+      if (cachedResourceTypes.has(resourceTypeName)) {
+        const rtMaxWeek = cachedMaxWeekByRt.get(resourceTypeName)
+        if (rtMaxWeek != null && week <= rtMaxWeek) {
+          weeklyDemandMap.delete(key)
+        }
       }
     }
 
