@@ -106,7 +106,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (7 tests)
+### `timeline.spec.ts` — Timeline (8 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -132,6 +132,12 @@ API-level tests using the `request` fixture. No browser UI involved.
 | run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
 | apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts the exact `Starting team options` section label and that candidate cards expose `Apply directly` buttons, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
 
+#### `Timeline — cache invalidation` describe block (1 test)
+
+| Test | Description |
+|------|-------------|
+| manual feature override clears demand cache | Seeds Developer + Tech Lead tasks via CSV, schedules, manually overrides a feature's start week, navigates to Resource Profile — asserts both resource type rows render with formatted person-day values and Commercial tab cost summary loads (regression: stale `weeklyDemandCache` would cause error/blank page) |
+
 ---
 
 ### `gantt.spec.ts` — Gantt Chart (4 tests)
@@ -147,7 +153,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
-### `resource-profile.spec.ts` — Resource Profile & Commercial (7 tests)
+### `resource-profile.spec.ts` — Resource Profile & Commercial (8 tests)
 
 #### `Resource Profile` describe block (1 test — original)
 
@@ -164,6 +170,12 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | resource count display shows formatted values | Checks that the Developer resource type row text contains values formatted with 2 decimal places (e.g. `24.00`) |
 | named resources — add person | Clicks the Developer resource name to expand the named resources panel; verifies "Named Resources" heading appears; clicks "+ Add person" button; asserts a new input with value "New person" appears |
 | commercial tab — discount management | Switches to Commercial tab; verifies "Cost Summary" and "Project Discounts" headings; clicks "+ Add Discount"; asserts the discount form appears with label input and type dropdown |
+
+#### `Resource Profile — cache invalidation from Timeline` describe block (1 test)
+
+| Test | Description |
+|------|-------------|
+| both resource types show fallback demand after manual feature override | Seeds Developer + Tech Lead via CSV, schedules on Timeline, manually overrides feature start week, navigates to Resource Profile — asserts both resource type rows render with formatted hours and Commercial tab cost summary loads (regression: per-RT cache horizon bug would suppress one RT's fallback) |
 
 #### `Rate Cards` describe block (1 test)
 

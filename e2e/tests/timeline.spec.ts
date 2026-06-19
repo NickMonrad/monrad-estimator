@@ -184,6 +184,105 @@ test.describe('Timeline', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Cache invalidation — manual feature override updates Resource Profile
+// Fixes: stale weeklyDemandCache after PUT /timeline/:featureId
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * CSV seed with Developer + Tech Lead resource types so the Resource Profile
+ * shows meaningful person-day values after scheduling. Both types are seeded
+ * from global resource types on every new project.
+ */
+const CACHE_INV_CSV = [
+  'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+  'Epic,Platform Build,,,,,,,,,,,,',
+  'Feature,Platform Build,Core API,,,,,,,,,,,',
+  'Story,Platform Build,Core API,API Design,,,,,,,,,,',
+  'Task,Platform Build,Core API,API Design,Implement,,Developer,40,5,,,,,',
+  'Task,Platform Build,Core API,API Design,Review,,Tech Lead,16,2,,,,,',
+].join('\n')
+
+test.describe('Timeline — cache invalidation', () => {
+  test('manual feature override clears demand cache — Resource Profile and Commercial render correctly', async ({ page }) => {
+    test.setTimeout(90_000)
+
+    const projectName = `E2E CacheInv ${Date.now()}`
+
+    // ── Login and create project ──
+    await login(page)
+    await createProject(page, projectName)
+
+    // ── Navigate to Backlog and seed CSV ──
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
+    const tmpFile = path.join(os.tmpdir(), `cache-inv-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
+
+    // ── Navigate to Timeline ──
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole('button', { name: /timeline/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /timeline/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i })
+    ).toBeVisible({ timeout: 8_000 })
+
+    // ── Set start date and Quick schedule ──
+    const dateInput = page.locator('input[type="date"]')
+    await expect(dateInput).toBeVisible({ timeout: 8_000 })
+    await dateInput.fill('2026-06-01')
+    await expect(dateInput).toHaveValue('2026-06-01')
+    await quickSchedule(page)
+    await expect(
+      page.getByRole('button', { name: /sequential|parallel/i }).first()
+    ).toBeVisible({ timeout: 15_000 })
+
+    // ── Manual override: move feature to week 5 ──
+    const featureLabel = page.locator('[title="Core API"]').first()
+    await featureLabel.click()
+    await expect(page.getByText('Start week:').first()).toBeVisible({ timeout: 8_000 })
+    await page.locator('input[min="0"]').first().fill('5')
+    await page.getByRole('button', { name: /^save$/i }).click()
+    await expect(
+      page.getByRole('button', { name: /reset to auto/i })
+    ).toBeVisible({ timeout: 10_000 })
+
+    // ── Navigate to Resource Profile (cache was cleared by the manual override) ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i })
+    ).toBeVisible({ timeout: 10_000 })
+
+    // Verify both resource type rows render from recomputed fallback demand
+    const developerRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(developerRow).toBeVisible({ timeout: 15_000 })
+    // Row should contain formatted person-day values (e.g. "40.00 h")
+    const devText = await developerRow.textContent()
+    expect(devText).toMatch(/\d+\.\d{2}\s*h/i)
+
+    const techLeadRow = page.locator('tr').filter({ hasText: /tech lead/i }).first()
+    await expect(techLeadRow).toBeVisible({ timeout: 10_000 })
+    const tlText = await techLeadRow.textContent()
+    expect(tlText).toMatch(/\d+\.\d{2}\s*h/i)
+
+    // ── Switch to Commercial tab — verify cost summary loads ──
+    await page.getByRole('button', { name: /commercial/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /cost summary/i })
+    ).toBeVisible({ timeout: 10_000 })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Starting Team Finder drawer — Phase 4, issue #233
 // ─────────────────────────────────────────────────────────────────────────────
 
