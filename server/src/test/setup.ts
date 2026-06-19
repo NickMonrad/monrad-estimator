@@ -13,13 +13,13 @@ vi.mock('../lib/scopeDocumentRenderer.js', () => ({
 // Mock Prisma globally so tests don't need a real DB
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
-    user: { findUnique: vi.fn(), create: vi.fn() },
+    user: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     project: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn() },
     epic: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
     feature: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
     userStory: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
     task: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
-    resourceType: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), createMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn() },
+    resourceType: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), createMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
     globalResourceType: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     featureTemplate: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     templateTask: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn(), count: vi.fn() },
@@ -58,8 +58,8 @@ vi.mock('../lib/prisma.js', () => ({
       userStory: { create: vi.fn().mockResolvedValue({ id: 'story-id' }) },
       task: { create: vi.fn() },
       project: { update: vi.fn() },
-      resourceType: { findUnique: vi.fn().mockResolvedValue(null), update: vi.fn(), create: vi.fn(), upsert: vi.fn() },
-      namedResource: { findUnique: vi.fn().mockResolvedValue(null), update: vi.fn(), updateMany: vi.fn(), create: vi.fn(), upsert: vi.fn() },
+      resourceType: { findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn(), update: vi.fn(), create: vi.fn(), upsert: vi.fn() },
+      namedResource: { findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), create: vi.fn(), upsert: vi.fn(), delete: vi.fn(), count: vi.fn() },
       timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
       storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
       epicDependency: { deleteMany: vi.fn(), createMany: vi.fn() },

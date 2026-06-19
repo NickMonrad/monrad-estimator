@@ -3,6 +3,7 @@ import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -62,29 +63,42 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   // If RT's allocationMode is not EFFORT, copy the RT's allocation settings as defaults for the new NR
-  const rtAllocationMode = rt.allocationMode as AllocationMode
+  const rtAllocationMode = rt.allocationMode === 'CAPACITY_PLAN'
+    ? 'TIMELINE'
+    : rt.allocationMode as AllocationMode
+  const rtAllocationPercent = rt.allocationMode === 'CAPACITY_PLAN' ? 100 : (rt.allocationPercent ?? 100)
+  const rtAllocationStartWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationStartWeek ?? null)
+  const rtAllocationEndWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationEndWeek ?? null)
   const inheritAllocation = rtAllocationMode !== 'EFFORT'
 
-  const resource = await prisma.namedResource.create({
-    data: {
-      name,
-      resourceTypeId: rtId,
-      ...(startWeek !== undefined && { startWeek }),
-      ...(endWeek !== undefined && { endWeek }),
-      ...(allocationPct !== undefined && { allocationPct }),
-      ...(pricingModel !== undefined && { pricingModel }),
-      ...(inheritAllocation && {
-        allocationMode: rtAllocationMode,
-        allocationPercent: rt.allocationPercent ?? 100,
-        allocationStartWeek: rt.allocationStartWeek ?? null,
-        allocationEndWeek: rt.allocationEndWeek ?? null,
-      }),
-    },
-  })
+  const resource = await prisma.$transaction(async tx => {
+    if (rt.allocationMode === 'CAPACITY_PLAN') {
+      await exitCapacityPlanForManualScheduling(rt.id, tx)
+    }
 
-  // Sync resource type count to match total named resources
-  const total = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
-  await prisma.resourceType.update({ where: { id: rtId }, data: { count: total } })
+    const created = await tx.namedResource.create({
+      data: {
+        name,
+        resourceTypeId: rtId,
+        ...(startWeek !== undefined && { startWeek }),
+        ...(endWeek !== undefined && { endWeek }),
+        ...(allocationPct !== undefined && { allocationPct }),
+        ...(pricingModel !== undefined && { pricingModel }),
+        ...(inheritAllocation && {
+          allocationMode: rtAllocationMode,
+          allocationPercent: rtAllocationPercent,
+          allocationStartWeek: rtAllocationStartWeek,
+          allocationEndWeek: rtAllocationEndWeek,
+        }),
+      },
+    })
+
+    // Sync resource type count to match total named resources
+    const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
+    await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
+
+    return created
+  })
 
   res.status(201).json(resource)
 }))
@@ -163,11 +177,17 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
 
-  await prisma.namedResource.delete({ where: { id } })
+  await prisma.$transaction(async tx => {
+    if (rt.allocationMode === 'CAPACITY_PLAN') {
+      await exitCapacityPlanForManualScheduling(rt.id, tx)
+    }
 
-  // Sync resource type count (can reach 0 when all named resources are deleted)
-  const total = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
-  await prisma.resourceType.update({ where: { id: rtId }, data: { count: total } })
+    await tx.namedResource.delete({ where: { id } })
+
+    // Sync resource type count (can reach 0 when all named resources are deleted)
+    const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
+    await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
+  })
 
   res.status(204).send()
 }))

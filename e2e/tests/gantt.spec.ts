@@ -6,13 +6,13 @@
  * (class "h-6 cursor-pointer") positioned via CSS grid-column.
  *
  * Tests cover:
- *   1. Auto-schedule populates the Gantt grid with feature bars.
+ *   1. Quick schedule populates the Gantt grid with feature bars.
  *   2. The epic feature-mode button toggles sequential ↔ parallel.
  *   3. Clicking a feature bar (or label) opens the inline edit panel.
  *   4. Saving a manual start week via inline edit marks the bar with ✏.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { login, createProject } from './helpers'
+import { login, createProject, quickSchedule } from './helpers'
 
 // ---------------------------------------------------------------------------
 // Shared setup helper
@@ -20,7 +20,7 @@ import { login, createProject } from './helpers'
 
 /**
  * Log in, create a project with 1 epic + 1 feature, navigate to the
- * Timeline page, fill the start date, click Auto-schedule, and wait
+ * Timeline page, fill the start date, click Quick schedule, and wait
  * until the Gantt grid footer ("X features scheduled") is visible.
  */
 async function setupTimeline(
@@ -62,12 +62,12 @@ async function setupTimeline(
     timeout: 8_000,
   })
 
-  // Set start date, then Auto-schedule
+  // Set start date, then Quick schedule
   const dateInput = page.locator('input[type="date"]')
   await expect(dateInput).toBeVisible({ timeout: 8_000 })
   await dateInput.fill('2026-06-01')
   await expect(dateInput).toHaveValue('2026-06-01')
-  await page.getByRole('button', { name: /auto-schedule/i }).click()
+  await quickSchedule(page)
 
   // Wait until the Gantt footer appears — it is only rendered once
   // timeline.entries.length > 0, so it's the earliest reliable signal
@@ -83,9 +83,9 @@ async function setupTimeline(
 
 test.describe('Gantt Chart', () => {
   // ──────────────────────────────────────────────────────────────────────────
-  // 1. Smoke test: feature bars are rendered after auto-schedule
+  // 1. Smoke test: feature bars are rendered after quick schedule
   // ──────────────────────────────────────────────────────────────────────────
-  test('auto-schedule renders feature bars in the Gantt grid', async ({ page }) => {
+  test('quick schedule renders feature bars in the Gantt grid', async ({ page }) => {
     await setupTimeline(page)
 
     // The footer "X weeks total · X features scheduled" is only rendered when

@@ -109,10 +109,11 @@ export default function GanttBar({
     const barColor = entry.timelineColour ?? colour.hex
     const isDragging = dragging?.type === 'feature' && dragging.id === entry.featureId
     const effectiveStart = isDragging ? dragging!.currentStart : entry.startWeek
+    const effectiveEnd = effectiveStart + entry.durationWeeks
     const barW = Math.max(entry.durationWeeks * colW, 4)
     const isOverAllocated = weeklyDemand.some(d =>
-      d.week >= entry.startWeek &&
-      d.week < entry.startWeek + entry.durationWeeks &&
+      d.week >= effectiveStart &&
+      d.week < effectiveEnd &&
       d.demandDays > d.capacityDays + 0.01,
     )
     const tooltipContent = buildFeatureTooltip(entry)

@@ -122,6 +122,35 @@ function buildWeeklyDemandCacheFromPlannerResult(
   return weeklyDemandCache
 }
 
+function buildReplayPlannerResourceTypes(
+  resourceTypes: SchedulerResourceType[],
+  slotWindowsByRt: Map<string, CapacityPlanSlotWindow[]>,
+  maxHeadcountByRt: Map<string, number>,
+): SchedulerResourceType[] {
+  return resourceTypes.map(resourceType => {
+    const slotWindows = slotWindowsByRt.get(resourceType.id)
+    const maxHeadcount = maxHeadcountByRt.get(resourceType.id)
+
+    if (!slotWindows || maxHeadcount == null) return resourceType
+
+    return {
+      ...resourceType,
+      count: maxHeadcount,
+      namedResources: slotWindows.map((slotWindow, idx) => ({
+        id: `capacity-plan-${resourceType.id}-${idx}`,
+        name: `${resourceType.name} ${idx + 1}`,
+        startWeek: slotWindow.startWeek,
+        endWeek: slotWindow.endWeek,
+        allocationPct: slotWindow.allocationPercent,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: slotWindow.allocationPercent,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      })),
+    }
+  })
+}
+
 async function loadSchedulerInput(
   projectId: string,
   hoursPerDay: number,
@@ -547,21 +576,22 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay, {
         includeCapacityPlanMaterialization: false,
       })
-      const plannerMaxCap = new Map<string, number>()
-      for (const [rtId, headcount] of maxHeadcountByRt.entries()) {
-        if (isNonNegativeFiniteNumber(headcount)) {
-          plannerMaxCap.set(rtId, headcount)
-        }
-      }
-      const plannerResult = runSAPlanner(schedulerInput, {
+      const replayResourceTypes = buildReplayPlannerResourceTypes(
+        schedulerInput.resourceTypes,
+        slotWindowsByRt,
+        maxHeadcountByRt,
+      )
+      const plannerResult = runSAPlanner({
+        ...schedulerInput,
+        resourceTypes: replayResourceTypes,
+      }, {
         targetDurationWeeks: targetWeeks,
         maxParallelismPerFeature: maxParallelism,
-        maxCap: plannerMaxCap,
         maxConcurrentEpics: clientMaxConcurrentEpics,
       })
       refreshedWeeklyDemandCache = buildWeeklyDemandCacheFromPlannerResult(
         plannerResult.weeklyDemandByResourceType,
-        schedulerInput.resourceTypes,
+        replayResourceTypes,
       )
 
       // Persist epic start weeks
@@ -865,7 +895,25 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     maxConcurrentEpics: body.maxConcurrentEpics,
   }
 
-  const result = computeCapacityPlan(schedulerInput, config)
+  let result: ReturnType<typeof computeCapacityPlan>
+  try {
+    result = computeCapacityPlan(schedulerInput, config)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const isGenerationFailure =
+      error instanceof Error && detail.includes('Fractional planner could not finish feature')
+
+    if (isGenerationFailure) {
+      res.status(400).json({
+        error:
+          'No feasible squad plan found under the current constraints. Try resetting RT max caps, increasing max parallelism, or clearing saved planner settings. ' +
+          `Details: ${detail}`,
+      })
+      return
+    }
+
+    throw error
+  }
 
   // ── Serialise LevellingResult Maps for JSON transport ───────────────────
   res.json({

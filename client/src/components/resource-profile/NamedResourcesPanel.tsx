@@ -1,5 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
+import type { ResourceProfileRow } from '../../types/backlog'
 
 type PricingModel = 'ACTUAL_DAYS' | 'PRO_RATA'
 
@@ -20,6 +21,26 @@ interface NamedResourcesPanelProps {
   rtId: string
   rtCount: number
   columnCount: number
+  allocations?: ResourceProfileRow['namedResources']
+}
+
+type AllocationEntry = NonNullable<ResourceProfileRow['namedResources']>[number]
+
+function formatWeekLabel(week: number) {
+  return `W${week + 1}`
+}
+
+function formatAssignedSummary(allocation?: AllocationEntry) {
+  const segments = allocation?.actualAllocationSegments ?? []
+  if (segments.length === 0) return 'No assigned weeks'
+  return segments
+    .slice(0, 2)
+    .map(segment => (
+      segment.startWeek === segment.endWeek
+        ? `${formatWeekLabel(segment.startWeek)} (${segment.days.toFixed(1)}d)`
+        : `${formatWeekLabel(segment.startWeek)}-${formatWeekLabel(segment.endWeek)} (${segment.days.toFixed(1)}d)`
+    ))
+    .join(', ') + (segments.length > 2 ? ` +${segments.length - 2} more` : '')
 }
 
 export default function NamedResourcesPanel({
@@ -27,6 +48,7 @@ export default function NamedResourcesPanel({
   rtId,
   rtCount,
   columnCount,
+  allocations = [],
 }: NamedResourcesPanelProps) {
   const qc = useQueryClient()
 
@@ -45,8 +67,11 @@ export default function NamedResourcesPanel({
           name: 'New person',
         })
         .then((r) => r.data),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+    },
   })
 
   const updateResource = useMutation({
@@ -86,6 +111,30 @@ export default function NamedResourcesPanel({
     },
   })
 
+  const allocationById = new Map(allocations.map(allocation => [allocation.id, allocation]))
+  const mergedResources = [
+    ...resources.map(resource => ({
+      ...resource,
+      allocation: allocationById.get(resource.id),
+      persisted: true,
+    })),
+    ...allocations
+      .filter(allocation => !resources.some(resource => resource.id === allocation.id))
+      .map(allocation => ({
+        id: allocation.id,
+        resourceTypeId: rtId,
+        name: allocation.name,
+        startWeek: allocation.startWeek,
+        endWeek: allocation.endWeek,
+        allocationPct: allocation.allocationPercent,
+        pricingModel: (allocation.pricingModel ?? 'ACTUAL_DAYS') as PricingModel,
+        createdAt: '',
+        updatedAt: '',
+        allocation,
+        persisted: false,
+      })),
+  ]
+
   return (
     <tr>
       <td colSpan={columnCount} className="px-10 py-4 bg-gray-50 dark:bg-gray-700 border-b border-gray-100 dark:border-gray-700">
@@ -96,100 +145,123 @@ export default function NamedResourcesPanel({
 
           {isLoading ? (
             <p className="text-sm text-gray-400 dark:text-gray-500">Loading…</p>
-          ) : resources.length === 0 ? (
+          ) : mergedResources.length === 0 ? (
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              No named resources — using aggregate count ({rtCount})
+              No named resources - using aggregate count ({rtCount})
             </p>
           ) : (
             <div className="space-y-0.5">
-              <div className="grid grid-cols-[1fr_110px_110px_80px_140px_28px] gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 px-2 py-1">
+              <div className="grid grid-cols-[1fr_110px_110px_80px_150px_minmax(180px,1fr)_28px] gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 px-2 py-1">
                 <span>Name</span>
                 <span>Start Week</span>
                 <span>End Week</span>
                 <span>Alloc %</span>
                 <span>Pricing</span>
+                <span>Assigned weeks</span>
                 <span />
               </div>
-              {resources.map((r) => (
+              {mergedResources.map((resource) => (
                 <div
-                  key={r.id}
-                  className="grid grid-cols-[1fr_110px_110px_80px_140px_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                  key={resource.id}
+                  className="grid grid-cols-[1fr_110px_110px_80px_150px_minmax(180px,1fr)_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                 >
                   <input
                     type="text"
-                    defaultValue={r.name}
+                    defaultValue={resource.name}
                     onBlur={(e) => {
-                      const val = e.target.value.trim()
-                      if (val && val !== r.name)
-                        updateResource.mutate({ id: r.id, name: val })
+                      if (!resource.persisted) return
+                      const value = e.target.value.trim()
+                      if (value && value !== resource.name) {
+                        updateResource.mutate({ id: resource.id, name: value })
+                      }
                     }}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    disabled={!resource.persisted}
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   />
                   <input
                     type="number"
-                    defaultValue={r.startWeek ?? ''}
+                    defaultValue={resource.startWeek ?? ''}
                     placeholder="Project start"
                     onBlur={(e) => {
-                      const val = e.target.value
-                        ? parseInt(e.target.value)
+                      if (!resource.persisted) return
+                      const value = e.target.value
+                        ? parseInt(e.target.value, 10)
                         : null
-                      if (val !== r.startWeek)
-                        updateResource.mutate({ id: r.id, startWeek: val })
+                      if (value !== resource.startWeek) {
+                        updateResource.mutate({ id: resource.id, startWeek: value })
+                      }
                     }}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    disabled={!resource.persisted}
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   />
                   <input
                     type="number"
-                    defaultValue={r.endWeek ?? ''}
+                    defaultValue={resource.endWeek ?? ''}
                     placeholder="Project end"
                     onBlur={(e) => {
-                      const val = e.target.value
-                        ? parseInt(e.target.value)
+                      if (!resource.persisted) return
+                      const value = e.target.value
+                        ? parseInt(e.target.value, 10)
                         : null
-                      if (val !== r.endWeek)
-                        updateResource.mutate({ id: r.id, endWeek: val })
+                      if (value !== resource.endWeek) {
+                        updateResource.mutate({ id: resource.id, endWeek: value })
+                      }
                     }}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    disabled={!resource.persisted}
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   />
                   <input
                     type="number"
                     min={0}
                     max={100}
-                    defaultValue={r.allocationPct}
+                    defaultValue={resource.allocationPct}
                     onBlur={(e) => {
-                      const val = parseInt(e.target.value)
+                      if (!resource.persisted) return
+                      const value = parseInt(e.target.value, 10)
                       if (
-                        !isNaN(val) &&
-                        val >= 0 &&
-                        val <= 100 &&
-                        val !== r.allocationPct
+                        !isNaN(value) &&
+                        value >= 0 &&
+                        value <= 100 &&
+                        value !== resource.allocationPct
                       ) {
-                        updateResource.mutate({ id: r.id, allocationPct: val })
+                        updateResource.mutate({ id: resource.id, allocationPct: value })
                       }
                     }}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    disabled={!resource.persisted}
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   />
                   <select
-                    defaultValue={r.pricingModel}
+                    defaultValue={resource.pricingModel}
                     onChange={(e) => {
-                      if (e.target.value !== r.pricingModel) {
+                      if (!resource.persisted) return
+                      if (e.target.value !== resource.pricingModel) {
                         updateResource.mutate({
-                          id: r.id,
+                          id: resource.id,
                           pricingModel: e.target.value,
                         })
                       }
                     }}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full"
+                    disabled={!resource.persisted}
+                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   >
                     <option value="ACTUAL_DAYS">Actual Days</option>
                     <option value="PRO_RATA">Pro-rata</option>
                   </select>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    <div>{formatAssignedSummary(resource.allocation)}</div>
+                    {resource.allocation?.actualAllocatedDays ? (
+                      <div className="mt-0.5 text-[11px] text-gray-400 dark:text-gray-500">
+                        {resource.allocation.actualAllocatedDays.toFixed(1)} assigned days
+                      </div>
+                    ) : null}
+                  </div>
                   <button
-                    onClick={() => deleteResource.mutate(r.id)}
-                    className="text-gray-400 dark:text-gray-500 hover:text-red-600 text-lg leading-none"
-                    title="Delete"
+                    onClick={() => resource.persisted && deleteResource.mutate(resource.id)}
+                    disabled={!resource.persisted}
+                    className="text-gray-400 dark:text-gray-500 hover:text-red-600 text-lg leading-none disabled:opacity-30"
+                    title={resource.persisted ? 'Delete' : 'Generated slot'}
                   >
-                    ×
+                    x
                   </button>
                 </div>
               ))}

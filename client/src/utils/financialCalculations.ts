@@ -1,5 +1,7 @@
 import type { ResourceProfile, ProjectDiscount } from '../types/backlog'
 
+type NamedResourcePricingModel = 'ACTUAL_DAYS' | 'PRO_RATA'
+
 export type CommercialRow = {
   id: string
   name: string
@@ -16,6 +18,7 @@ export type CommercialRow = {
   derivedStartWeek: number | null
   derivedEndWeek: number | null
   kind: 'resource' | 'named-resource' | 'overhead'
+  pricingModel: NamedResourcePricingModel | null
   /** For mutations — NR rows need their RT id for the PATCH URL */
   resourceTypeId: string
   appliedDiscounts: Array<{
@@ -42,6 +45,29 @@ export type CommercialData = {
   grandTotal: number
 }
 
+type CostRow = Omit<CommercialRow, 'appliedDiscounts' | 'netSubtotal'>
+
+type ResourceProfileNamedResource = NonNullable<ResourceProfile['resourceRows'][number]['namedResources']>[number]
+
+function getPricingModel(namedResource: ResourceProfileNamedResource): NamedResourcePricingModel {
+  const pricingModel = (namedResource as { pricingModel?: NamedResourcePricingModel }).pricingModel
+  return pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS'
+}
+
+function getNamedResourceBillableDays(namedResource: ResourceProfileNamedResource) {
+  const pricingModel = getPricingModel(namedResource)
+  const billableDays = pricingModel === 'PRO_RATA'
+    ? namedResource.allocatedDays
+    : typeof namedResource.actualAllocatedDays === 'number'
+      ? namedResource.actualAllocatedDays
+      : namedResource.allocatedDays
+
+  return {
+    pricingModel,
+    billableDays,
+  }
+}
+
 /**
  * Pure function that computes the commercial cost breakdown from profile + discounts + project tax config.
  * Extracted from the commercialData useMemo in ResourceProfilePage.
@@ -49,51 +75,53 @@ export type CommercialData = {
 export function computeCommercialData(
   profile: ResourceProfile | undefined,
   discounts: ProjectDiscount[],
-  project: { taxRate?: number | null; taxLabel?: string | null } | undefined,
+  project: { taxRate?: number | null; taxLabel?: string | null } | null | undefined,
 ): CommercialData | null {
   if (!profile) return null
 
   // All rows (resource + overhead) with day rates
-  const costRows = [
-    ...profile.resourceRows.filter(r => r.dayRate != null).flatMap((r): Array<{
-      id: string; name: string; count: number; effortDays: number; allocatedDays: number;
-      totalDays: number; dayRate: number; subtotal: number; allocationMode: string;
-      allocationPercent: number; allocationStartWeek: number | null; allocationEndWeek: number | null;
-      derivedStartWeek: number | null; derivedEndWeek: number | null;
-      kind: 'named-resource' | 'resource'; resourceTypeId: string;
-    }> => {
+  const costRows: CostRow[] = [
+    ...profile.resourceRows.filter(r => r.dayRate != null).flatMap((r): CostRow[] => {
       if (r.namedResources && r.namedResources.length > 0) {
         // Per-NR rows only — no aggregate row in commercial tab
-        const nrRows = r.namedResources.map(nr => ({
-          id: nr.id,
-          name: nr.name,
-          count: 1,
-          effortDays: nr.allocatedDays,
-          allocatedDays: nr.allocatedDays,
-          totalDays: nr.allocatedDays,
-          dayRate: r.dayRate!,
-          subtotal: nr.allocatedDays * r.dayRate!,
-          allocationMode: nr.allocationMode,
-          allocationPercent: nr.allocationPercent,
-          allocationStartWeek: nr.allocationStartWeek ?? null,
-          allocationEndWeek: nr.allocationEndWeek ?? null,
-          derivedStartWeek: nr.derivedStartWeek ?? r.derivedStartWeek ?? null,
-          derivedEndWeek: nr.derivedEndWeek ?? r.derivedEndWeek ?? null,
-          kind: 'named-resource' as const,
-          resourceTypeId: r.resourceTypeId,
-        }))
+        const nrRows = r.namedResources.map(nr => {
+          const { pricingModel, billableDays } = getNamedResourceBillableDays(nr)
+
+          return {
+            id: nr.id,
+            name: nr.name,
+            count: 1,
+            effortDays: nr.allocatedDays,
+            allocatedDays: billableDays,
+            totalDays: billableDays,
+            dayRate: r.dayRate!,
+            subtotal: billableDays * r.dayRate!,
+            allocationMode: nr.allocationMode,
+            allocationPercent: nr.allocationPercent,
+            allocationStartWeek: nr.allocationStartWeek ?? null,
+            allocationEndWeek: nr.allocationEndWeek ?? null,
+            derivedStartWeek: nr.derivedStartWeek ?? r.derivedStartWeek ?? null,
+            derivedEndWeek: nr.derivedEndWeek ?? r.derivedEndWeek ?? null,
+            kind: 'named-resource' as const,
+            pricingModel,
+            resourceTypeId: r.resourceTypeId,
+          }
+        })
         return nrRows
       }
-      // No NRs — RT-level row as before
+
+      // No NRs — RT-level row as before. Keep subtotal based on the same days
+      // displayed as allocatedDays so commercial rows do not show one basis and bill another.
+      const billableDays = r.allocatedDays ?? r.totalDays
       return [{
         id: r.resourceTypeId,
         name: r.name,
         count: r.count,
         effortDays: r.effortDays ?? r.totalDays,
-        allocatedDays: r.allocatedDays ?? r.totalDays,
-        totalDays: r.totalDays,
+        allocatedDays: billableDays,
+        totalDays: billableDays,
         dayRate: r.dayRate!,
-        subtotal: r.totalDays * r.dayRate!,
+        subtotal: billableDays * r.dayRate!,
         allocationMode: r.allocationMode ?? 'EFFORT',
         allocationPercent: r.allocationPercent ?? 100,
         allocationStartWeek: r.allocationStartWeek ?? null,
@@ -101,6 +129,7 @@ export function computeCommercialData(
         derivedStartWeek: r.derivedStartWeek ?? null,
         derivedEndWeek: r.derivedEndWeek ?? null,
         kind: 'resource' as const,
+        pricingModel: null,
         resourceTypeId: r.resourceTypeId,
       }]
     }),
@@ -120,6 +149,7 @@ export function computeCommercialData(
       derivedStartWeek: null as number | null,
       derivedEndWeek: null as number | null,
       kind: 'overhead' as const,
+      pricingModel: null,
       resourceTypeId: r.overheadId,
     })),
   ]

@@ -74,6 +74,23 @@ export default function ResourceProfileTab({
                       {row.count > 1 && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">({formatNumber(row.totalHours / row.count)}h / {formatNumber(row.totalDays / row.count)}d per person)</p>
                       )}
+                      {row.namedResources && row.namedResources.some(namedResource => (namedResource.actualAllocationSegments?.length ?? 0) > 0) && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          Assigned: {row.namedResources
+                            .filter(namedResource => (namedResource.actualAllocationSegments?.length ?? 0) > 0)
+                            .slice(0, 2)
+                            .map(namedResource => {
+                              const firstSegment = namedResource.actualAllocationSegments[0]
+                              return firstSegment.startWeek === firstSegment.endWeek
+                                ? `${namedResource.name} W${firstSegment.startWeek + 1}`
+                                : `${namedResource.name} W${firstSegment.startWeek + 1}-W${firstSegment.endWeek + 1}`
+                            })
+                            .join('; ')}
+                          {row.namedResources.filter(namedResource => (namedResource.actualAllocationSegments?.length ?? 0) > 0).length > 2
+                            ? ` +${row.namedResources.filter(namedResource => (namedResource.actualAllocationSegments?.length ?? 0) > 0).length - 2} more`
+                            : ''}
+                        </p>
+                      )}
                       <div className="flex items-center gap-3 mt-0.5">
                         <button className="text-xs text-red-500 hover:text-red-700 transition-colors" onClick={() => toggleRow(row.resourceTypeId)}>
                           {expandedRows.has(row.resourceTypeId) ? '▲ Hide breakdown' : '▼ Show breakdown'}
@@ -85,7 +102,7 @@ export default function ResourceProfileTab({
                     </td>
                     <td className="text-center px-4 py-3 text-gray-800 dark:text-gray-100">
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={e => { e.stopPropagation(); removeLastPerson.mutate(row.resourceTypeId) }} disabled={row.count <= 1}
+                        <button onClick={e => { e.stopPropagation(); removeLastPerson.mutate(row.resourceTypeId) }} disabled={row.count <= 0}
                           className="w-6 h-6 rounded border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium" title="Remove person">−</button>
                         <span className="w-8 text-center text-sm font-medium">{row.count}</span>
                         <button onClick={e => { e.stopPropagation(); addPerson.mutate(row.resourceTypeId) }}
@@ -156,7 +173,13 @@ export default function ResourceProfileTab({
                     {hasCost && <td className="text-right px-6 py-3 text-gray-900 dark:text-white">{row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}</td>}
                   </tr>
                   {expandedNamedResources.has(row.resourceTypeId) && (
-                    <NamedResourcesPanel projectId={projectId} rtId={row.resourceTypeId} rtCount={row.count} columnCount={columnCount} />
+                    <NamedResourcesPanel
+                      projectId={projectId}
+                      rtId={row.resourceTypeId}
+                      rtCount={row.count}
+                      columnCount={columnCount}
+                      allocations={row.namedResources}
+                    />
                   )}
                   {expandedRows.has(row.resourceTypeId) && (
                     <tr className="bg-gray-50 dark:bg-gray-700">

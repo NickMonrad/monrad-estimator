@@ -3,6 +3,14 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
+import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
+
+
+const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
+  (tx ?? prisma).project.update({
+    where: { id: projectId },
+    data: { weeklyDemandCache: {} },
+  })
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -28,24 +36,28 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  const { name, category, count, proposedName, hoursPerDay, dayRate } = req.body
+  const { name, category, proposedName, hoursPerDay, dayRate } = req.body
   if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
-  const rt = await prisma.resourceType.create({
-    data: {
-      name,
-      category,
-      count,
-      proposedName,
-      hoursPerDay,
-      dayRate,
-      projectId: req.params.projectId as string,
-    },
+  const rt = await prisma.$transaction(async tx => {
+    const created = await tx.resourceType.create({
+      data: {
+        name,
+        category,
+        projectId: project.id,
+        count: 0,
+        proposedName,
+        hoursPerDay,
+        dayRate,
+      },
+    })
+    // Auto-create a default named resource so the resource profile has a person ready to configure
+    await tx.namedResource.create({
+      data: { name: `${name} 1`, resourceTypeId: created.id },
+    })
+    await tx.resourceType.update({ where: { id: created.id }, data: { count: 1 } })
+    await clearWeeklyDemandCache(project.id, tx)
+    return created
   })
-  // Auto-create a default named resource so the resource profile has a person ready to configure
-  await prisma.namedResource.create({
-    data: { name: `${name} 1`, resourceTypeId: rt.id },
-  })
-  await prisma.resourceType.update({ where: { id: rt.id }, data: { count: 1 } })
   res.status(201).json(rt)
 }))
 
@@ -54,6 +66,14 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const { name, category, count, proposedName, hoursPerDay, dayRate, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
+
+  const existing = await prisma.resourceType.findFirst({
+    where: {
+      id: req.params.id as string,
+      projectId: req.params.projectId as string,
+    },
+  })
+  if (!existing) { res.status(404).json({ error: 'Resource type not found' }); return }
 
   // Validate new allocation fields
   if (allocationMode !== undefined && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode)) {
@@ -73,9 +93,45 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if ('allocationStartWeek' in req.body) data.allocationStartWeek = allocationStartWeek ?? null
   if ('allocationEndWeek' in req.body) data.allocationEndWeek = allocationEndWeek ?? null
 
-  const rt = await prisma.resourceType.update({
-    where: { id: req.params.id as string },
-    data,
+  const shouldExitCapacityPlan =
+    existing.allocationMode === 'CAPACITY_PLAN' &&
+    allocationMode === undefined &&
+    count !== undefined
+
+  if (shouldExitCapacityPlan) {
+    data.allocationMode = 'TIMELINE'
+    data.allocationPercent = 100
+    data.allocationStartWeek = null
+    data.allocationEndWeek = null
+  }
+
+  const rt = await prisma.$transaction(async tx => {
+    const updated = await tx.resourceType.update({
+      where: { id: req.params.id as string },
+      data,
+    })
+
+    if (shouldExitCapacityPlan) {
+      await tx.namedResource.updateMany({
+        where: {
+          resourceTypeId: existing.id,
+          allocationMode: 'CAPACITY_PLAN',
+        },
+        data: {
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          allocationPct: 100,
+          startWeek: null,
+          endWeek: null,
+        },
+      })
+    }
+
+    await clearWeeklyDemandCache(req.params.projectId as string, tx)
+
+    return updated
   })
   res.json(rt)
 }))
@@ -93,41 +149,75 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rt = await prisma.resourceType.findFirst({ where: { id: req.params.id as string, projectId: req.params.projectId as string } })
   if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
 
-  const currentNRs = await prisma.namedResource.findMany({
-    where: { resourceTypeId: rt.id },
-    orderBy: { createdAt: 'asc' },
-  })
-  const currentCount = currentNRs.length
-  const warnings: string[] = []
+  const defaultAllocationMode = rt.allocationMode === 'CAPACITY_PLAN' ? 'TIMELINE' : rt.allocationMode
+  const defaultAllocationPercent = rt.allocationMode === 'CAPACITY_PLAN' ? 100 : (rt.allocationPercent ?? 100)
+  const defaultAllocationStartWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationStartWeek ?? null)
+  const defaultAllocationEndWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationEndWeek ?? null)
 
-  if (count > currentCount) {
-    // Add new anonymous named resources for each new slot
-    for (let n = currentCount + 1; n <= count; n++) {
-      await prisma.namedResource.create({
-        data: { name: `${rt.name} ${n}`, resourceTypeId: rt.id, allocationPct: 100 },
-      })
+  const { updated, warnings } = await prisma.$transaction(async tx => {
+    if (rt.allocationMode === 'CAPACITY_PLAN') {
+      await exitCapacityPlanForManualScheduling(rt.id, tx)
     }
-  } else if (count < currentCount) {
-    // Remove last N named resources (highest createdAt) if they have no custom settings
-    const toConsider = [...currentNRs].reverse().slice(0, currentCount - count)
-    let removed = 0
-    for (const nr of toConsider) {
-      if (nr.startWeek !== null || nr.endWeek !== null || nr.allocationPct !== 100) {
-        warnings.push(`Skipped removal of "${nr.name}" — has custom settings`)
-        continue
+
+    const currentNRs = await tx.namedResource.findMany({
+      where: { resourceTypeId: rt.id },
+      orderBy: { createdAt: 'asc' },
+    })
+    const currentCount = currentNRs.length
+    const nextWarnings: string[] = []
+
+    let result: { updated: any; warnings: string[] }
+
+    if (count > currentCount) {
+      // Add new anonymous named resources for each new slot
+      for (let n = currentCount + 1; n <= count; n++) {
+        await tx.namedResource.create({
+          data: {
+            name: `${rt.name} ${n}`,
+            resourceTypeId: rt.id,
+            allocationPct: 100,
+            ...(defaultAllocationMode !== 'EFFORT' && {
+              allocationMode: defaultAllocationMode,
+              allocationPercent: defaultAllocationPercent,
+              allocationStartWeek: defaultAllocationStartWeek,
+              allocationEndWeek: defaultAllocationEndWeek,
+            }),
+          },
+        })
       }
-      await prisma.namedResource.delete({ where: { id: nr.id } })
-      removed++
-    }
-    // Recompute actual count after removals
-    const actualCount = currentCount - removed
-    await prisma.resourceType.update({ where: { id: rt.id }, data: { count: actualCount } })
-    const updated = await prisma.resourceType.findUnique({ where: { id: rt.id } })
-    res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })
-    return
-  }
 
-  const updated = await prisma.resourceType.update({ where: { id: rt.id }, data: { count } })
+      result = {
+        updated: await tx.resourceType.update({ where: { id: rt.id }, data: { count } }),
+        warnings: nextWarnings,
+      }
+    } else if (count < currentCount) {
+      // Remove last N named resources (highest createdAt) if they have no custom settings
+      const toConsider = [...currentNRs].reverse().slice(0, currentCount - count)
+      let removed = 0
+      for (const nr of toConsider) {
+        if (nr.startWeek !== null || nr.endWeek !== null || nr.allocationPct !== 100) {
+          nextWarnings.push(`Skipped removal of "${nr.name}" — has custom settings`)
+          continue
+        }
+        await tx.namedResource.delete({ where: { id: nr.id } })
+        removed++
+      }
+
+      const actualCount = currentCount - removed
+      result = {
+        updated: await tx.resourceType.update({ where: { id: rt.id }, data: { count: actualCount } }),
+        warnings: nextWarnings,
+      }
+    } else {
+      result = {
+        updated: await tx.resourceType.update({ where: { id: rt.id }, data: { count } }),
+        warnings: nextWarnings,
+      }
+    }
+
+    await clearWeeklyDemandCache(req.params.projectId as string, tx)
+    return result
+  })
   res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })
 }))
 
@@ -135,7 +225,17 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  await prisma.resourceType.delete({ where: { id: req.params.id as string } })
+  const count = await prisma.$transaction(async tx => {
+    const deleted = await tx.resourceType.deleteMany({
+      where: { id: req.params.id as string, projectId: req.params.projectId as string },
+    })
+    if (deleted.count > 0) {
+      await clearWeeklyDemandCache(req.params.projectId as string, tx)
+    }
+    return deleted.count
+  })
+  if (count === 0) { res.status(404).json({ error: 'Resource type not found' }); return }
+
   res.json({ message: 'Deleted' })
 }))
 

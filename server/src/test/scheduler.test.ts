@@ -443,6 +443,42 @@ describe('runScheduler', () => {
     expect(widerWarnings.length).toBe(0)
   })
 
+  it('computeParallelWarnings: ignores floating-point residue when demand matches partial-week capacity', () => {
+    const taskRT = { id: 'rt-security', name: 'Security', hoursPerDay: 8 }
+    const allFeatures = [
+      { id: 'f1', userStories: [{ isActive: true as boolean | null, tasks: [{ resourceTypeId: 'rt-security', resourceType: taskRT, hoursEffort: 78, durationDays: null as number | null }] }] },
+      { id: 'f2', userStories: [{ isActive: true as boolean | null, tasks: [{ resourceTypeId: 'rt-security', resourceType: taskRT, hoursEffort: 78, durationDays: null as number | null }] }] },
+    ]
+    const epicMeta = { id: 'e-security', name: 'Security', featureMode: 'parallel' }
+    const entries = [
+      { featureId: 'f1', startWeek: 14.8, durationWeeks: 7.8, feature: { epic: epicMeta } },
+      { featureId: 'f2', startWeek: 14.8, durationWeeks: 7.8, feature: { epic: epicMeta } },
+    ]
+    const rt: SchedulerResourceType = {
+      id: 'rt-security',
+      name: 'Security',
+      count: 1,
+      hoursPerDay: 8,
+      namedResources: [
+        {
+          id: 'nr-security',
+          name: 'Principal Consultant - Security',
+          startWeek: 0,
+          endWeek: null,
+          allocationPct: 100,
+          allocationMode: 'FULL_PROJECT',
+          allocationPercent: 50,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      ],
+    }
+
+    const warnings = computeParallelWarnings(8, entries, allFeatures, [rt])
+
+    expect(warnings).toEqual([])
+  })
+
   // ── Resource-levelling: consumption map populated ────────────────────────────
   it('resourceLevel=true: weeklyConsumptionMap is populated', () => {
     const rt = makeRt('rt1', 'Dev', 1)
