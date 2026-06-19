@@ -4,6 +4,7 @@ import {
 } from './capacityPlanMaterialisation.js'
 
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
+type PricingModel = 'ACTUAL_DAYS' | 'PRO_RATA'
 
 type NamedResourceLike = {
   id: string
@@ -15,6 +16,7 @@ type NamedResourceLike = {
   allocationPercent?: number | null
   allocationStartWeek?: number | null
   allocationEndWeek?: number | null
+  pricingModel?: string | null
 }
 
 type ResourceTypeLike = {
@@ -52,6 +54,7 @@ export type DerivedNamedResourceAssignment = {
   allocationPercent: number
   allocationStartWeek: number | null
   allocationEndWeek: number | null
+  pricingModel: PricingModel
   startWeek: number | null
   endWeek: number | null
   synthetic: boolean
@@ -114,6 +117,7 @@ function buildEffectiveNamedResources(
           allocationPercent: window.allocationPercent,
           allocationStartWeek: null,
           allocationEndWeek: null,
+          pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
           synthetic: !existing,
         }
       })
@@ -136,6 +140,7 @@ function buildEffectiveNamedResources(
           allocationPercent: 100,
           allocationStartWeek: null,
           allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
           synthetic: true,
         })),
       ]
@@ -150,6 +155,7 @@ function buildEffectiveNamedResources(
     allocationPercent: namedResource.allocationPercent ?? namedResource.allocationPct ?? 100,
     allocationStartWeek: namedResource.allocationStartWeek ?? null,
     allocationEndWeek: namedResource.allocationEndWeek ?? null,
+    pricingModel: namedResource.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
     startWeek: namedResource.startWeek ?? null,
     endWeek: namedResource.endWeek ?? null,
     synthetic: namedResource.synthetic,

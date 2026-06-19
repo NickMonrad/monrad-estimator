@@ -107,7 +107,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
           namedResource.actualAllocationEndWeek != null ? formatWeekLabel(namedResource.actualAllocationEndWeek) : '',
           formatNamedResourceSegments(namedResource),
           formatNamedResourceWeeks(namedResource),
-          namedResource.synthetic ? 'Generated slot' : 'Configured person',
+          namedResource.pricingModel ?? 'ACTUAL_DAYS',
         ])
       })
       return
@@ -394,7 +394,7 @@ export function useResourceProfile() {
     onSuccess: (_data, rtId) => {
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
-      qc.invalidateQueries({ queryKey: ['named-resources'] })
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
       // Auto-expand named resources panel so the user sees the people
       setExpandedNamedResources(prev => new Set([...prev, rtId]))
     },
@@ -408,10 +408,10 @@ export function useResourceProfile() {
         await api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${resources[resources.length - 1].id}`)
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, rtId) => {
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
-      qc.invalidateQueries({ queryKey: ['named-resources'] })
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
   })
 

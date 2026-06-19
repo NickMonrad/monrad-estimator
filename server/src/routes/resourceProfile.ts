@@ -375,6 +375,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
               allocationPercent: window.allocationPercent,
               allocationStartWeek: null,
               allocationEndWeek: null,
+              pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
               startWeek: window.startWeek,
               endWeek: window.endWeek,
             }
@@ -408,6 +409,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         allocationPercent: number
         allocationStartWeek: number | null
         allocationEndWeek: number | null
+        pricingModel: 'ACTUAL_DAYS' | 'PRO_RATA'
         startWeek: number | null
         endWeek: number | null
         allocatedDays: number
@@ -454,6 +456,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             allocationPercent: nrPercent,
             allocationStartWeek: nr.allocationStartWeek ?? null,
             allocationEndWeek: nr.allocationEndWeek ?? null,
+            pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
             startWeek: nr.startWeek ?? null,
             endWeek: nr.endWeek ?? null,
             allocatedDays: nrAllocatedDays,
@@ -477,6 +480,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           allocationPercent: actual.allocationPercent,
           allocationStartWeek: actual.allocationStartWeek,
           allocationEndWeek: actual.allocationEndWeek,
+          pricingModel: actual.pricingModel,
           startWeek: actual.startWeek,
           endWeek: actual.endWeek,
           allocatedDays: actual.actualAllocatedDays,

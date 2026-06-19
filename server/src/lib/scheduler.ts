@@ -62,6 +62,7 @@ export interface SchedulerNamedResource {
   allocationPercent: number
   allocationStartWeek: number | null
   allocationEndWeek: number | null
+  pricingModel?: string | null
 }
 
 export interface SchedulerResourceType {

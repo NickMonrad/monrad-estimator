@@ -26,6 +26,17 @@ describe('auth password reset rate-limit regression', () => {
 
     let currentPasswordHash = await bcrypt.hash('OriginalPassword123!', 10)
     const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex')
+    ;(prisma.passwordResetToken.findUnique as any).mockImplementation(async ({ where }: any) => {
+      expect(where).toEqual({ tokenHash: resetTokenHash })
+
+      return {
+        userId,
+        tokenHash: resetTokenHash,
+        expiresAt: new Date(Date.now() + 60_000),
+        usedAt: null,
+      } as any
+    })
+
 
     ;(prisma.user.findUnique as any).mockImplementation(async ({ where }: any) => {
       if (where.email !== email) return null
@@ -40,7 +51,7 @@ describe('auth password reset rate-limit regression', () => {
     })
 
     ;(prisma.passwordResetToken.update as any).mockImplementation(async ({ where }: any) => {
-      expect(where).toEqual({ tokenHash: resetTokenHash, usedAt: null })
+      expect(where).toEqual({ tokenHash: resetTokenHash })
 
       return {
         userId,
@@ -62,6 +73,13 @@ describe('auth password reset rate-limit regression', () => {
         password: currentPasswordHash,
       } as any
     })
+
+    ;(prisma.$transaction as any).mockImplementation(async (fn: any) =>
+      fn({
+        passwordResetToken: { update: prisma.passwordResetToken.update },
+        user: { update: prisma.user.update },
+      }),
+    )
   })
 
   afterEach(async () => {

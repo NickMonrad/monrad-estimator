@@ -91,6 +91,7 @@ function buildWarningResourceTypes(
           allocationPct: window.allocationPercent,
           allocationMode: 'CAPACITY_PLAN',
           allocationPercent: window.allocationPercent,
+          pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
           allocationStartWeek: null,
           allocationEndWeek: null,
         }
@@ -282,6 +283,7 @@ function buildResponse(
         allocationPercent: namedResource.allocationPercent,
         allocationStartWeek: namedResource.allocationStartWeek,
         allocationEndWeek: namedResource.allocationEndWeek,
+        pricingModel: namedResource.pricingModel,
         actualAllocatedDays: namedResource.actualAllocatedDays,
         actualAllocationStartWeek: namedResource.actualAllocationStartWeek,
         actualAllocationEndWeek: namedResource.actualAllocationEndWeek,

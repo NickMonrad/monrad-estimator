@@ -67,8 +67,11 @@ export default function NamedResourcesPanel({
           name: 'New person',
         })
         .then((r) => r.data),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+    },
   })
 
   const updateResource = useMutation({
@@ -124,7 +127,7 @@ export default function NamedResourcesPanel({
         startWeek: allocation.startWeek,
         endWeek: allocation.endWeek,
         allocationPct: allocation.allocationPercent,
-        pricingModel: 'ACTUAL_DAYS' as PricingModel,
+        pricingModel: (allocation.pricingModel ?? 'ACTUAL_DAYS') as PricingModel,
         createdAt: '',
         updatedAt: '',
         allocation,

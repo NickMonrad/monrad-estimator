@@ -171,6 +171,8 @@ export interface StoryDependency {
   dependsOnId: string
 }
 
+export type PricingModel = 'ACTUAL_DAYS' | 'PRO_RATA'
+
 export interface NamedResourceEntry {
   id?: string
   resourceTypeId?: string
@@ -179,6 +181,7 @@ export interface NamedResourceEntry {
   startWeek: number | null
   endWeek: number | null
   allocationPct: number
+  pricingModel?: PricingModel
   allocationMode?: string
   allocationPercent?: number
   allocationStartWeek?: number | null
@@ -271,6 +274,7 @@ export interface ResourceProfileRow {
   namedResources?: Array<{
     id: string
     name: string
+    pricingModel?: PricingModel
     allocationMode: string
     allocationPercent: number
     allocationStartWeek: number | null

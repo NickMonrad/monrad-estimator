@@ -319,6 +319,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
               allocationEndWeek: null,
               startWeek: null,
               endWeek: null,
+              pricingModel: 'PRO_RATA',
             },
           ],
         },
@@ -372,6 +373,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(securityRow.namedResources).toEqual([
       expect.objectContaining({
         name: 'Principal Consultant - Security',
+        pricingModel: 'PRO_RATA',
         actualAllocatedDays: 3.6,
         actualAllocationStartWeek: 12,
         actualAllocationEndWeek: 12,
