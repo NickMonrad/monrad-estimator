@@ -350,7 +350,11 @@ describe('resource type manual scheduling regression', () => {
 describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
   it('deletes a resource type scoped to the project', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
-    vi.mocked(prisma.resourceType.deleteMany).mockResolvedValue({ count: 1 } as never)
+    const tx = {
+      resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      project: { update: vi.fn().mockResolvedValue({}) },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
 
     const res = await request(app)
       .delete('/api/projects/proj-1/resource-types/rt-1')
@@ -359,7 +363,7 @@ describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ message: 'Deleted' })
     // Delete must be scoped to the project, not a bare primary-key delete
-    expect(prisma.resourceType.deleteMany).toHaveBeenCalledWith({
+    expect(tx.resourceType.deleteMany).toHaveBeenCalledWith({
       where: { id: 'rt-1', projectId: 'proj-1' },
     })
   })
@@ -368,7 +372,11 @@ describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
     // Caller owns proj-1, but rt-99 lives in another tenant's project, so the
     // project-scoped deleteMany affects 0 rows.
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
-    vi.mocked(prisma.resourceType.deleteMany).mockResolvedValue({ count: 0 } as never)
+    const tx = {
+      resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
 
     const res = await request(app)
       .delete('/api/projects/proj-1/resource-types/rt-99')
@@ -376,13 +384,46 @@ describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
 
     expect(res.status).toBe(404)
     expect(res.body).toEqual({ error: 'Resource type not found' })
-    expect(prisma.resourceType.deleteMany).toHaveBeenCalledWith({
+    expect(tx.resourceType.deleteMany).toHaveBeenCalledWith({
       where: { id: 'rt-99', projectId: 'proj-1' },
     })
   })
 })
 
 describe('weeklyDemandCache invalidation', () => {
+
+  it('clears cache on POST resource type creation', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    const createdRt = { id: 'rt-new', projectId: 'proj-1', name: 'Tester', category: 'DEV' }
+    const tx = {
+      resourceType: {
+        create: vi.fn().mockResolvedValue(createdRt),
+        update: vi.fn().mockResolvedValue({ ...createdRt, count: 1 }),
+      },
+      namedResource: { create: vi.fn().mockResolvedValue({}) },
+      project: { update: vi.fn().mockResolvedValue({}) },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/resource-types')
+      .set('Authorization', authHeader)
+      .send({ name: 'Tester', category: 'DEV' })
+
+    expect(res.status).toBe(201)
+    expect(res.body).toEqual(createdRt)
+    // Should create resource type + default named resource + update count + clear cache in one transaction
+    expect(tx.resourceType.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Tester', category: 'DEV', projectId: 'proj-1' }),
+    })
+    expect(tx.namedResource.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Tester 1', resourceTypeId: 'rt-new' }),
+    })
+    expect(tx.project.update).toHaveBeenCalledWith({
+      where: { id: 'proj-1' },
+      data: { weeklyDemandCache: {} },
+    })
+  })
   it('clears cache on PUT rename', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
@@ -443,18 +484,21 @@ describe('weeklyDemandCache invalidation', () => {
 
   it('clears cache on DELETE after successful scoped delete', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
-    vi.mocked(prisma.resourceType.deleteMany).mockResolvedValue({ count: 1 } as never)
-    vi.mocked(prisma.project.update).mockResolvedValue({} as never)
+    const tx = {
+      resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      project: { update: vi.fn().mockResolvedValue({}) },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
 
     const res = await request(app)
       .delete('/api/projects/proj-1/resource-types/rt-1')
       .set('Authorization', authHeader)
 
     expect(res.status).toBe(200)
-    expect(prisma.resourceType.deleteMany).toHaveBeenCalledWith({
+    expect(tx.resourceType.deleteMany).toHaveBeenCalledWith({
       where: { id: 'rt-1', projectId: 'proj-1' },
     })
-    expect(prisma.project.update).toHaveBeenCalledWith({
+    expect(tx.project.update).toHaveBeenCalledWith({
       where: { id: 'proj-1' },
       data: { weeklyDemandCache: {} },
     })
@@ -462,13 +506,17 @@ describe('weeklyDemandCache invalidation', () => {
 
   it('does not clear cache when DELETE returns 404 (wrong project)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
-    vi.mocked(prisma.resourceType.deleteMany).mockResolvedValue({ count: 0 } as never)
+    const tx = {
+      resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
 
     const res = await request(app)
       .delete('/api/projects/proj-1/resource-types/rt-99')
       .set('Authorization', authHeader)
 
     expect(res.status).toBe(404)
-    expect(prisma.project.update).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
   })
 })

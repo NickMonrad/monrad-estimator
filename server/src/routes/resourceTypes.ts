@@ -38,24 +38,26 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
   const { name, category, proposedName, hoursPerDay, dayRate } = req.body
   if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
-  const rt = await prisma.resourceType.create({
-    data: {
-      name,
-      category,
-      projectId: project.id,
-      count: 0,
-      proposedName,
-      hoursPerDay,
-      dayRate,
-    },
+  const rt = await prisma.$transaction(async tx => {
+    const created = await tx.resourceType.create({
+      data: {
+        name,
+        category,
+        projectId: project.id,
+        count: 0,
+        proposedName,
+        hoursPerDay,
+        dayRate,
+      },
+    })
+    // Auto-create a default named resource so the resource profile has a person ready to configure
+    await tx.namedResource.create({
+      data: { name: `${name} 1`, resourceTypeId: created.id },
+    })
+    await tx.resourceType.update({ where: { id: created.id }, data: { count: 1 } })
+    await clearWeeklyDemandCache(project.id, tx)
+    return created
   })
-  // Auto-create a default named resource so the resource profile has a person ready to configure
-  await prisma.namedResource.create({
-    data: { name: `${name} 1`, resourceTypeId: rt.id },
-  })
-  await prisma.resourceType.update({ where: { id: rt.id }, data: { count: 1 } })
-  await clearWeeklyDemandCache(project.id)
-
   res.status(201).json(rt)
 }))
 
@@ -223,9 +225,16 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-  const result = await prisma.resourceType.deleteMany({ where: { id: req.params.id as string, projectId: req.params.projectId as string } })
-  if (result.count === 0) { res.status(404).json({ error: 'Resource type not found' }); return }
-  await clearWeeklyDemandCache(project.id)
+  const count = await prisma.$transaction(async tx => {
+    const deleted = await tx.resourceType.deleteMany({
+      where: { id: req.params.id as string, projectId: req.params.projectId as string },
+    })
+    if (deleted.count > 0) {
+      await clearWeeklyDemandCache(req.params.projectId as string, tx)
+    }
+    return deleted.count
+  })
+  if (count === 0) { res.status(404).json({ error: 'Resource type not found' }); return }
 
   res.json({ message: 'Deleted' })
 }))
