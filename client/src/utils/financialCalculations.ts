@@ -75,7 +75,7 @@ function getNamedResourceBillableDays(namedResource: ResourceProfileNamedResourc
 export function computeCommercialData(
   profile: ResourceProfile | undefined,
   discounts: ProjectDiscount[],
-  project: { taxRate?: number | null; taxLabel?: string | null } | undefined,
+  project: { taxRate?: number | null; taxLabel?: string | null } | null | undefined,
 ): CommercialData | null {
   if (!profile) return null
 
