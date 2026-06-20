@@ -271,8 +271,9 @@ test.describe('Global admin auth — admin user', () => {
     // Verify edit/delete buttons exist on rows (pencil + trash icons)
     // Note: seed types are all isDefault, so delete button title is
     // "Default types cannot be deleted" (not "Delete")
-    await expect(page.locator('button[title="Edit"]').first()).toBeVisible()
-    await expect(page.locator('[title*="Delete"]').first()).toBeVisible()
+    await expect(page.locator('[title*="Edit"]').first()).toBeVisible()
+    // Use case-insensitive match — seed types have "Default types cannot be deleted"
+    await expect(page.locator('[title*="delete" i]').first()).toBeVisible()
 
     /* ── Create a unique global resource type ─────────────────── */
     const typeName = `E2E Admin Test ${unique}`
