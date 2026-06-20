@@ -12,11 +12,9 @@ export default function CommercialTab({
   selectedRateCardId, setSelectedRateCardId, rateCardResult,
   editingTaxLabel, setEditingTaxLabel, taxLabelDraft, setTaxLabelDraft,
   editingTaxRate, setEditingTaxRate, taxRateDraft, setTaxRateDraft,
-  editingAllocation, setEditingAllocation, allocationDraft, setAllocationDraft,
   bufferWeeks, setBufferWeeks, onboardingWeeks, setOnboardingWeeks,
   createDiscount, deleteDiscount, updateTax, applyRateCard,
-  updateAllocationMutation, updateNrAllocationMutation,
-  handleDiscountSubmit, handleApplyRateCard, startEditAllocation, getAllocationBadge,
+  handleDiscountSubmit, handleApplyRateCard, getAllocationBadge,
   weekToDate, fmtDate, formatNumber, saveBufferOnboarding,
   filteredResourceRows,
 }: Props) {

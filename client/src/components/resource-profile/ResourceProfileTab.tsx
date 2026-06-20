@@ -25,8 +25,7 @@ export default function ResourceProfileTab({
   createOverhead, updateOverhead,
   weekToDate, fmtDate, formatNumber, saveBufferOnboarding,
   editingAllocation, setEditingAllocation, allocationDraft, setAllocationDraft,
-  updateAllocationMutation, updateNrAllocationMutation,
-  startEditAllocation, getAllocationBadge,
+  updateAllocationMutation,
 }: Props) {
   return (
     <>
@@ -145,6 +144,8 @@ export default function ResourceProfileTab({
                         const badge = (() => {
                           if (mode === 'EFFORT') return { label: 'T&M', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
                           if (mode === 'TIMELINE') return { label: `Timeline · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
+                          if (mode === 'FULL_PROJECT') return { label: `Full Project · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'CAPACITY_PLAN') return { label: `Capacity Plan · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
                           return { label: `Full Project · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
                         })()
                         return (
