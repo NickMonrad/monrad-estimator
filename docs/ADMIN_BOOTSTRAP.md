@@ -4,13 +4,31 @@ Monrad Estimator uses a **deliberate bootstrap flow** to create the first global
 user. There are no default admin credentials. The bootstrap path is permanently disabled
 once a single `ADMIN` role user exists in the database.
 
+## Bootstrap token requirement
+
+Staging and production bootstrap is disabled unless `ADMIN_BOOTSTRAP_TOKEN` is set
+in the server environment. Requests must send the exact token value in the
+`X-Bootstrap-Token` header.
+
+The token is a temporary operational secret for creating the first admin. Generate
+it out of band, do not commit it, and do not put it in scripts that are logged.
+After the first admin is created, remove the token from the environment or rotate
+it to a new unused value.
+
+For developer-friendly local work, tokenless bootstrap is allowed only when
+`NODE_ENV` is `development` (or `test`) and `ADMIN_BOOTSTRAP_TOKEN` is not set.
+
 ## Quick start — local development
 
-With both servers running against a **fresh/empty database**:
+With both servers running against a **fresh/empty database**, set a local token
+and send it in `X-Bootstrap-Token`:
 
 ```bash
+export ADMIN_BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+
 curl -X POST http://localhost:3001/api/bootstrap/admin \
   -H "Content-Type: application/json" \
+  -H "X-Bootstrap-Token: $ADMIN_BOOTSTRAP_TOKEN" \
   -d '{"name":"Your Name","email":"admin@example.com","password":"your-secure-password"}'
 ```
 
@@ -30,10 +48,14 @@ curl -X POST http://localhost:3001/api/bootstrap/admin \
 
 ## Fresh deployment (staging / production)
 
-1. Deploy the app with an empty database.
-2. Run the bootstrap command once (see above) to create the first admin.
-3. Log in with the admin credentials you just created.
-4. Global Resource Types and Rate Cards are now editable.
+1. Generate a high-entropy bootstrap token outside source control.
+2. Set `ADMIN_BOOTSTRAP_TOKEN` in the server runtime environment.
+3. Deploy the app with an empty database.
+4. Run the bootstrap command once from a trusted shell, including
+   `X-Bootstrap-Token: <token>`.
+5. Log in with the admin credentials you just created.
+6. Remove `ADMIN_BOOTSTRAP_TOKEN` from the environment, or rotate it to a new
+   unused value, and redeploy/restart the server.
 
 > **Do not script this into deployment pipelines.** The bootstrap step is intentionally
 > a one-time manual action to avoid insecure default credentials in infrastructure.
@@ -44,8 +66,9 @@ If your database has regular `USER` accounts but no `ADMIN` has been created yet
 bootstrap endpoint is still available. Create a new admin account with a different email:
 
 ```bash
-curl -X POST http://localhost:3001/api/bootstrap/admin \
+curl -X POST https://your-server.example.com/api/bootstrap/admin \
   -H "Content-Type: application/json" \
+  -H "X-Bootstrap-Token: $ADMIN_BOOTSTRAP_TOKEN" \
   -d '{"name":"Admin Name","email":"admin@yourcompany.com","password":"secure-password"}'
 ```
 
@@ -62,12 +85,16 @@ endpoint's behaviour.
 
 ## How it works
 
-The bootstrap check+create runs inside a **Prisma `$transaction`** with a
-**PostgreSQL advisory transaction lock** (`pg_advisory_xact_lock`).
+The bootstrap token check runs before any database transaction or advisory lock.
+After the token gate passes, the bootstrap check+create runs inside a **Prisma
+`$transaction`** with a **PostgreSQL advisory transaction lock**
+(`pg_advisory_xact_lock`).
 
 | Step | Behaviour |
 |------|-----------|
-| `POST /api/bootstrap/admin` | Opens a database transaction and acquires `pg_advisory_xact_lock(900000001)` |
+| `POST /api/bootstrap/admin` | Requires `X-Bootstrap-Token` to match `ADMIN_BOOTSTRAP_TOKEN`, except tokenless local `development`/`test` when no token is configured |
+| Token missing/invalid, or token unset outside local dev/test | Returns **403 Forbidden** before acquiring the advisory lock |
+| Token accepted | Opens a database transaction and acquires `pg_advisory_xact_lock(900000001)` |
 | Inside the lock | Checks `prisma.user.count({ where: { role: 'ADMIN' } })` |
 | No admin exists | Creates the user with `role: ADMIN` and returns a JWT |
 | Admin already exists | Returns **409 Conflict** — endpoint is permanently disabled |
@@ -95,6 +122,12 @@ admins.
 
 - **No default credentials** — bootstrap is always a manual step with user-chosen
   credentials.
+- **No default bootstrap token** — staging/production bootstrap requires an
+  operator-provided `ADMIN_BOOTSTRAP_TOKEN`.
+- **Header-gated production access** — missing or invalid `X-Bootstrap-Token`
+  returns 403 before the database lock is acquired.
+- **Local-only tokenless bootstrap** — omitting the token is accepted only in
+  `development`/`test` when `ADMIN_BOOTSTRAP_TOKEN` is unset.
 - **One-time gate** — once the first admin exists, the endpoint is dead. There is no
   bypass, no hidden flag, no env-var override.
 - **Normal registration** always creates `USER`. An attacker cannot register as admin.
@@ -142,7 +175,8 @@ UPDATE "User" SET role = 'ADMIN' WHERE email = 'user@example.com';
 - **Compromise surface** — a default `admin/admin` credential that must be changed on
   first login is at risk of being forgotten, left unchanged, or checked into source
   control.
-- **Observability** — bootstrap is a single clear API call. It appears in server logs
-  and is auditable.
-- **Simplicity** — no special seed scripts, no environment variables, no first-run
-  wizard UI. The same endpoint works for local dev, CI, staging, and production.
+- **Observability without secret leakage** — bootstrap is a single clear API call,
+  but the bootstrap token must be sent only as a header and must not be logged.
+- **Simplicity** — no special seed scripts or first-run wizard UI. The same endpoint
+  works for local dev, CI, staging, and production with environment-specific token
+  requirements.

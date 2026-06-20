@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import request from 'supertest'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
@@ -25,6 +25,14 @@ const mockExistingUser = {
   updatedAt: new Date(),
 }
 
+const validBootstrapPayload = {
+  name: 'Admin User',
+  email: 'admin@example.com',
+  password: 'securePassword123!',
+}
+
+const validBootstrapToken = 'test-bootstrap-token'
+
 // Controlled mock transaction client — each test can configure the user
 // mocks and verify lock acquisition independently of the setup.ts default.
 const mockQueryRawUnsafe = vi.fn()
@@ -34,7 +42,8 @@ const mockTxUserCreate = vi.fn()
 
 beforeEach(() => {
   vi.clearAllMocks()
-
+  vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', '')
+  vi.stubEnv('NODE_ENV', 'test')
   // Default: no admin exists, email not taken
   mockQueryRawUnsafe.mockResolvedValue([{ pg_advisory_xact_lock: null }])
   mockTxUserCount.mockResolvedValue(0)
@@ -56,7 +65,86 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 describe('POST /api/bootstrap/admin', () => {
+  it('rejects non-local bootstrap when ADMIN_BOOTSTRAP_TOKEN is not configured', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', '')
+
+    const res = await request(app)
+      .post('/api/bootstrap/admin')
+      .send(validBootstrapPayload)
+
+    expect(res.status).toBe(403)
+    expect(res.body.error).toContain('ADMIN_BOOTSTRAP_TOKEN')
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(mockQueryRawUnsafe).not.toHaveBeenCalled()
+  })
+
+  it('rejects a configured bootstrap token when the request header is missing', async () => {
+    vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', validBootstrapToken)
+
+    const res = await request(app)
+      .post('/api/bootstrap/admin')
+      .send(validBootstrapPayload)
+
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Bootstrap token is required')
+    expect(res.body.error).not.toContain(validBootstrapToken)
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(mockQueryRawUnsafe).not.toHaveBeenCalled()
+  })
+
+  it('rejects an empty configured bootstrap token header', async () => {
+    vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', validBootstrapToken)
+
+    const res = await request(app)
+      .post('/api/bootstrap/admin')
+      .set('X-Bootstrap-Token', '')
+      .send(validBootstrapPayload)
+
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Bootstrap token is required')
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(mockQueryRawUnsafe).not.toHaveBeenCalled()
+  })
+
+  it('rejects the wrong configured bootstrap token', async () => {
+    const wrongToken = 'nope-bootstrap-token'
+    vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', validBootstrapToken)
+
+    const res = await request(app)
+      .post('/api/bootstrap/admin')
+      .set('X-Bootstrap-Token', wrongToken)
+      .send(validBootstrapPayload)
+
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Invalid bootstrap token')
+    expect(res.body.error).not.toContain(validBootstrapToken)
+    expect(res.body.error).not.toContain(wrongToken)
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(mockQueryRawUnsafe).not.toHaveBeenCalled()
+  })
+
+  it('creates the first admin when the configured bootstrap token matches', async () => {
+    vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', validBootstrapToken)
+
+    const res = await request(app)
+      .post('/api/bootstrap/admin')
+      .set('X-Bootstrap-Token', validBootstrapToken)
+      .send(validBootstrapPayload)
+
+    expect(res.status).toBe(201)
+    expect(res.body.user).toMatchObject({
+      email: 'admin@example.com',
+      name: 'Admin User',
+      role: 'ADMIN',
+    })
+  })
+
   it('creates the first admin on a fresh DB (201)', async () => {
     const res = await request(app)
       .post('/api/bootstrap/admin')
@@ -108,36 +196,39 @@ describe('POST /api/bootstrap/admin', () => {
     expect(mockTxUserCreate).toHaveBeenCalled()
   })
 
-  it('returns 409 when an admin already exists', async () => {
+  it('returns 409 when an admin already exists with a correct bootstrap token', async () => {
+    vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', validBootstrapToken)
     mockTxUserCount.mockResolvedValue(1)
 
     const res = await request(app)
       .post('/api/bootstrap/admin')
-      .send({ name: 'Admin User', email: 'admin@example.com', password: 'securePassword123!' })
-
+      .set('X-Bootstrap-Token', validBootstrapToken)
+      .send(validBootstrapPayload)
     expect(res.status).toBe(409)
     expect(res.body.error).toContain('admin already exists')
     // Must not attempt to create a user when admin exists
     expect(mockTxUserCreate).not.toHaveBeenCalled()
   })
 
-  it('returns 409 when the email is already taken by a regular user', async () => {
+  it('returns 409 when the email is already taken by a regular user with a correct bootstrap token', async () => {
+    vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', validBootstrapToken)
     mockTxUserFindUnique.mockResolvedValue(mockExistingUser)
 
     const res = await request(app)
       .post('/api/bootstrap/admin')
-      .send({ name: 'Admin User', email: 'existing@example.com', password: 'securePassword123!' })
-
+      .set('X-Bootstrap-Token', validBootstrapToken)
+      .send({ ...validBootstrapPayload, email: 'existing@example.com' })
     expect(res.status).toBe(409)
     expect(res.body.error).toContain('already exists')
     expect(mockTxUserCreate).not.toHaveBeenCalled()
   })
 
-  it('prevents concurrent bootstrap attempts from creating multiple admins', async () => {
+  it('prevents concurrent bootstrap attempts with a correct bootstrap token from creating multiple admins', async () => {
     // Simulate PostgreSQL advisory lock serialisation by making the mock
     // $transaction queue concurrent callers until the active one finishes.
     let transactionInProgress = false
     const waitQueue: Array<() => void> = []
+    vi.stubEnv('ADMIN_BOOTSTRAP_TOKEN', validBootstrapToken)
 
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
       if (typeof fn !== 'function') return Promise.resolve(fn)
@@ -175,9 +266,11 @@ describe('POST /api/bootstrap/admin', () => {
     const [res1, res2] = await Promise.all([
       request(app)
         .post('/api/bootstrap/admin')
+        .set('X-Bootstrap-Token', validBootstrapToken)
         .send({ name: 'Admin Alpha', email: 'alpha@example.com', password: 'securePassword123!' }),
       request(app)
         .post('/api/bootstrap/admin')
+        .set('X-Bootstrap-Token', validBootstrapToken)
         .send({ name: 'Admin Beta', email: 'beta@example.com', password: 'securePassword123!' }),
     ])
 
@@ -214,5 +307,40 @@ describe('POST /api/bootstrap/admin', () => {
 
     expect(res.status).toBe(400)
     expect(mockQueryRawUnsafe).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/auth/register', () => {
+  it('creates normal registered users as USER accounts', async () => {
+    const registeredUser = {
+      ...mockExistingUser,
+      id: 'user-2',
+      email: 'new-user@example.com',
+      name: 'Registered User',
+      role: 'USER' as const,
+    }
+
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.user.create).mockResolvedValue(registeredUser as never)
+
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send({ name: 'Registered User', email: 'new-user@example.com', password: 'securePassword123!' })
+
+    expect(res.status).toBe(201)
+    expect(res.body.user).toMatchObject({
+      email: 'new-user@example.com',
+      name: 'Registered User',
+      role: 'USER',
+    })
+    expect(prisma.user.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        email: 'new-user@example.com',
+        name: 'Registered User',
+      }),
+    })
+
+    const createData = (vi.mocked(prisma.user.create).mock.calls[0][0] as { data: Record<string, unknown> }).data
+    expect(createData.role).toBeUndefined()
   })
 })

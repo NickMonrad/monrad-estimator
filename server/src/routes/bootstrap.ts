@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import crypto from 'crypto'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { bootstrapSchema, validate } from '../lib/validation.js'
@@ -16,21 +17,42 @@ type BootstrapResult =
   | { kind: 'conflict'; error: string }
   | { kind: 'success'; token: string; user: { id: string; email: string; name: string; role: string } }
 
+const BOOTSTRAP_TOKEN_HEADER = 'x-bootstrap-token'
+
+function isDevelopmentOrTestEnvironment() {
+  const nodeEnv = process.env.NODE_ENV ?? 'development'
+  return nodeEnv === 'development' || nodeEnv === 'test'
+}
+
+function bootstrapTokensMatch(requestToken: string, bootstrapToken: string) {
+  const requestTokenBuffer = Buffer.from(requestToken)
+  const bootstrapTokenBuffer = Buffer.from(bootstrapToken)
+
+  return requestTokenBuffer.length === bootstrapTokenBuffer.length
+    && crypto.timingSafeEqual(requestTokenBuffer, bootstrapTokenBuffer)
+}
+
 /**
  * POST /api/bootstrap/admin
  *
- * Creates the first global admin user. Only available when no ADMIN role
- * user exists in the database. Returns 409 once an admin has been created.
+ * Creates the first global admin user. Staging/production requests must include
+ * X-Bootstrap-Token matching ADMIN_BOOTSTRAP_TOKEN. Local development/test may
+ * omit the token only when ADMIN_BOOTSTRAP_TOKEN is unset.
  *
- * Concurrency safety: the entire bootstrap check+create runs inside a
- * Prisma $transaction with a PostgreSQL advisory transaction lock
- * (pg_advisory_xact_lock). This serialises concurrent bootstrap attempts
- * so only one admin can ever be created — concurrent requests observe
- * either the old state (no admin → create) or the new state (admin exists
- * → 409), never a stale snapshot of zero admins.
+ * Only available when no ADMIN role user exists in the database. Returns 409
+ * once an admin has been created.
  *
+ * Concurrency safety: after the token gate passes, the entire bootstrap
+ * check+create runs inside a Prisma $transaction with a PostgreSQL advisory
+ * transaction lock (pg_advisory_xact_lock). This serialises concurrent
+ * bootstrap attempts so only one admin can ever be created — concurrent
+ * requests observe either the old state (no admin → create) or the new state
+ * (admin exists → 409), never a stale snapshot of zero admins.
+ *
+ * Header: X-Bootstrap-Token
  * Body: { name, email, password }
  * Success (201): { token, user: { id, email, name, role: "ADMIN" } }
+ * Forbidden (403): { error: "..." }
  * Conflict (409): { error: "..." }
  */
 router.post(
@@ -38,6 +60,26 @@ router.post(
   validate(bootstrapSchema),
   asyncHandler(async (req: Request, res: Response) => {
     const { name, email, password } = req.body
+    const bootstrapToken = process.env.ADMIN_BOOTSTRAP_TOKEN
+
+    if (bootstrapToken) {
+      const requestToken = req.headers[BOOTSTRAP_TOKEN_HEADER]
+
+      if (typeof requestToken !== 'string' || requestToken.length === 0) {
+        res.status(403).json({ error: 'Bootstrap token is required' })
+        return
+      }
+
+      if (!bootstrapTokensMatch(requestToken, bootstrapToken)) {
+        res.status(403).json({ error: 'Invalid bootstrap token' })
+        return
+      }
+    } else if (!isDevelopmentOrTestEnvironment()) {
+      res.status(403).json({
+        error: 'Bootstrap is disabled. Set ADMIN_BOOTSTRAP_TOKEN to enable bootstrap in production.',
+      })
+      return
+    }
 
     const result = await prisma.$transaction<BootstrapResult>(async (tx) => {
       // Acquire PostgreSQL advisory transaction lock to serialise bootstrap
