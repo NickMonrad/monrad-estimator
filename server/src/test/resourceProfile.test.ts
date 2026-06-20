@@ -1055,4 +1055,34 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       }),
     ]))
   })
+  it('uses shared computePlanningWindow and handles null startDate', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      startDate: null,
+      name: 'Test Project',
+      weeklyDemandCache: null,
+      bufferWeeks: 2,
+      onboardingWeeks: 1,
+      resourceTypes: [],
+      epics: [],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 0, durationWeeks: 4 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    // max entry end = 4, maxWeek = 4 + 2 + 1 = 7
+    expect(res.body.projectDurationWeeks).toBe(7)
+    expect(res.body.bufferWeeks).toBe(2)
+    expect(res.body.onboardingWeeks).toBe(1)
+  })
 })
