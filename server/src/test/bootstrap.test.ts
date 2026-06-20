@@ -15,14 +15,45 @@ const mockAdminUser = {
   updatedAt: new Date(),
 }
 
+const mockExistingUser = {
+  id: 'user-1',
+  email: 'existing@example.com',
+  name: 'Regular User',
+  password: 'hashed-password',
+  role: 'USER' as const,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+}
+
+// Controlled mock transaction client — each test can configure the user
+// mocks and verify lock acquisition independently of the setup.ts default.
+const mockQueryRawUnsafe = vi.fn()
+const mockTxUserCount = vi.fn()
+const mockTxUserFindUnique = vi.fn()
+const mockTxUserCreate = vi.fn()
+
 beforeEach(() => {
   vi.clearAllMocks()
-  // Default: no admin exists → bootstrap is available
-  vi.mocked(prisma.user.count).mockResolvedValue(0)
-  // Default: email not taken
-  vi.mocked(prisma.user.findUnique).mockResolvedValue(null)
-  // Default: create returns admin user
-  vi.mocked(prisma.user.create).mockResolvedValue(mockAdminUser)
+
+  // Default: no admin exists, email not taken
+  mockQueryRawUnsafe.mockResolvedValue([{ pg_advisory_xact_lock: null }])
+  mockTxUserCount.mockResolvedValue(0)
+  mockTxUserFindUnique.mockResolvedValue(null)
+  mockTxUserCreate.mockResolvedValue(mockAdminUser)
+
+  // Override $transaction to provide a controlled mock tx with user methods
+  vi.mocked(prisma.$transaction).mockImplementation((fn: unknown) => {
+    if (typeof fn !== 'function') return Promise.resolve(fn)
+    const tx = {
+      $queryRawUnsafe: mockQueryRawUnsafe,
+      user: {
+        count: mockTxUserCount,
+        findUnique: mockTxUserFindUnique,
+        create: mockTxUserCreate,
+      },
+    }
+    return fn(tx)
+  })
 })
 
 describe('POST /api/bootstrap/admin', () => {
@@ -46,51 +77,125 @@ describe('POST /api/bootstrap/admin', () => {
       .post('/api/bootstrap/admin')
       .send({ name: 'Admin User', email: 'admin@example.com', password: 'securePassword123!' })
 
-    expect(prisma.user.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          email: 'admin@example.com',
-          name: 'Admin User',
-          role: 'ADMIN',
-        }),
-      }),
-    )
+    expect(mockTxUserCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ role: 'ADMIN' }),
+    })
+  })
+
+  it('acquires the PostgreSQL advisory lock inside the transaction', async () => {
+    await request(app)
+      .post('/api/bootstrap/admin')
+      .send({ name: 'Admin User', email: 'admin@example.com', password: 'securePassword123!' })
+
+    // The lock SQL must be the first operation inside the transaction
+    expect(mockQueryRawUnsafe).toHaveBeenCalled()
+    const lockCall = mockQueryRawUnsafe.mock.calls[0]
+    expect(lockCall[0]).toContain('pg_advisory_xact_lock')
+  })
+
+  it('runs all user queries on the transaction client (not directly on prisma)', async () => {
+    await request(app)
+      .post('/api/bootstrap/admin')
+      .send({ name: 'Admin User', email: 'admin@example.com', password: 'securePassword123!' })
+
+    // Route must use tx.user not prisma.user for all DB operations
+    expect(prisma.user.count).not.toHaveBeenCalled()
+    expect(prisma.user.findUnique).not.toHaveBeenCalled()
+    expect(prisma.user.create).not.toHaveBeenCalled()
+    // All calls go through the transaction client
+    expect(mockTxUserCount).toHaveBeenCalled()
+    expect(mockTxUserFindUnique).toHaveBeenCalled()
+    expect(mockTxUserCreate).toHaveBeenCalled()
   })
 
   it('returns 409 when an admin already exists', async () => {
-    vi.mocked(prisma.user.count).mockResolvedValueOnce(1)
-
-    const res = await request(app)
-      .post('/api/bootstrap/admin')
-      .send({ name: 'Another Admin', email: 'admin2@example.com', password: 'securePassword123!' })
-
-    expect(res.status).toBe(409)
-    expect(res.body.error).toMatch(/admin already exists/i)
-    expect(prisma.user.create).not.toHaveBeenCalled()
-  })
-
-  it('returns 409 when the email is already taken by a regular user', async () => {
-    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
-      id: 'user-1',
-      email: 'admin@example.com',
-      role: 'USER',
-    } as any)
+    mockTxUserCount.mockResolvedValue(1)
 
     const res = await request(app)
       .post('/api/bootstrap/admin')
       .send({ name: 'Admin User', email: 'admin@example.com', password: 'securePassword123!' })
 
     expect(res.status).toBe(409)
-    expect(res.body.error).toMatch(/email already exists/i)
-    expect(prisma.user.create).not.toHaveBeenCalled()
+    expect(res.body.error).toContain('admin already exists')
+    // Must not attempt to create a user when admin exists
+    expect(mockTxUserCreate).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when the email is already taken by a regular user', async () => {
+    mockTxUserFindUnique.mockResolvedValue(mockExistingUser)
+
+    const res = await request(app)
+      .post('/api/bootstrap/admin')
+      .send({ name: 'Admin User', email: 'existing@example.com', password: 'securePassword123!' })
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('already exists')
+    expect(mockTxUserCreate).not.toHaveBeenCalled()
+  })
+
+  it('prevents concurrent bootstrap attempts from creating multiple admins', async () => {
+    // Simulate PostgreSQL advisory lock serialisation by making the mock
+    // $transaction queue concurrent callers until the active one finishes.
+    let transactionInProgress = false
+    const waitQueue: Array<() => void> = []
+
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
+      if (typeof fn !== 'function') return Promise.resolve(fn)
+
+      if (transactionInProgress) {
+        await new Promise<void>((resolve) => waitQueue.push(resolve))
+      }
+
+      transactionInProgress = true
+      try {
+        const tx = {
+          $queryRawUnsafe: mockQueryRawUnsafe,
+          user: {
+            count: mockTxUserCount,
+            findUnique: mockTxUserFindUnique,
+            create: mockTxUserCreate,
+          },
+        }
+        return await fn(tx)
+      } finally {
+        transactionInProgress = false
+        const next = waitQueue.shift()
+        if (next) next()
+      }
+    })
+
+    // First request to create sets a flag; second sees existing admin
+    let adminCreated = false
+    mockTxUserCount.mockImplementation(() => Promise.resolve(adminCreated ? 1 : 0))
+    mockTxUserCreate.mockImplementation(() => {
+      adminCreated = true
+      return Promise.resolve(mockAdminUser)
+    })
+
+    const [res1, res2] = await Promise.all([
+      request(app)
+        .post('/api/bootstrap/admin')
+        .send({ name: 'Admin Alpha', email: 'alpha@example.com', password: 'securePassword123!' }),
+      request(app)
+        .post('/api/bootstrap/admin')
+        .send({ name: 'Admin Beta', email: 'beta@example.com', password: 'securePassword123!' }),
+    ])
+
+    // Exactly one must succeed, the other must be rejected
+    const statuses = [res1.status, res2.status].sort()
+    expect(statuses).toEqual([201, 409])
+    // Exactly one create call must have happened
+    expect(mockTxUserCreate).toHaveBeenCalledTimes(1)
   })
 
   it('returns 400 when password is too short', async () => {
     const res = await request(app)
       .post('/api/bootstrap/admin')
-      .send({ name: 'Admin', email: 'admin@example.com', password: 'short' })
+      .send({ name: 'Admin User', email: 'admin@example.com', password: '123' })
 
     expect(res.status).toBe(400)
+    // Validation happens before the transaction — no lock or DB calls
+    expect(mockQueryRawUnsafe).not.toHaveBeenCalled()
   })
 
   it('returns 400 when name is missing', async () => {
@@ -99,13 +204,15 @@ describe('POST /api/bootstrap/admin', () => {
       .send({ email: 'admin@example.com', password: 'securePassword123!' })
 
     expect(res.status).toBe(400)
+    expect(mockQueryRawUnsafe).not.toHaveBeenCalled()
   })
 
   it('returns 400 when email is invalid', async () => {
     const res = await request(app)
       .post('/api/bootstrap/admin')
-      .send({ name: 'Admin', email: 'not-an-email', password: 'securePassword123!' })
+      .send({ name: 'Admin User', email: 'not-an-email', password: 'securePassword123!' })
 
     expect(res.status).toBe(400)
+    expect(mockQueryRawUnsafe).not.toHaveBeenCalled()
   })
 })

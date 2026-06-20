@@ -62,12 +62,34 @@ endpoint's behaviour.
 
 ## How it works
 
+The bootstrap check+create runs inside a **Prisma `$transaction`** with a
+**PostgreSQL advisory transaction lock** (`pg_advisory_xact_lock`).
+
 | Step | Behaviour |
 |------|-----------|
-| `POST /api/bootstrap/admin` | Checks `prisma.user.count({ where: { role: 'ADMIN' } })` |
+| `POST /api/bootstrap/admin` | Opens a database transaction and acquires `pg_advisory_xact_lock(900000001)` |
+| Inside the lock | Checks `prisma.user.count({ where: { role: 'ADMIN' } })` |
 | No admin exists | Creates the user with `role: ADMIN` and returns a JWT |
 | Admin already exists | Returns **409 Conflict** — endpoint is permanently disabled |
 | Email already taken | Returns **409 Conflict** — use a different email |
+| Transaction commits | The lock is released automatically when the transaction ends |
+
+### Concurrency safety
+
+The PostgreSQL advisory transaction lock serialises all bootstrap attempts.
+If two requests arrive at the same time:
+
+1. Both open a transaction.
+2. Both try to acquire the same advisory lock.
+3. **One succeeds** and proceeds — it checks for an existing admin (none),
+   checks email uniqueness, creates the admin, and commits.
+4. **The other waits** — when it acquires the lock, the first request has
+   already committed. The admin count check now sees an `ADMIN` user and
+   returns **409 Conflict**.
+
+This guarantees that only one admin can ever be created, even under racy
+conditions — concurrent requests never observe a stale snapshot of zero
+admins.
 
 ### Safety properties
 
@@ -81,8 +103,8 @@ endpoint's behaviour.
 - **No privilege escalation** — second/subsequent users are always `USER` through
   normal registration.
 - **Idempotent lockout** — calling bootstrap after an admin exists always returns 409.
-  There is no race window that could create two admins (the count check is the sole
-  gate; the race window is smaller than a single HTTP request).
+  The PostgreSQL advisory transaction lock serialises concurrent bootstrap attempts,
+  so only one admin can ever be created.
 
 ## Recovery scenarios
 
