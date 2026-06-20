@@ -280,14 +280,19 @@ test.describe('Global admin auth — admin user', () => {
     createdResourceTypeNames.push(typeName)
 
     await addBtn.click()
+    // Wait for the add-form heading, then fill using scoped textbox selectors
+    const formHeading = page.getByText('New resource type')
+    await expect(formHeading).toBeVisible({ timeout: 5_000 })
 
-    // Fill the add form — labels lack htmlFor, use adjacency selectors
-    const addForm = page.locator('h2:has-text("New resource type")').locator('..')
-    await addForm.locator('label:has-text("Name") + input').fill(typeName)
-    await addForm.locator('label:has-text("Category") + select').selectOption('ENGINEERING')
+    // The add-form div wraps the heading — scope there using a simple parent chain
+    const addForm = formHeading.locator('..')
+    const textboxes = addForm.getByRole('textbox')
+    // First textbox = Name, second = Description
+    await textboxes.nth(0).fill(typeName)
+    await addForm.getByRole('combobox').selectOption('ENGINEERING')
     await page.getByPlaceholder('7.6').fill('8')
     await page.getByPlaceholder('1200').fill('900')
-    await page.getByRole('button', { name: /^save$/i }).click()
+    await addForm.getByRole('button', { name: /^save$/i }).click()
 
     // Wait for the type to appear in the table
     await expect(page.getByText(typeName)).toBeVisible({ timeout: 10_000 })
@@ -303,21 +308,20 @@ test.describe('Global admin auth — admin user', () => {
     /* ── Edit the type ────────────────────────────────────────── */
     // Find the edit button for our row and click it
     const row = page.locator('tr').filter({ hasText: typeName })
-    await row.locator('button[title="Edit"]').click()
+    await row.locator('[title="Edit"]').click()
 
     // The row transforms into an inline edit form — change the description
     const descInput = page.locator('tr').filter({ hasText: typeName }).getByPlaceholder(/description/i)
+    await expect(descInput).toBeVisible({ timeout: 5_000 })
     await descInput.fill(`Updated description ${unique}`)
     await page.getByRole('button', { name: /^save$/i }).click()
 
-    // Verify the edit succeeded (the description is no longer an input)
-    // We trust the mutation completed without error and check the row is back to display mode
-    await expect(page.locator('button[title="Edit"]').first()).toBeVisible({ timeout: 10_000 })
+    // Verify the edit succeeded (the row is back to display mode)
+    await expect(page.locator('[title="Edit"]').first()).toBeVisible({ timeout: 10_000 })
 
     /* ── Delete the type ──────────────────────────────────────── */
-    // Click delete
     page.on('dialog', dialog => dialog.accept())
-    await row.locator('button[title="Delete"]').click()
+    await row.locator('[title="Delete"]').click()
 
     // Wait for it to disappear from the table
     await expect(page.getByText(typeName)).not.toBeVisible({ timeout: 10_000 })
