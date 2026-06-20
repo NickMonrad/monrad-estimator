@@ -1,3 +1,4 @@
+import bootstrapRoutes from './routes/bootstrap.js'
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
@@ -49,6 +50,7 @@ app.use(cors({ origin: process.env.CLIENT_URL ?? 'http://localhost:5173' }))
 app.use(express.json({ limit: '10mb' }))
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }))
+app.use('/api/bootstrap', bootstrapRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/projects', projectRoutes)
 app.use('/api/projects/:projectId/epics', epicRoutes)
