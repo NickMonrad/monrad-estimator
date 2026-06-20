@@ -831,6 +831,69 @@ describe('GET /api/projects/:projectId/timeline', () => {
     expect(res.body.storyEntries[0].storyName).toBe('Active Story')
     expect(res.body.storyEntries[0].featureId).toBe('feat-active')
   })
+  it('excludes story entries for inactive epic from storyEntries', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([
+      {
+        id: 'entry-active-epic',
+        projectId: 'proj-1',
+        featureId: 'feat-active-epic',
+        startWeek: 0,
+        durationWeeks: 2,
+        isManual: false,
+        feature: {
+          id: 'feat-active-epic',
+          name: 'Feature in Active Epic',
+          order: 0,
+          isActive: true,
+          epic: { id: 'epic-active', name: 'Active Epic', isActive: true, order: 0, featureMode: 'SEQUENTIAL', scheduleMode: 'AUTO', timelineStartWeek: null },
+          userStories: [],
+        },
+      },
+      {
+        id: 'entry-inactive-epic',
+        projectId: 'proj-1',
+        featureId: 'feat-inactive-epic',
+        startWeek: 3,
+        durationWeeks: 2,
+        isManual: false,
+        feature: {
+          id: 'feat-inactive-epic',
+          name: 'Feature in Inactive Epic',
+          order: 1,
+          isActive: true,
+          epic: { id: 'epic-inactive', name: 'Inactive Epic', isActive: false, order: 1, featureMode: 'SEQUENTIAL', scheduleMode: 'AUTO', timelineStartWeek: null },
+          userStories: [],
+        },
+      },
+    ] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([])
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([
+      {
+        storyId: 'story-active-epic',
+        startWeek: 0,
+        durationWeeks: 2,
+        isManual: false,
+        story: { name: 'Active Epic Story', featureId: 'feat-active-epic' },
+      },
+      {
+        storyId: 'story-inactive-epic',
+        startWeek: 3,
+        durationWeeks: 2,
+        isManual: false,
+        story: { name: 'Inactive Epic Story', featureId: 'feat-inactive-epic' },
+      },
+    ] as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.storyEntries).toHaveLength(1)
+    expect(res.body.storyEntries[0].storyName).toBe('Active Epic Story')
+    expect(res.body.storyEntries[0].featureId).toBe('feat-active-epic')
+  })
 })
 
 describe('POST /api/projects/:projectId/timeline/schedule', () => {

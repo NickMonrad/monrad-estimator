@@ -482,16 +482,27 @@ export async function buildProjectPlanningModel(
     }),
   ])
 
-  // ── 3. Load dependencies ──────────────────────────────────────────────
-  const allFeatureIds = timelineEntries.map(e => e.featureId)
-  const allStoryIds = storyTimelineEntries.map(e => e.storyId)
+  // ── 3. Filter active entries ──────────────────────────────────────────
+  const activeEntries = timelineEntries.filter(
+    e => e.feature.isActive !== false && e.feature.epic.isActive !== false,
+  )
+  const activeFeatureIds = activeEntries.map(e => e.featureId)
+  const activeFeatureIdSet = new Set(activeFeatureIds)
+  const activeStoryIds = storyTimelineEntries
+    .filter(e => activeFeatureIdSet.has(e.story.featureId))
+    .map(e => e.storyId)
+  const activeStoryEntries = storyTimelineEntries.filter(e =>
+    activeFeatureIdSet.has(e.story.featureId),
+  )
+
+  // ── 4. Load dependencies (active-only) ────────────────────────────────
   const [featureDeps, storyDeps, epicDeps] = await Promise.all([
     prisma.featureDependency.findMany({
-      where: { featureId: { in: allFeatureIds } },
+      where: { featureId: { in: activeFeatureIds } },
       select: { featureId: true, dependsOnId: true },
     }),
     prisma.storyDependency.findMany({
-      where: { storyId: { in: allStoryIds } },
+      where: { storyId: { in: activeStoryIds } },
       select: { storyId: true, dependsOnId: true },
     }),
     prisma.epicDependency.findMany({
@@ -500,7 +511,7 @@ export async function buildProjectPlanningModel(
     }),
   ])
 
-  // ── 4. Load active capacity plan ─────────────────────────────────────
+  // ── 5. Load active capacity plan ─────────────────────────────────────
   const activeCapacityPlan = await prisma.capacityPlan.findFirst({
     where: { projectId, isActive: true },
     include: {
@@ -511,15 +522,6 @@ export async function buildProjectPlanningModel(
     },
   })
   const capacityPlanByRt = materializeCapacityPlanResources(activeCapacityPlan?.periods ?? [])
-
-  // ── 5. Filter active entries only ────────────────────────────────────
-  const activeEntries = timelineEntries.filter(
-    e => e.feature.isActive !== false && e.feature.epic.isActive !== false,
-  )
-  const activeFeatureIdSet = new Set(allFeatureIds)
-  const activeStoryEntries = storyTimelineEntries.filter(e =>
-    activeFeatureIdSet.has(e.story.featureId),
-  )
 
   // ── 6. Resolved entries (with display metadata) ──────────────────────
   const resolvedEntries: FeatureEntryDetail[] = activeEntries.map(e => ({
