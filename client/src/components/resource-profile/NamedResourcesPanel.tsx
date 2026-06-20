@@ -71,6 +71,7 @@ export default function NamedResourcesPanel({
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     },
   })
 
@@ -96,6 +97,7 @@ export default function NamedResourcesPanel({
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     },
   })
 
@@ -108,6 +110,7 @@ export default function NamedResourcesPanel({
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     },
   })
 
