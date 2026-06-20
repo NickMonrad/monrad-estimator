@@ -9,7 +9,7 @@ import {
   shouldFallbackToActiveCapacityPlan,
 } from '../lib/capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
-import { mergeWeeklyDemand, computePlanningWindow } from '../lib/projectPlanningModel.js'
+import { buildFallbackWeeklyDemand, mergeWeeklyDemand, computePlanningWindow } from '../lib/projectPlanningModel.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
@@ -17,7 +17,6 @@ router.use(authenticate)
 
 const CATEGORY_ORDER: ResourceCategory[] = ['ENGINEERING', 'GOVERNANCE', 'PROJECT_MANAGEMENT']
 const round2 = (value: number) => Math.round(value * 100) / 100
-const weeklyDemandKey = (week: number, resourceTypeName: string) => `${week}|${resourceTypeName}`
 
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
@@ -70,21 +69,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
-  const resourceTypeNameById = new Map(project.resourceTypes.map(rt => [rt.id, rt.name]))
-
-  // Build a map: rtId → total allocated days from the active capacity plan
+  // Materialize capacity plan for shared model consumption
   const activePlan = project.capacityPlans?.[0] ?? null
-  const capacityPlanDays = new Map<string, number>()
   const capacityPlanByRt = materializeCapacityPlanResources(activePlan?.periods ?? [])
-  if (activePlan) {
-    for (const period of activePlan.periods) {
-      const periodDays = (period.endWeek - period.startWeek) * 5
-      for (const entry of period.entries) {
-        const current = capacityPlanDays.get(entry.resourceTypeId) ?? 0
-        capacityPlanDays.set(entry.resourceTypeId, current + entry.headcount * periodDays)
-      }
-    }
-  }
 
   // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
   const planningWindow = computePlanningWindow(
@@ -215,13 +202,26 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
-  const fallbackWeeklyDemandMap = new Map<string, number>()
-  const addWeeklyDemand = (week: number, resourceTypeName: string, demandDays: number) => {
-    if (!Number.isFinite(demandDays) || demandDays <= 0) return
-    const key = weeklyDemandKey(week, resourceTypeName)
-    fallbackWeeklyDemandMap.set(key, round2((fallbackWeeklyDemandMap.get(key) ?? 0) + demandDays))
-  }
-
+  // ── Fallback weekly demand from shared model ──────────────────────
+  // Build entries at story-level granularity to preserve story-level scheduling semantics.
+  // Stories with a story timeline entry get their own timing; remaining active stories
+  // without a story entry are grouped under their feature-level timeline entry.
+  const fallbackEntries: Array<{
+    startWeek: number
+    durationWeeks: number
+    feature: {
+      userStories: Array<{
+        isActive: boolean | null
+        tasks: Array<{
+          resourceTypeId: string | null
+          hoursEffort: number
+          durationDays: number | null
+          resourceType: { name: string; hoursPerDay: number | null } | null
+        }>
+      }>
+    }
+  }> = []
+  const storyTimedIds = new Set<string>()
   for (const epic of project.epics) {
     if (epic.isActive === false) continue
     for (const feature of epic.features) {
@@ -229,54 +229,52 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       for (const story of feature.userStories) {
         if (story.isActive === false) continue
         const storyEntry = storyEntryMap.get(story.id)
-        const featureEntry = featureEntryMap.get(feature.id)
-        const entry = storyEntry ?? featureEntry
-        if (!entry || entry.durationWeeks <= 0) continue
-
-        for (const task of story.tasks) {
-          if (!task.resourceTypeId) continue
-          const resourceTypeName = resourceTypeNameById.get(task.resourceTypeId)
-          if (!resourceTypeName) continue
-          const resourceType = resourceTypeById.get(task.resourceTypeId)
-          const effectiveHoursPerDay =
-            resourceType?.hoursPerDay && resourceType.hoursPerDay > 0
-              ? resourceType.hoursPerDay
-              : fallbackHoursPerDay
-          if (!effectiveHoursPerDay) continue
-
-          const demandDays = effectiveDays(task.durationDays, task.hoursEffort ?? 0, effectiveHoursPerDay)
-          const startWeek = entry.startWeek
-          const endWeek = entry.startWeek + entry.durationWeeks
-          for (let week = Math.floor(startWeek); week < Math.ceil(endWeek); week += 1) {
-            const overlap = Math.min(week + 1, endWeek) - Math.max(week, startWeek)
-            if (overlap <= 0) continue
-            addWeeklyDemand(week, resourceTypeName, demandDays * (overlap / entry.durationWeeks))
-          }
+        if (storyEntry) {
+          fallbackEntries.push({
+            startWeek: storyEntry.startWeek,
+            durationWeeks: storyEntry.durationWeeks,
+            feature: { userStories: [story] },
+          })
+          storyTimedIds.add(story.id)
         }
       }
     }
   }
-  // Convert fallback demand map to WeeklyDemandRow[] for mergeWeeklyDemand
-  const fallbackRows: Array<{ week: number; resourceTypeName: string; demandDays: number; capacityDays: number }> =
-    Array.from(fallbackWeeklyDemandMap.entries()).map(([key, demandDays]) => {
-      const separatorIdx = key.indexOf('|')
-      return {
-        week: Number(key.substring(0, separatorIdx)),
-        resourceTypeName: key.substring(separatorIdx + 1),
-        demandDays,
-        capacityDays: 0,
+  for (const epic of project.epics) {
+    if (epic.isActive === false) continue
+    for (const feature of epic.features) {
+      if (feature.isActive === false) continue
+      const featureEntry = featureEntryMap.get(feature.id)
+      if (!featureEntry) continue
+      const remaining = feature.userStories.filter(
+        story => story.isActive !== false && !storyTimedIds.has(story.id),
+      )
+      if (remaining.length > 0) {
+        fallbackEntries.push({
+          startWeek: featureEntry.startWeek,
+          durationWeeks: featureEntry.durationWeeks,
+          feature: { userStories: remaining },
+        })
       }
-    })
+    }
+  }
+
+  const fallbackDemand = buildFallbackWeeklyDemand(
+    fallbackEntries as any[],
+    project.resourceTypes,
+    capacityPlanByRt,
+    project.hoursPerDay,
+  )
 
   const weeklyDemandCache = project.weeklyDemandCache as Record<string, number> | null
   let weeklyDemand: WeeklyDemandLike[]
 
   if (weeklyDemandCache && Object.keys(weeklyDemandCache).length > 0) {
     const simulatedDemand = new Map<string, number>(Object.entries(weeklyDemandCache))
-    const merged = mergeWeeklyDemand(fallbackRows, simulatedDemand)
+    const merged = mergeWeeklyDemand(fallbackDemand, simulatedDemand)
     weeklyDemand = merged.map(r => ({ week: r.week, resourceTypeName: r.resourceTypeName, demandDays: r.demandDays }))
   } else {
-    weeklyDemand = fallbackRows.map(r => ({ week: r.week, resourceTypeName: r.resourceTypeName, demandDays: r.demandDays }))
+    weeklyDemand = fallbackDemand.map(r => ({ week: r.week, resourceTypeName: r.resourceTypeName, demandDays: r.demandDays }))
   }
 
   weeklyDemand = weeklyDemand.filter(row => row.demandDays > 0)
@@ -495,7 +493,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       } else {
         namedResourcesOutput = []
         if (mode === 'CAPACITY_PLAN') {
-          allocatedDays = capacityPlanDays.get(resourceType.id) ?? totalDays
+          allocatedDays = capacityPlanByRt.get(resourceType.id)?.totalDays ?? totalDays
         } else if (mode === 'EFFORT') {
           allocatedDays = totalDays
         } else if (mode === 'TIMELINE') {
