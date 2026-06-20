@@ -111,7 +111,13 @@ test.describe('Global admin auth — regular user', () => {
   })
 
   test('Rate Cards page shows read-only state for regular user', async ({ page }) => {
-    // Still logged in from previous serial test
+    // Log in separately (don't rely on serial session from previous test)
+    await page.goto('/login')
+    await page.getByPlaceholder('you@example.com').fill(regularUser.email)
+    await page.getByPlaceholder('Password').fill(regularUser.password)
+    await page.getByRole('button', { name: /sign in/i }).click()
+    await expect(page.getByRole('heading', { name: /projects/i })).toBeVisible({ timeout: 10_000 })
+
     await page.goto('/rate-cards')
     await expect(page.getByRole('heading', { name: /rate cards/i })).toBeVisible({ timeout: 10_000 })
 
@@ -127,7 +133,6 @@ test.describe('Global admin auth — regular user', () => {
 
     // Rate card list items show "Read only" badge
     const readOnlyIndicators = page.getByText('Read only')
-    // Should be at least one per rate card row (if any exist)
     const firstReadOnly = readOnlyIndicators.first()
     if (await firstReadOnly.isVisible().catch(() => false)) {
       await expect(firstReadOnly).toBeVisible()
@@ -263,9 +268,11 @@ test.describe('Global admin auth — admin user', () => {
       'Actions',
     ])
 
-    // Verify edit/delete buttons exist on rows (pencil + trash icons via title)
+    // Verify edit/delete buttons exist on rows (pencil + trash icons)
+    // Note: seed types are all isDefault, so delete button title is
+    // "Default types cannot be deleted" (not "Delete")
     await expect(page.locator('button[title="Edit"]').first()).toBeVisible()
-    await expect(page.locator('button[title="Delete"]').first()).toBeVisible()
+    await expect(page.locator('[title*="Delete"]').first()).toBeVisible()
 
     /* ── Create a unique global resource type ─────────────────── */
     const typeName = `E2E Admin Test ${unique}`
@@ -320,7 +327,13 @@ test.describe('Global admin auth — admin user', () => {
   test('Rate Cards page shows admin controls and allows creation', async ({ page }) => {
     const unique = suffix()
 
-    // Still logged in from previous serial test
+    // Login as admin via UI (fresh login, not relying on serial session)
+    await page.goto('/login')
+    await page.getByPlaceholder('you@example.com').fill(adminUser.email)
+    await page.getByPlaceholder('Password').fill(adminUser.password)
+    await page.getByRole('button', { name: /sign in/i }).click()
+    await expect(page.getByRole('heading', { name: /projects/i })).toBeVisible({ timeout: 10_000 })
+
     await page.goto('/rate-cards')
     await expect(page.getByRole('heading', { name: /rate cards/i })).toBeVisible({ timeout: 10_000 })
 
@@ -339,21 +352,19 @@ test.describe('Global admin auth — admin user', () => {
     createdRateCardNames.push(cardName)
 
     await createBtn.click()
-    const dialog = page.getByRole('dialog')
 
+    // The modal has no role="dialog", so scope by unique placeholders
     // Fill name
-    await dialog.getByPlaceholder(/e\.g\. standard/i).fill(cardName)
+    await page.getByPlaceholder(/e\.g\. standard/i).fill(cardName)
 
     // Select a global resource type from the add-entry dropdown
-    const entrySelect = dialog.locator('select')
-    await entrySelect.selectOption({ label: 'Developer' })
+    await page.locator('select').filter({ has: page.getByText('Developer') }).selectOption({ label: 'Developer' })
 
     // Fill the day rate that appears
-    const dayRateInput = page.getByPlaceholder('1200')
-    await dayRateInput.fill('1100')
+    await page.getByPlaceholder('1200').fill('1100')
 
     // Save
-    await dialog.getByRole('button', { name: /^save$/i }).click()
+    await page.getByRole('button', { name: /^save$/i }).click()
 
     // Verify the card appears in the list
     await expect(page.getByText(cardName)).toBeVisible({ timeout: 10_000 })
