@@ -9,6 +9,7 @@
  * Phase 2 extraction: issue #233
  */
 
+import { effectiveDays } from '../utils/round.js'
 // ─────────────────────────────────────────────────────────────────────────────
 // Input / Output types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -288,7 +289,7 @@ export function computeParallelWarnings(
         for (const task of story.tasks) {
           const rtId = task.resourceTypeId ?? '_unassigned'
           const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-          const days = task.durationDays ?? (task.hoursEffort / hpd)
+          const days = effectiveDays(task.durationDays, task.hoursEffort, hpd)
           if (!demandMap.has(rtId)) {
             demandMap.set(rtId, {
               name: task.resourceType?.name ?? 'Unassigned',
@@ -380,7 +381,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       for (const task of tasks) {
         if (!task.resourceTypeId) continue
         const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-        const demand = task.durationDays ?? (task.hoursEffort / hpd)
+        const demand = effectiveDays(task.durationDays, task.hoursEffort, hpd)
         totalDemandByRt.set(
           task.resourceTypeId,
           (totalDemandByRt.get(task.resourceTypeId) ?? 0) + demand,
@@ -418,7 +419,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     for (const [rtId, tasks] of byRt) {
       const personDays = tasks.reduce((sum, t) => {
         const hpd = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-        return sum + (t.durationDays ?? (t.hoursEffort / hpd))
+        return sum + effectiveDays(t.durationDays, t.hoursEffort, hpd)
       }, 0)
       const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
       const days = personDays / count
@@ -597,7 +598,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
         for (const task of story.tasks) {
           const rtId = task.resourceTypeId ?? '_unassigned'
           const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-          const hours = (task.durationDays ?? (task.hoursEffort / hpd)) * hpd
+          const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
           result.set(rtId, (result.get(rtId) ?? 0) + hours)
         }
       }
@@ -763,7 +764,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     for (const task of story.tasks) {
       const rtId = task.resourceTypeId ?? '_unassigned'
       const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-      const hours = (task.durationDays ?? (task.hoursEffort / hpd)) * hpd
+      const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
       result.set(rtId, (result.get(rtId) ?? 0) + hours)
     }
     return result

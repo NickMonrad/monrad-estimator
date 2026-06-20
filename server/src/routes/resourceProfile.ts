@@ -3,6 +3,7 @@ import { ResourceCategory } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { effectiveDays } from '../utils/round.js'
 import {
   materializeCapacityPlanResources,
   shouldFallbackToActiveCapacityPlan,
@@ -140,7 +141,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           if (!effectiveHoursPerDay) continue
 
           const hours = task.hoursEffort ?? 0
-          const days = task.durationDays ?? (hours / effectiveHoursPerDay)
+          const days = effectiveDays(task.durationDays, hours, effectiveHoursPerDay)
           if (!resourceAgg.has(resourceType.id)) {
             resourceAgg.set(resourceType.id, {
               resourceTypeId: resourceType.id,
@@ -240,7 +241,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
               : fallbackHoursPerDay
           if (!effectiveHoursPerDay) continue
 
-          const demandDays = task.durationDays ?? ((task.hoursEffort ?? 0) / effectiveHoursPerDay)
+          const demandDays = effectiveDays(task.durationDays, task.hoursEffort ?? 0, effectiveHoursPerDay)
           const startWeek = entry.startWeek
           const endWeek = entry.startWeek + entry.durationWeeks
           for (let week = Math.floor(startWeek); week < Math.ceil(endWeek); week += 1) {
