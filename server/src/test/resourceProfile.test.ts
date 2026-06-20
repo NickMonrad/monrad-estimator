@@ -1085,4 +1085,72 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(res.body.bufferWeeks).toBe(2)
     expect(res.body.onboardingWeeks).toBe(1)
   })
+  it('excludes inactive epics and features from effort summary', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      startDate: null,
+      name: 'Test Project',
+      weeklyDemandCache: null,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceTypes: [
+        { id: 'rt-dev', name: 'Developer', category: 'ENGINEERING', count: 1, hoursPerDay: 8, dayRate: null, allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null, globalType: null, namedResources: [] },
+      ],
+      epics: [
+        {
+          id: 'epic-active', name: 'Active Epic', order: 0, isActive: true,
+          features: [
+            {
+              id: 'feat-active', name: 'Active Feature', order: 0, isActive: true,
+              userStories: [
+                {
+                  id: 'story-active', name: 'Active Story', order: 0, isActive: true,
+                  tasks: [
+                    { id: 'task-active', resourceTypeId: 'rt-dev', hoursEffort: 80, durationDays: 5, order: 0, resourceType: { name: 'Developer', hoursPerDay: 8 } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: 'epic-inactive', name: 'Inactive Epic', order: 1, isActive: false,
+          features: [
+            {
+              id: 'feat-inactive', name: 'Inactive Feature', order: 0, isActive: true,
+              userStories: [
+                {
+                  id: 'story-inactive', name: 'Inactive Story', order: 0, isActive: true,
+                  tasks: [
+                    { id: 'task-inactive', resourceTypeId: 'rt-dev', hoursEffort: 80, durationDays: 5, order: 0, resourceType: { name: 'Developer', hoursPerDay: 8 } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-active', startWeek: 0, durationWeeks: 2 },
+        { featureId: 'feat-inactive', startWeek: 0, durationWeeks: 2 },
+      ],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    // Only active epic's effort should appear
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    expect(devRow).toBeTruthy()
+    expect(devRow.effortDays).toBe(5) // effectiveDays(5, 80, 8) = max(durationDays=5, hours/hpd=10) = 5
+    expect(devRow.epics).toHaveLength(1)
+    expect(devRow.epics[0].epicId).toBe('epic-active')
+  })
 })

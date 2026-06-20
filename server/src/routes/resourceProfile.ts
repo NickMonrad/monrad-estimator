@@ -72,19 +72,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
   const resourceTypeNameById = new Map(project.resourceTypes.map(rt => [rt.id, rt.name]))
 
-  // Build a map: rtId → total allocated days from the active capacity plan
+  // Materialize capacity plan for shared model consumption
   const activePlan = project.capacityPlans?.[0] ?? null
-  const capacityPlanDays = new Map<string, number>()
   const capacityPlanByRt = materializeCapacityPlanResources(activePlan?.periods ?? [])
-  if (activePlan) {
-    for (const period of activePlan.periods) {
-      const periodDays = (period.endWeek - period.startWeek) * 5
-      for (const entry of period.entries) {
-        const current = capacityPlanDays.get(entry.resourceTypeId) ?? 0
-        capacityPlanDays.set(entry.resourceTypeId, current + entry.headcount * periodDays)
-      }
-    }
-  }
 
   // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
   const planningWindow = computePlanningWindow(
@@ -495,7 +485,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       } else {
         namedResourcesOutput = []
         if (mode === 'CAPACITY_PLAN') {
-          allocatedDays = capacityPlanDays.get(resourceType.id) ?? totalDays
+          allocatedDays = capacityPlanByRt.get(resourceType.id)?.totalDays ?? totalDays
         } else if (mode === 'EFFORT') {
           allocatedDays = totalDays
         } else if (mode === 'TIMELINE') {
