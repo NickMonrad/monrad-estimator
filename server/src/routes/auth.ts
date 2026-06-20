@@ -69,7 +69,7 @@ router.post('/register', loginLimiter, validate(registerSchema), asyncHandler(as
   const user = await prisma.user.create({ data: { email, name, password: hashed } })
   logger.info({ userId: user.id }, 'New user registered')
   const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '7d' })
-  res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name } })
+  res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } })
 }))
 
 router.post('/login', loginLimiter, validate(loginSchema), asyncHandler(async (req: Request, res: Response) => {
@@ -82,7 +82,7 @@ router.post('/login', loginLimiter, validate(loginSchema), asyncHandler(async (r
   }
   logger.info({ userId: user.id }, 'User logged in')
   const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '7d' })
-  res.json({ token, user: { id: user.id, email: user.email, name: user.name } })
+  res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } })
 }))
 
 router.post('/forgot-password', forgotPasswordLimiter, validate(forgotPasswordSchema), asyncHandler(async (req: Request, res: Response) => {
