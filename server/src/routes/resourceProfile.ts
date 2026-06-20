@@ -9,7 +9,7 @@ import {
   shouldFallbackToActiveCapacityPlan,
 } from '../lib/capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
-import { mergeWeeklyDemand } from '../lib/projectPlanningModel.js'
+import { mergeWeeklyDemand, computePlanningWindow } from '../lib/projectPlanningModel.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
@@ -87,10 +87,13 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
-  const projectDurationWeeks =
-    (project.timelineEntries.length > 0
-      ? Math.max(...project.timelineEntries.map(te => te.startWeek + te.durationWeeks))
-      : 0) + (project.bufferWeeks ?? 0) + (project.onboardingWeeks ?? 0)
+  const planningWindow = computePlanningWindow(
+    project.timelineEntries,
+    project.startDate,
+    project.bufferWeeks ?? 0,
+    project.onboardingWeeks ?? 0,
+  )
+  const projectDurationWeeks = planningWindow.maxWeek ?? 0
 
   // Build lookup maps for timeline entries
   const featureEntryMap = new Map(project.timelineEntries.map(e => [e.featureId, e]))

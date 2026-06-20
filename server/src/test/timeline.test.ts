@@ -130,6 +130,24 @@ describe('GET /api/projects/:projectId/timeline', () => {
     // durationWeeks=2 => endDate = +14 days
     expect(entry.endDate).toBe('2026-03-15T00:00:00.000Z')
   })
+  it('handles null startDate gracefully without throwing', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...mockProject,
+      startDate: null,
+    } as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue(mockEntries as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([])
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const entry = res.body.entries[0]
+    expect(entry.startDate).toBeNull()
+    expect(entry.endDate).toBeNull()
+    expect(res.body.projectedEndDate).toBeNull()
+  })
 
   it('derives CAPACITY_PLAN weekly capacity and named-resource windows from the active plan when persisted windows are stale', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
@@ -749,6 +767,69 @@ describe('GET /api/projects/:projectId/timeline', () => {
         endWeek: 4,
       }),
     ]))
+  })
+  it('excludes story entries for inactive features from storyEntries', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([
+      {
+        id: 'entry-active',
+        projectId: 'proj-1',
+        featureId: 'feat-active',
+        startWeek: 0,
+        durationWeeks: 2,
+        isManual: false,
+        feature: {
+          id: 'feat-active',
+          name: 'Active Feature',
+          order: 0,
+          isActive: true,
+          epic: { id: 'epic-1', name: 'Main Epic', isActive: true, order: 0, featureMode: 'SEQUENTIAL', scheduleMode: 'AUTO', timelineStartWeek: null },
+          userStories: [],
+        },
+      },
+      {
+        id: 'entry-inactive',
+        projectId: 'proj-1',
+        featureId: 'feat-inactive',
+        startWeek: 3,
+        durationWeeks: 2,
+        isManual: false,
+        feature: {
+          id: 'feat-inactive',
+          name: 'Inactive Feature',
+          order: 1,
+          isActive: false,
+          epic: { id: 'epic-1', name: 'Main Epic', isActive: true, order: 0, featureMode: 'SEQUENTIAL', scheduleMode: 'AUTO', timelineStartWeek: null },
+          userStories: [],
+        },
+      },
+    ] as any)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([])
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([
+      {
+        storyId: 'story-active',
+        startWeek: 0,
+        durationWeeks: 2,
+        isManual: false,
+        story: { name: 'Active Story', featureId: 'feat-active' },
+      },
+      {
+        storyId: 'story-inactive',
+        startWeek: 3,
+        durationWeeks: 2,
+        isManual: false,
+        story: { name: 'Inactive Story', featureId: 'feat-inactive' },
+      },
+    ] as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.storyEntries).toHaveLength(1)
+    expect(res.body.storyEntries[0].storyName).toBe('Active Story')
+    expect(res.body.storyEntries[0].featureId).toBe('feat-active')
   })
 })
 

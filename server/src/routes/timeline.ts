@@ -356,7 +356,8 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // Build entries with resource breakdown (route-specific formatting)
   // Need the full feature objects to compute breakdown
-  // Reload raw entries for the breakdown computation — TODO: move breakdown into model
+  // Reload raw entries for the breakdown computation
+  // TODO(#268): move feature-entry presentation formatting into the shared model
   const rawEntries = await prisma.timelineEntry.findMany({
     where: { projectId },
     include: {
@@ -403,6 +404,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }))
   )
 
+  const projectStartDate = model.startDate ? new Date(model.startDate) : null
   res.json({
     projectId,
     startDate: model.startDate,
@@ -441,7 +443,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         isManual: e.isManual,
         resourceBreakdown: breakdown,
         effectiveEngineers,
-        ...computeDates(new Date(model.startDate ?? ''), e.startWeek, e.durationWeeks, planningWindow.onboardingWeeks),
+        ...computeDates(projectStartDate, e.startWeek, e.durationWeeks, planningWindow.onboardingWeeks),
       }
     }),
   })
