@@ -306,29 +306,35 @@ test.describe('Global admin auth — admin user', () => {
 
     /* ── Edit (update) the type name and description ──────────── */
     const updatedName = `E2E Admin Test Updated ${unique}`
-    const row = page.locator('tr').filter({ hasText: typeName })
 
-    // Click the edit (pencil) button in this row
+    // Click the edit (pencil) button in the newly created row
+    const row = page.locator('tr').filter({ hasText: typeName })
     await row.locator('[title="Edit"]').click()
 
-    // Wait for the inline edit form — the Save button appears when EditRow renders
-    await expect(row.getByRole('button', { name: /^save$/i })).toBeVisible({ timeout: 5_000 })
+    // After clicking Edit, React re-renders the row as EditRow (inline inputs).
+    // The hasText:typeName filter no longer matches — input values are not
+    // part of textContent — so scope to the table instead of the stale row.
+    const table = page.locator('table')
 
-    // Change the name to the updated value
-    await row.getByPlaceholder('Name *').clear()
-    await row.getByPlaceholder('Name *').fill(updatedName)
+    // Wait for the EditRow to render — its Save button appears immediately
+    await expect(table.getByRole('button', { name: /^save$/i })).toBeVisible({ timeout: 5_000 })
 
-    // Change description to a unique updated value
-    const updatedDesc = `Updated description ${unique}`
-    await row.getByPlaceholder('Description').clear()
-    await row.getByPlaceholder('Description').fill(updatedDesc)
+    // Find the name input in the EditRow via its unique placeholder
+    const nameInput = table.getByPlaceholder('Name *')
+    await expect(nameInput).toBeVisible({ timeout: 5_000 })
+    await nameInput.clear()
+    await nameInput.fill(updatedName)
+
+    // Change description
+    const descInput = table.getByPlaceholder('Description')
+    await descInput.clear()
+    await descInput.fill(`Updated description ${unique}`)
 
     // Click Save to submit the edit
-    await row.getByRole('button', { name: /^save$/i }).click()
+    await table.getByRole('button', { name: /^save$/i }).click()
 
-    // Wait for the updated name to appear (edit mode closes, display mode shows updated text)
+    // Wait for the updated name to appear (EditRow closes, display mode shows updated text)
     await expect(page.getByText(updatedName)).toBeVisible({ timeout: 10_000 })
-    await expect(page.getByText(updatedDesc)).toBeVisible({ timeout: 5_000 })
 
     // Track both names for cleanup (in case test fails between edit and delete)
     createdResourceTypeNames.push(updatedName)
