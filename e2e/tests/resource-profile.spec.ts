@@ -239,7 +239,7 @@ test.describe('Resource Profile — enhanced', () => {
  *  Rate Cards page                                                         *
  * ======================================================================== */
 test.describe('Rate Cards', () => {
-  test('rate cards page loads with create button', async ({ page }) => {
+  test('rate cards page shows read-only state for regular user', async ({ page }) => {
     await login(page)
 
     // Navigate to rate cards page
@@ -250,9 +250,14 @@ test.describe('Rate Cards', () => {
       page.getByRole('heading', { name: /rate cards/i })
     ).toBeVisible({ timeout: 10_000 })
 
-    // Verify "+ Create Rate Card" button is visible
+    // Verify the "Create Rate Card" button is NOT visible (regular user)
     await expect(
       page.getByRole('button', { name: /create rate card/i })
+    ).not.toBeVisible()
+
+    // Verify read-only notice is visible
+    await expect(
+      page.getByText(/rate cards can only be edited by a global admin/i)
     ).toBeVisible()
   })
 })

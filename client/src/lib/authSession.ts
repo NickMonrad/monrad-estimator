@@ -2,6 +2,7 @@ export interface AuthUser {
   id: string
   email: string
   name: string
+  role?: string
 }
 
 const TOKEN_STORAGE_KEY = 'token'
