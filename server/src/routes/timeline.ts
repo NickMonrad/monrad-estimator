@@ -17,10 +17,10 @@ import {
   type MaterializedCapacityPlanResource,
 } from '../lib/capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments } from '../lib/namedResourceAssignments.js'
+import { buildProjectPlanningModel } from '../lib/projectPlanningModel.js'
 import { runSAPlanner } from '../lib/sa-planner.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
-
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
@@ -348,77 +348,104 @@ function buildResponse(
 
 // GET /api/projects/:projectId/timeline
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const project = await ownedProject(req.params.projectId as string, req.userId!)
-  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  const model = await buildProjectPlanningModel(req.params.projectId as string, req.userId!)
+    .catch(() => { res.status(404).json({ error: 'Project not found' }); return null })
+  if (!model) return
 
-  const entries = await prisma.timelineEntry.findMany({
-    where: { projectId: project.id },
+  const { projectId, planningWindow, storyEntries } = model
+
+  // Build entries with resource breakdown (route-specific formatting)
+  // Need the full feature objects to compute breakdown
+  // Reload raw entries for the breakdown computation — TODO: move breakdown into model
+  const rawEntries = await prisma.timelineEntry.findMany({
+    where: { projectId },
     include: {
       feature: {
         include: {
           epic: true,
           userStories: {
             include: {
-              tasks: { include: { resourceType: true } }
-            }
-          }
-        }
-      }
+              tasks: { include: { resourceType: true } },
+            },
+          },
+        },
+      },
     },
     orderBy: { startWeek: 'asc' },
   })
+  const activeRawEntries = rawEntries.filter(
+    e => e.feature.isActive !== false && e.feature.epic.isActive !== false,
+  )
 
-  // Filter out inactive epics/features
-  const activeEntries = entries.filter(e => e.feature.isActive !== false && e.feature.epic.isActive !== false)
+  // Group named resources by resource type for the response
+  const rtNameById = new Map(model.resourceTypeFacts.map(rt => [rt.id, rt.name]))
 
-  // Load resource types before computing warnings (passed in to avoid redundant queries)
-  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
-  const activeCapacityPlan = await prisma.capacityPlan.findFirst({
-    where: { projectId: project.id, isActive: true },
-    include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
-  })
-  const capacityPlanByRt = materializeCapacityPlanResources(activeCapacityPlan?.periods ?? [])
-  const warningResourceTypes = buildWarningResourceTypes(resourceTypes, capacityPlanByRt)
+  const namedResourcesList = Array.from(model.namedResourceAssignments.entries()).flatMap(([rtId, assignment]) =>
+    assignment.namedResources.map(nr => ({
+      id: nr.id,
+      resourceTypeId: rtId,
+      resourceTypeName: rtNameById.get(rtId) ?? '',
+      name: nr.name,
+      startWeek: nr.startWeek,
+      endWeek: nr.endWeek,
+      allocationPct: nr.allocationMode === 'EFFORT' ? 100 : Math.round(nr.allocationPercent),
+      allocationMode: nr.allocationMode,
+      allocationPercent: nr.allocationPercent,
+      allocationStartWeek: nr.allocationStartWeek,
+      allocationEndWeek: nr.allocationEndWeek,
+      pricingModel: nr.pricingModel,
+      actualAllocatedDays: nr.actualAllocatedDays,
+      actualAllocationStartWeek: nr.actualAllocationStartWeek,
+      actualAllocationEndWeek: nr.actualAllocationEndWeek,
+      actualAllocatedWeeks: nr.actualAllocatedWeeks,
+      actualAllocationSegments: nr.actualAllocationSegments,
+      synthetic: nr.synthetic,
+    }))
+  )
 
-  // #178: pass pre-loaded features and resource types — no extra DB queries inside
-  const activeFeatures = activeEntries.map(e => e.feature)
-  const parallelWarnings = computeParallelWarnings(project.hoursPerDay, activeEntries, activeFeatures, warningResourceTypes)
-
-  const storyTimelineEntries = await prisma.storyTimelineEntry.findMany({
-    where: { projectId: project.id },
-    include: { story: { select: { name: true, featureId: true } } },
+  res.json({
+    projectId,
+    startDate: model.startDate,
+    hoursPerDay: model.hoursPerDay,
+    projectedEndDate: planningWindow.projectedEndDate,
+    bufferWeeks: planningWindow.bufferWeeks,
+    onboardingWeeks: planningWindow.onboardingWeeks,
+    parallelWarnings: model.parallelWarnings,
+    storyEntries,
+    featureDependencies: model.featureDependencies,
+    storyDependencies: model.storyDependencies,
+    epicDependencies: model.epicDependencies,
+    weeklyDemand: model.weeklyDemand,
+    weeklyCapacity: model.weeklyCapacity,
+    namedResources: namedResourcesList,
+    entries: activeRawEntries.map(e => {
+      const breakdown = computeResourceBreakdown(e.feature, model.hoursPerDay)
+      const durationWeeksActual = Math.max(e.durationWeeks, 0.01)
+      const effectiveEngineers = breakdown.map(({ name, days }) => ({
+        name,
+        engineerEquivalent: Math.round((days / (durationWeeksActual * 5)) * 100) / 100,
+      }))
+      return {
+        featureId: e.featureId,
+        featureName: e.feature.name,
+        epicId: e.feature.epic.id,
+        epicName: e.feature.epic.name,
+        epicOrder: e.feature.epic.order,
+        epicFeatureMode: e.feature.epic.featureMode,
+        epicScheduleMode: e.feature.epic.scheduleMode,
+        epicTimelineStartWeek: e.feature.epic.timelineStartWeek,
+        featureOrder: e.feature.order,
+        timelineColour: e.feature.timelineColour ?? null,
+        startWeek: e.startWeek,
+        durationWeeks: e.durationWeeks,
+        isManual: e.isManual,
+        resourceBreakdown: breakdown,
+        effectiveEngineers,
+        ...computeDates(new Date(model.startDate ?? ''), e.startWeek, e.durationWeeks, planningWindow.onboardingWeeks),
+      }
+    }),
   })
-  const allFeatureIds = activeEntries.map(e => e.featureId)
-  const featureDependencies = await prisma.featureDependency.findMany({
-    where: { featureId: { in: allFeatureIds } },
-    select: { featureId: true, dependsOnId: true },
-  })
-  const epicDependencies = await prisma.epicDependency.findMany({
-    where: { epic: { projectId: project.id } },
-    select: { epicId: true, dependsOnId: true },
-  })
-  const activeFeatureIdSet = new Set(allFeatureIds)
-  const activeStoryTimelineEntries = storyTimelineEntries.filter(e => activeFeatureIdSet.has(e.story.featureId))
-  const allStoryIds = activeStoryTimelineEntries.map(e => e.storyId)
-  const storyDependencies = await prisma.storyDependency.findMany({
-    where: { storyId: { in: allStoryIds } },
-    select: { storyId: true, dependsOnId: true },
-  })
-  const mappedStoryEntries = activeStoryTimelineEntries.map(e => ({
-    storyId: e.storyId,
-    storyName: e.story.name,
-    featureId: e.story.featureId,
-    startWeek: e.startWeek,
-    durationWeeks: e.durationWeeks,
-    isManual: e.isManual,
-  }))
-
-  const simulatedDemand = project.weeklyDemandCache
-    ? new Map<string, number>(Object.entries(project.weeklyDemandCache as Record<string, number>))
-    : undefined
-  res.json(buildResponse(project, activeEntries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDependencies, resourceTypes, simulatedDemand, capacityPlanByRt))
 }))
-
 // POST /api/projects/:projectId/timeline/schedule
 router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) => {
   let project = await ownedProject(req.params.projectId as string, req.userId!)
