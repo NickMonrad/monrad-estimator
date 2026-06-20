@@ -48,6 +48,9 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   const { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays } = req.body
+  if (durationDays !== undefined && durationDays !== null && (typeof durationDays !== 'number' || isNaN(durationDays) || durationDays <= 0)) {
+    res.status(400).json({ error: 'durationDays must be a positive number' }); return
+  }
   const hoursPerDay = story.feature.epic.project.hoursPerDay ?? 7.6
   const resolvedDuration = durationDays !== undefined ? durationDays
     : hoursEffort !== undefined ? calcDurationDays(hoursEffort, hoursPerDay)

@@ -2,6 +2,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { effectiveDays } from '../utils/round.js'
 import {
   runScheduler,
   getWeeklyCapacity,
@@ -58,7 +59,7 @@ function computeResourceBreakdown(
       const key = task.resourceTypeId ?? '_unassigned'
       const name = task.resourceType?.name ?? 'Unassigned'
       const hpd = task.resourceType?.hoursPerDay ?? fallbackHpd
-      const days = task.durationDays ?? (task.hoursEffort / hpd)
+      const days = effectiveDays(task.durationDays, task.hoursEffort, hpd)
       const existing = byRt.get(key) ?? { name, days: 0 }
       byRt.set(key, { name, days: existing.days + days })
     }

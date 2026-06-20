@@ -57,3 +57,56 @@ describe('PUT /api/stories/:storyId/tasks/:id', () => {
     expect(res.body.hoursEffort).toBe(8)
   })
 })
+
+describe('PUT /api/stories/:storyId/tasks/:id — durationDays validation', () => {
+  it('rejects durationDays = 0', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    const res = await request(app)
+      .put('/api/stories/story-1/tasks/task-1')
+      .set('Authorization', authHeader)
+      .send({ durationDays: 0 })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('positive')
+  })
+
+  it('rejects negative durationDays', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    const res = await request(app)
+      .put('/api/stories/story-1/tasks/task-1')
+      .set('Authorization', authHeader)
+      .send({ durationDays: -1 })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('positive')
+  })
+
+  it('rejects NaN durationDays', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    const res = await request(app)
+      .put('/api/stories/story-1/tasks/task-1')
+      .set('Authorization', authHeader)
+      .send({ durationDays: 'abc' })
+    expect(res.status).toBe(400)
+  })
+
+  it('accepts null durationDays as valid (auto-compute)', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    vi.mocked(prisma.task.update).mockResolvedValue({ ...mockTask, hoursEffort: 4, durationDays: null, resourceType: { name: 'Developer' } } as any)
+    const res = await request(app)
+      .put('/api/stories/story-1/tasks/task-1')
+      .set('Authorization', authHeader)
+      .send({ durationDays: null })
+    expect(res.status).toBe(200)
+    expect(res.body.durationDays).toBeNull()
+  })
+
+  it('accepts positive durationDays', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    vi.mocked(prisma.task.update).mockResolvedValue({ ...mockTask, hoursEffort: 4, durationDays: 5, resourceType: { name: 'Developer' } } as any)
+    const res = await request(app)
+      .put('/api/stories/story-1/tasks/task-1')
+      .set('Authorization', authHeader)
+      .send({ durationDays: 5 })
+    expect(res.status).toBe(200)
+    expect(res.body.durationDays).toBe(5)
+  })
+})
