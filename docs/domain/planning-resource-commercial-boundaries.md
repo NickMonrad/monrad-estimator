@@ -63,6 +63,7 @@ It owns:
 - feature and story timing;
 - weekly demand;
 - capacity by week;
+- onboarding weeks and buffer weeks;
 - manual timeline overrides;
 - named-resource actual assignment;
 - actual allocated days, weeks, and segments;
@@ -71,6 +72,8 @@ It owns:
 - capacity-plan materialisation where it affects schedule and actual assignment.
 
 Timeline / Planning may use effort from Backlog / Estimation and resource metadata from Resource Profile, but it owns the derived planning result.
+
+Onboarding weeks and buffer weeks belong here because they shape the project planning window, affect when capacity is required, and change how resources are allocated over time.
 
 ### Resource Profile owns resource shape
 
@@ -112,6 +115,8 @@ Commercial may display effort and planning-derived values, but it should not be 
 | Effort summary by role | Estimated effort rolled up by resource type / role. | Resource Profile display | Derived from backlog effort inputs |
 | Scheduled demand | Effort distributed across timeline weeks. | Timeline / Planning | Derived planning output |
 | Capacity | Available working capacity for a role or named resource across time. | Resource Profile inputs, Planning output by week | Inputs persisted, weekly capacity derived |
+| Onboarding weeks | Planning time added before delivery work ramps up. | Timeline / Planning | Persisted planning input, reflected in derived planning window |
+| Buffer weeks | Planning time added to the schedule window to absorb delivery risk or transition time. | Timeline / Planning | Persisted planning input, reflected in derived planning window |
 | Planned allocation | Intended allocation based on selected planning mode, percentage, dates, count, or capacity plan. | Timeline / Planning, using Resource Profile inputs | Inputs persisted, result derived |
 | Actual named-resource assignment | The actual assignment of weekly demand to named people or synthetic slots. | Timeline / Planning | Derived planning output |
 | Actual allocated days | The days actually assigned by the planning model. | Timeline / Planning | Derived planning output |
@@ -154,14 +159,15 @@ Preferred target:
 
 ### Onboarding weeks and buffer weeks
 
-Project-level planning settings should have one owning surface.
+Onboarding weeks and buffer weeks should be owned by Timeline / Planning.
 
 Preferred target:
 
-- Onboarding weeks and buffer weeks should live in the planning/project settings area.
-- Timeline / Planning should use them directly because they affect dates and schedule outputs.
-- Resource Profile and Commercial may display them as read-only context if needed.
-- They should not be primary editable controls in multiple places.
+- Timeline / Planning is the only primary edit surface for onboarding weeks and buffer weeks.
+- Timeline / Planning uses them directly because they affect dates, weekly demand, capacity timing, and resource allocation over time.
+- Resource Profile may display them as read-only context where they explain role/resource summaries.
+- Commercial may display them as read-only context where they explain pricing inputs, but it should not own or edit them.
+- They should not be primary editable controls in Resource Profile or Commercial.
 
 ### Named-resource billing basis
 
@@ -204,7 +210,8 @@ Follow-up #264 should introduce a shared project planning read model used by Tim
 The read model should provide consistent planning-derived facts, including:
 
 - effort rollups by role from the backlog estimate;
-- planning window;
+- onboarding weeks and buffer weeks as Timeline-owned planning inputs;
+- planning window derived from Timeline-owned planning inputs;
 - weekly demand;
 - weekly capacity;
 - named-resource actual assignments;
@@ -224,6 +231,7 @@ Persisted data should be limited to source inputs and intentional user decisions
 - resource type and named-resource metadata;
 - rates;
 - allocation mode inputs;
+- onboarding weeks and buffer weeks;
 - availability windows;
 - capacity-plan inputs;
 - manual timeline overrides;
@@ -233,6 +241,7 @@ Persisted data should be limited to source inputs and intentional user decisions
 Derived data should be calculated through shared services/read models, such as:
 
 - effort summaries by role;
+- planning windows derived from Timeline-owned planning inputs;
 - weekly demand;
 - weekly capacity;
 - actual named-resource assignment;
@@ -244,6 +253,25 @@ Derived data should be calculated through shared services/read models, such as:
 
 Display labels should be resolved from IDs at response/render time. Planning outputs should persist IDs and derived facts, not stale copies of resource names.
 
+## Automated testing expectations
+
+Automated tests should be updated as each implementation slice lands. Testing should not be deferred until the end of the #263 refactor.
+
+Each behaviour-changing PR under #263 should either add/update automated tests or clearly explain why no automated coverage changed.
+
+Expected coverage by slice:
+
+- #264 should test the shared planning read model and parity with existing route outputs.
+- #265 should test that Commercial no longer owns planning allocation edits.
+- #266 should cover renamed billing-basis terminology where practical.
+- #267 should cover invalidation helpers or mutation side effects where practical.
+- #268 should test that display labels resolve from current IDs after a rename.
+- #270 should test Timeline-owned onboarding/buffer week changes and cross-view refresh.
+- #271 should keep behaviour-preserving tests green while the Resource Profile hook is split.
+- #269 should provide the canonical consistency fixture across Timeline, Resource Profile, Commercial, and exports.
+
+Prefer fast integration/unit coverage around the shared planning model and API behaviour. Add Playwright coverage for key user flows where the existing UI test harness makes that practical.
+
 ## Follow-up implementation sequence
 
 Recommended order under #263:
@@ -253,7 +281,7 @@ Recommended order under #263:
 3. #266 - Clarify named-resource billing basis terminology.
 4. #267 - Centralise project query invalidation for planning and resource changes.
 5. #268 - Store planning IDs and derived facts instead of stale display labels.
-6. #270 - Give project planning settings one owning surface.
+6. #270 - Move onboarding and buffer weeks into Timeline planning settings.
 7. #271 - Split Resource Profile client hook into focused modules.
 8. #269 - Add canonical Timeline to Resource Profile to Commercial consistency fixture.
 
@@ -266,10 +294,11 @@ This decision is satisfied when:
 - Backlog / Estimation, Timeline / Planning, Resource Profile, and Commercial have clearly defined ownership.
 - Delivery effort, resource plan / capacity, and commercial pricing are documented as separate concepts.
 - Allocation mode has a planning owner and is no longer treated as a commercial control.
+- Timeline / Planning owns onboarding weeks and buffer weeks.
 - Named-resource billing basis is described as a commercial pricing decision, not a planning mode.
-- Project-level planning settings have one intended owning surface.
 - Follow-up #264 can proceed without re-litigating the domain model.
 - Follow-up UI and refactor issues can use this document as the source of truth.
+- Automated testing expectations are explicit for the implementation issues under #263.
 
 ## Non-goals for this slice
 
