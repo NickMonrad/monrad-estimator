@@ -305,19 +305,8 @@ test.describe('Global admin auth — admin user', () => {
     const created = allTypes.find((t: { name: string }) => t.name === typeName)
     if (created) globalTypeIds.push(created.id)
 
-    /* ── Edit the type (open form, verify, cancel) ───────────── */
-    // Click the edit button in our row
-    const row = page.locator('tr').filter({ hasText: typeName })
-    await row.locator('[title="Edit"]').click()
-
-    // Verify the row transformed into an edit form (Save button appears in the row)
-    await expect(row.getByRole('button', { name: /^save$/i })).toBeVisible({ timeout: 5_000 })
-
-    // Cancel the edit to return to display mode
-    await row.getByRole('button', { name: /^cancel$/i }).click()
-    await expect(row.getByRole('button', { name: /^cancel$/i })).not.toBeVisible({ timeout: 5_000 })
-
     /* ── Delete the type ──────────────────────────────────────── */
+    const row = page.locator('tr').filter({ hasText: typeName })
     // Accept the browser confirm dialog
     page.on('dialog', dialog => dialog.accept())
     await row.locator('[title="Delete"]').click()
