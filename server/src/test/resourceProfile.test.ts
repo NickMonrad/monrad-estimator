@@ -1161,8 +1161,484 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     // Only active epic's effort should appear
     const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
     expect(devRow).toBeTruthy()
-    expect(devRow.effortDays).toBe(5) // effectiveDays(5, 80, 8) = max(durationDays=5, hours/hpd=10) = 5
+    expect(devRow.effortDays).toBe(5) // effectiveDays(5, 80, 8) = 5 — positive durationDays used directly
     expect(devRow.epics).toHaveLength(1)
     expect(devRow.epics[0].epicId).toBe('epic-active')
+  })
+
+  it('uses story timeline entry for fallback demand when feature has no timeline entry', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      startDate: null,
+      name: 'Test Project',
+      weeklyDemandCache: null,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-dev',
+              name: 'Dev 1',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+              pricingModel: 'ACTUAL_DAYS',
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Epic',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Feature',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Story',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      resourceTypeId: 'rt-dev',
+                      hoursEffort: 80,
+                      durationDays: 10,
+                      order: 0,
+                      resourceType: { name: 'Developer', hoursPerDay: 8 },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [],  // No feature-level entry
+      storyTimelineEntries: [
+        { storyId: 'story-1', startWeek: 4, durationWeeks: 2 },
+      ],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    expect(devRow).toBeTruthy()
+
+    // Fallback demand should be driven by the story timeline entry (startWeek=4, durationWeeks=2)
+    // not by an absent feature entry. Named-resource actual weeks reflect the story timing.
+    const nr = devRow.namedResources[0]
+    expect(nr.actualAllocationStartWeek).toBe(4)
+    expect(nr.actualAllocationEndWeek).toBe(5)
+    expect(nr.actualAllocatedWeeks).toEqual([
+      expect.objectContaining({ week: 4, days: 5, capacityDays: 5 }),
+      expect.objectContaining({ week: 5, days: 5, capacityDays: 5 }),
+    ])
+    expect(nr.actualAllocatedDays).toBe(10)
+  })
+
+  it('reflects two different story timeline entries under the same feature', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      startDate: null,
+      name: 'Test Project',
+      weeklyDemandCache: null,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-dev',
+              name: 'Dev 1',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+              pricingModel: 'ACTUAL_DAYS',
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Epic',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Feature',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Story 1',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      resourceTypeId: 'rt-dev',
+                      hoursEffort: 80,
+                      durationDays: 10,
+                      order: 0,
+                      resourceType: { name: 'Developer', hoursPerDay: 8 },
+                    },
+                  ],
+                },
+                {
+                  id: 'story-2',
+                  name: 'Story 2',
+                  order: 1,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-2',
+                      resourceTypeId: 'rt-dev',
+                      hoursEffort: 80,
+                      durationDays: 10,
+                      order: 0,
+                      resourceType: { name: 'Developer', hoursPerDay: 8 },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [],  // No feature entry
+      storyTimelineEntries: [
+        { storyId: 'story-1', startWeek: 2, durationWeeks: 2 },
+        { storyId: 'story-2', startWeek: 6, durationWeeks: 2 },
+      ],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    expect(devRow).toBeTruthy()
+
+    // Two stories with different story entries should produce two demand blocks
+    const nr = devRow.namedResources[0]
+    expect(nr.actualAllocationStartWeek).toBe(2)
+    expect(nr.actualAllocationEndWeek).toBe(7)
+    expect(nr.actualAllocatedWeeks).toHaveLength(4)
+    expect(nr.actualAllocationSegments).toEqual([
+      { startWeek: 2, endWeek: 3, days: 10 },
+      { startWeek: 6, endWeek: 7, days: 10 },
+    ])
+    expect(nr.actualAllocatedDays).toBe(20)
+  })
+
+  it('uses story timeline entry for story-timed stories and feature entry for others', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      startDate: null,
+      name: 'Test Project',
+      weeklyDemandCache: null,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-dev',
+              name: 'Dev 1',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+              pricingModel: 'ACTUAL_DAYS',
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Epic',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Feature',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Story Timed',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      resourceTypeId: 'rt-dev',
+                      hoursEffort: 40,
+                      durationDays: 5,
+                      order: 0,
+                      resourceType: { name: 'Developer', hoursPerDay: 8 },
+                    },
+                  ],
+                },
+                {
+                  id: 'story-2',
+                  name: 'Feature Timed',
+                  order: 1,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-2',
+                      resourceTypeId: 'rt-dev',
+                      hoursEffort: 40,
+                      durationDays: 5,
+                      order: 0,
+                      resourceType: { name: 'Developer', hoursPerDay: 8 },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-1', startWeek: 0, durationWeeks: 1 },
+      ],
+      storyTimelineEntries: [
+        { storyId: 'story-1', startWeek: 2, durationWeeks: 1 },
+      ],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    expect(devRow).toBeTruthy()
+
+    // story-1 (timed at week 2) contributes demand at week 2
+    // story-2 (no story entry, feature timed at week 0) contributes demand at week 0
+    const nr = devRow.namedResources[0]
+    expect(nr.actualAllocationStartWeek).toBe(0)
+    expect(nr.actualAllocationEndWeek).toBe(2)
+    expect(nr.actualAllocatedWeeks).toHaveLength(2)
+    // Two separate segments since weeks 0 and 2 are not consecutive
+    expect(nr.actualAllocationSegments).toHaveLength(2)
+    const seg0 = nr.actualAllocationSegments[0]
+    expect(seg0.startWeek).toBe(0)
+    expect(seg0.endWeek).toBe(0)
+    const seg1 = nr.actualAllocationSegments[1]
+    expect(seg1.startWeek).toBe(2)
+    expect(seg1.endWeek).toBe(2)
+    expect(nr.actualAllocatedDays).toBe(10)
+  })
+
+  it('excludes inactive stories and features from fallback demand', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      startDate: null,
+      name: 'Test Project',
+      weeklyDemandCache: null,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [
+            {
+              id: 'nr-dev',
+              name: 'Dev 1',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+              pricingModel: 'ACTUAL_DAYS',
+            },
+          ],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-active',
+          name: 'Active Epic',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-active',
+              name: 'Active Feature',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-active',
+                  name: 'Active Story',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-active',
+                      resourceTypeId: 'rt-dev',
+                      hoursEffort: 80,
+                      durationDays: 10,
+                      order: 0,
+                      resourceType: { name: 'Developer', hoursPerDay: 8 },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: 'epic-inactive',
+          name: 'Inactive Epic',
+          order: 1,
+          isActive: false,
+          features: [
+            {
+              id: 'feat-inactive',
+              name: 'Inactive Feature',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-inactive',
+                  name: 'Inactive Story',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-inactive',
+                      resourceTypeId: 'rt-dev',
+                      hoursEffort: 80,
+                      durationDays: 10,
+                      order: 0,
+                      resourceType: { name: 'Developer', hoursPerDay: 8 },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [
+        { featureId: 'feat-active', startWeek: 0, durationWeeks: 2 },
+        { featureId: 'feat-inactive', startWeek: 0, durationWeeks: 2 },
+      ],
+      storyTimelineEntries: [
+        { storyId: 'story-inactive', startWeek: 0, durationWeeks: 2 },
+      ],
+      capacityPlans: [],
+    } as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    expect(devRow).toBeTruthy()
+
+    // Inactive epic's story should NOT contribute to fallback demand despite having a story entry
+    const nr = devRow.namedResources[0]
+    // Only the active story (feature-timed at week 0) contributes demand
+    expect(nr.actualAllocationStartWeek).toBe(0)
+    expect(nr.actualAllocationEndWeek).toBe(1)
+    expect(nr.actualAllocatedWeeks).toHaveLength(2)
+    expect(nr.actualAllocatedDays).toBe(10)
   })
 })

@@ -203,18 +203,61 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   // ── Fallback weekly demand from shared model ──────────────────────
-  // Build entries from project hierarchy paired with timeline entry timing
-  const fallbackEntries = project.epics
-    .filter(e => e.isActive !== false)
-    .flatMap(epic =>
-      epic.features
-        .filter(f => f.isActive !== false && featureEntryMap.has(f.id))
-        .map(f => ({
-          startWeek: featureEntryMap.get(f.id)!.startWeek,
-          durationWeeks: featureEntryMap.get(f.id)!.durationWeeks,
-          feature: f,
-        })),
-    )
+  // Build entries at story-level granularity to preserve story-level scheduling semantics.
+  // Stories with a story timeline entry get their own timing; remaining active stories
+  // without a story entry are grouped under their feature-level timeline entry.
+  const fallbackEntries: Array<{
+    startWeek: number
+    durationWeeks: number
+    feature: {
+      userStories: Array<{
+        isActive: boolean | null
+        tasks: Array<{
+          resourceTypeId: string | null
+          hoursEffort: number
+          durationDays: number | null
+          resourceType: { name: string; hoursPerDay: number | null } | null
+        }>
+      }>
+    }
+  }> = []
+  const storyTimedIds = new Set<string>()
+  for (const epic of project.epics) {
+    if (epic.isActive === false) continue
+    for (const feature of epic.features) {
+      if (feature.isActive === false) continue
+      for (const story of feature.userStories) {
+        if (story.isActive === false) continue
+        const storyEntry = storyEntryMap.get(story.id)
+        if (storyEntry) {
+          fallbackEntries.push({
+            startWeek: storyEntry.startWeek,
+            durationWeeks: storyEntry.durationWeeks,
+            feature: { userStories: [story] },
+          })
+          storyTimedIds.add(story.id)
+        }
+      }
+    }
+  }
+  for (const epic of project.epics) {
+    if (epic.isActive === false) continue
+    for (const feature of epic.features) {
+      if (feature.isActive === false) continue
+      const featureEntry = featureEntryMap.get(feature.id)
+      if (!featureEntry) continue
+      const remaining = feature.userStories.filter(
+        story => story.isActive !== false && !storyTimedIds.has(story.id),
+      )
+      if (remaining.length > 0) {
+        fallbackEntries.push({
+          startWeek: featureEntry.startWeek,
+          durationWeeks: featureEntry.durationWeeks,
+          feature: { userStories: remaining },
+        })
+      }
+    }
+  }
 
   const fallbackDemand = buildFallbackWeeklyDemand(
     fallbackEntries as any[],
