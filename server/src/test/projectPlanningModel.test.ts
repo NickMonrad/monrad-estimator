@@ -15,7 +15,9 @@ import {
   applyCapacityPlanFallback,
 } from '../lib/projectPlanningModel.js'
 import type { MaterializedCapacityPlanResource } from '../lib/capacityPlanMaterialisation.js'
+import type { SchedulerNamedResource } from '../lib/scheduler.js'
 
+type MockRTNamedResources = SchedulerNamedResource[]
 // ─────────────────────────────────────────────────────────────────────────────
 // computePlanningWindow
 // ─────────────────────────────────────────────────────────────────────────────
@@ -283,7 +285,7 @@ describe('buildFallbackWeeklyDemand', () => {
       hoursPerDay: 8,
       allocationMode: 'EFFORT',
       count: 2,
-      namedResources: [] as Array<{ id: string }>,
+      namedResources: [] as MockRTNamedResources,
     },
   ]
 
@@ -479,8 +481,8 @@ describe('computeWeeklyCapacity', () => {
 
   it('computes capacity for each RT for each week', () => {
     const rts = [
-      { id: 'rt-dev', name: 'Developer', hoursPerDay: 8, allocationMode: 'EFFORT', count: 2, namedResources: [] as Array<{ id: string }> },
-      { id: 'rt-qa', name: 'QA', hoursPerDay: 8, allocationMode: 'EFFORT', count: 1, namedResources: [] as Array<{ id: string }> },
+      { id: 'rt-dev', name: 'Developer', hoursPerDay: 8, allocationMode: 'EFFORT', count: 2, namedResources: [] as MockRTNamedResources },
+      { id: 'rt-qa', name: 'QA', hoursPerDay: 8, allocationMode: 'EFFORT', count: 1, namedResources: [] as MockRTNamedResources },
     ]
     const result = computeWeeklyCapacity(rts, 8, 3, new Map())
     // 2 RTs × 3 weeks = 6 rows
@@ -506,7 +508,7 @@ describe('computeWeeklyCapacity', () => {
     cpMap.set('rt-cp', materialized)
 
     const rts = [
-      { id: 'rt-cp', name: 'Security', hoursPerDay: 8, allocationMode: 'CAPACITY_PLAN', count: 1, namedResources: [] as Array<{ id: string }> },
+      { id: 'rt-cp', name: 'Security', hoursPerDay: 8, allocationMode: 'CAPACITY_PLAN', count: 1, namedResources: [] as MockRTNamedResources },
     ]
     const result = computeWeeklyCapacity(rts, 8, 2, cpMap)
     expect(result).toHaveLength(2)
@@ -522,7 +524,7 @@ describe('computeWeeklyCapacity', () => {
 describe('weekly demand integration', () => {
   it('pipeline: fallback → merge → produce final weeklyDemand', () => {
     const rts = [
-      { name: 'Developer', id: 'rt-dev', hoursPerDay: 8, allocationMode: 'EFFORT', count: 2, namedResources: [] as Array<{ id: string }> },
+      { name: 'Developer', id: 'rt-dev', hoursPerDay: 8, allocationMode: 'EFFORT', count: 2, namedResources: [] as MockRTNamedResources },
     ]
     const entry = {
       startWeek: 0,
@@ -592,7 +594,7 @@ describe('stable IDs and display metadata', () => {
       allocationPercent: 100,
       allocationStartWeek: null,
       allocationEndWeek: null,
-      namedResources: [] as Array<{ id: string; name: string; startWeek: number | null; endWeek: number | null; allocationMode: string | null; allocationPercent: number | null; allocationStartWeek: number | null; allocationEndWeek: number | null; pricingModel: string | null; synthetic: boolean }>,
+      namedResources: [] as any,
       capacityPlanMaterialized: materialized,
     }]
     const result = applyCapacityPlanFallback(rt, cpMap)
