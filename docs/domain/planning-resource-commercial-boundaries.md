@@ -16,6 +16,12 @@ They are related, but they are not the same thing:
 
 The application should stop using the same-looking allocation fields across multiple screens to represent different concepts. Where one surface displays a value owned by another surface, that value should be read from a shared read model or derived at response/render time, not independently recalculated or persisted as duplicate state.
 
+A user should be able to answer three different questions without the UI implying that they are the same question:
+
+1. **How much work is required?** This is delivery effort.
+2. **How will we staff and schedule that work?** This is the resource plan / capacity model.
+3. **How will we price or bill it?** This is the commercial model.
+
 ## Why this is needed
 
 The Resource Profile, Timeline, and Commercial areas have grown from useful views into partially overlapping domain editors. This has made the product harder to reason about and harder to maintain.
@@ -34,6 +40,19 @@ The main maintainability issue is not a single bug. It is that the same business
 
 ## Target ownership model
 
+### Backlog / Estimation owns effort inputs
+
+Backlog / Estimation is the source of truth for the effort required to deliver the work.
+
+It owns:
+
+- task effort inputs;
+- task duration inputs where duration is used as the estimate basis;
+- backlog structure used to roll effort up to stories, features, epics, and roles;
+- the raw estimated work before scheduling, capacity constraints, or pricing rules are applied.
+
+Resource Profile may summarise estimated effort by role. Timeline / Planning may distribute the effort across time. Commercial may price a selected billing basis derived from effort or planning outputs. None of those surfaces should become a second owner of the original task effort estimate.
+
 ### Timeline / Planning owns planning reality
 
 Timeline / Planning is the source of truth for delivery scheduling and planning outputs.
@@ -51,7 +70,7 @@ It owns:
 - resource-level scheduling outputs;
 - capacity-plan materialisation where it affects schedule and actual assignment.
 
-Timeline / Planning may use resource metadata from Resource Profile, but it owns the derived planning result.
+Timeline / Planning may use effort from Backlog / Estimation and resource metadata from Resource Profile, but it owns the derived planning result.
 
 ### Resource Profile owns resource shape
 
@@ -68,7 +87,7 @@ It owns:
 - role/category metadata;
 - resource metadata required by planning and commercial calculations.
 
-Resource Profile can display planning-derived information, such as actual assigned days, but should not independently calculate a separate version of the planning result.
+Resource Profile can display estimated effort and planning-derived information, such as actual assigned days, but should not independently calculate a separate version of the effort or planning result.
 
 ### Commercial owns billing and price presentation
 
@@ -83,13 +102,14 @@ It owns:
 - commercial export presentation;
 - explanation of which planning basis was used for pricing.
 
-Commercial may display planning-derived values, but it should not be the primary place where planning allocation modes are edited.
+Commercial may display effort and planning-derived values, but it should not be the primary place where delivery effort or planning allocation modes are edited.
 
 ## Terminology
 
 | Term | Meaning | Owner | Persisted or derived |
 | --- | --- | --- | --- |
-| Estimated effort | Work required to complete backlog tasks, usually from task estimates and effective hours/days. | Backlog / Resource Profile summary | Persisted at task level, derived in summaries |
+| Estimated effort | Work required to complete backlog tasks, usually from task estimates and effective hours/days. | Backlog / Estimation | Persisted at task level, derived in summaries |
+| Effort summary by role | Estimated effort rolled up by resource type / role. | Resource Profile display | Derived from backlog effort inputs |
 | Scheduled demand | Effort distributed across timeline weeks. | Timeline / Planning | Derived planning output |
 | Capacity | Available working capacity for a role or named resource across time. | Resource Profile inputs, Planning output by week | Inputs persisted, weekly capacity derived |
 | Planned allocation | Intended allocation based on selected planning mode, percentage, dates, count, or capacity plan. | Timeline / Planning, using Resource Profile inputs | Inputs persisted, result derived |
@@ -171,6 +191,7 @@ Commercial should answer:
 
 Commercial should not be the place where users primarily answer:
 
+- How much work is required?
 - When is the work scheduled?
 - Which named resources are assigned?
 - Which allocation mode shapes the delivery plan?
@@ -182,6 +203,7 @@ Follow-up #264 should introduce a shared project planning read model used by Tim
 
 The read model should provide consistent planning-derived facts, including:
 
+- effort rollups by role from the backlog estimate;
 - planning window;
 - weekly demand;
 - weekly capacity;
@@ -198,6 +220,7 @@ The read model should avoid each route recalculating its own version of the same
 Persisted data should be limited to source inputs and intentional user decisions, such as:
 
 - task effort inputs;
+- task duration inputs where duration is an estimate input;
 - resource type and named-resource metadata;
 - rates;
 - allocation mode inputs;
@@ -209,6 +232,7 @@ Persisted data should be limited to source inputs and intentional user decisions
 
 Derived data should be calculated through shared services/read models, such as:
 
+- effort summaries by role;
 - weekly demand;
 - weekly capacity;
 - actual named-resource assignment;
@@ -239,7 +263,7 @@ This order is intentional. The shared read model should come before UI movement 
 
 This decision is satisfied when:
 
-- Timeline / Planning, Resource Profile, and Commercial have clearly defined ownership.
+- Backlog / Estimation, Timeline / Planning, Resource Profile, and Commercial have clearly defined ownership.
 - Delivery effort, resource plan / capacity, and commercial pricing are documented as separate concepts.
 - Allocation mode has a planning owner and is no longer treated as a commercial control.
 - Named-resource billing basis is described as a commercial pricing decision, not a planning mode.
