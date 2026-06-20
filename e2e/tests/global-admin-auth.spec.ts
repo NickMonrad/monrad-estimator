@@ -296,7 +296,6 @@ test.describe('Global admin auth — admin user', () => {
 
     // Wait for the type to appear in the table
     await expect(page.getByText(typeName)).toBeVisible({ timeout: 10_000 })
-
     // Capture the created ID for cleanup
     const listRes = await fetch(`${API_BASE}/api/global-resource-types`, {
       headers: { Authorization: `Bearer ${adminUser.token}` },
@@ -305,14 +304,45 @@ test.describe('Global admin auth — admin user', () => {
     const created = allTypes.find((t: { name: string }) => t.name === typeName)
     if (created) globalTypeIds.push(created.id)
 
-    /* ── Delete the type ──────────────────────────────────────── */
+    /* ── Edit (update) the type name and description ──────────── */
+    const updatedName = `E2E Admin Test Updated ${unique}`
     const row = page.locator('tr').filter({ hasText: typeName })
+
+    // Click the edit (pencil) button in this row
+    await row.locator('[title="Edit"]').click()
+
+    // Wait for the inline edit form — the Save button appears when EditRow renders
+    await expect(row.getByRole('button', { name: /^save$/i })).toBeVisible({ timeout: 5_000 })
+
+    // Change the name to the updated value
+    await row.getByPlaceholder('Name *').clear()
+    await row.getByPlaceholder('Name *').fill(updatedName)
+
+    // Change description to a unique updated value
+    const updatedDesc = `Updated description ${unique}`
+    await row.getByPlaceholder('Description').clear()
+    await row.getByPlaceholder('Description').fill(updatedDesc)
+
+    // Click Save to submit the edit
+    await row.getByRole('button', { name: /^save$/i }).click()
+
+    // Wait for the updated name to appear (edit mode closes, display mode shows updated text)
+    await expect(page.getByText(updatedName)).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText(updatedDesc)).toBeVisible({ timeout: 5_000 })
+
+    // Track both names for cleanup (in case test fails between edit and delete)
+    createdResourceTypeNames.push(updatedName)
+
+    // ID is unchanged — already tracked in globalTypeIds from the create step
+
+    /* ── Delete the type (now using the updated name) ─────────── */
+    const deleteRow = page.locator('tr').filter({ hasText: updatedName })
     // Accept the browser confirm dialog
     page.on('dialog', dialog => dialog.accept())
-    await row.locator('[title="Delete"]').click()
+    await deleteRow.locator('[title="Delete"]').click()
 
     // Wait for it to disappear from the table
-    await expect(page.getByText(typeName)).not.toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText(updatedName)).not.toBeVisible({ timeout: 10_000 })
   })
 
   /* ── UI: Rate Cards page ────────────────────────────────────────────── */

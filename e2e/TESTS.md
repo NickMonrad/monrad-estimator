@@ -254,7 +254,7 @@ Creates a fresh admin user (via API registration + DB role update). Tests browse
 
 | Test | Description |
 |------|-------------|
-| Resource Types page shows admin controls and allows CRUD | Navigates to `/resource-types` as admin; asserts "+ Add resource type" button visible; asserts table headers include `Actions` column; asserts edit/delete buttons visible on rows; creates a uniquely named resource type via inline form; edits it; deletes it; asserts each step's result visible |
+| Resource Types page shows admin controls and allows CRUD | Navigates to `/resource-types` as admin; asserts admin controls visible; creates a uniquely named resource type; edits it (changes name and description); deletes it; asserts each step's result visible |
 | Rate Cards page shows admin controls and allows creation | Navigates to `/rate-cards` as admin; asserts "+ Create Rate Card" button visible; creates a rate card via modal (name + Developer entry at $1100/day); asserts it appears in the list; optionally sets as default and verifies badge |
 
 #### `Global admin auth — API success for admin user` describe block (6 tests — serial)
