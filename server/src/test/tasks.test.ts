@@ -41,6 +41,68 @@ describe('POST /api/stories/:storyId/tasks', () => {
 
     expect(res.status).toBe(400)
   })
+
+  it('rejects durationDays = 0 on create', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    const res = await request(app)
+      .post('/api/stories/story-1/tasks')
+      .set('Authorization', authHeader)
+      .send({ name: 'Task', hoursEffort: 4, resourceTypeId: 'rt-1', durationDays: 0 })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('positive')
+  })
+
+  it('rejects negative durationDays on create', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    const res = await request(app)
+      .post('/api/stories/story-1/tasks')
+      .set('Authorization', authHeader)
+      .send({ name: 'Task', hoursEffort: 4, resourceTypeId: 'rt-1', durationDays: -1 })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('positive')
+  })
+
+  it('rejects NaN durationDays on create', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    const res = await request(app)
+      .post('/api/stories/story-1/tasks')
+      .set('Authorization', authHeader)
+      .send({ name: 'Task', hoursEffort: 4, resourceTypeId: 'rt-1', durationDays: 'abc' })
+    expect(res.status).toBe(400)
+  })
+
+  it('accepts omitted durationDays on create', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    vi.mocked(prisma.task.findMany).mockResolvedValue([])
+    vi.mocked(prisma.task.create).mockResolvedValue({ ...mockTask, resourceType: { name: 'Developer' } } as any)
+    const res = await request(app)
+      .post('/api/stories/story-1/tasks')
+      .set('Authorization', authHeader)
+      .send({ name: 'Task', hoursEffort: 4, resourceTypeId: 'rt-1' })
+    expect(res.status).toBe(201)
+  })
+
+  it('accepts null durationDays on create', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    vi.mocked(prisma.task.findMany).mockResolvedValue([])
+    vi.mocked(prisma.task.create).mockResolvedValue({ ...mockTask, resourceType: { name: 'Developer' } } as any)
+    const res = await request(app)
+      .post('/api/stories/story-1/tasks')
+      .set('Authorization', authHeader)
+      .send({ name: 'Task', hoursEffort: 4, resourceTypeId: 'rt-1', durationDays: null })
+    expect(res.status).toBe(201)
+  })
+
+  it('accepts positive durationDays on create', async () => {
+    vi.mocked(prisma.userStory.findFirst).mockResolvedValue(mockStory as any)
+    vi.mocked(prisma.task.findMany).mockResolvedValue([])
+    vi.mocked(prisma.task.create).mockResolvedValue({ ...mockTask, resourceType: { name: 'Developer' } } as any)
+    const res = await request(app)
+      .post('/api/stories/story-1/tasks')
+      .set('Authorization', authHeader)
+      .send({ name: 'Task', hoursEffort: 4, resourceTypeId: 'rt-1', durationDays: 3 })
+    expect(res.status).toBe(201)
+  })
 })
 
 describe('PUT /api/stories/:storyId/tasks/:id', () => {

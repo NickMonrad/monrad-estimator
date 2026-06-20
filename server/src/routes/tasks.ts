@@ -5,6 +5,14 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { calcDurationDays } from '../utils/round.js'
 import { ownedStory } from '../lib/ownership.js'
 
+function validateDurationDays(value: unknown): string | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || isNaN(value) || value <= 0) {
+    return 'durationDays must be a positive number'
+  }
+  return null
+}
+
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
@@ -24,16 +32,19 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
-  const { name, description, assumptions, hoursEffort, resourceTypeId } = req.body
+  const { name, description, assumptions, hoursEffort, resourceTypeId, durationDays } = req.body
   if (!name || !resourceTypeId) { res.status(400).json({ error: 'name and resourceTypeId are required' }); return }
   if (hoursEffort !== undefined && hoursEffort < 0) { res.status(400).json({ error: 'hoursEffort must be non-negative' }); return }
+  const durErr = validateDurationDays(durationDays)
+  if (durErr) { res.status(400).json({ error: durErr }); return }
   const hoursPerDay = story.feature.epic.project.hoursPerDay ?? 7.6
   const count = await prisma.task.count({ where: { userStoryId: req.params.storyId as string } })
+  const resolvedDuration = durationDays !== undefined ? durationDays : calcDurationDays(hoursEffort ?? 0, hoursPerDay)
   const task = await prisma.task.create({
     data: {
       name, description, assumptions,
       hoursEffort: hoursEffort ?? 0,
-      durationDays: calcDurationDays(hoursEffort ?? 0, hoursPerDay),
+      durationDays: resolvedDuration,
       resourceTypeId,
       userStoryId: req.params.storyId as string,
       order: count,
@@ -48,9 +59,8 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const story = await ownedStory(req.params.storyId as string, req.userId!)
   if (!story) { res.status(404).json({ error: 'Story not found' }); return }
   const { name, description, assumptions, hoursEffort, resourceTypeId, order, durationDays } = req.body
-  if (durationDays !== undefined && durationDays !== null && (typeof durationDays !== 'number' || isNaN(durationDays) || durationDays <= 0)) {
-    res.status(400).json({ error: 'durationDays must be a positive number' }); return
-  }
+  const durErr = validateDurationDays(durationDays)
+  if (durErr) { res.status(400).json({ error: durErr }); return }
   const hoursPerDay = story.feature.epic.project.hoursPerDay ?? 7.6
   const resolvedDuration = durationDays !== undefined ? durationDays
     : hoursEffort !== undefined ? calcDurationDays(hoursEffort, hoursPerDay)
