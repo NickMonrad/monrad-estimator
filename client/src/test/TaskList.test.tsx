@@ -48,3 +48,56 @@ describe('TaskList', () => {
     expect(screen.getByText(/0\.5d/)).toBeInTheDocument()
   })
 })
+
+describe('TaskList — durationDays validation', () => {
+  it('shows error when saving with duration override of 0', () => {
+    render(<TaskList storyId="s-1" tasks={[]} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
+    fireEvent.click(screen.getByText('+ Add task'))
+    fireEvent.change(screen.getByPlaceholderText('Task name *'), { target: { value: 'Test task' } })
+    const rtSelect = screen.getByRole('combobox')
+    fireEvent.change(rtSelect, { target: { value: 'rt-1' } })
+    const overrideInput = screen.getByPlaceholderText('Leave blank to use hours/day rate')
+    fireEvent.change(overrideInput, { target: { value: '0' } })
+    fireEvent.click(screen.getByText('Save'))
+    expect(screen.getByText('Duration must be at least 1 day')).toBeInTheDocument()
+  })
+
+  it('shows error when saving with negative duration override', () => {
+    render(<TaskList storyId="s-1" tasks={[]} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
+    fireEvent.click(screen.getByText('+ Add task'))
+    fireEvent.change(screen.getByPlaceholderText('Task name *'), { target: { value: 'Test task' } })
+    const rtSelect = screen.getByRole('combobox')
+    fireEvent.change(rtSelect, { target: { value: 'rt-1' } })
+    const overrideInput = screen.getByPlaceholderText('Leave blank to use hours/day rate')
+    fireEvent.change(overrideInput, { target: { value: '-1' } })
+    fireEvent.click(screen.getByText('Save'))
+    expect(screen.getByText('Duration must be at least 1 day')).toBeInTheDocument()
+  })
+
+  it('clears error when duration override is changed after failed validation', () => {
+    render(<TaskList storyId="s-1" tasks={[]} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
+    fireEvent.click(screen.getByText('+ Add task'))
+    const rtSelect = screen.getByRole('combobox')
+    fireEvent.change(rtSelect, { target: { value: 'rt-1' } })
+    fireEvent.change(screen.getByPlaceholderText('Task name *'), { target: { value: 'Test task' } })
+    const overrideInput = screen.getByPlaceholderText('Leave blank to use hours/day rate')
+    fireEvent.change(overrideInput, { target: { value: '0' } })
+    fireEvent.click(screen.getByText('Save'))
+    expect(screen.getByText('Duration must be at least 1 day')).toBeInTheDocument()
+    // Change duration to a valid value — error should clear
+    fireEvent.change(overrideInput, { target: { value: '3' } })
+    expect(screen.queryByText('Duration must be at least 1 day')).not.toBeInTheDocument()
+  })
+
+  it('saves successfully with valid positive duration override', () => {
+    render(<TaskList storyId="s-1" tasks={[]} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
+    fireEvent.click(screen.getByText('+ Add task'))
+    const rtSelect = screen.getByRole('combobox')
+    fireEvent.change(rtSelect, { target: { value: 'rt-1' } })
+    fireEvent.change(screen.getByPlaceholderText('Task name *'), { target: { value: 'Test task' } })
+    const overrideInput = screen.getByPlaceholderText('Leave blank to use hours/day rate')
+    fireEvent.change(overrideInput, { target: { value: '3' } })
+    fireEvent.click(screen.getByText('Save'))
+    expect(screen.queryByText('Duration must be at least 1 day')).not.toBeInTheDocument()
+  })
+})

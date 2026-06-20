@@ -145,14 +145,17 @@ function TaskForm({ initial, resourceTypes, hoursPerDay, onSave, onCancel, savin
   saving: boolean
 }) {
   const [form, setForm] = useState(initial)
+  const [errors, setErrors] = useState<Record<string, string>>({})
   const [days, setDays] = useState(
     initial.hoursEffort && parseFloat(initial.hoursEffort) > 0
       ? String(parseFloat((parseFloat(initial.hoursEffort) / hoursPerDay).toFixed(2)))
       : ''
   )
 
-  const f = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  const f = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setForm(v => ({ ...v, [field]: e.target.value }))
+    if (field === 'durationDays') setErrors(v => ({ ...v, durationDays: '' }))
+  }
 
   const onHoursChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const h = e.target.value
@@ -202,11 +205,20 @@ function TaskForm({ initial, resourceTypes, hoursPerDay, onSave, onCancel, savin
         </div>
         <div className="col-span-2">
           <label className="block text-xs text-gray-400 dark:text-gray-500 mb-0.5">Duration override (days) — optional</label>
-          <input type="number" placeholder="Leave blank to use hours/day rate" min="0" step="0.5" value={form.durationDays} onChange={f('durationDays')} className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-xs text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+          <input type="number" placeholder="Leave blank to use hours/day rate" min="1" step="0.5" value={form.durationDays} onChange={f('durationDays')} className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-xs text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+          {errors.durationDays && <p className="text-xs text-red-500 mt-0.5">{errors.durationDays}</p>}
         </div>
       </div>
       <div className="flex gap-2">
-        <button onClick={() => onSave(form)} disabled={!form.name || !form.resourceTypeId || saving}
+        <button onClick={() => {
+          const dd = form.durationDays.trim()
+          if (dd && (parseFloat(dd) <= 0 || isNaN(parseFloat(dd)))) {
+            setErrors(v => ({ ...v, durationDays: 'Duration must be at least 1 day' }))
+            return
+          }
+          setErrors({})
+          onSave(form)
+        }} disabled={!form.name || !form.resourceTypeId || saving}
           className="bg-lab3-navy text-white px-3 py-1 rounded text-xs font-medium hover:bg-lab3-blue disabled:opacity-50">
           {saving ? 'Saving…' : 'Save'}
         </button>
