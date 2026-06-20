@@ -240,6 +240,7 @@ export default function GlobalResourceTypesPage() {
                   <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Description</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Default hrs/day</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Default day rate</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Default</th>
                   {isAdmin ? (
                     <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Actions</th>
                   ) : (
