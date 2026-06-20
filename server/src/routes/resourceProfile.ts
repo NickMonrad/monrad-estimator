@@ -9,7 +9,7 @@ import {
   shouldFallbackToActiveCapacityPlan,
 } from '../lib/capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
-
+import { mergeWeeklyDemand, computePlanningWindow } from '../lib/projectPlanningModel.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
@@ -87,10 +87,13 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
-  const projectDurationWeeks =
-    (project.timelineEntries.length > 0
-      ? Math.max(...project.timelineEntries.map(te => te.startWeek + te.durationWeeks))
-      : 0) + (project.bufferWeeks ?? 0) + (project.onboardingWeeks ?? 0)
+  const planningWindow = computePlanningWindow(
+    project.timelineEntries,
+    project.startDate,
+    project.bufferWeeks ?? 0,
+    project.onboardingWeeks ?? 0,
+  )
+  const projectDurationWeeks = planningWindow.maxWeek ?? 0
 
   // Build lookup maps for timeline entries
   const featureEntryMap = new Map(project.timelineEntries.map(e => [e.featureId, e]))
@@ -253,56 +256,30 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       }
     }
   }
-
-  const weeklyDemandMap = new Map<string, number>(fallbackWeeklyDemandMap)
-
-  if (project.weeklyDemandCache && Object.keys(project.weeklyDemandCache as Record<string, number>).length > 0) {
-    const cachedResourceTypes = new Set<string>()
-    const cachedMaxWeekByRt = new Map<string, number>()
-
-    for (const [key] of Object.entries(project.weeklyDemandCache as Record<string, number>)) {
-      const separatorIdx = key.lastIndexOf('|')
-      if (separatorIdx === -1) continue
-      const resourceTypeName = key.substring(0, separatorIdx)
-      const week = Number(key.substring(separatorIdx + 1))
-      if (!Number.isFinite(week)) continue
-      cachedResourceTypes.add(resourceTypeName)
-      const prev = cachedMaxWeekByRt.get(resourceTypeName) ?? Number.NEGATIVE_INFINITY
-      cachedMaxWeekByRt.set(resourceTypeName, Math.max(prev, week))
-    }
-
-    for (const key of Array.from(weeklyDemandMap.keys())) {
+  // Convert fallback demand map to WeeklyDemandRow[] for mergeWeeklyDemand
+  const fallbackRows: Array<{ week: number; resourceTypeName: string; demandDays: number; capacityDays: number }> =
+    Array.from(fallbackWeeklyDemandMap.entries()).map(([key, demandDays]) => {
       const separatorIdx = key.indexOf('|')
-      if (separatorIdx === -1) continue
-      const week = Number(key.substring(0, separatorIdx))
-      const resourceTypeName = key.substring(separatorIdx + 1)
-      if (cachedResourceTypes.has(resourceTypeName)) {
-        const rtMaxWeek = cachedMaxWeekByRt.get(resourceTypeName)
-        if (rtMaxWeek != null && week <= rtMaxWeek) {
-          weeklyDemandMap.delete(key)
-        }
+      return {
+        week: Number(key.substring(0, separatorIdx)),
+        resourceTypeName: key.substring(separatorIdx + 1),
+        demandDays,
+        capacityDays: 0,
       }
-    }
+    })
 
-    for (const [key, demandDays] of Object.entries(project.weeklyDemandCache as Record<string, number>)) {
-      const separatorIdx = key.lastIndexOf('|')
-      if (separatorIdx === -1) continue
-      const resourceTypeName = key.substring(0, separatorIdx)
-      const week = Number(key.substring(separatorIdx + 1))
-      if (!Number.isFinite(week) || !Number.isFinite(demandDays) || demandDays <= 0) continue
-      weeklyDemandMap.set(weeklyDemandKey(week, resourceTypeName), round2(demandDays))
-    }
+  const weeklyDemandCache = project.weeklyDemandCache as Record<string, number> | null
+  let weeklyDemand: WeeklyDemandLike[]
+
+  if (weeklyDemandCache && Object.keys(weeklyDemandCache).length > 0) {
+    const simulatedDemand = new Map<string, number>(Object.entries(weeklyDemandCache))
+    const merged = mergeWeeklyDemand(fallbackRows, simulatedDemand)
+    weeklyDemand = merged.map(r => ({ week: r.week, resourceTypeName: r.resourceTypeName, demandDays: r.demandDays }))
+  } else {
+    weeklyDemand = fallbackRows.map(r => ({ week: r.week, resourceTypeName: r.resourceTypeName, demandDays: r.demandDays }))
   }
 
-  const weeklyDemand: WeeklyDemandLike[] = Array.from(weeklyDemandMap.entries()).map(([key, demandDays]) => {
-    const separatorIdx = key.indexOf('|')
-    return {
-      week: Number(key.substring(0, separatorIdx)),
-      resourceTypeName: key.substring(separatorIdx + 1),
-      demandDays,
-    }
-  }).filter(row => row.demandDays > 0)
-
+  weeklyDemand = weeklyDemand.filter(row => row.demandDays > 0)
   const namedResourceAssignments = deriveNamedResourceAssignments({
     resourceTypes: project.resourceTypes,
     weeklyDemand,
