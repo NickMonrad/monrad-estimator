@@ -105,6 +105,14 @@ function createProps(
     fmtDate: vi.fn(() => ''),
     formatNumber: (value: number, fractionDigits = 2) => value.toFixed(fractionDigits),
     saveBufferOnboarding: vi.fn(),
+    editingAllocation: null,
+    setEditingAllocation: vi.fn(),
+    allocationDraft: null,
+    setAllocationDraft: vi.fn(),
+    updateAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
+    updateNrAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
+    startEditAllocation: vi.fn(),
+    getAllocationBadge: (row: any) => ({ label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }),
     ...overrides,
   }
 }
@@ -240,5 +248,249 @@ describe('ResourceProfileTab', () => {
     )
 
     expect(screen.getByText('Assigned: Alex W3-W4')).toBeInTheDocument()
+  })
+
+  it('shows allocation editor when clicking the allocation badge', () => {
+    const setEditingAllocation = vi.fn()
+    const setAllocationDraft = vi.fn()
+    const updateAllocationMutate = vi.fn()
+    const props = createProps(1, {
+      profile: {
+        resourceRows: [
+          {
+            resourceTypeId: 'rt-dev',
+            name: 'Developer',
+            count: 1,
+            hoursPerDay: 8,
+            totalHours: 80,
+            totalDays: 10,
+            effortDays: 10,
+            allocatedDays: 10,
+            allocationMode: 'TIMELINE' as const,
+            allocationPercent: 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            derivedStartWeek: 0,
+            derivedEndWeek: 10,
+            dayRate: 500,
+            category: 'ENGINEERING',
+            estimatedCost: 5000,
+            namedResources: [],
+            epics: [],
+          } as any,
+        ],
+        overheadRows: [],
+        summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: true },
+        projectDurationWeeks: 12,
+        hoursPerDay: 8,
+        bufferWeeks: 0,
+        onboardingWeeks: 0,
+        projectId: 'project-1',
+      } as any,
+      filteredResourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 500,
+          totalHours: 80,
+          totalDays: 10,
+          effortDays: 10,
+          allocatedDays: 10,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 10,
+          estimatedCost: 5000,
+          epics: [],
+          namedResources: [],
+        },
+      ],
+      editingAllocation: null,
+      setEditingAllocation,
+      setAllocationDraft,
+      updateAllocationMutation: { isPending: false, mutate: updateAllocationMutate } as never,
+    })
+
+    const { container } = render(<ResourceProfileTab {...props} />)
+    const badge = container.querySelector('button[title="Click to edit allocation"]')
+    expect(badge).toBeTruthy()
+
+    // Click to open editor
+    fireEvent.click(badge!)
+    expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
+    expect(setAllocationDraft).toHaveBeenCalledWith({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+  })
+
+  it('shows allocation mode options in the editor', () => {
+    const props = createProps(1, {
+      profile: {
+        resourceRows: [
+          {
+            resourceTypeId: 'rt-dev',
+            name: 'Developer',
+            count: 1,
+            hoursPerDay: 8,
+            totalHours: 80,
+            totalDays: 10,
+            effortDays: 10,
+            allocatedDays: 10,
+            allocationMode: 'EFFORT' as const,
+            allocationPercent: 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            derivedStartWeek: null,
+            derivedEndWeek: null,
+            dayRate: 500,
+            category: 'ENGINEERING',
+            estimatedCost: 5000,
+            namedResources: [],
+            epics: [],
+          } as any,
+        ],
+        overheadRows: [],
+        summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: true },
+        projectDurationWeeks: 12,
+        hoursPerDay: 8,
+        bufferWeeks: 0,
+        onboardingWeeks: 0,
+        projectId: 'project-1',
+      } as any,
+      filteredResourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 500,
+          totalHours: 80,
+          totalDays: 10,
+          effortDays: 10,
+          allocatedDays: 10,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 10,
+          estimatedCost: 5000,
+          epics: [],
+          namedResources: [],
+        },
+      ],
+      editingAllocation: 'rt-dev',
+      allocationDraft: {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+      updateAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
+    })
+
+    const { container } = render(<ResourceProfileTab {...props} />)
+    // The inline editor should be visible with allocation mode dropdown
+    const select = container.querySelector('select')
+    expect(select).toBeTruthy()
+    expect(select?.querySelector('option[value="EFFORT"]')).toBeTruthy()
+    expect(select?.querySelector('option[value="TIMELINE"]')).toBeTruthy()
+    expect(select?.querySelector('option[value="FULL_PROJECT"]')).toBeTruthy()
+    expect(select?.querySelector('option[value="CAPACITY_PLAN"]')).toBeTruthy()
+  })
+
+  it('saves allocation changes when clicking Save', () => {
+    const updateAllocationMutate = vi.fn()
+    const props = createProps(1, {
+      profile: {
+        resourceRows: [
+          {
+            resourceTypeId: 'rt-dev',
+            name: 'Developer',
+            count: 1,
+            hoursPerDay: 8,
+            totalHours: 80,
+            totalDays: 10,
+            effortDays: 10,
+            allocatedDays: 10,
+            allocationMode: 'EFFORT' as const,
+            allocationPercent: 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            derivedStartWeek: null,
+            derivedEndWeek: null,
+            dayRate: 500,
+            category: 'ENGINEERING',
+            estimatedCost: 5000,
+            namedResources: [],
+            epics: [],
+          } as any,
+        ],
+        overheadRows: [],
+        summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: true },
+        projectDurationWeeks: 12,
+        hoursPerDay: 8,
+        bufferWeeks: 0,
+        onboardingWeeks: 0,
+        projectId: 'project-1',
+      } as any,
+      filteredResourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 500,
+          totalHours: 80,
+          totalDays: 10,
+          effortDays: 10,
+          allocatedDays: 10,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 10,
+          estimatedCost: 5000,
+          epics: [],
+          namedResources: [],
+        },
+      ],
+      editingAllocation: 'rt-dev',
+      allocationDraft: {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 75,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+      updateAllocationMutation: { isPending: false, mutate: updateAllocationMutate } as never,
+    })
+
+    const { container } = render(<ResourceProfileTab {...props} />)
+    const saveButton = container.querySelector('button')
+    // Find the Save button in the editor
+    const allButtons = container.querySelectorAll('button')
+    const saveBtn = Array.from(allButtons).find(b => b.textContent === 'Save')
+    expect(saveBtn).toBeTruthy()
+    fireEvent.click(saveBtn!)
+    expect(updateAllocationMutate).toHaveBeenCalledWith({
+      rtId: 'rt-dev',
+      data: {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 75,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+    })
   })
 })
