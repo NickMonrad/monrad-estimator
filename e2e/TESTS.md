@@ -223,6 +223,55 @@ All tests log in, create a fresh project, import a CSV with Tech Lead + Project 
 
 ---
 
+
+### `global-admin-auth.spec.ts` — Global Admin Auth (16 tests — issue #258)
+
+#### `Global admin auth — regular user` describe block (2 tests — serial)
+
+Creates a fresh regular user via API + DB to verify read-only UX.
+
+| Test | Description |
+|------|-------------|
+| Resource Types page shows read-only state for regular user | Navigates to `/resource-types` as a fresh regular user; asserts "Global resources can only be edited by a global admin." notice is visible; asserts "+ Add resource type" button is absent; asserts table headers include `Access` column; asserts body rows show "Read only" badge |
+| Rate Cards page shows read-only state for regular user | Navigates to `/rate-cards` as a fresh regular user; asserts "Rate cards can only be edited by a global admin." notice is visible; asserts "+ Create Rate Card" button absent; asserts rate card list items show "Read only" badge |
+
+#### `Global admin auth — API guards for regular user` describe block (6 tests — serial)
+
+Creates a fresh regular user via API. Tests run as direct API `request` calls (no browser).
+
+| Test | Description |
+|------|-------------|
+| POST /api/global-resource-types returns 403 for regular user | Attempts to create a global resource type — asserts HTTP 403 |
+| PUT /api/global-resource-types/:id returns 403 for regular user | Attempts to update a global resource type — asserts HTTP 403 |
+| DELETE /api/global-resource-types/:id returns 403 for regular user | Attempts to delete a global resource type — asserts HTTP 403 |
+| POST /api/rate-cards returns 403 for regular user | Attempts to create a rate card — asserts HTTP 403 |
+| PUT /api/rate-cards/:id returns 403 for regular user | Attempts to update a rate card — asserts HTTP 403 |
+| DELETE /api/rate-cards/:id returns 403 for regular user | Attempts to delete a rate card — asserts HTTP 403 |
+
+#### `Global admin auth — admin user` describe block (2 tests — serial)
+
+Creates a fresh admin user (via API registration + DB role update). Tests browser UI flows.
+
+| Test | Description |
+|------|-------------|
+| Resource Types page shows admin controls and allows CRUD | Navigates to `/resource-types` as admin; asserts "+ Add resource type" button visible; asserts table headers include `Actions` column; asserts edit/delete buttons visible on rows; creates a uniquely named resource type via inline form; edits it; deletes it; asserts each step's result visible |
+| Rate Cards page shows admin controls and allows creation | Navigates to `/rate-cards` as admin; asserts "+ Create Rate Card" button visible; creates a rate card via modal (name + Developer entry at $1100/day); asserts it appears in the list; optionally sets as default and verifies badge |
+
+#### `Global admin auth — API success for admin user` describe block (6 tests — serial)
+
+Creates a fresh admin user (via API registration + DB role update). Tests run as direct API `request` calls (no browser).
+
+| Test | Description |
+|------|-------------|
+| POST /api/global-resource-types succeeds for admin | Creates a global resource type — asserts HTTP 201 and name match |
+| PUT /api/global-resource-types/:id succeeds for admin | Updates the created resource type — asserts HTTP 200 |
+| DELETE /api/global-resource-types/:id succeeds for admin | Deletes the created resource type — asserts HTTP 204 |
+| POST /api/rate-cards succeeds for admin | Creates a rate card with a Developer entry — asserts HTTP 201 and name match |
+| PUT /api/rate-cards/:id succeeds for admin | Updates the created rate card name — asserts HTTP 200 |
+| DELETE /api/rate-cards/:id succeeds for admin | Deletes the created rate card — asserts HTTP 204 |
+
+---
+
 ## Adding New Tests
 
 1. Add tests to the relevant spec file (or create a new `*.spec.ts` if the feature area is new)
@@ -242,10 +291,12 @@ All tests log in, create a fresh project, import a CSV with Tech Lead + Project 
 ### Helper reference
 
 ```ts
-import { login, createProject, TEST_EMAIL, TEST_PASSWORD } from './helpers'
+import { login, createProject, createTestUser, createUserAndLogin, TEST_EMAIL, TEST_PASSWORD } from './helpers'
 
-// login(page)           — navigates to / and signs in, waits for /projects
-// createProject(page, name) — clicks New Project, fills name, submits
+// login(page)                       — navigates to / and signs in with seed user, waits for /projects
+// createProject(page, name)         — clicks New Project, fills name, submits
+// createTestUser(role?)             — creates unique test user (USER/ADMIN) via API + optional DB role update
+// createUserAndLogin(page, role?)   — creates test user and logs in via browser UI
 ```
 
 ---
