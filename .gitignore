@@ -9,3 +9,4 @@ server/uploads/templates/*
 server/uploads/generated/*
 !server/uploads/generated/.gitkeep
 backups/
+test-results/
