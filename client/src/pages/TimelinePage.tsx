@@ -938,7 +938,7 @@ export default function TimelinePage() {
               <div className="mt-3">
                 <button onClick={() => savePlanningSettings.mutate()} disabled={savePlanningSettings.isPending}
                   className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
-                  {savePlanningSettings.isPending ? 'Saving…' : 'Save'}
+                  {savePlanningSettings.isPending ? 'Saving…' : 'Save Settings'}
                 </button>
               </div>
             </div>
