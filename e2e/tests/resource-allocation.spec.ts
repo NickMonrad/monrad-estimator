@@ -148,8 +148,10 @@ test.describe('Resource Allocation', () => {
 
     await page.locator('[data-testid="allocation-save"]').click()
 
-    await expect(page.getByText(/Allocation Mode/i).first()).not.toBeVisible({ timeout: 8_000 })
+    // Wait for the editor to close (onSuccess handler sets editingAllocation to null)
+    await expect(page.locator('[data-testid="allocation-save"]')).not.toBeVisible({ timeout: 10_000 })
 
+    // The badge should still be visible (row intact after save)
     await expect(
       page.locator('button[title="Click to edit allocation"]').first()
     ).toBeVisible({ timeout: 8_000 })
@@ -162,7 +164,6 @@ test.describe('Resource Allocation', () => {
 
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
-
     const badgeTextBefore = await badge.textContent()
 
     await badge.click({ force: true })
@@ -171,10 +172,13 @@ test.describe('Resource Allocation', () => {
     const modeSelect = page.locator('select').filter({ hasText: /T&M|Timeline window|Full project/ }).first()
     await modeSelect.selectOption('FULL_PROJECT')
 
-    await page.getByRole('button', { name: /^Cancel$/ }).click()
+    // Click Cancel via data-testid
+    await page.locator('[data-testid="allocation-cancel"]').click()
 
-    await expect(page.getByText(/Allocation Mode/i).first()).not.toBeVisible({ timeout: 8_000 })
+    // Editor should close
+    await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 8_000 })
 
+    // Badge text should be unchanged
     const badgeAfter = page.locator('button[title="Click to edit allocation"]').first()
     const badgeTextAfter = await badgeAfter.textContent()
     expect(badgeTextAfter?.trim()).toBe(badgeTextBefore?.trim())
