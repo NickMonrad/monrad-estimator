@@ -243,13 +243,13 @@ export default function ResourceProfileTab({
                             </>
                           )}
                           <div className="flex gap-2 ml-auto">
-                            <button onClick={() => {
+                            <button data-testid="allocation-save" onClick={() => {
                               updateAllocationMutation.mutate({ rtId: row.resourceTypeId, data: { allocationMode: allocationDraft.allocationMode, allocationPercent: allocationDraft.allocationPercent, allocationStartWeek: allocationDraft.allocationStartWeek, allocationEndWeek: allocationDraft.allocationEndWeek } })
                             }} disabled={updateAllocationMutation.isPending}
                               className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
                               {updateAllocationMutation.isPending ? 'Saving…' : 'Save'}
                             </button>
-                            <button onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
+                            <button data-testid="allocation-cancel" onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
                               className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
                               Cancel
                             </button>

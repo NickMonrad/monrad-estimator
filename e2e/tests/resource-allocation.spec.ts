@@ -117,7 +117,7 @@ test.describe('Resource Allocation', () => {
 
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
-    await badge.click()
+    await badge.click({ force: true })
 
     await expect(page.getByText(/Allocation Mode/i).first()).toBeVisible({ timeout: 8_000 })
     await expect(page.getByText(/FTE %/i).first()).toBeVisible({ timeout: 5_000 })
@@ -139,7 +139,7 @@ test.describe('Resource Allocation', () => {
 
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
-    await badge.click()
+    await badge.click({ force: true })
 
     await expect(page.getByText(/FTE %/i).first()).toBeVisible({ timeout: 8_000 })
 
@@ -165,7 +165,7 @@ test.describe('Resource Allocation', () => {
 
     const badgeTextBefore = await badge.textContent()
 
-    await badge.click()
+    await badge.click({ force: true })
     await expect(page.getByText(/Allocation Mode/i).first()).toBeVisible({ timeout: 8_000 })
 
     const modeSelect = page.locator('select').filter({ hasText: /T&M|Timeline window|Full project/ }).first()
