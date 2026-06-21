@@ -250,7 +250,7 @@ test.describe('Timeline — cache invalidation', () => {
     const featureLabel = page.locator('[title="Core API"]').first()
     await featureLabel.click()
     await expect(page.getByText('Start week:').first()).toBeVisible({ timeout: 8_000 })
-    await page.locator('input[min="0"]').first().fill('5')
+    await page.locator('input[min="0"]:not([id])').first().fill('5')
     await page.getByRole('button', { name: /^save$/i }).click()
     await expect(
       page.getByRole('button', { name: /reset to auto/i })

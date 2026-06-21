@@ -298,6 +298,8 @@ export default function TimelinePage() {
   const [squadPlannerOpen, setSquadPlannerOpen] = useState(false)
   const [squadPlannerSeedSettings, setSquadPlannerSeedSettings] = useState<SquadPlannerSeedSettings | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [planningOnboardingWeeks, setPlanningOnboardingWeeks] = useState(0)
+  const [planningBufferWeeks, setPlanningBufferWeeks] = useState(0)
 
   const SCALE_KEY = 'gantt-scale'
   const [ganttScale, setGanttScale] = useState<GanttScale>(
@@ -436,6 +438,13 @@ export default function TimelinePage() {
       setStartDateInput(project.startDate.slice(0, 10))
     }
   }, [project?.startDate])
+  useEffect(() => {
+    if (project != null) {
+      setPlanningOnboardingWeeks(project.onboardingWeeks ?? 0)
+      setPlanningBufferWeeks(project.bufferWeeks ?? 0)
+    }
+  }, [project?.onboardingWeeks, project?.bufferWeeks])
+
 
   // Populate edit form with current entry values when a feature is selected
   useEffect(() => {
@@ -491,6 +500,16 @@ export default function TimelinePage() {
     onSuccess: (data) => {
       qc.setQueryData(['timeline', projectId], data)
       qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+    },
+  })
+
+  const savePlanningSettings = useMutation({
+    mutationFn: () =>
+      api.patch(`/projects/${projectId}`, { bufferWeeks: planningBufferWeeks, onboardingWeeks: planningOnboardingWeeks }).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
       qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
     },
   })
@@ -892,6 +911,36 @@ export default function TimelinePage() {
               ) : (
                 <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">No timeline generated yet</span>
               )}
+            </div>
+
+            {/* Planning settings — onboarding & buffer weeks */}
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Planning Settings</h3>
+              </div>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+                Used by the planning model to shape the project timeline and downstream resource/commercial views.
+              </p>
+              <div className="grid grid-cols-2 gap-4 max-w-md">
+                <div>
+                  <label htmlFor="timeline-onboarding-weeks" className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Onboarding Weeks</label>
+                  <input id="timeline-onboarding-weeks" type="number" min={0} value={planningOnboardingWeeks}
+                    onChange={e => setPlanningOnboardingWeeks(Number(e.target.value))}
+                    className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                </div>
+                <div>
+                  <label htmlFor="timeline-buffer-weeks" className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Buffer Weeks</label>
+                  <input id="timeline-buffer-weeks" type="number" min={0} value={planningBufferWeeks}
+                    onChange={e => setPlanningBufferWeeks(Number(e.target.value))}
+                    className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <button onClick={() => savePlanningSettings.mutate()} disabled={savePlanningSettings.isPending}
+                  className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
+                  {savePlanningSettings.isPending ? 'Saving…' : 'Save Settings'}
+                </button>
+              </div>
             </div>
 
             <div className="rounded-xl border border-red-200 bg-red-50/60 dark:border-red-900/40 dark:bg-red-900/10 p-4">
