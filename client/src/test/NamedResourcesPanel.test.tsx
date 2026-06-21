@@ -122,3 +122,50 @@ describe('NamedResourcesPanel cache invalidation', () => {
     })
   })
 })
+
+describe('NamedResourcesPanel billing basis terminology', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('displays Billing basis label', async () => {
+    renderPanel()
+    const labels = await screen.findAllByText('Billing basis')
+    expect(labels).toHaveLength(2)
+  })
+
+  it('shows Actual scheduled days option', async () => {
+    renderPanel()
+    await screen.findByDisplayValue('Developer 1')
+    const options = screen.getAllByText('Actual scheduled days')
+    expect(options).toHaveLength(2)
+  })
+
+  it('shows Planned allocation option', async () => {
+    renderPanel()
+    await screen.findByDisplayValue('Developer 1')
+    const options = screen.getAllByText('Planned allocation')
+    expect(options).toHaveLength(2)
+  })
+
+  it('does not show old labels Actual Days or Pro-rata', async () => {
+    renderPanel()
+    await screen.findByDisplayValue('Developer 1')
+    expect(screen.queryByText('Actual Days')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pro-rata')).not.toBeInTheDocument()
+  })
+
+  it('has accessible billing basis selects with name Billing basis', async () => {
+    renderPanel()
+    const selects = await screen.findAllByRole('combobox', { name: 'Billing basis' })
+    expect(selects).toHaveLength(2)
+  })
+
+  it('provides helper text that billing does not affect schedule', async () => {
+    renderPanel()
+    await screen.findByDisplayValue('Developer 1')
+    const descriptions = screen.getAllByText('Determines which days are used for commercial billing. Does not affect the planning schedule.')
+    expect(descriptions).toHaveLength(2)
+    descriptions.forEach(el => expect(el.className).toContain('sr-only'))
+  })
+})
