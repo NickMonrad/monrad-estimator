@@ -53,9 +53,7 @@ function renderTab(commercialData: CommercialData) {
       taxRateDraft=""
       setTaxRateDraft={vi.fn()}
       bufferWeeks={0}
-      setBufferWeeks={vi.fn()}
       onboardingWeeks={0}
-      setOnboardingWeeks={vi.fn()}
       createDiscount={{ mutate: vi.fn() } as any}
       deleteDiscount={{ mutate: vi.fn() } as any}
       updateTax={{ mutate: vi.fn() } as any}
@@ -66,7 +64,6 @@ function renderTab(commercialData: CommercialData) {
       weekToDate={vi.fn(() => null)}
       fmtDate={vi.fn(() => '')}
       formatNumber={(value: number, fractionDigits = 2) => value.toFixed(fractionDigits)}
-      saveBufferOnboarding={vi.fn()}
       filteredResourceRows={[]}
     />,
   )
@@ -288,9 +285,7 @@ describe('CommercialTab Planning Context', () => {
         taxRateDraft=""
         setTaxRateDraft={vi.fn()}
         bufferWeeks={2}
-        setBufferWeeks={vi.fn()}
         onboardingWeeks={3}
-        setOnboardingWeeks={vi.fn()}
         createDiscount={{ mutate: vi.fn() } as any}
         deleteDiscount={{ mutate: vi.fn() } as any}
         updateTax={{ mutate: vi.fn() } as any}
@@ -301,7 +296,6 @@ describe('CommercialTab Planning Context', () => {
         weekToDate={vi.fn(() => null)}
         fmtDate={vi.fn(() => '')}
         formatNumber={(value: number, fractionDigits = 2) => value.toFixed(fractionDigits)}
-        saveBufferOnboarding={vi.fn()}
         filteredResourceRows={[]}
       />,
     )

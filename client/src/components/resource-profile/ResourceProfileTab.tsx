@@ -19,11 +19,11 @@ export default function ResourceProfileTab({
   projectId, profile, profileLoading, overheadItems, resourceTypes,
   filteredResourceRows, hasCost, columnCount, chartData,
   expandedRows, expandedNamedResources, editingId, form, setForm, formError,
-  bufferWeeks, setBufferWeeks, onboardingWeeks, setOnboardingWeeks,
+  bufferWeeks, onboardingWeeks,
   toggleRow, toggleNamedResources, resetForm, handleFormSubmit, handleEdit, handleDelete,
   updateResourceType, addPerson, removeLastPerson,
   createOverhead, updateOverhead,
-  weekToDate, fmtDate, formatNumber, saveBufferOnboarding,
+  weekToDate, fmtDate, formatNumber,
   editingAllocation, setEditingAllocation, allocationDraft, setAllocationDraft,
   updateAllocationMutation,
 }: Props) {
