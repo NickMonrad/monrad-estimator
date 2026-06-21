@@ -12,11 +12,9 @@ export default function CommercialTab({
   selectedRateCardId, setSelectedRateCardId, rateCardResult,
   editingTaxLabel, setEditingTaxLabel, taxLabelDraft, setTaxLabelDraft,
   editingTaxRate, setEditingTaxRate, taxRateDraft, setTaxRateDraft,
-  editingAllocation, setEditingAllocation, allocationDraft, setAllocationDraft,
   bufferWeeks, setBufferWeeks, onboardingWeeks, setOnboardingWeeks,
   createDiscount, deleteDiscount, updateTax, applyRateCard,
-  updateAllocationMutation, updateNrAllocationMutation,
-  handleDiscountSubmit, handleApplyRateCard, startEditAllocation, getAllocationBadge,
+  handleDiscountSubmit, handleApplyRateCard, getAllocationBadge,
   weekToDate, fmtDate, formatNumber, saveBufferOnboarding,
   filteredResourceRows,
 }: Props) {
@@ -104,6 +102,9 @@ export default function CommercialTab({
       <header className="px-6 py-4 border-b border-gray-100 dark:border-gray-700">
         <h2 className="text-base font-semibold text-gray-900 dark:text-white">Cost Summary</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400">Breakdown by resource type with day rates and discounts</p>
+        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+          Allocation mode and schedule settings are managed in the <strong>Resource Profile</strong> tab.
+        </p>
       </header>
       {!commercialData || commercialData.rows.length === 0 ? (
         <div className="py-12 text-center text-gray-400 dark:text-gray-500">
@@ -137,20 +138,19 @@ export default function CommercialTab({
                     <td className="text-center px-4 py-3 text-gray-800 dark:text-gray-100">{row.count}</td>
                     <td className="text-right px-4 py-3 text-gray-500 dark:text-gray-400">{formatNumber(row.effortDays)}</td>
                     <td className="px-4 py-3">
-                      {(row.kind === 'resource' || row.kind === 'named-resource') ? (() => {
-                        const badge = getAllocationBadge(row)
-                        const isAggregate = row.allocationMode === 'AGGREGATE'
-                        if (isAggregate) return <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color}`}>{badge.label}</span>
-                        return (
-                          <div>
-                            <button onClick={() => editingAllocation === row.id ? setEditingAllocation(null) : startEditAllocation(row)}
-                              className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color} hover:opacity-80 transition-opacity`} title="Click to edit allocation">
-                              {badge.label}
-                            </button>
-                            {badge.sub && <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{badge.sub}</div>}
-                          </div>
-                        )
-                      })() : <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>}
+                    {(row.kind === 'resource' || row.kind === 'named-resource') ? (() => {
+                      const badge = getAllocationBadge(row)
+                      const isAggregate = row.allocationMode === 'AGGREGATE'
+                      if (isAggregate) return <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color}`}>{badge.label}</span>
+                      return (
+                        <div>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color}`}>
+                            {badge.label}
+                          </span>
+                          {badge.sub && <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{badge.sub}</div>}
+                        </div>
+                      )
+                    })() : <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                       {(row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' ? (() => {
@@ -168,68 +168,6 @@ export default function CommercialTab({
                     <td className="text-right px-4 py-3 text-gray-800 dark:text-gray-100">${formatNumber(row.dayRate, 0)}</td>
                     <td className="text-right px-6 py-3 text-gray-900 dark:text-white">${formatNumber(row.subtotal, 0)}</td>
                   </tr>
-                  {editingAllocation === row.id && allocationDraft && (row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' && (
-                    <tr className="border-b border-blue-100 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30">
-                      <td colSpan={8} className="px-6 py-4">
-                        <div className="flex flex-wrap items-end gap-4">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Allocation Mode</label>
-                            <select value={allocationDraft.allocationMode} onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
-                              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                              <option value="EFFORT">T&M (effort only)</option>
-                              <option value="TIMELINE">Timeline window</option>
-                              <option value="FULL_PROJECT">Full project</option>
-                              <option value="CAPACITY_PLAN">Capacity Plan</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">FTE %</label>
-                            <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
-                              onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
-                              className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                          </div>
-                          {allocationDraft.allocationMode === 'TIMELINE' && (
-                            <>
-                              <div>
-                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                                  Start Week override
-                                  {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
-                                </label>
-                                <input type="number" min={0} step={0.5} value={allocationDraft.allocationStartWeek ?? ''} placeholder="auto"
-                                  onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
-                                  className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                              </div>
-                              <div>
-                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                                  End Week override
-                                  {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
-                                </label>
-                                <input type="number" min={0} step={0.5} value={allocationDraft.allocationEndWeek ?? ''} placeholder="auto"
-                                  onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
-                                  className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                              </div>
-                            </>
-                          )}
-                          <div className="flex gap-2 ml-auto">
-                            <button onClick={() => {
-                              if (row.kind === 'named-resource') {
-                                updateNrAllocationMutation.mutate({ rtId: row.resourceTypeId, nrId: row.id, data: { allocationMode: allocationDraft.allocationMode, allocationPercent: allocationDraft.allocationPercent, allocationStartWeek: allocationDraft.allocationStartWeek, allocationEndWeek: allocationDraft.allocationEndWeek } })
-                              } else {
-                                updateAllocationMutation.mutate({ rtId: row.id, data: { allocationMode: allocationDraft.allocationMode, allocationPercent: allocationDraft.allocationPercent, allocationStartWeek: allocationDraft.allocationStartWeek, allocationEndWeek: allocationDraft.allocationEndWeek } })
-                              }
-                            }} disabled={updateAllocationMutation.isPending || updateNrAllocationMutation.isPending}
-                              className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50" data-testid="allocation-save">
-                              {(updateAllocationMutation.isPending || updateNrAllocationMutation.isPending) ? 'Saving…' : 'Save'}
-                            </button>
-                            <button onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
-                              className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" data-testid="allocation-cancel">
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
                   {row.appliedDiscounts.map(d => (
                     <tr key={d.id} className="border-b border-gray-50 bg-gray-50 dark:bg-gray-700">
                       <td className="px-6 py-2 pl-10 text-gray-500 dark:text-gray-400 italic text-xs" colSpan={7}>
