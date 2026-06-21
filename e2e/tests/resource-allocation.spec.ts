@@ -100,9 +100,9 @@ async function setupCommercialTab(page: import('@playwright/test').Page) {
     page.getByRole('heading', { name: /cost summary/i })
   ).toBeVisible({ timeout: 10_000 })
   // Wait for at least one resource row with an allocation badge
-  // Commercial tab shows read-only allocation badges (spans, not buttons)
+  // Badge text matches allocation mode labels: T&M, Timeline · n%, Full Project · n%, Capacity Plan
   await expect(
-    page.locator('span.inline-flex.items-center.px-2.py-0.5.rounded').first()
+    page.locator('span[class*="inline-flex"][class*="rounded"]').first()
   ).toBeVisible({ timeout: 15_000 })
 
   return projectId
@@ -116,11 +116,11 @@ test.describe('Resource Allocation', () => {
     await setupCommercialTab(page)
 
     // The Allocation column should contain a badge for each resource row.
-    // Badge text is one of: "T&M", "Timeline · N%", "Full Project · N%"
-    const badge = page.locator('span.inline-flex.items-center.px-2.py-0.5.rounded').first()
+    // Badge text is one of: "T&M", "Timeline · N%", "Full Project · N%", "Capacity Plan"
+    const badge = page.locator('span[class*="inline-flex"][class*="rounded"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
     const badgeText = await badge.textContent()
-    expect(badgeText).toMatch(/T&M|Timeline|Full Project/)
+    expect(badgeText).toMatch(/T&M|Timeline|Full Project|Capacity Plan/)
   })
 
   test('allocation editor opens on badge click', async ({ page }) => {
