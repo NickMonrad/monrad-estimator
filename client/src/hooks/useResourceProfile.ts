@@ -621,10 +621,6 @@ export function useResourceProfile() {
   }
 
 
-  const saveBufferOnboarding = () =>
-    api.patch(`/projects/${projectId}`, { bufferWeeks, onboardingWeeks })
-      .then(() => qc.invalidateQueries({ queryKey: ['resource-profile', projectId] }))
-
   return {
     projectId, navigate, qc,
     project, profile, profileLoading, overheadItems, resourceTypes,
@@ -634,8 +630,7 @@ export function useResourceProfile() {
     editingId, setEditingId,
     formError, setFormError,
     form, setForm,
-    bufferWeeks, setBufferWeeks,
-    onboardingWeeks, setOnboardingWeeks,
+    bufferWeeks, onboardingWeeks,
     activeTab, setActiveTab,
     showDiscountForm, setShowDiscountForm,
     discountForm, setDiscountForm,
@@ -661,7 +656,6 @@ export function useResourceProfile() {
     startEditAllocation, getAllocationBadge,
     toggleRow, toggleNamedResources,
     weekToDate, fmtDate, formatNumber,
-    saveBufferOnboarding,
   }
 }
 

@@ -145,7 +145,7 @@ test.describe('Gantt Chart', () => {
     await expect(page.getByText('Start week:').first()).toBeVisible({ timeout: 8_000 })
 
     // Move the feature to week 2 (any value ≠ current auto-scheduled week)
-    const startWeekInput = page.locator('input[min="0"]').first()
+    const startWeekInput = page.locator('input[min="0"]:not([id])').first()
     await startWeekInput.fill('2')
 
     // Save — triggers PUT /timeline/:featureId with isManual: true

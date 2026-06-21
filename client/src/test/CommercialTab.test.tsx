@@ -53,9 +53,7 @@ function renderTab(commercialData: CommercialData) {
       taxRateDraft=""
       setTaxRateDraft={vi.fn()}
       bufferWeeks={0}
-      setBufferWeeks={vi.fn()}
       onboardingWeeks={0}
-      setOnboardingWeeks={vi.fn()}
       createDiscount={{ mutate: vi.fn() } as any}
       deleteDiscount={{ mutate: vi.fn() } as any}
       updateTax={{ mutate: vi.fn() } as any}
@@ -66,7 +64,6 @@ function renderTab(commercialData: CommercialData) {
       weekToDate={vi.fn(() => null)}
       fmtDate={vi.fn(() => '')}
       formatNumber={(value: number, fractionDigits = 2) => value.toFixed(fractionDigits)}
-      saveBufferOnboarding={vi.fn()}
       filteredResourceRows={[]}
     />,
   )
@@ -241,5 +238,79 @@ describe('CommercialTab billing basis indicator', () => {
     expect(screen.queryByRole('combobox', { name: /allocation mode/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /edit allocation/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: /timeline|effort|capacity plan|full project/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('CommercialTab Planning Context', () => {
+  it('shows Planning Context heading with read-only values', () => {
+    renderTab(createMockCommercialData())
+
+    expect(screen.getByText('Planning Context')).toBeInTheDocument()
+    // Default bufferWeeks=0, onboardingWeeks=0
+    expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Set in Timeline → Planning Settings')).toHaveLength(2)
+  })
+
+  it('shows actual onboarding and buffer weeks as read-only values', () => {
+    render(
+      <CommercialTab
+        projectId="project-1"
+        profile={{
+          projectId: 'project-1',
+          hoursPerDay: 8,
+          projectDurationWeeks: 12,
+          bufferWeeks: 2,
+          onboardingWeeks: 3,
+          resourceRows: [],
+          overheadRows: [],
+          summary: { totalHours: 0, totalDays: 0, totalCost: null, hasCost: false },
+        } as any}
+        project={{ id: 'project-1', name: 'Test', taxRate: null, taxLabel: '' } as any}
+        rateCards={[]}
+        commercialData={createMockCommercialData()}
+        showDiscountForm={false}
+        setShowDiscountForm={vi.fn()}
+        discountForm={null}
+        setDiscountForm={vi.fn()}
+        discountFormError={null}
+        selectedRateCardId={null}
+        setSelectedRateCardId={vi.fn()}
+        rateCardResult={null}
+        editingTaxLabel={false}
+        setEditingTaxLabel={vi.fn()}
+        taxLabelDraft=""
+        setTaxLabelDraft={vi.fn()}
+        editingTaxRate={false}
+        setEditingTaxRate={vi.fn()}
+        taxRateDraft=""
+        setTaxRateDraft={vi.fn()}
+        bufferWeeks={2}
+        onboardingWeeks={3}
+        createDiscount={{ mutate: vi.fn() } as any}
+        deleteDiscount={{ mutate: vi.fn() } as any}
+        updateTax={{ mutate: vi.fn() } as any}
+        applyRateCard={{ mutate: vi.fn() } as any}
+        handleDiscountSubmit={vi.fn()}
+        handleApplyRateCard={vi.fn()}
+        getAllocationBadge={() => ({ label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null })}
+        weekToDate={vi.fn(() => null)}
+        fmtDate={vi.fn(() => '')}
+        formatNumber={(value: number, fractionDigits = 2) => value.toFixed(fractionDigits)}
+        filteredResourceRows={[]}
+      />,
+    )
+
+    expect(screen.getByText('3')).toBeInTheDocument()
+    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.getByText('Planning Context')).toBeInTheDocument()
+  })
+
+  it('does not show editable Project Duration section with inputs and save', () => {
+    renderTab(createMockCommercialData())
+
+    expect(screen.queryByText('Project Duration')).not.toBeInTheDocument()
+    expect(screen.queryByText('Weeks at project start for team onboarding (added to period)')).not.toBeInTheDocument()
+    expect(screen.queryByText('Extra weeks added to project end date for contingency')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
   })
 })
