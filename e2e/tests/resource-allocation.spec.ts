@@ -100,8 +100,9 @@ async function setupCommercialTab(page: import('@playwright/test').Page) {
     page.getByRole('heading', { name: /cost summary/i })
   ).toBeVisible({ timeout: 10_000 })
   // Wait for at least one resource row with an allocation badge
+  // Commercial tab shows read-only allocation badges (spans, not buttons)
   await expect(
-    page.locator('button[title="Click to edit allocation"]').first()
+    page.locator('span.inline-flex.items-center.px-2.py-0.5.rounded').first()
   ).toBeVisible({ timeout: 15_000 })
 
   return projectId
@@ -116,7 +117,7 @@ test.describe('Resource Allocation', () => {
 
     // The Allocation column should contain a badge for each resource row.
     // Badge text is one of: "T&M", "Timeline · N%", "Full Project · N%"
-    const badge = page.locator('button[title="Click to edit allocation"]').first()
+    const badge = page.locator('span.inline-flex.items-center.px-2.py-0.5.rounded').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
     const badgeText = await badge.textContent()
     expect(badgeText).toMatch(/T&M|Timeline|Full Project/)
@@ -126,7 +127,9 @@ test.describe('Resource Allocation', () => {
     test.setTimeout(90_000)
     await setupCommercialTab(page)
 
-    // Click the first allocation badge in the table
+    // Navigate to Resource Profile tab where the allocation editor lives
+    await page.getByRole('button', { name: /resource profile/i }).first().click()
+    await expect(page.getByRole('heading', { name: /summary/i }).first()).toBeVisible({ timeout: 15_000 })
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await badge.click()
 
@@ -152,7 +155,9 @@ test.describe('Resource Allocation', () => {
     test.setTimeout(90_000)
     await setupCommercialTab(page)
 
-    // Capture the first badge before editing
+    // Navigate to Resource Profile tab where the allocation editor lives
+    await page.getByRole('button', { name: /resource profile/i }).first().click()
+    await expect(page.getByRole('heading', { name: /summary/i }).first()).toBeVisible({ timeout: 15_000 })
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await badge.click()
 
@@ -179,6 +184,9 @@ test.describe('Resource Allocation', () => {
     test.setTimeout(90_000)
     await setupCommercialTab(page)
 
+    // Navigate to Resource Profile tab where the allocation editor lives
+    await page.getByRole('button', { name: /resource profile/i }).first().click()
+    await expect(page.getByRole('heading', { name: /summary/i }).first()).toBeVisible({ timeout: 15_000 })
     const badge = page.locator('button[title="Click to edit allocation"]').first()
 
     // Record badge text before opening editor
