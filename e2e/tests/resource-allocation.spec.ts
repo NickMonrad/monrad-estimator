@@ -102,7 +102,7 @@ async function setupCommercialTab(page: import('@playwright/test').Page) {
   // Wait for at least one resource row with an allocation badge
   // Badge text matches allocation mode labels: T&M, Timeline · n%, Full Project · n%, Capacity Plan
   await expect(
-    page.locator('span[class*="inline-flex"][class*="rounded"]').first()
+    page.getByText(/^(T&M|Timeline ·|Full Project ·|Capacity Plan)/).first()
   ).toBeVisible({ timeout: 15_000 })
 
   return projectId
@@ -117,7 +117,7 @@ test.describe('Resource Allocation', () => {
 
     // The Allocation column should contain a badge for each resource row.
     // Badge text is one of: "T&M", "Timeline · N%", "Full Project · N%", "Capacity Plan"
-    const badge = page.locator('span[class*="inline-flex"][class*="rounded"]').first()
+    const badge = page.getByText(/^(T&M|Timeline ·|Full Project ·|Capacity Plan)/).first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
     const badgeText = await badge.textContent()
     expect(badgeText).toMatch(/T&M|Timeline|Full Project|Capacity Plan/)
