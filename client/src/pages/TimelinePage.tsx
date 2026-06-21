@@ -923,14 +923,14 @@ export default function TimelinePage() {
               </p>
               <div className="grid grid-cols-2 gap-4 max-w-md">
                 <div>
-                  <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Onboarding Weeks</label>
-                  <input type="number" min={0} value={planningOnboardingWeeks}
+                  <label htmlFor="timeline-onboarding-weeks" className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Onboarding Weeks</label>
+                  <input id="timeline-onboarding-weeks" type="number" min={0} value={planningOnboardingWeeks}
                     onChange={e => setPlanningOnboardingWeeks(Number(e.target.value))}
                     className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Buffer Weeks</label>
-                  <input type="number" min={0} value={planningBufferWeeks}
+                  <label htmlFor="timeline-buffer-weeks" className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Buffer Weeks</label>
+                  <input id="timeline-buffer-weeks" type="number" min={0} value={planningBufferWeeks}
                     onChange={e => setPlanningBufferWeeks(Number(e.target.value))}
                     className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
                 </div>
