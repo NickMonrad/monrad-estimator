@@ -493,3 +493,26 @@ describe('ResourceProfileTab', () => {
     }, { onSuccess: expect.any(Function) })
   })
 })
+
+describe('ResourceProfileTab Planning Context', () => {
+  it('shows Planning Context heading with read-only values', () => {
+    render(<ResourceProfileTab {...createProps(1, {
+      onboardingWeeks: 3,
+      bufferWeeks: 2,
+    })} />)
+
+    expect(screen.getByText('Planning Context')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.getAllByText('Set in Timeline → Planning Settings')).toHaveLength(2)
+  })
+  it('does not show editable Project Duration section with inputs and save', () => {
+    render(<ResourceProfileTab {...createProps(1)} />)
+
+    expect(screen.queryByText('Project Duration')).not.toBeInTheDocument()
+    expect(screen.queryByText('Weeks at project start for team onboarding (added to period)')).not.toBeInTheDocument()
+    expect(screen.queryByText('Extra weeks added to project end date for contingency')).not.toBeInTheDocument()
+    expect(screen.queryByText('Onboarding Weeks')).toBeInTheDocument()
+    expect(screen.queryByText('Buffer Weeks')).toBeInTheDocument()
+  })
+})

@@ -428,23 +428,18 @@ export default function ResourceProfileTab({
     </section>
 
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4">
-      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Project Duration</h3>
+      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Planning Context</h3>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Onboarding Weeks</label>
-          <input type="number" min={0} value={onboardingWeeks} onChange={e => setOnboardingWeeks(Number(e.target.value))}
-            className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Weeks at project start for team onboarding (added to period)</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">Onboarding Weeks</p>
+          <p className="text-sm font-medium text-gray-900 dark:text-white">{onboardingWeeks}</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Set in Timeline → Planning Settings</p>
         </div>
         <div>
-          <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Buffer Weeks</label>
-          <input type="number" min={0} value={bufferWeeks} onChange={e => setBufferWeeks(Number(e.target.value))}
-            className="w-full border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Extra weeks added to project end date for contingency</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">Buffer Weeks</p>
+          <p className="text-sm font-medium text-gray-900 dark:text-white">{bufferWeeks}</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Set in Timeline → Planning Settings</p>
         </div>
-      </div>
-      <div className="mt-3 flex justify-end">
-        <button onClick={saveBufferOnboarding} className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue">Save</button>
       </div>
     </div>
 
