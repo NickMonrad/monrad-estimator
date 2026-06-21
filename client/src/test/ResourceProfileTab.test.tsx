@@ -112,7 +112,7 @@ function createProps(
     updateAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     updateNrAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     startEditAllocation: vi.fn(),
-    getAllocationBadge: (row: any) => ({ label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }),
+    getAllocationBadge: () => ({ label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }),
     ...overrides,
   }
 }
@@ -477,7 +477,6 @@ describe('ResourceProfileTab', () => {
     })
 
     const { container } = render(<ResourceProfileTab {...props} />)
-    const saveButton = container.querySelector('button')
     // Find the Save button in the editor
     const allButtons = container.querySelectorAll('button')
     const saveBtn = Array.from(allButtons).find(b => b.textContent === 'Save')
