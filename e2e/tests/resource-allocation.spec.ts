@@ -69,8 +69,8 @@ async function setupCommercialTab(page: import('@playwright/test').Page) {
   // The Summary tab is the default view. Day rate inputs have class `w-20` and placeholder "—".
   // Resource types are PROJECT-SCOPED; each new project starts with dayRate=null unless the
   // global type has a defaultDayRate. Check inputValue() after data loads:
-  //   - non-empty -> inherited defaultDayRate, Commercial tab already works, skip
-  //   - empty     -> must set, fill and wait for the PUT to /projects/:id/resource-types/:id
+  //   - non-empty → inherited defaultDayRate, Commercial tab already works, skip
+  //   - empty     → must set, fill and wait for the PUT to /projects/:id/resource-types/:id
   await expect(page.locator('input.w-20').first()).toBeVisible({ timeout: 10_000 })
   const dayRateInputs = page.locator('input.w-20')
   const drCount = await dayRateInputs.count()
@@ -110,6 +110,21 @@ async function setupCommercialTab(page: import('@playwright/test').Page) {
 
 /* ======================================================================== */
 
+async function gotoResourceProfile(page: import('@playwright/test').Page, projectId: string) {
+  const [rtLoadResponse] = await Promise.all([
+    page.waitForResponse(
+      resp =>
+        resp.url().includes(`/projects/${projectId}/resource-types`) &&
+        !resp.url().includes('/named-resources') &&
+        resp.request().method() === 'GET',
+      { timeout: 15_000 }
+    ),
+    page.goto(`/projects/${projectId}/resource-profile`),
+  ])
+  expect(rtLoadResponse.ok()).toBeTruthy()
+  await expect(page.getByRole('heading', { name: /^summary$/i }).first()).toBeVisible({ timeout: 15_000 })
+}
+
 test.describe('Resource Allocation', () => {
   test('commercial tab shows allocation badge', async ({ page }) => {
     test.setTimeout(90_000)
@@ -126,10 +141,7 @@ test.describe('Resource Allocation', () => {
   test('allocation editor opens on badge click', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
-    // Navigate to Resource Profile tab where the allocation editor lives
-    await page.goto(`/projects/${projectId}/resource-profile`)
-    // Wait for the summary table to load
-    await expect(page.getByRole('heading', { name: /^summary$/i }).first()).toBeVisible({ timeout: 15_000 })
+    await gotoResourceProfile(page, projectId)
 
     // Click the first allocation badge in the table
     const badge = page.locator('button[title="Click to edit allocation"]').first()
@@ -156,10 +168,7 @@ test.describe('Resource Allocation', () => {
   test('changing FTE % updates allocated days', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
-    // Navigate to Resource Profile tab where the allocation editor lives
-    await page.goto(`/projects/${projectId}/resource-profile`)
-    // Wait for the summary table to load
-    await expect(page.getByRole('heading', { name: /^summary$/i }).first()).toBeVisible({ timeout: 15_000 })
+    await gotoResourceProfile(page, projectId)
 
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await badge.click()
@@ -186,10 +195,7 @@ test.describe('Resource Allocation', () => {
   test('cancel closes editor without changing mode badge', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
-    // Navigate to Resource Profile tab where the allocation editor lives
-    await page.goto(`/projects/${projectId}/resource-profile`)
-    // Wait for the summary table to load
-    await expect(page.getByRole('heading', { name: /^summary$/i }).first()).toBeVisible({ timeout: 15_000 })
+    await gotoResourceProfile(page, projectId)
 
     const badge = page.locator('button[title="Click to edit allocation"]').first()
 
@@ -218,14 +224,7 @@ test.describe('Resource Allocation', () => {
   test('summary tab shows Allocation column', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
-
-    // Navigate to the Resource Profile (summary) tab via URL
-    await page.goto(`/projects/${projectId}/resource-profile`)
-
-    // Wait for the summary table to load — the heading should be visible
-    await expect(
-      page.getByRole('heading', { name: /^summary$/i }).first()
-    ).toBeVisible({ timeout: 15_000 })
+    await gotoResourceProfile(page, projectId)
 
     // The summary table header should contain an "Allocation" column
     const allocationHeader = page.locator('th').filter({ hasText: /^Allocation$/ })
