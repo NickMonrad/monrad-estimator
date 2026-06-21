@@ -11,6 +11,7 @@ export default function CommercialTab({
   discountForm, setDiscountForm, discountFormError,
   selectedRateCardId, setSelectedRateCardId, rateCardResult,
   editingTaxLabel, setEditingTaxLabel, taxLabelDraft, setTaxLabelDraft,
+  editingTaxRate, setEditingTaxRate, taxRateDraft, setTaxRateDraft,
   bufferWeeks, onboardingWeeks,
   createDiscount, deleteDiscount, updateTax, applyRateCard,
   handleDiscountSubmit, handleApplyRateCard, getAllocationBadge,
