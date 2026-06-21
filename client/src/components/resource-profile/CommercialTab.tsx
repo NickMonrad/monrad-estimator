@@ -133,7 +133,11 @@ export default function CommercialTab({
                     <td className="px-6 py-3 text-gray-900 dark:text-white font-medium">
                       {row.name}
                       {row.kind === 'overhead' && <span className="text-xs text-amber-600 ml-2">(overhead)</span>}
-                      {row.kind === 'named-resource' && <span className="text-xs text-blue-500 ml-2">(person)</span>}
+                      {row.kind === 'named-resource' && (
+                        <span className="text-xs text-blue-500 ml-2">
+                          (person · {row.pricingModel === 'PRO_RATA' ? 'planned allocation' : 'actual scheduled days'})
+                        </span>
+                      )}
                     </td>
                     <td className="text-center px-4 py-3 text-gray-800 dark:text-gray-100">{row.count}</td>
                     <td className="text-right px-4 py-3 text-gray-500 dark:text-gray-400">{formatNumber(row.effortDays)}</td>

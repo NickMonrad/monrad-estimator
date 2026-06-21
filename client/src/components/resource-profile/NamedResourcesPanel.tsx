@@ -233,8 +233,11 @@ export default function NamedResourcesPanel({
                     disabled={!resource.persisted}
                     className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   />
+                  <label htmlFor={`billing-basis-${resource.id}`} className="block text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium" title="Determines which days are used for commercial billing — does not affect the planning schedule">Billing basis</label>
                   <select
+                    id={`billing-basis-${resource.id}`}
                     defaultValue={resource.pricingModel}
+                    aria-describedby={`billing-desc-${resource.id}`}
                     onChange={(e) => {
                       if (!resource.persisted) return
                       if (e.target.value !== resource.pricingModel) {
@@ -247,9 +250,10 @@ export default function NamedResourcesPanel({
                     disabled={!resource.persisted}
                     className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   >
-                    <option value="ACTUAL_DAYS">Actual Days</option>
-                    <option value="PRO_RATA">Pro-rata</option>
+                    <option value="ACTUAL_DAYS">Actual scheduled days</option>
+                    <option value="PRO_RATA">Planned allocation</option>
                   </select>
+                  <span id={`billing-desc-${resource.id}`} className="sr-only">Determines which days are used for commercial billing. Does not affect the planning schedule.</span>
                   <div className="text-xs text-gray-500 dark:text-gray-400">
                     <div>{formatAssignedSummary(resource.allocation)}</div>
                     {resource.allocation?.actualAllocatedDays ? (

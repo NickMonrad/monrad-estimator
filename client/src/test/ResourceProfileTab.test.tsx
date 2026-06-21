@@ -490,6 +490,6 @@ describe('ResourceProfileTab', () => {
         allocationStartWeek: null,
         allocationEndWeek: null,
       },
-    })
+    }, { onSuccess: expect.any(Function) })
   })
 })
