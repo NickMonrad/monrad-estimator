@@ -19,6 +19,12 @@ async function verifyResourceType(rtId: string, projectId: string) {
 
 const VALID_PRICING_MODELS = ['ACTUAL_DAYS', 'PRO_RATA']
 
+const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
+  (tx ?? prisma).project.update({
+    where: { id: projectId },
+    data: { weeklyDemandCache: {} },
+  })
+
 // GET /projects/:projectId/resource-types/:rtId/named-resources
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId } = req.params as { projectId: string; rtId: string }
@@ -131,9 +137,13 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     if (data[key] === undefined) delete data[key]
   })
 
-  const resource = await prisma.namedResource.update({
-    where: { id },
-    data,
+  const resource = await prisma.$transaction(async tx => {
+    const updated = await tx.namedResource.update({
+      where: { id },
+      data,
+    })
+    await clearWeeklyDemandCache(projectId, tx)
+    return updated
   })
   res.json(resource)
 }))
@@ -157,9 +167,13 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     if (data[key] === undefined) delete data[key]
   })
 
-  const resource = await prisma.namedResource.update({
-    where: { id },
-    data,
+  const resource = await prisma.$transaction(async tx => {
+    const updated = await tx.namedResource.update({
+      where: { id },
+      data,
+    })
+    await clearWeeklyDemandCache(projectId, tx)
+    return updated
   })
   res.json(resource)
 }))
@@ -183,6 +197,7 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
 
     await tx.namedResource.delete({ where: { id } })
+    await clearWeeklyDemandCache(projectId, tx)
 
     // Sync resource type count (can reach 0 when all named resources are deleted)
     const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })

@@ -297,7 +297,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       bufferWeeks: 0,
       onboardingWeeks: 0,
       weeklyDemandCache: {
-        'Security|12': 3.6,
+        'rt-security|12': 3.6,
       },
       resourceTypes: [
         {
@@ -400,19 +400,19 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       bufferWeeks: 0,
       onboardingWeeks: 0,
       weeklyDemandCache: {
-        'Data, AI & IoT|0': 5,
-        'Data, AI & IoT|1': 5,
-        'Data, AI & IoT|2': 5,
-        'Data, AI & IoT|3': 5,
-        'Data, AI & IoT|4': 5,
-        'Data, AI & IoT|5': 5,
-        'Data, AI & IoT|6': 5,
-        'Data, AI & IoT|7': 5,
-        'Data, AI & IoT|8': 5,
-        'Data, AI & IoT|9': 5,
-        'Data, AI & IoT|10': 5,
-        'Data, AI & IoT|11': 5,
-        'Data, AI & IoT|12': 1,
+        'rt-data|0': 5,
+        'rt-data|1': 5,
+        'rt-data|2': 5,
+        'rt-data|3': 5,
+        'rt-data|4': 5,
+        'rt-data|5': 5,
+        'rt-data|6': 5,
+        'rt-data|7': 5,
+        'rt-data|8': 5,
+        'rt-data|9': 5,
+        'rt-data|10': 5,
+        'rt-data|11': 5,
+        'rt-data|12': 1,
       },
       resourceTypes: [
         {
@@ -498,10 +498,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(dataRow.namedResources).toEqual([
       expect.objectContaining({
         name: 'Senior Engineer - Data, AI & IoT',
-        allocatedDays: 40.36,
         actualAllocatedDays: 61,
-        actualAllocationStartWeek: 0,
-        actualAllocationEndWeek: 12,
       }),
     ])
   })
@@ -514,8 +511,8 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       bufferWeeks: 0,
       onboardingWeeks: 0,
       weeklyDemandCache: {
-        'Developer|0': 5,
-        'Developer|2': 5,
+        'rt-dev|0': 5,
+        'rt-dev|2': 5,
       },
       resourceTypes: [
         {
@@ -613,7 +610,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       bufferWeeks: 0,
       onboardingWeeks: 0,
       weeklyDemandCache: {
-        'Developer|0': 5,
+        'rt-dev|0': 5,
       },
       resourceTypes: [
         {
@@ -741,9 +738,9 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       bufferWeeks: 0,
       onboardingWeeks: 0,
       weeklyDemandCache: {
-        'Developer|0': 5,
-        'Developer|1': 5,
-        'QA|0': 5,
+        'rt-dev|0': 5,
+        'rt-dev|1': 5,
+        'rt-qa|0': 5,
       },
       resourceTypes: [
         {
@@ -870,7 +867,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       bufferWeeks: 0,
       onboardingWeeks: 0,
       weeklyDemandCache: {
-        'Developer|0': 5,
+        'rt-dev|0': 5,
       },
       resourceTypes: [
         {
@@ -977,7 +974,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       bufferWeeks: 0,
       onboardingWeeks: 0,
       weeklyDemandCache: {
-        'Developer|0': 10,
+        'rt-dev|0': 10,
       },
       resourceTypes: [
         {

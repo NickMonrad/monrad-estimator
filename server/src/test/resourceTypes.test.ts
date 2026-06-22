@@ -303,6 +303,9 @@ describe('resource type manual scheduling regression', () => {
         delete: vi.fn().mockResolvedValue({}),
         count: vi.fn().mockResolvedValue(1),
       },
+      project: {
+        update: vi.fn().mockResolvedValue({}),
+      },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(exitTx))
     vi.mocked(prisma.resourceType.update)

@@ -28,8 +28,57 @@ import { deriveNamedResourceAssignments } from './namedResourceAssignments.js'
 import { effectiveDays } from '../utils/round.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Public Types
+// Cache key resolution (backward-compatible: tries ID then legacy name)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Backward-compatible cache key resolver.
+ * Tries key prefix as a resourceTypeId first; if no match, tries as a legacy
+ * resourceTypeName. Falls back to 'Unknown resource' when neither matches.
+ */
+export function resolveCacheKeyResourceTypeName(
+  prefix: string,
+  resourceTypes: Array<{ id: string; name: string }>,
+): string {
+  const byId = new Map(resourceTypes.map(rt => [rt.id, rt.name]))
+  const byName = new Map(resourceTypes.map(rt => [rt.name.toLowerCase(), rt.name]))
+
+  const nameFromId = byId.get(prefix)
+  if (nameFromId) return nameFromId
+
+  const nameFromLegacy = byName.get(prefix.toLowerCase())
+  if (nameFromLegacy) return nameFromLegacy
+
+  return 'Unknown resource'
+}
+
+/**
+ * Convert a raw weeklyDemandCache (Record<string, number>) whose keys may be
+ * in either modern (resourceTypeId|week) or legacy (resourceTypeName|week)
+ * format into a Map whose keys are always resourceTypeName|week.
+ *
+ * This is the single canonical entry point for reading the weeklyDemandCache.
+ * All cache readers should use this function.
+ */
+export function convertWeeklyDemandCache(
+  cache: Record<string, number> | null | undefined,
+  resourceTypes: Array<{ id: string; name: string }>,
+): Map<string, number> {
+  if (!cache) return new Map()
+  const result = new Map<string, number>()
+  for (const [key, value] of Object.entries(cache)) {
+    const sep = key.lastIndexOf('|')
+    if (sep < 0) continue
+    const prefix = key.substring(0, sep)
+    const week = key.substring(sep + 1)
+    const rtName = resolveCacheKeyResourceTypeName(prefix, resourceTypes)
+    result.set(`${rtName}|${week}`, value)
+  }
+  return result
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public Types
 
 export interface PlanningWindow {
   /** Last occupied week (max entry end week + buffer + onboarding) */
@@ -582,10 +631,10 @@ export async function buildProjectPlanningModel(
   )
 
   // ── 9. Compute weekly demand ─────────────────────────────────────────
-  const weeklyDemandCache = project.weeklyDemandCache as Record<string, number> | null
-  const simulatedDemand = weeklyDemandCache
-    ? new Map(Object.entries(weeklyDemandCache))
-    : null
+  const simulatedDemand = convertWeeklyDemandCache(
+    project.weeklyDemandCache as Record<string, number> | null,
+    resourceTypes,
+  )
 
   const fallbackDemand = buildFallbackWeeklyDemand(
     activeEntries,

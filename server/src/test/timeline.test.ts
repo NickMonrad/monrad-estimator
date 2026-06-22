@@ -154,8 +154,8 @@ describe('GET /api/projects/:projectId/timeline', () => {
       ...mockProject,
       bufferWeeks: 4,
       weeklyDemandCache: {
-        'Security|4': 2,
-        'Security|5': 2,
+        'rt-security|4': 2,
+        'rt-security|5': 2,
       },
     } as any)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
@@ -244,8 +244,8 @@ describe('GET /api/projects/:projectId/timeline', () => {
       ...mockProject,
       bufferWeeks: 0,
       weeklyDemandCache: {
-        'Security|0': 1.04,
-        'Security|15': 1.04,
+        'rt-security|0': 1.04,
+        'rt-security|15': 1.04,
       },
     } as any)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
@@ -316,7 +316,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,
       weeklyDemandCache: {
-        'Senior Engineer - Cloud & DevOps|56': 5.9,
+        'rt-cloud|56': 5.9,
       },
     } as any)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
@@ -394,7 +394,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,
       weeklyDemandCache: {
-        'Developer|0': 1.25,
+        'rt-1|0': 1.25,
       },
     } as any)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
@@ -458,8 +458,8 @@ describe('GET /api/projects/:projectId/timeline', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,
       weeklyDemandCache: {
-        'Developer|55': 2.5,
-        'Developer|57': 2.5,
+        'rt-1|55': 2.5,
+        'rt-1|57': 2.5,
       },
     } as any)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([{
@@ -525,10 +525,10 @@ describe('GET /api/projects/:projectId/timeline', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,
       weeklyDemandCache: {
-        'Principal Consultant - Security|10': 2.5,
-        'Principal Consultant - Security|11': 2.5,
-        'Developer|10': 1.5,
-        'Developer|14': 1.5,
+        'rt-security|10': 2.5,
+        'rt-security|11': 2.5,
+        'rt-1|10': 1.5,
+        'rt-1|14': 1.5,
       },
     } as any)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([
