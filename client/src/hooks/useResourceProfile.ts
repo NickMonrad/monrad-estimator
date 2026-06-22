@@ -158,6 +158,7 @@ export function useResourceProfile(): ResourceProfileState {
     startEditAllocation,
     getAllocationBadge,
   } = useAllocationEditing(projectId)
+  const getAllocationBadgeForRow = (row: CommercialRow) => getAllocationBadge(row, profile)
 
   // ── Buffer / onboarding weeks ──
   const [bufferWeeks, setBufferWeeks] = useState(0)
@@ -246,7 +247,7 @@ export function useResourceProfile(): ResourceProfileState {
     slugify, toCsvValue, buildProfileCsv, createCsvBlob, downloadBlob,
     handleExportProfile, handleExportFull,
     handleDiscountSubmit, handleApplyRateCard,
-    startEditAllocation, getAllocationBadge,
+    startEditAllocation, getAllocationBadge: getAllocationBadgeForRow,
     toggleRow, toggleNamedResources,
     weekToDate, fmtDate, formatNumber,
   }
