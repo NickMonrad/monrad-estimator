@@ -159,7 +159,7 @@ export default function NamedResourcesPanel({
                 <span>Start Week</span>
                 <span>End Week</span>
                 <span>Alloc %</span>
-                <span>Pricing</span>
+                <span>Billing basis</span>
                 <span>Assigned weeks</span>
                 <span />
               </div>
