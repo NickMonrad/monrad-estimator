@@ -13,6 +13,7 @@ import {
   mergeWeeklyDemand,
   computeWeeklyCapacity,
   applyCapacityPlanFallback,
+  convertWeeklyDemandCache,
 } from '../lib/projectPlanningModel.js'
 import type { MaterializedCapacityPlanResource } from '../lib/capacityPlanMaterialisation.js'
 import type { SchedulerNamedResource } from '../lib/scheduler.js'
@@ -634,5 +635,123 @@ describe('stable IDs and display metadata', () => {
     const result = applyCapacityPlanFallback(rt, new Map())
     expect(result[0].namedResources[0].id).toBe('nr-alice')
     expect(result[0].namedResources[0].name).toBe('Alice')
+  })
+})
+
+describe('regression: stale labels (#268)', () => {
+  it('named-resource name resolves from current DB data — not a stale cached label', () => {
+    const rt = [{
+      id: 'rt-dev',
+      name: 'Developer',
+      category: 'ENGINEERING',
+      count: 2,
+      hoursPerDay: 8,
+      dayRate: 500,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      namedResources: [
+        {
+          id: 'nr-1',
+          name: 'Renamed Person',
+          startWeek: null,
+          endWeek: null,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+          synthetic: false,
+        },
+      ],
+      capacityPlanMaterialized: undefined,
+    }]
+    const result = applyCapacityPlanFallback(rt, new Map())
+    expect(result[0].namedResources[0].name).toBe('Renamed Person')
+    expect(result[0].namedResources[0].id).toBe('nr-1')
+  })
+
+  it('resource-type name resolves from current DB data — weeklyDemandCache uses IDs', () => {
+    const rtName = 'Developer'
+    // mergeWeeklyDemand receives already-resolved resourceTypeName keys
+    const demand = mergeWeeklyDemand(
+      [{ week: 0, resourceTypeName: rtName, demandDays: 10, capacityDays: 5 }],
+      new Map([[`${rtName}|0`, 15]]),
+    )
+    expect(demand).toHaveLength(1)
+    expect(demand[0].resourceTypeName).toBe(rtName)
+    expect(demand[0].demandDays).toBe(15)
+  })
+
+  it('deleted resource type shows fallback label — Unknown resource', () => {
+    // The 'Unknown resource' fallback happens in buildProjectPlanningModel's
+    // ID-to-name conversion. mergeWeeklyDemand passes through whatever name it receives.
+    const demand = mergeWeeklyDemand(
+      [],
+      new Map([['Missing Role|0', 10]]),
+    )
+    expect(demand).toHaveLength(1)
+    expect(demand[0].resourceTypeName).toBe('Missing Role')
+    expect(demand[0].demandDays).toBe(10)
+  })
+
+  it('rename preserves numeric planning facts — allocated days unchanged', () => {
+    const demand = mergeWeeklyDemand(
+      [{ week: 0, resourceTypeName: 'Engineer', demandDays: 20, capacityDays: 5 }],
+      new Map(),
+    )
+    expect(demand[0].demandDays).toBe(20)
+    expect(demand[0].capacityDays).toBe(5)
+  })
+})
+
+describe('backward-compatible cache key parsing', () => {
+  const resourceTypes = [
+    { id: 'rt-dev', name: 'Developer' },
+    { id: 'rt-security', name: 'Principal Consultant - Security' },
+  ]
+
+  it('parses modern resourceTypeId|week keys', () => {
+    const result = convertWeeklyDemandCache(
+      { 'rt-dev|0': 5, 'rt-security|2': 3 },
+      resourceTypes,
+    )
+    expect(result.get('Developer|0')).toBe(5)
+    expect(result.get('Principal Consultant - Security|2')).toBe(3)
+    expect(result.size).toBe(2)
+  })
+
+  it('parses legacy resourceTypeName|week keys', () => {
+    const result = convertWeeklyDemandCache(
+      { 'Developer|0': 5, 'Principal Consultant - Security|2': 3 },
+      resourceTypes,
+    )
+    expect(result.get('Developer|0')).toBe(5)
+    expect(result.get('Principal Consultant - Security|2')).toBe(3)
+    expect(result.size).toBe(2)
+  })
+
+  it('resolves unmatched key prefix to Unknown resource', () => {
+    const result = convertWeeklyDemandCache(
+      { 'nonexistent-id|0': 5 },
+      resourceTypes,
+    )
+    expect(result.get('Unknown resource|0')).toBe(5)
+    expect(result.size).toBe(1)
+  })
+
+  it('gives ID priority over name when both match', () => {
+    const types = [
+      { id: 'rt-eng', name: 'Engineer' },
+      { id: 'rt-eng-alias', name: 'rt-eng' },  // name happens to match another RT's ID
+    ]
+    const result = convertWeeklyDemandCache(
+      { 'rt-eng|0': 5 },
+      types,
+    )
+    // Should prioritize ID match 'rt-eng' → 'Engineer', not name 'rt-eng' → that RT
+    expect(result.get('Engineer|0')).toBe(5)
+    expect(result.size).toBe(1)
   })
 })

@@ -9,7 +9,7 @@ import {
   shouldFallbackToActiveCapacityPlan,
 } from '../lib/capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
-import { buildFallbackWeeklyDemand, mergeWeeklyDemand, computePlanningWindow } from '../lib/projectPlanningModel.js'
+import { buildFallbackWeeklyDemand, mergeWeeklyDemand, computePlanningWindow, convertWeeklyDemandCache } from '../lib/projectPlanningModel.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
@@ -270,7 +270,10 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   let weeklyDemand: WeeklyDemandLike[]
 
   if (weeklyDemandCache && Object.keys(weeklyDemandCache).length > 0) {
-    const simulatedDemand = new Map<string, number>(Object.entries(weeklyDemandCache))
+    const simulatedDemand = convertWeeklyDemandCache(
+      weeklyDemandCache,
+      project.resourceTypes as Array<{ id: string; name: string }>,
+    )
     const merged = mergeWeeklyDemand(fallbackDemand, simulatedDemand)
     weeklyDemand = merged.map(r => ({ week: r.week, resourceTypeName: r.resourceTypeName, demandDays: r.demandDays }))
   } else {
