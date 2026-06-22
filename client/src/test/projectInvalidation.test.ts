@@ -80,8 +80,8 @@ describe('projectInvalidation', () => {
       // Planning: project, timeline, resource-profile (3)
       // Resource profile: resource-profile, resource-types, overheads, timeline (4, but resource-profile + timeline deduped by React Query)
       // Commercial: project, discounts, resource-profile (3, but project + resource-profile deduped)
-      // Total unique: 5 (project, timeline, resource-profile, resource-types, overheads, discounts)
-      // React Query deduplicates by queryKey, so we count the actual calls (they still happen, but React Query coalesces them)
+      // Total unique: 6 (project, timeline, resource-profile, resource-types, overheads, discounts)
+      // React Query deduplicates by queryKey, so the actual fetch is less than the call count
       expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['project', 'project-1'] })
       expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['timeline', 'project-1'] })
       expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['resource-profile', 'project-1'] })
