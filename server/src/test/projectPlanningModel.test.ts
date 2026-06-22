@@ -672,7 +672,6 @@ describe('regression: stale labels (#268)', () => {
   })
 
   it('resource-type name resolves from current DB data — weeklyDemandCache uses IDs', () => {
-    const rtId = 'rt-dev'
     const rtName = 'Developer'
     // mergeWeeklyDemand receives already-resolved resourceTypeName keys
     const demand = mergeWeeklyDemand(
