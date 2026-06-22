@@ -13,6 +13,7 @@ import {
   mergeWeeklyDemand,
   computeWeeklyCapacity,
   applyCapacityPlanFallback,
+  convertWeeklyDemandCache,
 } from '../lib/projectPlanningModel.js'
 import type { MaterializedCapacityPlanResource } from '../lib/capacityPlanMaterialisation.js'
 import type { SchedulerNamedResource } from '../lib/scheduler.js'
@@ -702,5 +703,55 @@ describe('regression: stale labels (#268)', () => {
     )
     expect(demand[0].demandDays).toBe(20)
     expect(demand[0].capacityDays).toBe(5)
+  })
+})
+
+describe('backward-compatible cache key parsing', () => {
+  const resourceTypes = [
+    { id: 'rt-dev', name: 'Developer' },
+    { id: 'rt-security', name: 'Principal Consultant - Security' },
+  ]
+
+  it('parses modern resourceTypeId|week keys', () => {
+    const result = convertWeeklyDemandCache(
+      { 'rt-dev|0': 5, 'rt-security|2': 3 },
+      resourceTypes,
+    )
+    expect(result.get('Developer|0')).toBe(5)
+    expect(result.get('Principal Consultant - Security|2')).toBe(3)
+    expect(result.size).toBe(2)
+  })
+
+  it('parses legacy resourceTypeName|week keys', () => {
+    const result = convertWeeklyDemandCache(
+      { 'Developer|0': 5, 'Principal Consultant - Security|2': 3 },
+      resourceTypes,
+    )
+    expect(result.get('Developer|0')).toBe(5)
+    expect(result.get('Principal Consultant - Security|2')).toBe(3)
+    expect(result.size).toBe(2)
+  })
+
+  it('resolves unmatched key prefix to Unknown resource', () => {
+    const result = convertWeeklyDemandCache(
+      { 'nonexistent-id|0': 5 },
+      resourceTypes,
+    )
+    expect(result.get('Unknown resource|0')).toBe(5)
+    expect(result.size).toBe(1)
+  })
+
+  it('gives ID priority over name when both match', () => {
+    const types = [
+      { id: 'rt-eng', name: 'Engineer' },
+      { id: 'rt-eng-alias', name: 'rt-eng' },  // name happens to match another RT's ID
+    ]
+    const result = convertWeeklyDemandCache(
+      { 'rt-eng|0': 5 },
+      types,
+    )
+    // Should prioritize ID match 'rt-eng' → 'Engineer', not name 'rt-eng' → that RT
+    expect(result.get('Engineer|0')).toBe(5)
+    expect(result.size).toBe(1)
   })
 })

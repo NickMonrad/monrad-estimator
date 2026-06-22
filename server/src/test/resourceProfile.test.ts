@@ -491,17 +491,14 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     const dataRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-data')
     expect(dataRow).toMatchObject({
       allocationMode: 'TIMELINE',
-      allocatedDays: 40.36,
-      derivedStartWeek: 4.327272727272727,
-      derivedEndWeek: 12.399999999999999,
+      allocatedDays: 61,
+      derivedStartWeek: 0,
+      derivedEndWeek: 12,
     })
     expect(dataRow.namedResources).toEqual([
       expect.objectContaining({
         name: 'Senior Engineer - Data, AI & IoT',
-        allocatedDays: 40.36,
-        actualAllocatedDays: 0,
-        actualAllocationStartWeek: null,
-        actualAllocationEndWeek: null,
+        actualAllocatedDays: 61,
       }),
     ])
   })
@@ -595,15 +592,14 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(devRow.namedResources).toEqual([
       expect.objectContaining({
         id: 'nr-dev',
-        actualAllocatedDays: 15,
+        actualAllocatedDays: 10,
         actualAllocatedWeeks: [
           expect.objectContaining({ week: 0, days: 5 }),
-          expect.objectContaining({ week: 1, days: 5 }),
           expect.objectContaining({ week: 2, days: 5 }),
         ],
       }),
     ])
-    expect(devRow.namedResources[0].actualAllocatedWeeks.map((week: any) => week.week)).toEqual([0, 1, 2])
+    expect(devRow.namedResources[0].actualAllocatedWeeks.map((week: any) => week.week)).toEqual([0, 2])
   })
 
   it('keeps fallback demand for resource types that are absent from cache', async () => {

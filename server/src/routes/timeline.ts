@@ -17,7 +17,7 @@ import {
   type MaterializedCapacityPlanResource,
 } from '../lib/capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments } from '../lib/namedResourceAssignments.js'
-import { buildProjectPlanningModel } from '../lib/projectPlanningModel.js'
+import { buildProjectPlanningModel, convertWeeklyDemandCache } from '../lib/projectPlanningModel.js'
 import { runSAPlanner } from '../lib/sa-planner.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
@@ -734,20 +734,20 @@ router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) =
   // Section 2 — Resource Demand
   const demandRows: string[] = ['ResourceType,Week,DemandDays,CapacityDays,Status']
   if (project.weeklyDemandCache) {
-    const cacheMap = project.weeklyDemandCache as Record<string, number>
-    const rtIdToRt = new Map(project.resourceTypes.map(rt => [rt.id, rt as ResourceTypeWithNamed]))
-    // Cache keys are `${resourceTypeId}|${week}` — resolve display name from current RT data
-    const cacheEntries = Object.entries(cacheMap).map(([key, demandDays]) => {
+    const simulatedDemand = convertWeeklyDemandCache(
+      project.weeklyDemandCache as Record<string, number>,
+      project.resourceTypes as Array<{ id: string; name: string }>,
+    )
+    const cacheEntries = Array.from(simulatedDemand.entries()).map(([key, demandDays]) => {
       const pipeIdx = key.lastIndexOf('|')
-      const rtId = key.slice(0, pipeIdx)
+      const rtName = key.slice(0, pipeIdx)
       const week = Number(key.slice(pipeIdx + 1))
-      const rt = rtIdToRt.get(rtId)
-      const rtName = rt?.name ?? 'Unknown resource'
-      return { rtName, rtId, week, demandDays }
+      return { rtName, week, demandDays }
     }).sort((a, b) => a.week - b.week || a.rtName.localeCompare(b.rtName))
 
-    for (const { rtName, rtId, week, demandDays } of cacheEntries) {
-      const rt = rtIdToRt.get(rtId)
+    const rtByName = new Map(project.resourceTypes.map(rt => [rt.name, rt as ResourceTypeWithNamed]))
+    for (const { rtName, week, demandDays } of cacheEntries) {
+      const rt = rtByName.get(rtName)
       const capacityHours = rt ? getWeeklyCapacity(rt, week, hpd) : hpd * 5
       const capacityDays = capacityHours / hpd
       const d = Math.round(demandDays * 100) / 100
