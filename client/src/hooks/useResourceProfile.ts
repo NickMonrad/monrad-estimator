@@ -82,7 +82,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
     'AssignedEndWeek',
     'AssignedSpans',
     'WeekAllocations',
-    'PricingModel',
+    'Billing basis',
   ]]
 
   profileData.resourceRows.forEach(row => {
@@ -107,7 +107,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
           namedResource.actualAllocationEndWeek != null ? formatWeekLabel(namedResource.actualAllocationEndWeek) : '',
           formatNamedResourceSegments(namedResource),
           formatNamedResourceWeeks(namedResource),
-          namedResource.pricingModel ?? 'ACTUAL_DAYS',
+          namedResource.pricingModel === 'PRO_RATA' ? 'Planned allocation' : 'Actual scheduled days',
         ])
       })
       return
