@@ -1,0 +1,193 @@
+import { useMemo } from 'react'
+import { api } from '../lib/api'
+import type { ResourceProfile, Project } from '../types/backlog'
+import JSZip from 'jszip'
+
+/**
+ * CSV export helpers and handlers for the Resource Profile domain.
+ */
+
+export const formatNumber = (value: number, fractionDigits = 2) =>
+  value.toLocaleString(undefined, { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })
+
+const asciiSafe = (value: string) => value
+  .replace(/[–—]/g, '-')
+  .replace(/×/g, 'x')
+
+export const toCsvValue = (value: string | number | null | undefined) => {
+  if (value == null) return ''
+  const str = asciiSafe(String(value))
+  if (/[,"\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`
+  }
+  return str
+}
+
+function formatWeekLabel(week: number) {
+  return `W${week + 1}`
+}
+
+function formatNamedResourceSegments(
+  namedResource: NonNullable<ResourceProfile['resourceRows'][number]['namedResources']>[number],
+) {
+  const segments = namedResource.actualAllocationSegments ?? []
+  if (segments.length === 0) return ''
+  return segments
+    .map(segment => {
+      const start = formatWeekLabel(segment.startWeek)
+      if (segment.startWeek === segment.endWeek) return `${start} (${segment.days.toFixed(2)}d)`
+      const end = formatWeekLabel(segment.endWeek)
+      return `${start}-${end} (${segment.days.toFixed(2)}d)`
+    })
+    .join('; ')
+}
+
+function formatNamedResourceWeeks(
+  namedResource: NonNullable<ResourceProfile['resourceRows'][number]['namedResources']>[number],
+) {
+  const weeks = namedResource.actualAllocatedWeeks ?? []
+  return weeks
+    .map(w => `${formatWeekLabel(w.week)}=${w.days.toFixed(2)}`)
+    .join('; ')
+}
+
+export const buildProfileCsv = (profileData: ResourceProfile) => {
+  const rows: string[][] = [
+    [
+      'Section', 'Role', 'NamedResource', 'SyntheticSlot', 'Category',
+      'Count', 'HoursPerDay', 'EffortDays', 'AllocatedDays', 'ActualAllocatedDays',
+      'DayRate', 'Cost', 'WindowStart', 'WindowEnd',
+      'ActualStart', 'ActualEnd', 'Segments', 'Weeks',
+      'PricingModel',
+    ],
+  ]
+
+  profileData.resourceRows.forEach(row => {
+    if (row.namedResources && row.namedResources.length > 0) {
+      row.namedResources.forEach(nr => {
+        rows.push([
+          'Resource', row.name, nr.name, nr.synthetic ? 'Yes' : 'No',
+          row.category, String(row.count), String(row.hoursPerDay),
+          String(row.effortDays), String(nr.allocatedDays), String(nr.actualAllocatedDays),
+          row.dayRate != null ? String(row.dayRate) : '',
+          row.dayRate != null ? (nr.actualAllocatedDays * row.dayRate).toFixed(2) : '',
+          nr.startWeek != null ? formatWeekLabel(nr.startWeek) : '',
+          nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '',
+          nr.actualAllocationStartWeek != null ? formatWeekLabel(nr.actualAllocationStartWeek) : '',
+          nr.actualAllocationEndWeek != null ? formatWeekLabel(nr.actualAllocationEndWeek) : '',
+          formatNamedResourceSegments(nr),
+          formatNamedResourceWeeks(nr),
+          nr.pricingModel === 'PRO_RATA' ? 'Planned allocation' : 'Actual scheduled days',
+        ])
+      })
+      return
+    }
+    rows.push([
+      'Resource', row.name, '', '', row.category,
+      String(row.count), String(row.hoursPerDay), String(row.effortDays),
+      String(row.totalDays), '',
+      row.dayRate != null ? String(row.dayRate) : '',
+      row.dayRate != null && row.totalDays != null ? (row.totalDays * row.dayRate).toFixed(2) : '',
+      '', '', '', '', '', '', '',
+    ])
+  })
+
+  profileData.overheadRows.forEach(row => {
+    rows.push([
+      'Overhead', row.name, '', '', '',
+      '', '', '', String(row.computedDays), '',
+      '', '',
+      row.cost != null ? String(row.cost) : '',
+      '', '', '', '', '',
+      row.resourceTypeName ?? '',
+    ])
+  })
+
+  return rows.map(r => r.map(toCsvValue).join(',')).join('\n')
+}
+
+const slugify = (text: string) =>
+  (text || 'project')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'project'
+
+const createCsvBlob = (csv: string) => new Blob([csv], { type: 'text/csv;charset=utf-8' })
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export interface ExportHandlers {
+  weekToDate: (weekNum: number | null | undefined) => Date | null
+  fmtDate: (d: Date | null) => string
+  handleExportProfile: () => void
+  handleExportFull: () => Promise<void>
+  slugify: (text: string) => string
+  toCsvValue: (value: string | number | null | undefined) => string
+  buildProfileCsv: (profileData: ResourceProfile) => string
+  formatNumber: (value: number, fractionDigits?: number) => string
+}
+
+export function useResourceProfileExport(
+  projectId: string | undefined,
+  project: Project | undefined,
+  profile: ResourceProfile | undefined,
+) {
+  const weekToDate = (weekNum: number | null | undefined): Date | null => {
+    if (weekNum == null || !project?.startDate) return null
+    const d = new Date(project.startDate)
+    d.setDate(d.getDate() + Math.round(weekNum * 7))
+    return d
+  }
+
+  const fmtDate = (d: Date | null): string => {
+    if (!d) return ''
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  }
+
+  const handleExportProfile = () => {
+    if (!profile) return
+    const csv = buildProfileCsv(profile)
+    const blob = createCsvBlob(csv)
+    const safeName = slugify(project?.name ?? 'project')
+    downloadBlob(blob, `${safeName}-resource-profile.csv`)
+  }
+
+  const handleExportFull = async () => {
+    if (!profile || !projectId) return
+    try {
+      const csv = buildProfileCsv(profile)
+      const safeName = slugify(project?.name ?? 'project')
+      const zip = new JSZip()
+      zip.file(`${safeName}-resource-profile.csv`, csv)
+      const [backlogRes, timelineRes] = await Promise.all([
+        api.get(`/projects/${projectId}/backlog/export-csv`, { responseType: 'blob' }),
+        api.get(`/projects/${projectId}/timeline/export/csv`, { responseType: 'blob' }),
+      ])
+      zip.file(`${safeName}-backlog.csv`, backlogRes.data)
+      zip.file(`${safeName}-timeline.csv`, timelineRes.data)
+      const blob = await zip.generateAsync({ type: 'blob' })
+      downloadBlob(blob, `${safeName}-project-export.zip`)
+    } catch (err) {
+      console.error(err)
+      alert('Failed to export project data. Please try again.')
+    }
+  }
+
+  return {
+    weekToDate,
+    fmtDate,
+    handleExportProfile,
+    handleExportFull,
+    slugify,
+    toCsvValue,
+    buildProfileCsv,
+    formatNumber,
+  }
+}
