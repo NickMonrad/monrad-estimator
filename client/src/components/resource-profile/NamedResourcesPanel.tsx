@@ -1,3 +1,4 @@
+import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type { ResourceProfileRow } from '../../types/backlog'
@@ -68,10 +69,8 @@ export default function NamedResourcesPanel({
         })
         .then((r) => r.data),
     onSuccess: () => {
+      invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     },
   })
 
@@ -94,10 +93,8 @@ export default function NamedResourcesPanel({
         )
         .then((r) => r.data),
     onSuccess: () => {
+      invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     },
   })
 
@@ -107,10 +104,8 @@ export default function NamedResourcesPanel({
         `/projects/${projectId}/resource-types/${rtId}/named-resources/${id}`,
       ),
     onSuccess: () => {
+      invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
     },
   })
 

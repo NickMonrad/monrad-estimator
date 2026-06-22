@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { invalidateProjectAll } from '../lib/projectInvalidation'
 import { api, getCustomers, getOrgs, moveProjectToOrg } from '../lib/api'
 import AppLayout from '../components/layout/AppLayout'
 import RichTextEditor from '../components/shared/RichTextEditor'
@@ -64,10 +65,8 @@ export default function ProjectSettingsPage() {
   const updateProject = useMutation({
     mutationFn: (data: typeof form) => api.put(`/projects/${id}`, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['project', id] })
+      invalidateProjectAll(qc, id)
       qc.invalidateQueries({ queryKey: ['projects'] })
-      qc.invalidateQueries({ queryKey: ['timeline', id] })
-      qc.invalidateQueries({ queryKey: ['resource-profile', id] })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     },
@@ -127,7 +126,7 @@ export default function ProjectSettingsPage() {
                 type="button"
                 onClick={async () => {
                   await moveProjectToOrg(id!, selectedOrgId)
-                  qc.invalidateQueries({ queryKey: ['project', id] })
+                  invalidateProjectAll(qc, id!)
                   setOrgSaved(true)
                   setTimeout(() => setOrgSaved(false), 2000)
                 }}

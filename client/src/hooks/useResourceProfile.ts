@@ -3,6 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import JSZip from 'jszip'
 import { api } from '../lib/api'
+import {
+  invalidateProjectResourceProfile,
+  invalidateProjectCommercial,
+} from '../lib/projectInvalidation'
+
 import type {
   Project,
   ResourceProfile,
@@ -278,13 +283,12 @@ export function useResourceProfile() {
     queryFn: () => api.get('/rate-cards').then(r => r.data),
     enabled: activeTab === 'commercial',
   })
-
   // ── Commercial mutations ──
   const createDiscount = useMutation({
     mutationFn: (data: { label: string; type: string; value: number }) =>
       api.post(`/projects/${projectId}/discounts`, data).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['discounts', projectId] })
+      invalidateProjectCommercial(qc, projectId)
       setShowDiscountForm(false)
       setDiscountForm({ label: '', type: 'PERCENTAGE', value: '' })
       setDiscountFormError(null)
@@ -293,14 +297,14 @@ export function useResourceProfile() {
 
   const deleteDiscount = useMutation({
     mutationFn: (id: string) => api.delete(`/projects/${projectId}/discounts/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['discounts', projectId] }),
+    onSuccess: () => invalidateProjectCommercial(qc, projectId),
   })
 
   const updateTax = useMutation({
     mutationFn: (data: { taxRate?: number | null; taxLabel?: string }) =>
       api.patch(`/projects/${projectId}/tax`, data).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      invalidateProjectCommercial(qc, projectId)
     },
   })
 
@@ -309,8 +313,7 @@ export function useResourceProfile() {
       api.post(`/projects/${projectId}/apply-rate-card`, { rateCardId }).then(r => r.data),
     onSuccess: (data: { updated: number; skipped: number }) => {
       setRateCardResult(data)
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      invalidateProjectResourceProfile(qc, projectId)
     },
   })
 
@@ -351,16 +354,14 @@ export function useResourceProfile() {
   }
 
   const invalidateProfile = () => {
-    qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-    qc.invalidateQueries({ queryKey: ['overheads', projectId] })
+    invalidateProjectResourceProfile(qc, projectId)
   }
 
   const updateResourceType = useMutation({
     mutationFn: ({ id, ...data }: { id: string; count?: number; hoursPerDay?: number | null; dayRate?: number | null }) =>
       api.put(`/projects/${projectId}/resource-types/${id}`, data).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      invalidateProjectResourceProfile(qc, projectId)
     },
   })
 
@@ -368,8 +369,7 @@ export function useResourceProfile() {
     mutationFn: ({ rtId, data }: { rtId: string; data: object }) =>
       api.put(`/projects/${projectId}/resource-types/${rtId}`, data).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      invalidateProjectResourceProfile(qc, projectId)
       setEditingAllocation(null)
       setAllocationDraft(null)
     },
@@ -379,21 +379,18 @@ export function useResourceProfile() {
     mutationFn: ({ rtId, nrId, data }: { rtId: string; nrId: string; data: object }) =>
       api.patch(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`, data).then(r => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      invalidateProjectResourceProfile(qc, projectId)
       setEditingAllocation(null)
       setAllocationDraft(null)
     },
   })
-
   const addPerson = useMutation({
     mutationFn: (rtId: string) =>
       api.post(`/projects/${projectId}/resource-types/${rtId}/named-resources`, {
         name: 'New person',
       }).then(r => r.data),
     onSuccess: (_data, rtId) => {
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
       // Auto-expand named resources panel so the user sees the people
       setExpandedNamedResources(prev => new Set([...prev, rtId]))
@@ -409,8 +406,7 @@ export function useResourceProfile() {
       }
     },
     onSuccess: (_data, rtId) => {
-      qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-      qc.invalidateQueries({ queryKey: ['resource-types', projectId] })
+      invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
   })
