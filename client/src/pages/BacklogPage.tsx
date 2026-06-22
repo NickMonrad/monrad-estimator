@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import DOMPurify from 'dompurify'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { invalidateProjectAll } from '../lib/projectInvalidation'
 import {
   DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors,
   type DragStartEvent, type DragOverEvent, type DragEndEvent,
@@ -67,9 +68,8 @@ export default function BacklogPage() {
 
   // Full invalidation: for mutations that affect effort/hours/active-status
   const invalidate = () => {
+    invalidateProjectAll(qc, projectId)
     qc.invalidateQueries({ queryKey: ['backlog', projectId] })
-    qc.invalidateQueries({ queryKey: ['timeline', projectId] })
-    qc.invalidateQueries({ queryKey: ['resource-profile', projectId] })
     qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
     qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
   }
