@@ -664,7 +664,6 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       const currentWeek = Math.floor(t)
       for (const rtId of allRtIds) {
         const rt = rtById.get(rtId)
-        const rtName = rt?.name ?? 'Unassigned'
         const hpd = rt?.hoursPerDay ?? fallbackHoursPerDay
         for (const [fId] of manualStartWeeks) {
           const fStart = simStart.get(fId)
@@ -698,7 +697,6 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
           ? getWeeklyCapacity(rt, currentWeek, fallbackHoursPerDay)
           : fallbackHoursPerDay * 5
         let capPerStep = capPerWeek * STEP
-        const rtName = rt?.name ?? 'Unassigned'
         const hpd = rt?.hoursPerDay ?? fallbackHoursPerDay
 
         for (const [fId] of manualStartWeeks) {

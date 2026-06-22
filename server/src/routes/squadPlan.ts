@@ -587,7 +587,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
       refreshedWeeklyDemandCache = buildWeeklyDemandCacheFromPlannerResult(
         plannerResult.weeklyDemandByResourceType,
-        replayResourceTypes,
       )
 
       // Persist epic start weeks
