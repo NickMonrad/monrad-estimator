@@ -131,7 +131,7 @@ describe('NamedResourcesPanel billing basis terminology', () => {
   it('displays Billing basis label', async () => {
     renderPanel()
     const labels = await screen.findAllByText('Billing basis')
-    expect(labels).toHaveLength(2)
+    expect(labels).toHaveLength(3)
   })
 
   it('shows Actual scheduled days option', async () => {
