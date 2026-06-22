@@ -335,7 +335,7 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     vi.mocked(prisma.epic.update).mockResolvedValue({} as never)
     vi.mocked(prisma.project.update).mockResolvedValue({
       ...mockProject,
-      weeklyDemandCache: { 'Developer|0': 2 },
+      weeklyDemandCache: { 'rt-dev|0': 2 },
     } as never)
 
     const res = await request(app)
@@ -373,7 +373,7 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     expect(res.status).toBe(201)
     expect(prisma.project.update).toHaveBeenCalledWith({
       where: { id: 'proj-1' },
-      data: { weeklyDemandCache: { 'Developer|0': 2 } },
+      data: { weeklyDemandCache: { 'rt-dev|0': 2 } },
     })
   })
 
@@ -513,8 +513,8 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     expect(res.status).toBe(201)
     const projectUpdateArg = vi.mocked(prisma.project.update).mock.calls.at(-1)?.[0]
     const weeklyDemandCache = projectUpdateArg?.data?.weeklyDemandCache as Record<string, number>
-    expect(weeklyDemandCache['Developer|0']).toBeCloseTo(5, 6)
-    expect(weeklyDemandCache['Developer|4']).toBeCloseTo(2.5, 6)
-    expect(weeklyDemandCache['Developer|4']).toBeLessThan(5)
+    expect(weeklyDemandCache['rt-dev|0']).toBeCloseTo(5, 6)
+    expect(weeklyDemandCache['rt-dev|4']).toBeCloseTo(2.5, 6)
+    expect(weeklyDemandCache['rt-dev|4']).toBeLessThan(5)
   })
 })

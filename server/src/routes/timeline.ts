@@ -123,7 +123,7 @@ function buildResponse(
   storyDeps: Array<{ storyId: string; dependsOnId: string }> = [],
   epicDeps: Array<{ epicId: string; dependsOnId: string }> = [],
   resourceTypes: ResourceTypeWithNamed[] = [],
-  simulatedDemand?: Map<string, number>,  // key: `${rtName}|${week}` → days consumed
+  simulatedDemand?: Map<string, number>,  // key: `${resourceTypeId}|${week}` → days consumed
   capacityPlanByRt: Map<string, MaterializedCapacityPlanResource> = new Map(),
 ) {
   const rawMaxWeek = entries.length > 0
@@ -134,9 +134,10 @@ function buildResponse(
     ? (() => { const d = new Date(project.startDate); d.setDate(d.getDate() + maxWeek * 7); return d.toISOString() })()
     : null
 
-  // Build resource type count map (name → count) for quick lookup
+  // Build resource type lookup maps (name→RT and ID→name) for quick access
   const rtCountByName = new Map(resourceTypes.map(rt => [rt.name, rt.count]))
   const rtByName = new Map(resourceTypes.map(rt => [rt.name, rt]))
+  const rtIdToName = new Map(resourceTypes.map(rt => [rt.id, rt.name]))
 
   const capacityDaysForWeek = (rt: ResourceTypeWithNamed, week: number) => {
     if ((rt.allocationMode as AllocationMode | null) === 'CAPACITY_PLAN') {
@@ -148,13 +149,14 @@ function buildResponse(
   }
 
   const weeklyDemandKey = (week: number, resourceTypeName: string) => `${week}|${resourceTypeName}`
-  const weeklyDemandSort = (a: WeeklyDemandRow, b: WeeklyDemandRow) =>
-    a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName)
+  const weeklyDemandSort = (a: WeeklyDemandRow, b: WeeklyDemandRow) => a.week - b.week || a.resourceTypeName.localeCompare(b.resourceTypeName)
   const parseSimulatedDemandKey = (key: string) => {
     const separatorIdx = key.lastIndexOf('|')
+    const rtId = key.substring(0, separatorIdx)
+    const week = parseInt(key.substring(separatorIdx + 1), 10)
     return {
-      resourceTypeName: key.substring(0, separatorIdx),
-      week: parseInt(key.substring(separatorIdx + 1), 10),
+      resourceTypeName: rtIdToName.get(rtId) ?? 'Unknown resource',
+      week,
     }
   }
 
@@ -733,17 +735,19 @@ router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) =
   const demandRows: string[] = ['ResourceType,Week,DemandDays,CapacityDays,Status']
   if (project.weeklyDemandCache) {
     const cacheMap = project.weeklyDemandCache as Record<string, number>
-    const rtByName = new Map(project.resourceTypes.map(rt => [rt.name, rt as ResourceTypeWithNamed]))
-    // Sort entries by (week, rtName) for deterministic output
+    const rtIdToRt = new Map(project.resourceTypes.map(rt => [rt.id, rt as ResourceTypeWithNamed]))
+    // Cache keys are `${resourceTypeId}|${week}` — resolve display name from current RT data
     const cacheEntries = Object.entries(cacheMap).map(([key, demandDays]) => {
       const pipeIdx = key.lastIndexOf('|')
-      const rtName = key.slice(0, pipeIdx)
+      const rtId = key.slice(0, pipeIdx)
       const week = Number(key.slice(pipeIdx + 1))
-      return { rtName, week, demandDays }
+      const rt = rtIdToRt.get(rtId)
+      const rtName = rt?.name ?? 'Unknown resource'
+      return { rtName, rtId, week, demandDays }
     }).sort((a, b) => a.week - b.week || a.rtName.localeCompare(b.rtName))
 
-    for (const { rtName, week, demandDays } of cacheEntries) {
-      const rt = rtByName.get(rtName)
+    for (const { rtName, rtId, week, demandDays } of cacheEntries) {
+      const rt = rtIdToRt.get(rtId)
       const capacityHours = rt ? getWeeklyCapacity(rt, week, hpd) : hpd * 5
       const capacityDays = capacityHours / hpd
       const d = Math.round(demandDays * 100) / 100

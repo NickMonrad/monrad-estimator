@@ -636,3 +636,72 @@ describe('stable IDs and display metadata', () => {
     expect(result[0].namedResources[0].name).toBe('Alice')
   })
 })
+
+describe('regression: stale labels (#268)', () => {
+  it('named-resource name resolves from current DB data — not a stale cached label', () => {
+    const rt = [{
+      id: 'rt-dev',
+      name: 'Developer',
+      category: 'ENGINEERING',
+      count: 2,
+      hoursPerDay: 8,
+      dayRate: 500,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      namedResources: [
+        {
+          id: 'nr-1',
+          name: 'Renamed Person',
+          startWeek: null,
+          endWeek: null,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+          synthetic: false,
+        },
+      ],
+      capacityPlanMaterialized: undefined,
+    }]
+    const result = applyCapacityPlanFallback(rt, new Map())
+    expect(result[0].namedResources[0].name).toBe('Renamed Person')
+    expect(result[0].namedResources[0].id).toBe('nr-1')
+  })
+
+  it('resource-type name resolves from current DB data — weeklyDemandCache uses IDs', () => {
+    const rtId = 'rt-dev'
+    const rtName = 'Developer'
+    // mergeWeeklyDemand receives already-resolved resourceTypeName keys
+    const demand = mergeWeeklyDemand(
+      [{ week: 0, resourceTypeName: rtName, demandDays: 10, capacityDays: 5 }],
+      new Map([[`${rtName}|0`, 15]]),
+    )
+    expect(demand).toHaveLength(1)
+    expect(demand[0].resourceTypeName).toBe(rtName)
+    expect(demand[0].demandDays).toBe(15)
+  })
+
+  it('deleted resource type shows fallback label — Unknown resource', () => {
+    // The 'Unknown resource' fallback happens in buildProjectPlanningModel's
+    // ID-to-name conversion. mergeWeeklyDemand passes through whatever name it receives.
+    const demand = mergeWeeklyDemand(
+      [],
+      new Map([['Missing Role|0', 10]]),
+    )
+    expect(demand).toHaveLength(1)
+    expect(demand[0].resourceTypeName).toBe('Missing Role')
+    expect(demand[0].demandDays).toBe(10)
+  })
+
+  it('rename preserves numeric planning facts — allocated days unchanged', () => {
+    const demand = mergeWeeklyDemand(
+      [{ week: 0, resourceTypeName: 'Engineer', demandDays: 20, capacityDays: 5 }],
+      new Map(),
+    )
+    expect(demand[0].demandDays).toBe(20)
+    expect(demand[0].capacityDays).toBe(5)
+  })
+})

@@ -104,19 +104,14 @@ export function stripCapacityPlanMaterialization(
 
 function buildWeeklyDemandCacheFromPlannerResult(
   weeklyDemandByResourceType: Map<string, number[]>,
-  resourceTypes: SchedulerResourceType[],
 ): Record<string, number> {
-  const resourceTypeNameById = new Map(resourceTypes.map(resourceType => [resourceType.id, resourceType.name]))
   const weeklyDemandCache: Record<string, number> = {}
 
   for (const [resourceTypeId, weeklyDemand] of weeklyDemandByResourceType.entries()) {
-    const resourceTypeName = resourceTypeNameById.get(resourceTypeId)
-    if (!resourceTypeName) continue
-
     for (let week = 0; week < weeklyDemand.length; week++) {
       const demandDays = weeklyDemand[week]
       if (!Number.isFinite(demandDays) || demandDays <= 0) continue
-      weeklyDemandCache[`${resourceTypeName}|${week}`] = demandDays
+      weeklyDemandCache[`${resourceTypeId}|${week}`] = demandDays
     }
   }
 

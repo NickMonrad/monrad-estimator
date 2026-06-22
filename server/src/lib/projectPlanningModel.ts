@@ -583,8 +583,19 @@ export async function buildProjectPlanningModel(
 
   // ── 9. Compute weekly demand ─────────────────────────────────────────
   const weeklyDemandCache = project.weeklyDemandCache as Record<string, number> | null
+  // Convert cache keys from resourceTypeId|week to name|week format,
+  // resolving display names from current resource type records.
+  const rtIdToName = new Map(resourceTypes.map(rt => [rt.id, rt.name]))
   const simulatedDemand = weeklyDemandCache
-    ? new Map(Object.entries(weeklyDemandCache))
+    ? new Map(
+        Object.entries(weeklyDemandCache).map(([key, val]) => {
+          const sep = key.lastIndexOf('|')
+          const rtId = key.substring(0, sep)
+          const week = key.substring(sep + 1)
+          const rtName = rtIdToName.get(rtId) ?? 'Unknown resource'
+          return [`${rtName}|${week}`, val] as [string, number]
+        }),
+      )
     : null
 
   const fallbackDemand = buildFallbackWeeklyDemand(

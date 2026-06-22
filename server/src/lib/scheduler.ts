@@ -118,7 +118,7 @@ export interface SchedulerOutput {
   }>
   /**
    * Actual resource consumption from the levelling simulation.
-   * Key: `${resourceTypeName}|${week}`, value: days consumed.
+   * Key: `${resourceTypeId}|${week}`, value: days consumed.
    * Empty map when resourceLevel=false.
    */
   weeklyConsumptionMap: Map<string, number>
@@ -674,7 +674,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
             const rtHours = featureResourceHoursCache.get(fId)!.get(rtId) ?? 0
             if (rtHours > 0) {
               const perStep = (rtHours / (fDone - fStart)) * STEP
-              const consumptionKey = `${rtName}|${currentWeek}`
+              const consumptionKey = `${rtId}|${currentWeek}`
               weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + perStep / hpd)
             }
           }
@@ -722,7 +722,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
         for (const fId of competing) {
           const rem = remainingHours.get(fId)!.get(rtId)!
           const actualAllocated = Math.min((rem / totalRemaining) * capPerStep, rem)
-          const consumptionKey = `${rtName}|${currentWeek}`
+          const consumptionKey = `${rtId}|${currentWeek}`
           weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + actualAllocated / hpd)
           remainingHours.get(fId)!.set(rtId, Math.max(0, rem - actualAllocated))
         }
