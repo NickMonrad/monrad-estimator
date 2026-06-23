@@ -1,4 +1,3 @@
-import { useMemo } from 'react'
 import { api } from '../lib/api'
 import type { ResourceProfile, Project } from '../types/backlog'
 import JSZip from 'jszip'
@@ -97,7 +96,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       'Overhead', row.name, '', '', '',
       '', '', '', String(row.computedDays), '',
       '', '',
-      row.cost != null ? String(row.cost) : '',
+      row.estimatedCost != null ? String(row.estimatedCost) : '',
       '', '', '', '', '',
       row.resourceTypeName ?? '',
     ])

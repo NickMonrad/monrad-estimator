@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { invalidateProjectResourceProfile } from '../lib/projectInvalidation'
-import type { CommercialRow, ResourceProfile } from '../types/backlog'
+import type { ResourceProfile } from '../types/backlog'
+import type { CommercialRow } from '../utils/financialCalculations'
 
 export interface AllocationEditingState {
   editingAllocation: string | null

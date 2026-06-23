@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { type UseMutationResult } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 
 import { useResourceProfileData } from './useResourceProfileData'
 import { useResourceProfileMutations, TYPE_OPTIONS } from './useResourceProfileMutations'
@@ -75,18 +76,18 @@ export interface ResourceProfileState {
   chartData: Array<{ name: string; taskDays: number; overheadDays: number }>
   filteredResourceRows: ResourceProfile['resourceRows']
   commercialData: ReturnType<typeof computeCommercialData>
-  createDiscount: ReturnType<typeof useMutation>
-  deleteDiscount: ReturnType<typeof useMutation>
-  updateTax: ReturnType<typeof useMutation>
-  applyRateCard: ReturnType<typeof useMutation>
-  updateResourceType: ReturnType<typeof useMutation>
-  updateAllocationMutation: ReturnType<typeof useMutation>
-  updateNrAllocationMutation: ReturnType<typeof useMutation>
-  addPerson: ReturnType<typeof useMutation>
-  removeLastPerson: ReturnType<typeof useMutation>
-  createOverhead: ReturnType<typeof useMutation>
-  updateOverhead: ReturnType<typeof useMutation>
-  deleteOverhead: ReturnType<typeof useMutation>
+  createDiscount: UseMutationResult<any, any, any, any>
+  deleteDiscount: UseMutationResult<any, any, any, any>
+  updateTax: UseMutationResult<any, any, any, any>
+  applyRateCard: UseMutationResult<any, any, any, any>
+  updateResourceType: UseMutationResult<any, any, any, any>
+  updateAllocationMutation: UseMutationResult<any, any, any, any>
+  updateNrAllocationMutation: UseMutationResult<any, any, any, any>
+  addPerson: UseMutationResult<any, any, any, any>
+  removeLastPerson: UseMutationResult<any, any, any, any>
+  createOverhead: UseMutationResult<any, any, any, any>
+  updateOverhead: UseMutationResult<any, any, any, any>
+  deleteOverhead: UseMutationResult<any, any, any, any>
   handleFormSubmit: () => void
   handleEdit: (item: OverheadItem) => void
   handleDelete: (id: string) => void
