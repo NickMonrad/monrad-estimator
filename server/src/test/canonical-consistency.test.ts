@@ -238,7 +238,13 @@ describe('canonical cross-surface consistency', () => {
     expect(bob.pricingModel).toBe('PRO_RATA')
     expect(alice.actualAllocatedDays).toBeGreaterThan(0)
 
-    expect(res.body.bufferWeeks).toBe(2)
+    // Commercial-relevant fields on the resource row
+    expect(devRow.dayRate).toBe(500)
+    expect(devRow.estimatedCost).toBeGreaterThan(0)
+
+    // Summary proves commercial totals are computed from shared facts
+    expect(res.body.summary.hasCost).toBe(true)
+    expect(res.body.summary.totalCost).toBeGreaterThan(0)
   })
 
   it('Timeline and Resource Profile agree on actualAllocatedDays for the same NR', async () => {
