@@ -153,18 +153,22 @@ describe('canonical cross-surface consistency', () => {
 
     expect(res.status).toBe(200)
 
-    // Named-resource labels are the current DB values, not stale cached labels
-    const nrs = res.body.namedResources
-    expect(nrs.length).toBeGreaterThanOrEqual(2)
-    expect(nrs[0].name).toBe('Alice')
-    expect(nrs[0].resourceTypeName).toBe('Developer')
-    expect(nrs[0].actualAllocatedDays).toBeGreaterThan(0)
-    expect(nrs[1].name).toBe('Bob')
-    expect(nrs[1].resourceTypeName).toBe('Developer')
-    expect(typeof nrs[1].actualAllocatedDays).toBe('number')
+    // Named-resource labels are the current DB values, not stale cached labels.
+    // Find by stable ID rather than assuming array ordering.
+    const alice = res.body.namedResources.find((nr: { id: string }) => nr.id === 'nr-alice')
+    const bob = res.body.namedResources.find((nr: { id: string }) => nr.id === 'nr-bob')
+    expect(alice).toBeTruthy()
+    expect(bob).toBeTruthy()
+    expect(alice.name).toBe('Alice')
+    expect(alice.resourceTypeName).toBe('Developer')
+    expect(alice.actualAllocatedDays).toBeGreaterThan(0)
+    expect(bob.name).toBe('Bob')
+    expect(bob.resourceTypeName).toBe('Developer')
+    expect(typeof bob.actualAllocatedDays).toBe('number')
 
     // Entry-level start date is shifted by onboarding weeks:
     // startWeek=0, 1 onboarding week → startDate = Jan 5 + 7 days = Jan 12
+    expect(res.body.entries.length).toBe(1)
     expect(res.body.entries[0].startDate).toBe('2026-01-12T00:00:00.000Z')
     expect(res.body.entries[0].endDate).toBe('2026-02-09T00:00:00.000Z')
 
@@ -236,19 +240,26 @@ describe('canonical cross-surface consistency', () => {
     expect(bob.name).toBe('Bob')
     expect(alice.pricingModel).toBe('ACTUAL_DAYS')
     expect(bob.pricingModel).toBe('PRO_RATA')
-    expect(alice.actualAllocatedDays).toBeGreaterThan(0)
-
-    // Commercial-relevant fields on the resource row
+    // Commercial-relevant fields on the resource row.
+    // estimatedCost must be internally consistent with day rate and allocated days.
     expect(devRow.dayRate).toBe(500)
     expect(devRow.estimatedCost).toBeGreaterThan(0)
+    expect(devRow.estimatedCost).toBe(devRow.allocatedDays * devRow.dayRate)
 
-    // Summary proves commercial totals are computed from shared facts
+    // Summary proves commercial totals are computed from shared facts.
+    // totalCost should equal row estimatedCost when there are no overheads.
     expect(res.body.summary.hasCost).toBe(true)
     expect(res.body.summary.totalCost).toBeGreaterThan(0)
+    const rowCostSum = res.body.resourceRows.reduce(
+      (sum: number, r: { estimatedCost: number | null }) => sum + (r.estimatedCost ?? 0), 0,
+    )
+    const overheadCostSum = res.body.overheadRows.reduce(
+      (sum: number, r: { estimatedCost: number | null }) => sum + (r.estimatedCost ?? 0), 0,
+    )
+    expect(res.body.summary.totalCost).toBe(rowCostSum + overheadCostSum)
   })
 
   it('Timeline and Resource Profile agree on actualAllocatedDays for the same NR', async () => {
-    // Timeline
     vi.mocked(prisma.project.findFirst).mockResolvedValueOnce(baseProjectFixture() as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
@@ -260,9 +271,13 @@ describe('canonical cross-surface consistency', () => {
       .get('/api/projects/proj-1/timeline')
       .set('Authorization', authHeader)
     expect(timelineRes.status).toBe(200)
-    const timelineDays: number = timelineRes.body.namedResources[0].actualAllocatedDays
+    const timelineAlice = timelineRes.body.namedResources.find(
+      (nr: { id: string }) => nr.id === 'nr-alice',
+    )
+    expect(timelineAlice).toBeTruthy()
+    const timelineDays: number = timelineAlice.actualAllocatedDays
+    expect(timelineDays).toBeGreaterThan(0)
 
-    // Resource Profile
     const profileFixture = {
       ...baseProjectFixture(),
       resourceTypes: resourceTypeWithNamedResources(),
@@ -306,9 +321,13 @@ describe('canonical cross-surface consistency', () => {
     const devRow = profileRes.body.resourceRows.find(
       (r: { resourceTypeId: string }) => r.resourceTypeId === 'rt-dev',
     )
-    const profileDays: number = devRow.namedResources[0].actualAllocatedDays
+    const profileAlice = devRow.namedResources.find(
+      (nr: { id: string }) => nr.id === 'nr-alice',
+    )
+    expect(profileAlice).toBeTruthy()
+    const profileDays: number = profileAlice.actualAllocatedDays
 
-    // Same cached demand produces the same allocated day count across both surfaces
+    expect(profileDays).toBeGreaterThan(0)
     expect(timelineDays).toBe(profileDays)
   })
 
@@ -340,7 +359,6 @@ describe('canonical cross-surface consistency', () => {
     const res = await request(app)
       .get('/api/projects/proj-1/timeline/export/csv')
       .set('Authorization', authHeader)
-
     expect(res.status).toBe(200)
     const csv: string = res.text
 
@@ -348,19 +366,15 @@ describe('canonical cross-surface consistency', () => {
     const sections = csv.split('\n\n')
     expect(sections.length).toBeGreaterThanOrEqual(3)
 
-    // Section 3 is the Named Resources section
+    // Section 3 is the Named Resources section. Find the Alice row by content.
     const nrSection = sections[2]
-    const nrRows = nrSection.split('\n')
-
-    // Header: Name,ResourceType,AllocationType,AllocationPct,StartWeek,EndWeek
-    expect(nrRows[0]).toBe('Name,ResourceType,AllocationType,AllocationPct,StartWeek,EndWeek')
-
-    // Data row: Alice,Developer,T&M,100,,
-    expect(nrRows[1]).toBe('Alice,Developer,T&M,100,,')
+    const nrRows = nrSection.split('\n').filter((r: string) => r.length > 0)
+    const aliceRow = nrRows.find((r: string) => r.startsWith('Alice,'))
+    expect(aliceRow).toBeTruthy()
+    expect(aliceRow).toBe('Alice,Developer,T&M,100,,')
 
     // Section 2 is the Resource Demand section: ResourceType,Week,DemandDays,CapacityDays,Status
     const demandSection = sections[1]
-    // The cached demand is for rt-dev|0..3, resolved to Developer|0..3
     expect(demandSection).toContain('Developer,0,5,')
   })
 })
