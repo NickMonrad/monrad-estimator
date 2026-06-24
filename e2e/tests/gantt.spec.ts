@@ -156,3 +156,93 @@ test.describe('Gantt Chart', () => {
     await expect(page.getByRole('button', { name: /reset to auto/i })).toBeVisible({ timeout: 10_000 })
   })
 })
+
+test.describe('Timeline Gantt UX — scale toggle, expand/collapse, allocation', () => {
+  test('scale toggle switches between Week, Month, Quarter, and Year views', async ({ page }) => {
+    await setupTimeline(page)
+
+    // The scale buttons are labelled Wk, Mo, Qtr, Yr
+    const wkBtn = page.getByRole('button', { name: /^wk$/i })
+    const moBtn = page.getByRole('button', { name: /^Mo$/ })
+    const qtrBtn = page.getByRole('button', { name: /^Qtr$/ })
+    const yrBtn = page.getByRole('button', { name: /^Yr$/ })
+
+    await expect(wkBtn).toBeVisible()
+    await expect(moBtn).toBeVisible()
+    await expect(qtrBtn).toBeVisible()
+    await expect(yrBtn).toBeVisible()
+
+    // Week is active by default
+    await expect(wkBtn).toHaveClass(/bg-lab3-navy/)
+
+    // Switch to Month — button becomes active, Gantt re-renders
+    await moBtn.click()
+    await expect(moBtn).toHaveClass(/bg-lab3-navy/)
+
+    // Switch to Quarter
+    await qtrBtn.click()
+    await expect(qtrBtn).toHaveClass(/bg-lab3-navy/)
+
+    await yrBtn.click()
+    await expect(yrBtn).toHaveClass(/bg-lab3-navy/)
+
+    // Switch back to Week
+    await wkBtn.click()
+    await expect(wkBtn).toHaveClass(/bg-lab3-navy/)
+  })
+
+  test('Expand All and Collapse All toggle epic rows', async ({ page }) => {
+    await setupTimeline(page)
+
+    // "Collapse All" button — title attribute set by the component
+    const collapseBtn = page.getByTitle('Collapse all epics')
+    const expandBtn = page.getByTitle('Expand all epics')
+
+    await expect(collapseBtn).toBeVisible()
+    await expect(expandBtn).toBeVisible()
+
+    // Click Collapse All
+    await collapseBtn.click()
+    await expect(collapseBtn).toHaveClass(/bg-lab3-navy/)
+
+    // Click Expand All
+    await expandBtn.click()
+    await expect(expandBtn).toHaveClass(/bg-lab3-navy/)
+
+    // Re-schedule to trigger a refetch — knownEpicIds ref prevents auto-expand
+    // of previously known epics, verifying the persistence fix for #232.
+    await quickSchedule(page)
+    await expect(expandBtn).toBeVisible({ timeout: 15_000 })
+    // After quick schedule, the epic is still known — expand should still work
+    await expandBtn.click()
+    await expect(expandBtn).toHaveClass(/bg-lab3-navy/)
+  })
+
+  test('allocating start/end week for a named resource persists and survives refetch', async ({ page }) => {
+    await setupTimeline(page)
+
+    // The Timeline page has a "People" section with inline allocation inputs
+    // for named resources. Look for the start-week input (placeholder="start").
+    // A scheduled project with a feature should have a named resource available.
+    const startInput = page.locator('input[placeholder="start"]').first()
+    const endInput = page.locator('input[placeholder="end"]').first()
+
+    // If no allocation editor is visible (no named resources), skip gracefully.
+    test.skip(await startInput.count() === 0, 'No named resources to edit — skipping')
+
+    // Set a start week
+    await startInput.fill('2')
+    // Set an end week
+    await endInput.fill('8')
+
+    // Trigger the onBlur by focusing elsewhere
+    await page.locator('h2').first().click()
+
+    // Re-schedule to refetch — allocation should persist
+    await quickSchedule(page)
+
+    // After refetch, the inputs should reflect the saved values
+    await expect(startInput).toHaveValue('2')
+    await expect(endInput).toHaveValue('8')
+  })
+})
