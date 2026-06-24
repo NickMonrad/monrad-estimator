@@ -61,12 +61,12 @@
     "@types/nodemailer": "^8.0.0",
     "@types/pino-http": "^5.8.4",
     "@types/supertest": "^7.2.0",
-    "eslint": "^10.0.0",
-    "globals": "^17.0.0",
+    "eslint": "^10.5.0",
+    "globals": "^17.7.0",
     "supertest": "^7.2.2",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.0",
-    "typescript-eslint": "^8.58.1",
-    "vitest": "^4.0.18"
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.0",
+    "vitest": "^4.1.9"
   }
 }
