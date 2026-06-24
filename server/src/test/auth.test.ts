@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs'
 import crypto from 'crypto'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
-import { loginLimiter } from '../routes/auth.js'
+import { loginLimiter, GET_LOGIN_LIMITER_KEY } from '../routes/auth.js'
 
 const email = 'user@example.com'
 const userId = 'user-1'
@@ -114,5 +114,38 @@ describe('auth password reset rate-limit regression', () => {
       name: 'Test User',
     })
     expect(loginResponse.body.token).toEqual(expect.any(String))
+  })
+})
+
+
+describe('rate-limiter IPv6 /64 subnet key', () => {
+  const mockReq = (ip: string) => ({ ip, socket: { remoteAddress: undefined } }) as any
+
+  it('compressed IPv6 addresses in the same /64 map to the same bucket key', () => {
+    const key1 = GET_LOGIN_LIMITER_KEY(mockReq('2001:db8::1'))
+    const key2 = GET_LOGIN_LIMITER_KEY(mockReq('2001:db8::2'))
+    expect(key1).toBe(key2)
+    expect(key1).toContain('ipv6:/64:')
+  })
+
+  it('different IPv6 /64 subnets map to different bucket keys', () => {
+    const key1 = GET_LOGIN_LIMITER_KEY(mockReq('2001:db8::1'))
+    const key2 = GET_LOGIN_LIMITER_KEY(mockReq('2001:db9::1'))
+    expect(key1).not.toBe(key2)
+  })
+
+  it('IPv4 addresses return the raw IP unchanged', () => {
+    const key = GET_LOGIN_LIMITER_KEY(mockReq('203.0.113.42'))
+    expect(key).toBe('203.0.113.42')
+  })
+
+  it('IPv4-mapped IPv6 addresses return the embedded IPv4', () => {
+    const key = GET_LOGIN_LIMITER_KEY(mockReq('::ffff:203.0.113.42'))
+    expect(key).toBe('203.0.113.42')
+  })
+
+  it('IPv6 loopback returns ::1', () => {
+    const key = GET_LOGIN_LIMITER_KEY(mockReq('::1'))
+    expect(key).toBe('::1')
   })
 })
