@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
+import ipaddr from 'ipaddr.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { sendEmail } from '../lib/email.js'
@@ -20,12 +21,36 @@ const router = Router()
 // Skip rate limiting in test environments so Playwright/Vitest suites are not
 // throttled by their own repeated auth calls from the same IP (127.0.0.1).
 const skipInTest = () => process.env.NODE_ENV === 'test'
-const getLoginLimiterKey = (req: Request) => req.ip ?? req.socket.remoteAddress ?? 'unknown'
+const GET_LOGIN_LIMITER_KEY = (req: Request): string => {
+  const raw = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+  // Normalise IPv6 addresses to their /64 subnet so rotating within a /64
+  // prefix does not bypass the login attempt bucket. Uses ipaddr.js for
+  // correct handling of compressed IPv6 notation (e.g. 2001:db8::1 expands
+  // to 2001:db8:0:0:0:0:0:1, and the /64 prefix becomes 2001:0db8:0000:0000).
+  try {
+    const addr = ipaddr.parse(raw)
+    if (addr.kind() === 'ipv6') {
+      // IPv4-mapped IPv6 (::ffff:x.x.x.x) — treat as IPv4
+      const v6 = addr as ipaddr.IPv6
+      if (v6.isIPv4MappedAddress()) return v6.toIPv4Address().toString()
+      // IPv6 loopback — use as-is
+      if (v6.range() === 'loopback') return '::1'
+      // Bucket by /64 subnet: mask the last 64 bits
+      const bytes = v6.toByteArray()
+      for (let i = 8; i < 16; i++) bytes[i] = 0
+      const subnet = ipaddr.fromByteArray(bytes).toString()
+      return `ipv6:/64:${subnet}`
+    }
+  } catch {
+    // Parsing failed — fall through to raw
+  }
+  return raw
+}
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
-  keyGenerator: getLoginLimiterKey,
+  keyGenerator: GET_LOGIN_LIMITER_KEY,
   skip: skipInTest,
   message: { error: 'Too many login attempts, please try again in 15 minutes' },
   standardHeaders: true,
@@ -158,7 +183,7 @@ router.post('/reset-password', validate(resetPasswordSchema), asyncHandler(async
     })
   })
 
-  await Promise.resolve(loginLimiter.resetKey(getLoginLimiterKey(req))).catch((error: unknown) => {
+  await Promise.resolve(loginLimiter.resetKey(GET_LOGIN_LIMITER_KEY(req))).catch((error: unknown) => {
     logger.warn({ error, ip: req.ip, userId: resetToken.userId }, 'Failed to clear login rate limit after password reset')
   })
 
@@ -167,4 +192,4 @@ router.post('/reset-password', validate(resetPasswordSchema), asyncHandler(async
 }))
 
 export default router
-export { loginLimiter }
+export { loginLimiter, GET_LOGIN_LIMITER_KEY }
