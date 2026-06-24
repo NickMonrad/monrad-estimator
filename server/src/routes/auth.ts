@@ -20,12 +20,34 @@ const router = Router()
 // Skip rate limiting in test environments so Playwright/Vitest suites are not
 // throttled by their own repeated auth calls from the same IP (127.0.0.1).
 const skipInTest = () => process.env.NODE_ENV === 'test'
-const getLoginLimiterKey = (req: Request) => req.ip ?? req.socket.remoteAddress ?? 'unknown'
+
+const GET_LOGIN_LIMITER_KEY = (req: Request) => {
+  const raw = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+  // Normalise IPv6 to /64 subnet so rotating within /64 does not bypass the bucket
+  if (raw.includes(':') && !raw.startsWith('::1') && !raw.startsWith('127.')) {
+    const addr = raw.includes('%') ? raw.slice(0, raw.indexOf('%')) : raw
+    if (addr.startsWith('::ffff:')) return addr
+    const hextets = addr.split(':')
+    const significant: string[] = []
+    let expanded = false
+    for (const h of hextets) {
+      if (h === '') {
+        if (!expanded) { expanded = true; continue }
+        break
+      }
+      significant.push(h)
+      if (significant.length === 4) break
+    }
+    while (significant.length < 4) significant.push('0')
+    return `ipv6:/64:${significant.join(':')}`
+  }
+  return raw
+}
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
-  keyGenerator: getLoginLimiterKey,
+  keyGenerator: GET_LOGIN_LIMITER_KEY,
   skip: skipInTest,
   message: { error: 'Too many login attempts, please try again in 15 minutes' },
   standardHeaders: true,
@@ -158,7 +180,7 @@ router.post('/reset-password', validate(resetPasswordSchema), asyncHandler(async
     })
   })
 
-  await Promise.resolve(loginLimiter.resetKey(getLoginLimiterKey(req))).catch((error: unknown) => {
+  await Promise.resolve(loginLimiter.resetKey(GET_LOGIN_LIMITER_KEY(req))).catch((error: unknown) => {
     logger.warn({ error, ip: req.ip, userId: resetToken.userId }, 'Failed to clear login rate limit after password reset')
   })
 

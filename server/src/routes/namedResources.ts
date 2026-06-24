@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { Router, Response } from 'express'
 import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
@@ -53,11 +54,12 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const { name: rawName, startWeek, endWeek, allocationPct, pricingModel } = req.body
 
-  // Auto-generate a numbered name if none provided or generic
+  // Auto-generate a name if none provided or generic.
+  // Use a random suffix instead of "count + 1" to avoid races when two
+  // concurrent requests both read the same count before either creates.
   let name = rawName as string | undefined
   if (!name || name === 'New person') {
-    const existing = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
-    name = `${rt.name} ${existing + 1}`
+    name = `${rt.name} ${randomUUID().slice(0, 8)}`
   }
 
   if (allocationPct !== undefined && (allocationPct < 0 || allocationPct > 100)) {
