@@ -719,7 +719,15 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
 
         for (const fId of competing) {
           const rem = remainingHours.get(fId)!.get(rtId)!
-          const actualAllocated = Math.min((rem / totalRemaining) * capPerStep, rem)
+          // If the feature's remaining hours fit entirely within the available
+          // capacity for this RT in this step, allocate them fully rather than
+          // spreading proportionally. This prevents a long tail of tiny
+          // fractional allocations when a feature is nearly done — the
+          // proportional split would otherwise give it a small fraction of
+          // capacity each step, leaving sparse slivers across many weeks.
+          const actualAllocated = rem <= capPerStep
+            ? rem
+            : Math.min((rem / totalRemaining) * capPerStep, rem)
           const consumptionKey = `${rtId}|${currentWeek}`
           weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + actualAllocated / hpd)
           remainingHours.get(fId)!.set(rtId, Math.max(0, rem - actualAllocated))
