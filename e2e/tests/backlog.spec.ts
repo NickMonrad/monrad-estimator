@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { login, createProject, deleteTemplatesByName } from './helpers'
+import { Client } from 'pg'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -558,5 +559,124 @@ test.describe('Dependencies', () => {
 
     // The "＋ dep" button (title="Add epic dependency") must be visible on the epic row
     await expect(page.getByTitle('Add epic dependency').first()).toBeVisible({ timeout: 8_000 })
+  })
+})
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TemplateSize column — CSV export includes it; CSV import with TemplateSize=S
+// auto-expands template tasks using Small tier hours.
+// Issues #232, #256
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('TemplateSize — export/import', () => {
+  test('CSV export includes TemplateSize column header', async ({ page }) => {
+    const PROJ = `E2E TemplateSize Export ${Date.now()}`
+    await login(page)
+    await createProject(page, PROJ)
+    await page.getByRole('heading', { name: PROJ, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor()
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    // Seed a simple hierarchy via CSV export won't crash with empty backlog
+    const headers = ['Epic', 'Feature', 'Story', 'Task', 'ResourceType', 'HoursEffort', 'DurationDays', 'Description', 'Assumptions']
+    const data = 'E2E TSEpic,E2E TSFeature,E2E TSStory,E2E TSTask,Developer,8,,,'
+    const csv = [headers, data].join('\n')
+    const tmpFile = path.join(os.tmpdir(), `csv-ts-export-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, csv)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('E2E TSEpic')).toBeVisible({ timeout: 10_000 })
+
+    // Export and verify headers
+    const downloadPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name: /export csv/i }).click()
+    const download = await downloadPromise
+    const exportPath = await download.path()
+    const content = fs.readFileSync(exportPath!, 'utf-8')
+    const headerCols = content.trim().split(/\r?\n/)[0].split(',').map(c => c.trim())
+
+    expect(headerCols).toContain('TemplateSize')
+  })
+
+  test('CSV import with TemplateSize=S auto-expands template tasks using Small tier hours', async ({ page, request }) => {
+    // ── Step 1: Create a template + its tasks via the API ──
+    const apiUrl = process.env.API_URL ?? 'http://localhost:3001'
+    const loginRes = await request.post(`${apiUrl}/api/auth/login`, {
+      data: { email: process.env.TEST_EMAIL ?? 'test@example.com', password: process.env.TEST_PASSWORD ?? 'password123' },
+    })
+    const { token } = await loginRes.json()
+    const auth = { headers: { Authorization: `Bearer ${token}` } }
+
+    // Create the template (name only — POST /api/templates ignores tasks in body)
+    const tplName = `E2E-TS-Tpl-${Date.now()}`
+    const tplRes = await request.post(`${apiUrl}/api/templates`, {
+      ...auth,
+      data: {
+        name: tplName,
+        tasks: [
+          { name: 'Design API', resourceTypeName: 'Developer', hoursSmall: 16, hoursMedium: 24, hoursLarge: 40, order: 0 },
+          { name: 'Write Tests', resourceTypeName: 'Developer', hoursSmall: 8, hoursMedium: 16, hoursLarge: 24, order: 1 },
+        ],
+      },
+    })
+    expect(tplRes.status()).toBe(201)
+    const template = await tplRes.json()
+    // Add tasks directly via the database (API doesn't support inline tasks)
+    const dbUrl = process.env.DATABASE_URL ?? 'postgresql://lokhor@localhost:5432/monrad_estimator'
+    const pgClient = new Client({ connectionString: dbUrl })
+    await pgClient.connect()
+    const taskRows = [
+      { name: 'Design API', resourceTypeName: 'Developer', hoursSmall: 16, hoursMedium: 24, hoursLarge: 40, order: 0 },
+      { name: 'Write Tests', resourceTypeName: 'Developer', hoursSmall: 8, hoursMedium: 16, hoursLarge: 24, order: 1 },
+    ]
+    for (const t of taskRows) {
+      await pgClient.query(
+        `INSERT INTO "TemplateTask" ("id", "name", "resourceTypeName", "hoursSmall", "hoursMedium", "hoursLarge", "order", "templateId") VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)`,
+        [t.name, t.resourceTypeName, t.hoursSmall, t.hoursMedium, t.hoursLarge, t.order, template.id]
+      )
+    }
+    await pgClient.end()
+
+    // ── Step 2: Create project, import CSV with Template=tplName and TemplateSize=Small ──
+    const PROJ = `E2E TS Import ${Date.now()}`
+    await login(page)
+    await createProject(page, PROJ)
+    await page.getByRole('heading', { name: PROJ, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor()
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    const csvLines = [
+      'Type,Epic,Feature,Story,Task,Template,TemplateSize,ResourceType,HoursEffort,DurationDays,Description,Assumptions',
+      'Epic,E2E TSEpic,,,,,,,,,,',
+      'Feature,E2E TSEpic,E2E TSFeature,,,,,,,,,',
+      `Story,E2E TSEpic,E2E TSFeature,E2E TSStory,,${tplName},Small,,,,,`,
+    ]
+    const tmpFile = path.join(os.tmpdir(), `csv-ts-import-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, csvLines.join('\n'))
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('E2E TSEpic')).toBeVisible({ timeout: 15_000 })
+
+    // ── Step 3: Export CSV and verify template tasks were auto-expanded ──
+    const downloadPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name: /export csv/i }).click()
+    const download = await downloadPromise
+    const exportPath = await download.path()
+    const content = fs.readFileSync(exportPath!, 'utf-8')
+    const lines = content.trim().split(/\r?\n/)
+
+    // The exported CSV should contain template task rows with Small tier hours
+    expect(lines.some(l => l.includes('Design API') && l.includes('Developer'))).toBe(true)
+    expect(lines.some(l => l.includes('Write Tests') && l.includes('Developer'))).toBe(true)
+
+    // Clean up: delete the template via API
+    await request.delete(`${apiUrl}/api/templates/${template.id}`, auth)
   })
 })

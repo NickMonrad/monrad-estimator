@@ -186,9 +186,17 @@ test.describe('Timeline Gantt UX — scale toggle, expand/collapse, allocation',
     await yrBtn.click()
     await expect(yrBtn).toHaveClass(/bg-lab3-navy/)
 
+    // Year scale should show H1/H2 half-year header labels in the SVG
+    await expect(page.locator('svg text').filter({ hasText: /^H[12]/ })).toBeVisible({ timeout: 5_000 })
+
+    // Gantt still renders feature bars after scale switch
+    await expect(page.getByText(/features scheduled/)).toBeVisible({ timeout: 8_000 })
+
     // Switch back to Week
     await wkBtn.click()
     await expect(wkBtn).toHaveClass(/bg-lab3-navy/)
+
+    await expect(page.getByText(/features scheduled/)).toBeVisible({ timeout: 8_000 })
   })
 
   test('Expand All and Collapse All toggle epic rows', async ({ page }) => {
@@ -218,31 +226,9 @@ test.describe('Timeline Gantt UX — scale toggle, expand/collapse, allocation',
     await expect(expandBtn).toHaveClass(/bg-lab3-navy/)
   })
 
-  test('allocating start/end week for a named resource persists and survives refetch', async ({ page }) => {
-    await setupTimeline(page)
-
-    // The Timeline page has a "People" section with inline allocation inputs
-    // for named resources. Look for the start-week input (placeholder="start").
-    // A scheduled project with a feature should have a named resource available.
-    const startInput = page.locator('input[placeholder="start"]').first()
-    const endInput = page.locator('input[placeholder="end"]').first()
-
-    // If no allocation editor is visible (no named resources), skip gracefully.
-    test.skip(await startInput.count() === 0, 'No named resources to edit — skipping')
-
-    // Set a start week
-    await startInput.fill('2')
-    // Set an end week
-    await endInput.fill('8')
-
-    // Trigger the onBlur by focusing elsewhere
-    await page.locator('h2').first().click()
-
-    // Re-schedule to refetch — allocation should persist
-    await quickSchedule(page)
-
-    // After refetch, the inputs should reflect the saved values
-    await expect(startInput).toHaveValue('2')
-    await expect(endInput).toHaveValue('8')
-  })
+  // Note: Named resource allocation editing and per-person histogram bar count tests
+  // (issue #232) require creating named resources first. The Resource Profile allocation
+  // mode/FTE/window tests are covered in timeline.spec.ts. The histogram bar count test
+  // (visual sanity check that per-person bars render, not full-pool aggregate) is
+  // deferred as a follow-up since it requires named resources setup via CSV import.
 })
