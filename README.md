@@ -25,7 +25,11 @@ A full-stack project estimation tool that replaces a manual spreadsheet process.
   /prisma      Schema + migrations
   /scripts     Utility scripts (e.g. e2e:cleanup)
 /e2e           Playwright E2E tests
+/docs          Documentation
+  /architecture  Planning architecture guide
 ```
+
+📖 **Architecture docs:** [`docs/architecture/scheduling-and-resource-model.md`](docs/architecture/scheduling-and-resource-model.md) — explains scheduling, resource levelling, named-resource allocation, capacity plans, commercial/resource-profile derivation, and cross-surface consistency.
 
 ---
 
