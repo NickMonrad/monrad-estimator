@@ -569,4 +569,36 @@ describe('named-resource auto-name race safety', () => {
     expect(res.status).toBe(201)
     expect(res.body.name).toBe('Alice')
   })
+
+  it('two concurrent generic creates produce distinct names and both succeed', async () => {
+    // The old "count + 1" approach would race: both requests read count=0
+    // and both create "Developer 1".  The random UUID suffix eliminates the
+    // shared-counter race entirely.  This test proves concurrency safety
+    // by firing two POSTs simultaneously and asserting both succeed with
+    // distinct auto-generated names.
+    const [res1, res2] = await Promise.all([
+      request(app)
+        .post(`/api/projects/${projectId}/resource-types/${rtId}/named-resources`)
+        .set('Authorization', authHeader)
+        .send({ name: 'New person' }),
+      request(app)
+        .post(`/api/projects/${projectId}/resource-types/${rtId}/named-resources`)
+        .set('Authorization', authHeader)
+        .send({ name: 'New person' }),
+    ])
+
+    expect(res1.status).toBe(201)
+    expect(res2.status).toBe(201)
+
+    const name1: string = res1.body.name
+    const name2: string = res2.body.name
+
+    // Both names are "Developer <8-hex-chars>" format
+    expect(name1).toMatch(/^Developer [a-f0-9]{8}$/)
+    expect(name2).toMatch(/^Developer [a-f0-9]{8}$/)
+
+    // Names are distinct — the random suffix makes collision astronomically
+    // unlikely (one in 2^32 ≈ 4 billion).
+    expect(name1).not.toBe(name2)
+  })
 })

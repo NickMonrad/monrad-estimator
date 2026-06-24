@@ -55,8 +55,21 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { name: rawName, startWeek, endWeek, allocationPct, pricingModel } = req.body
 
   // Auto-generate a name if none provided or generic.
-  // Use a random suffix instead of "count + 1" to avoid races when two
-  // concurrent requests both read the same count before either creates.
+  //
+  // Uniqueness strategy (Option A): random UUID suffix.
+  //
+  // The old approach used `count({ resourceTypeId }) + 1` which races when two
+  // concurrent requests read the same count before either creates.
+  //
+  // A deterministic fix (Option B) would add a unique constraint on
+  // (resourceTypeId, name) and retry on conflict, but that requires a schema
+  // migration.  The random suffix eliminates the shared-counter race without
+  // schema changes: each request independently generates a name using
+  // randomUUID().slice(0, 8), which provides 2^32 ≈ 4 billion possible values.
+  // Collision probability for two concurrent requests is ~1 in 4 billion.
+  //
+  // If collision risk becomes a practical concern, add a unique index on
+  // (resourceTypeId, name) and wrap the create in a retry loop.
   let name = rawName as string | undefined
   if (!name || name === 'New person') {
     name = `${rt.name} ${randomUUID().slice(0, 8)}`
