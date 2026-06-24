@@ -207,10 +207,17 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
           },
         })
         for (const entry of period.entries ?? []) {
+          const newRtId = rtIdMap.get(entry.resourceTypeId)
+          if (!newRtId) {
+            throw new Error(
+              `Clone failed: capacity plan entry references resource type "${entry.resourceTypeId}" which was not cloned. ` +
+              `All resource types must be cloned for a valid deep copy.`,
+            )
+          }
           await tx.capacityPlanEntry.create({
             data: {
               periodId: newPeriod.id,
-              resourceTypeId: rtIdMap.get(entry.resourceTypeId) ?? entry.resourceTypeId,
+              resourceTypeId: newRtId,
               headcount: entry.headcount,
               demandFTE: entry.demandFTE,
               utilisationPct: entry.utilisationPct,
