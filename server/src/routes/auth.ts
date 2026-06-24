@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
 import rateLimit from 'express-rate-limit'
+import ipaddr from 'ipaddr.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { sendEmail } from '../lib/email.js'
@@ -20,26 +21,28 @@ const router = Router()
 // Skip rate limiting in test environments so Playwright/Vitest suites are not
 // throttled by their own repeated auth calls from the same IP (127.0.0.1).
 const skipInTest = () => process.env.NODE_ENV === 'test'
-
-const GET_LOGIN_LIMITER_KEY = (req: Request) => {
+const GET_LOGIN_LIMITER_KEY = (req: Request): string => {
   const raw = req.ip ?? req.socket.remoteAddress ?? 'unknown'
-  // Normalise IPv6 to /64 subnet so rotating within /64 does not bypass the bucket
-  if (raw.includes(':') && !raw.startsWith('::1') && !raw.startsWith('127.')) {
-    const addr = raw.includes('%') ? raw.slice(0, raw.indexOf('%')) : raw
-    if (addr.startsWith('::ffff:')) return addr
-    const hextets = addr.split(':')
-    const significant: string[] = []
-    let expanded = false
-    for (const h of hextets) {
-      if (h === '') {
-        if (!expanded) { expanded = true; continue }
-        break
-      }
-      significant.push(h)
-      if (significant.length === 4) break
+  // Normalise IPv6 addresses to their /64 subnet so rotating within a /64
+  // prefix does not bypass the login attempt bucket. Uses ipaddr.js for
+  // correct handling of compressed IPv6 notation (e.g. 2001:db8::1 expands
+  // to 2001:db8:0:0:0:0:0:1, and the /64 prefix becomes 2001:0db8:0000:0000).
+  try {
+    const addr = ipaddr.parse(raw)
+    if (addr.kind() === 'ipv6') {
+      // IPv4-mapped IPv6 (::ffff:x.x.x.x) — treat as IPv4
+      const v6 = addr as ipaddr.IPv6
+      if (v6.isIPv4MappedAddress()) return v6.toIPv4Address().toString()
+      // IPv6 loopback — use as-is
+      if (v6.range() === 'loopback') return '::1'
+      // Bucket by /64 subnet: mask the last 64 bits
+      const bytes = v6.toByteArray()
+      for (let i = 8; i < 16; i++) bytes[i] = 0
+      const subnet = ipaddr.fromByteArray(bytes).toString()
+      return `ipv6:/64:${subnet}`
     }
-    while (significant.length < 4) significant.push('0')
-    return `ipv6:/64:${significant.join(':')}`
+  } catch {
+    // Parsing failed — fall through to raw
   }
   return raw
 }
@@ -189,4 +192,4 @@ router.post('/reset-password', validate(resetPasswordSchema), asyncHandler(async
 }))
 
 export default router
-export { loginLimiter }
+export { loginLimiter, GET_LOGIN_LIMITER_KEY }

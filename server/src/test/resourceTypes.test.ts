@@ -523,3 +523,50 @@ describe('weeklyDemandCache invalidation', () => {
     expect(tx.project.update).not.toHaveBeenCalled()
   })
 })
+
+describe('named-resource auto-name race safety', () => {
+  const rtId = 'rt-1'
+  const projectId = 'proj-1'
+
+  beforeEach(() => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projectId, ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: rtId,
+      projectId,
+      name: 'Developer',
+      allocationMode: 'EFFORT',
+      count: 0,
+    } as never)
+    vi.mocked(prisma.namedResource.count).mockResolvedValue(0)
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) =>
+      fn({
+        namedResource: {
+          count: vi.fn().mockResolvedValue(1),
+          create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: 'nr-new', ...data })),
+        },
+        resourceType: { update: vi.fn().mockResolvedValue({}) },
+        project: { update: vi.fn().mockResolvedValue({}) },
+      }),
+    )
+  })
+
+  it('creates a named resource with auto-generated random suffix when name is null', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/resource-types/${rtId}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({ name: 'New person' })
+
+    expect(res.status).toBe(201)
+    expect(res.body.name).toMatch(/^Developer [a-f0-9]{8}$/)
+  })
+
+  it('creates a named resource with the provided name when specified', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/resource-types/${rtId}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({ name: 'Alice' })
+
+    expect(res.status).toBe(201)
+    expect(res.body.name).toBe('Alice')
+  })
+})
