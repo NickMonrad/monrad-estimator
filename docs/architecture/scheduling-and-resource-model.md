@@ -8,11 +8,10 @@ It is intentionally architecture-focused rather than user-guide focused. Use it 
 
 The app deliberately separates four related but different concepts:
 
-| Concept | Primary source | Owned by | Notes |
 |---|---|---|---|
 | Delivery effort | `Task.hoursEffort`, `Task.durationDays`, task `resourceTypeId` | Backlog / Effort Review | This is the estimated work required to deliver the scoped backlog. |
 | Scheduling reality | `TimelineEntry`, `StoryTimelineEntry`, `Project.weeklyDemandCache` | Timeline Planner | This is where work lands over time after dependencies, manual overrides, and optional resource levelling. |
-| Resource capacity / staffing shape | `ResourceType`, `NamedResource`, `CapacityPlan*` | Resource Profile / planning controls | This describes which role/person/slot capacity is available by week. |
+| Resource capacity / staffing shape | `ResourceType`, `NamedResource` | Resource Profile / planning controls | This describes which role/person/slot capacity is available by week. `CapacityPlan` is materialized to override resource-type `count` for the response read model and shared planning model, but is **not** passed directly into `runScheduler`. The scheduler receives raw `ResourceType.count` values. |
 | Commercial pricing | `ResourceType.dayRate`, `NamedResource.pricingModel`, `ProjectOverhead`, `ProjectDiscount`, tax fields | Commercial / Resource Profile presentation | Pricing may use scheduled actual days, pro-rata allocation, full-project allocation, discounts, or overheads. It should not be treated as identical to effort or capacity. |
 
 ```mermaid
@@ -24,13 +23,13 @@ flowchart LR
     Task[Task effort<br/>hoursEffort + durationDays + resourceType]
     Epic --> Feature --> Story --> Task
   end
-
   subgraph Capacity[Resource Capacity / Staffing]
     RT[ResourceType<br/>count + hoursPerDay + dayRate]
     NR[NamedResource<br/>mode + percent + windows]
     CP[CapacityPlan<br/>period headcount]
+    Mat[capacityPlan →<br/>materialized RT overrides]
     RT --> NR
-    CP --> RT
+    CP --> Mat
   end
 
   subgraph Timeline[Timeline / Planning Reality]
@@ -61,13 +60,14 @@ flowchart LR
   Task --> Sched
   RT --> Sched
   NR --> Sched
-  CP --> Sched
   TE --> PRM
   STE --> PRM
   Cache --> PRM
   RT --> PRM
   NR --> PRM
-  CP --> PRM
+  Mat --> PRM
+  Mat --> Profile
+  Mat --> Commercial
   PRM --> Demand
   PRM --> WCap
   PRM --> Assign
@@ -81,8 +81,6 @@ flowchart LR
   STE --> Gantt
   Profile --> Docs
   Commercial --> Docs
-```
-
 ## Core entity relationship diagram
 
 This ERD focuses on the scheduling/resource-planning domain. It omits unrelated auth, organisation, customer, template, and generated-document details except where they materially affect planning or commercial calculations.
@@ -318,7 +316,6 @@ flowchart TD
   Deps --> SchedulerInput
   Manual --> SchedulerInput
   ResourceTypes --> SchedulerInput
-  Materialize --> SchedulerInput
   SchedulerInput --> Scheduler
   Scheduler --> FeatureSchedule
   Scheduler --> StorySchedule
