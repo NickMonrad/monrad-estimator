@@ -496,13 +496,12 @@ describe('runScheduler', () => {
     expect(totalDays).toBeCloseTo(5, 0)  // 40h / 8hpd = 5 days
   })
 
-  it('resourceLevel=true: nearly-done features finish in one step instead of leaving gaps', () => {
-    // Two features compete for the same resource type. Feature A has most of the
-    // work (152h), feature B has a small amount (8h). Under pure proportional
-    // allocation, feature B gets a tiny fraction of capacity each step and its
-    // remaining hours spread across many weeks, leaving sparse allocation slivers.
-    // The fix: when remaining hours fit entirely within available step capacity,
-    // allocate them fully rather than proportionally.
+  it('resourceLevel=true: small-tail feature finishes without leaving sparse slivers', () => {
+    // Feature A (152h) and feature B (8h) compete for the same RT.
+    // Feature B is the "small tail" — its 8h = 1 day of work. Under pure
+    // proportional allocation, the last few hours receive a tiny fraction of
+    // capacity each step and spread across many weeks. Verify the consumption
+    // map shows work packed into dense weeks, not tiny slivers across many.
     const rt = makeRt('rt1', 'Dev', 1)
     const fA = makeFeature('fA', [makeStory('sA', [makeTask(152, 'rt1', 'Dev')])])
     const fB = makeFeature('fB', [makeStory('sB', [makeTask(8, 'rt1', 'Dev')])])
@@ -514,29 +513,31 @@ describe('runScheduler', () => {
       resourceLevel: true,
     }))
 
-    const weeklyMap = result.weeklyConsumptionMap
-    expect(weeklyMap.size).toBeGreaterThan(0)
-
-    // Check that feature B (small work) finishes quickly — its total allocated
-    // days should concentrate in a single week or at most two adjacent weeks,
-    // not spread thinly across many weeks.
-    const allocationByWeek = new Map<number, number>()
-    for (const [key, days] of weeklyMap) {
+    const byWeek = new Map<number, number>()
+    for (const [key, days] of result.weeklyConsumptionMap) {
       const sep = key.lastIndexOf('|')
       const week = parseInt(key.substring(sep + 1), 10)
-      allocationByWeek.set(week, (allocationByWeek.get(week) ?? 0) + days)
+      byWeek.set(week, (byWeek.get(week) ?? 0) + days)
     }
 
-    // Total allocated days should be approximately (152+8)/8 = 20 days
-    const totalDays = [...allocationByWeek.values()].reduce((a, b) => a + b, 0)
+    // No week should exceed capacity (5 days for count=1, 8hpd)
+    for (const [, days] of byWeek) {
+      expect(days).toBeLessThanOrEqual(5 + 0.01)
+    }
+
+    // Total days = (152 + 8) / 8 = 20
+    const totalDays = [...byWeek.values()].reduce((a, b) => a + b, 0)
     expect(totalDays).toBeCloseTo(20, 0)
 
-    // Count non-zero weeks (weeks with at least 1 day of allocation)
-    const activeWeeks = [...allocationByWeek.entries()].filter(([, days]) => days >= 1)
-    // With count=1 and 20 total days, work should pack into at most 5 weeks
-    // (20 days / 5 days per week). The old proportional allocation could easily
-    // leave slivers across 6+ weeks.
-    expect(activeWeeks.length).toBeLessThanOrEqual(5)
+    // Work should pack into at most 5 weeks (20 days / 5 days per week).
+    // The old proportional allocation could leave slivers in 6+ weeks.
+    expect(byWeek.size).toBeLessThanOrEqual(5)
+
+    // Every non-zero week should carry meaningful work (at least 1 day),
+    // not tiny slivers like 0.02d.
+    for (const [, days] of byWeek) {
+      expect(days).toBeGreaterThanOrEqual(1)
+    }
   })
 
   // ── Cross-epic dep anti-cycle (hasCrossEpicDep skip logic) ──────────────────
