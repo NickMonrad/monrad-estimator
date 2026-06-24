@@ -523,3 +523,82 @@ describe('weeklyDemandCache invalidation', () => {
     expect(tx.project.update).not.toHaveBeenCalled()
   })
 })
+
+describe('named-resource auto-name race safety', () => {
+  const rtId = 'rt-1'
+  const projectId = 'proj-1'
+
+  beforeEach(() => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projectId, ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: rtId,
+      projectId,
+      name: 'Developer',
+      allocationMode: 'EFFORT',
+      count: 0,
+    } as never)
+    vi.mocked(prisma.namedResource.count).mockResolvedValue(0)
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) =>
+      fn({
+        namedResource: {
+          count: vi.fn().mockResolvedValue(1),
+          create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: 'nr-new', ...data })),
+        },
+        resourceType: { update: vi.fn().mockResolvedValue({}) },
+        project: { update: vi.fn().mockResolvedValue({}) },
+      }),
+    )
+  })
+
+  it('creates a named resource with auto-generated random suffix when name is null', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/resource-types/${rtId}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({ name: 'New person' })
+
+    expect(res.status).toBe(201)
+    expect(res.body.name).toMatch(/^Developer [a-f0-9]{8}$/)
+  })
+
+  it('creates a named resource with the provided name when specified', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/resource-types/${rtId}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({ name: 'Alice' })
+
+    expect(res.status).toBe(201)
+    expect(res.body.name).toBe('Alice')
+  })
+
+  it('two concurrent generic creates produce distinct names and both succeed', async () => {
+    // The old "count + 1" approach would race: both requests read count=0
+    // and both create "Developer 1".  The random UUID suffix eliminates the
+    // shared-counter race entirely.  This test proves concurrency safety
+    // by firing two POSTs simultaneously and asserting both succeed with
+    // distinct auto-generated names.
+    const [res1, res2] = await Promise.all([
+      request(app)
+        .post(`/api/projects/${projectId}/resource-types/${rtId}/named-resources`)
+        .set('Authorization', authHeader)
+        .send({ name: 'New person' }),
+      request(app)
+        .post(`/api/projects/${projectId}/resource-types/${rtId}/named-resources`)
+        .set('Authorization', authHeader)
+        .send({ name: 'New person' }),
+    ])
+
+    expect(res1.status).toBe(201)
+    expect(res2.status).toBe(201)
+
+    const name1: string = res1.body.name
+    const name2: string = res2.body.name
+
+    // Both names are "Developer <8-hex-chars>" format
+    expect(name1).toMatch(/^Developer [a-f0-9]{8}$/)
+    expect(name2).toMatch(/^Developer [a-f0-9]{8}$/)
+
+    // Names are distinct — the random suffix makes collision astronomically
+    // unlikely (one in 2^32 ≈ 4 billion).
+    expect(name1).not.toBe(name2)
+  })
+})

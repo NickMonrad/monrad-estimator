@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { Router, Response } from 'express'
 import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
@@ -53,11 +54,25 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const { name: rawName, startWeek, endWeek, allocationPct, pricingModel } = req.body
 
-  // Auto-generate a numbered name if none provided or generic
+  // Auto-generate a name if none provided or generic.
+  //
+  // Uniqueness strategy (Option A): random UUID suffix.
+  //
+  // The old approach used `count({ resourceTypeId }) + 1` which races when two
+  // concurrent requests read the same count before either creates.
+  //
+  // A deterministic fix (Option B) would add a unique constraint on
+  // (resourceTypeId, name) and retry on conflict, but that requires a schema
+  // migration.  The random suffix eliminates the shared-counter race without
+  // schema changes: each request independently generates a name using
+  // randomUUID().slice(0, 8), which provides 2^32 ≈ 4 billion possible values.
+  // Collision probability for two concurrent requests is ~1 in 4 billion.
+  //
+  // If collision risk becomes a practical concern, add a unique index on
+  // (resourceTypeId, name) and wrap the create in a retry loop.
   let name = rawName as string | undefined
   if (!name || name === 'New person') {
-    const existing = await prisma.namedResource.count({ where: { resourceTypeId: rtId } })
-    name = `${rt.name} ${existing + 1}`
+    name = `${rt.name} ${randomUUID().slice(0, 8)}`
   }
 
   if (allocationPct !== undefined && (allocationPct < 0 || allocationPct > 100)) {
