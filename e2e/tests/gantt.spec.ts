@@ -156,3 +156,86 @@ test.describe('Gantt Chart', () => {
     await expect(page.getByRole('button', { name: /reset to auto/i })).toBeVisible({ timeout: 10_000 })
   })
 })
+
+test.describe('Timeline Gantt UX — scale toggle, expand/collapse, allocation', () => {
+  test('scale toggle switches between Week, Month, Quarter, and Year views', async ({ page }) => {
+    await setupTimeline(page)
+
+    // The scale buttons are labelled Wk, Mo, Qtr, Yr
+    const wkBtn = page.getByRole('button', { name: /^wk$/i })
+    const moBtn = page.getByRole('button', { name: /^Mo$/ })
+    const qtrBtn = page.getByRole('button', { name: /^Qtr$/ })
+    const yrBtn = page.getByRole('button', { name: /^Yr$/ })
+
+    await expect(wkBtn).toBeVisible()
+    await expect(moBtn).toBeVisible()
+    await expect(qtrBtn).toBeVisible()
+    await expect(yrBtn).toBeVisible()
+
+    // Week is active by default
+    await expect(wkBtn).toHaveClass(/bg-lab3-navy/)
+
+    // Switch to Month — button becomes active, Gantt re-renders
+    await moBtn.click()
+    await expect(moBtn).toHaveClass(/bg-lab3-navy/)
+
+    // Switch to Quarter
+    await qtrBtn.click()
+    await expect(qtrBtn).toHaveClass(/bg-lab3-navy/)
+
+    await yrBtn.click()
+    await expect(yrBtn).toHaveClass(/bg-lab3-navy/)
+
+    // Year scale should show H1/H2 half-year header labels in the SVG
+    await expect(page.locator('svg text').filter({ hasText: /^H[12]/ })).toBeVisible({ timeout: 5_000 })
+
+    // Gantt still renders feature bars after scale switch
+    await expect(page.getByText(/features scheduled/)).toBeVisible({ timeout: 8_000 })
+
+    // Switch back to Week
+    await wkBtn.click()
+    await expect(wkBtn).toHaveClass(/bg-lab3-navy/)
+
+    await expect(page.getByText(/features scheduled/)).toBeVisible({ timeout: 8_000 })
+  })
+
+  test('Expand All and Collapse All toggle epic rows persistently across refetch', async ({ page }) => {
+    const { featureName } = await setupTimeline(page)
+
+    // The feature label/title is rendered in the Gantt label panel.
+    // On first load, the single epic is auto-expanded, so the feature row is visible.
+    const featureLoc = page.locator(`[title="${featureName}"]`).first()
+    await expect(featureLoc).toBeVisible({ timeout: 8_000 })
+
+    // "Collapse All" button — title attribute set by the component
+    const collapseBtn = page.getByTitle('Collapse all epics')
+    const expandBtn = page.getByTitle('Expand all epics')
+
+    await expect(collapseBtn).toBeVisible()
+    await expect(expandBtn).toBeVisible()
+
+    // Click Collapse All — all epics should collapse, hiding child rows
+    await collapseBtn.click()
+    await expect(featureLoc).not.toBeVisible({ timeout: 5_000 })
+
+    // Re-schedule to trigger a refetch — knownEpicIds ref prevents auto-expand
+    // of previously known epics, verifying the persistence fix for #232.
+    await quickSchedule(page)
+    await expect(featureLoc).not.toBeVisible({ timeout: 15_000 })
+
+    // Click Expand All — child rows should reappear
+    await expandBtn.click()
+    await expect(featureLoc).toBeVisible({ timeout: 5_000 })
+
+    // Trigger another refetch and confirm expanded state persists
+    // (knownEpicIds ref maintains expanded state for known epics after manual toggle)
+    await quickSchedule(page)
+    await expect(featureLoc).toBeVisible({ timeout: 15_000 })
+  })
+
+  // Note: Named resource allocation editing and per-person histogram bar count tests
+  // (issue #232) require creating named resources first. The Resource Profile allocation
+  // mode/FTE/window tests are covered in timeline.spec.ts. The histogram bar count test
+  // (visual sanity check that per-person bars render, not full-pool aggregate) is
+  // deferred as a follow-up since it requires named resources setup via CSV import.
+})
