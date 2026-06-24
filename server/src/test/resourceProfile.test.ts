@@ -1639,3 +1639,195 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(nr.actualAllocatedDays).toBe(10)
   })
 })
+
+
+describe('overhead FTE scaling', () => {
+  it('computes requiredFTE for percentage-based overhead linked to a resource type', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      name: 'FTE Test',
+      startDate: new Date('2026-01-05T00:00:00.000Z'),
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: null,
+      resourceTypes: [{
+        id: 'rt-dev',
+        name: 'Developer',
+        category: 'ENGINEERING',
+        count: 3,
+        hoursPerDay: 8,
+        dayRate: 500,
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        globalType: null,
+        namedResources: [
+          { id: 'nr-1', name: 'Dev 1', startWeek: null, endWeek: null, allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS' },
+        ],
+      }],
+      epics: [{
+        id: 'epic-1',
+        name: 'Platform',
+        order: 0,
+        isActive: true,
+        featureMode: 'sequential',
+        scheduleMode: 'auto',
+        features: [{
+          id: 'feat-1',
+          name: 'Delivery',
+          order: 0,
+          isActive: true,
+          featureMode: 'sequential',
+          timelineStartWeek: null,
+          userStories: [{
+            isActive: true,
+            tasks: [{
+              resourceTypeId: 'rt-dev',
+              hoursEffort: 800,
+              durationDays: null,
+              resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+            }],
+          }],
+        }],
+      }],
+      overheads: [{
+        id: 'oh-1',
+        name: 'Project Manager',
+        resourceTypeId: 'rt-pm',
+        type: 'PERCENTAGE',
+        value: 22,
+        order: 0,
+        resourceType: {
+          id: 'rt-pm',
+          name: 'Project Manager',
+          category: 'PROJECT_MANAGEMENT',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 600,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          globalType: null,
+          namedResources: [],
+        },
+      }],
+      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 10 }],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+
+    const pmRow = res.body.overheadRows.find((r: any) => r.overheadId === 'oh-1')
+    expect(pmRow).toBeDefined()
+    expect(pmRow.requiredFTE).toBeGreaterThan(0)
+    expect(pmRow.currentCount).toBe(1)
+
+    // requiredFTE = computedDays / (projectDurationWeeks * 5)
+    // 800h / 8hpd = 100 days effort → 22% = 22 computed days
+    // projectDurationWeeks = 10, so FTE = 22 / (10 * 5) = 0.44
+    expect(pmRow.computedDays).toBe(22)
+    expect(pmRow.requiredFTE).toBe(0.44)
+  })
+
+  it('sets requiredFTE to 0 when projectDurationWeeks is 0', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      name: 'Zero Weeks',
+      startDate: new Date('2026-01-05T00:00:00.000Z'),
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: null,
+      resourceTypes: [{
+        id: 'rt-dev', name: 'Developer', category: 'ENGINEERING', count: 1, hoursPerDay: 8,
+        dayRate: 500, allocationMode: 'EFFORT', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null, globalType: null,
+        namedResources: [],
+      }],
+      epics: [{
+        id: 'epic-1', name: 'E1', order: 0, isActive: true, featureMode: 'sequential',
+        scheduleMode: 'auto', features: [{
+          id: 'feat-1', name: 'F1', order: 0, isActive: true, featureMode: 'sequential',
+          timelineStartWeek: null,
+          userStories: [{ isActive: true, tasks: [] }],
+        }],
+      }],
+      overheads: [{
+        id: 'oh-1', name: 'PM', resourceTypeId: null, type: 'PERCENTAGE', value: 22, order: 0,
+        resourceType: null,
+      }],
+      timelineEntries: [],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const pmRow = res.body.overheadRows.find((r: any) => r.overheadId === 'oh-1')
+    expect(pmRow).toBeDefined()
+    expect(pmRow.requiredFTE).toBe(0)
+    expect(pmRow.currentCount).toBeNull()
+  })
+
+  it('FTE warning is triggered when requiredFTE exceeds currentCount', async () => {
+    // Set count=1 for the PM RT but FTE > 1 (e.g. 60% overhead on 200 effort days over 10 weeks)
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      id: 'proj-1',
+      ownerId: userId,
+      name: 'FTE Warn',
+      startDate: new Date('2026-01-05T00:00:00.000Z'),
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: null,
+      resourceTypes: [{
+        id: 'rt-dev', name: 'Developer', category: 'ENGINEERING', count: 5, hoursPerDay: 8,
+        dayRate: 500, allocationMode: 'EFFORT', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null, globalType: null,
+        namedResources: [],
+      }],
+      epics: [{
+        id: 'epic-1', name: 'E1', order: 0, isActive: true, featureMode: 'sequential',
+        scheduleMode: 'auto', features: [{
+          id: 'feat-1', name: 'F1', order: 0, isActive: true, featureMode: 'sequential',
+          timelineStartWeek: null,
+          userStories: [{ isActive: true, tasks: [{ resourceTypeId: 'rt-dev', hoursEffort: 1600, durationDays: null, resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 } }] }],
+        }],
+      }],
+      overheads: [{
+        id: 'oh-1', name: 'PM', resourceTypeId: 'rt-pm', type: 'PERCENTAGE', value: 60, order: 0,
+        resourceType: { id: 'rt-pm', name: 'Project Manager', category: 'PROJECT_MANAGEMENT', count: 1, hoursPerDay: 8, dayRate: 600, allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null, globalType: null, namedResources: [] },
+      }],
+      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 10 }],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const pmRow = res.body.overheadRows.find((r: any) => r.overheadId === 'oh-1')
+    expect(pmRow).toBeDefined()
+
+    // 1600h / 8hpd = 200 effort days, 60% = 120 computed days
+    // 120 / (10 * 5) = 2.4 FTE
+    expect(pmRow.requiredFTE).toBe(2.4)
+    expect(pmRow.currentCount).toBe(1)
+    expect(pmRow.requiredFTE).toBeGreaterThan(pmRow.currentCount)
+  })
+})
