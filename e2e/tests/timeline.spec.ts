@@ -414,3 +414,127 @@ test.describe('Starting Team Finder drawer — with resources', () => {
     await expect(drawer).toBeVisible({ timeout: 5_000 })
   })
 })
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resource Profile allocation — mode, FTE %, and Timeline window inputs
+// Issues #232, #231
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Resource Profile allocation', () => {
+  test.beforeEach(async ({ page }) => {
+    test.setTimeout(60_000)
+
+    const projectName = `E2E ResAlloc ${Date.now()}`
+    await login(page)
+    await createProject(page, projectName)
+
+    // Navigate to Backlog and seed CSV with resource types
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    const tmpFile = path.join(os.tmpdir(), `res-alloc-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
+
+    // Navigate to Resource Profile
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i })
+    ).toBeVisible({ timeout: 10_000 })
+  })
+
+  test('allocation mode dropdown changes from Timeline to Full Project', async ({ page }) => {
+    // Find the Developer row and click its allocation badge
+    const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(devRow).toBeVisible({ timeout: 15_000 })
+
+    // The initial badge shows "Timeline · 100%" (database default for new resource types)
+    const badge = devRow.locator('button[title="Click to edit allocation"]')
+    await expect(badge).toBeVisible()
+    await expect(badge).toHaveText(/Timeline · 100%/)
+
+    // Click the badge to open the inline edit form
+    await badge.click()
+
+    // The allocation mode dropdown should be visible
+    const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
+    await expect(modeSelect).toBeVisible({ timeout: 5_000 })
+
+    // Change to Full Project
+    await modeSelect.selectOption('FULL_PROJECT')
+
+    // Set FTE to 50%
+    const fteInput = page.locator('input[type="number"][min="1"][max="100"]').first()
+    await fteInput.fill('50')
+
+    // Click Save (data-testid="allocation-save")
+    await page.locator('[data-testid="allocation-save"]').click()
+
+    // After save, the badge should show "Full Project · 50%"
+    await expect(badge).toHaveText(/Full Project · 50%/, { timeout: 8_000 })
+  })
+
+  test('Timeline mode shows start/end week inputs and persists', async ({ page }) => {
+    // Find the Developer row and click its allocation badge
+    const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(devRow).toBeVisible({ timeout: 15_000 })
+    const badge = devRow.locator('button[title="Click to edit allocation"]')
+    await expect(badge).toBeVisible()
+    await badge.click()
+
+    // Change mode to Timeline
+    const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
+    await expect(modeSelect).toBeVisible({ timeout: 5_000 })
+    await modeSelect.selectOption('TIMELINE')
+
+    // Start/end week inputs should appear
+    const startInput = page.locator('input[placeholder="auto"]').first()
+    const endInput = page.locator('input[placeholder="auto"]').last()
+    await expect(startInput).toBeVisible({ timeout: 5_000 })
+    await expect(endInput).toBeVisible({ timeout: 5_000 })
+
+    // Set values
+    await startInput.fill('2')
+    await endInput.fill('10')
+
+    // Click Save
+    await page.locator('[data-testid="allocation-save"]').click()
+
+    // Badge should show "Timeline · 100%" (default % when switching from EFFORT)
+    await expect(badge).toHaveText(/Timeline/, { timeout: 8_000 })
+  })
+
+  test('allocation % input persists independently', async ({ page }) => {
+    // Find the Developer row
+    const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(devRow).toBeVisible({ timeout: 15_000 })
+    const badge = devRow.locator('button[title="Click to edit allocation"]')
+    await expect(badge).toBeVisible()
+    await badge.click()
+
+    // Change mode to Full Project (has % field)
+    const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
+    await expect(modeSelect).toBeVisible({ timeout: 5_000 })
+    await modeSelect.selectOption('FULL_PROJECT')
+
+    // Set FTE to 75%
+    const fteInput = page.locator('input[type="number"][min="1"][max="100"]').first()
+    await fteInput.fill('75')
+
+    // Save
+    await page.locator('[data-testid="allocation-save"]').click()
+    await expect(badge).toHaveText(/75%/, { timeout: 8_000 })
+
+    // Re-open the edit form — the % should persist
+    await badge.click()
+    await expect(fteInput).toHaveValue('75')
+  })
+})
