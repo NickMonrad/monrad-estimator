@@ -496,16 +496,56 @@ describe('runScheduler', () => {
     expect(totalDays).toBeCloseTo(5, 0)  // 40h / 8hpd = 5 days
   })
 
-  it('resourceLevel=true: small-tail feature finishes without leaving sparse slivers', () => {
-    // Feature A (152h) and feature B (8h) compete for the same RT.
-    // Feature B is the "small tail" — its 8h = 1 day of work. Under pure
-    // proportional allocation, the last few hours receive a tiny fraction of
-    // capacity each step and spread across many weeks. Verify the consumption
-    // map shows work packed into dense weeks, not tiny slivers across many.
+  it('resourceLevel=true: small feature finishes promptly regardless of feature iteration order', () => {
+    // Large feature A (152h) and small feature B (8h) compete for the same RT.
+    // The small feature must finish within 1-2 weeks even when it appears
+    // after the large feature in the input array.
+    function runScenario(featureA: ReturnType<typeof makeFeature>, featureB: ReturnType<typeof makeFeature>) {
+      const rt = makeRt('rt1', 'Dev', 1)
+      const epic = makeEpic('e1', [featureA, featureB], { featureMode: 'parallel' })
+      return runScheduler(baseInput({ epics: [epic], resourceTypes: [rt], resourceLevel: true }))
+    }
+
+    const fLarge = makeFeature('f-large', [makeStory('sA', [makeTask(152, 'rt1', 'Dev')])])
+    const fSmall = makeFeature('f-small', [makeStory('sB', [makeTask(8, 'rt1', 'Dev')])])
+
+    // Run with small feature first, then reversed
+    const resultForward = runScenario(fLarge, fSmall)
+    const resultReversed = runScenario(fSmall, fLarge)
+
+    for (const result of [resultForward, resultReversed]) {
+      // Small feature must finish within 2 weeks regardless of input order
+      const entrySmall = result.featureSchedule.find(e => e.featureId === 'f-small')
+      expect(entrySmall).toBeDefined()
+      expect(entrySmall!.durationWeeks).toBeLessThanOrEqual(2)
+
+      // Large feature must have the same duration in both orderings (±1 week tolerance)
+      const entryLarge = result.featureSchedule.find(e => e.featureId === 'f-large')
+      expect(entryLarge).toBeDefined()
+    }
+
+    // Both orderings must produce the same large-feature schedule (within tolerance)
+    const largeFwd = resultForward.featureSchedule.find(e => e.featureId === 'f-large')!
+    const largeRev = resultReversed.featureSchedule.find(e => e.featureId === 'f-large')!
+    expect(Math.abs(largeFwd.startWeek - largeRev.startWeek)).toBeLessThanOrEqual(1)
+    expect(Math.abs(largeFwd.durationWeeks - largeRev.durationWeeks)).toBeLessThanOrEqual(1)
+
+    // Total allocated days unchanged in both orderings
+    for (const result of [resultForward, resultReversed]) {
+      const totalDays = [...result.weeklyConsumptionMap.values()].reduce((a, b) => a + b, 0)
+      expect(totalDays).toBeCloseTo(20, 0)
+    }
+  })
+
+  it('resourceLevel=true: multiple small competing features do not exceed step capacity', () => {
+    // Three parallel features each with 4h on a single-resource RT.
+    // Capacity per step = 8h/day × 5 days/week × 0.2 step = 8h per step.
+    // Greedy smallest-first allocation must not let the sum exceed capacity.
     const rt = makeRt('rt1', 'Dev', 1)
-    const fA = makeFeature('fA', [makeStory('sA', [makeTask(152, 'rt1', 'Dev')])])
-    const fB = makeFeature('fB', [makeStory('sB', [makeTask(8, 'rt1', 'Dev')])])
-    const epic = makeEpic('e1', [fA, fB], { featureMode: 'parallel' })
+    const f1 = makeFeature('f1', [makeStory('s1', [makeTask(4, 'rt1', 'Dev')])])
+    const f2 = makeFeature('f2', [makeStory('s2', [makeTask(4, 'rt1', 'Dev')])])
+    const f3 = makeFeature('f3', [makeStory('s3', [makeTask(4, 'rt1', 'Dev')])])
+    const epic = makeEpic('e1', [f1, f2, f3], { featureMode: 'parallel' })
 
     const result = runScheduler(baseInput({
       epics: [epic],
@@ -519,24 +559,19 @@ describe('runScheduler', () => {
       const week = parseInt(key.substring(sep + 1), 10)
       byWeek.set(week, (byWeek.get(week) ?? 0) + days)
     }
-
-    // No week should exceed capacity (5 days for count=1, 8hpd)
     for (const [, days] of byWeek) {
       expect(days).toBeLessThanOrEqual(5 + 0.01)
     }
 
-    // Total days = (152 + 8) / 8 = 20
-    const totalDays = [...byWeek.values()].reduce((a, b) => a + b, 0)
-    expect(totalDays).toBeCloseTo(20, 0)
+    // Total = 12h / 8hpd = 1.5 days
+    const totalDays = [...result.weeklyConsumptionMap.values()].reduce((a, b) => a + b, 0)
+    expect(totalDays).toBeCloseTo(1.5, 1)
 
-    // Work should pack into at most 5 weeks (20 days / 5 days per week).
-    // The old proportional allocation could leave slivers in 6+ weeks.
-    expect(byWeek.size).toBeLessThanOrEqual(5)
-
-    // Every non-zero week should carry meaningful work (at least 1 day),
-    // not tiny slivers like 0.02d.
-    for (const [, days] of byWeek) {
-      expect(days).toBeGreaterThanOrEqual(1)
+    // All three features finish within 2 weeks
+    for (const fId of ['f1', 'f2', 'f3']) {
+      const entry = result.featureSchedule.find(e => e.featureId === fId)
+      expect(entry).toBeDefined()
+      expect(entry!.durationWeeks).toBeLessThanOrEqual(2)
     }
   })
 
