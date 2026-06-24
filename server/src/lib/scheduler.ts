@@ -711,15 +711,27 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
             }
           }
         }
-
         const competing = active.filter(fId => (remainingHours.get(fId)?.get(rtId) ?? 0) > 0.001)
         if (competing.length === 0) continue
 
-        const totalRemaining = competing.reduce((s, fId) => s + (remainingHours.get(fId)!.get(rtId) ?? 0), 0)
+        // Sort by remaining work ascending — "almost done" features finish
+        // within the current step instead of being starved by iteration order.
+        // This is both fair (small-footprint tasks complete promptly) and
+        // order-independent (sorting replaces array iteration bias).
+        const sorted = [...competing].sort(
+          (a, b) => (remainingHours.get(a)?.get(rtId) ?? 0) - (remainingHours.get(b)?.get(rtId) ?? 0),
+        )
 
-        for (const fId of competing) {
+        let remainingStepCapacity = capPerStep
+        for (const fId of sorted) {
           const rem = remainingHours.get(fId)!.get(rtId)!
-          const actualAllocated = Math.min((rem / totalRemaining) * capPerStep, rem)
+          // Greedy within remaining capacity: take what you need, up to
+          // what's left in the step.  Small features will claim their full
+          // remaining work and finish; large features get whatever capacity
+          // remains after smaller competing work has been satisfied.
+          const actualAllocated = Math.min(rem, remainingStepCapacity)
+          remainingStepCapacity -= actualAllocated
+
           const consumptionKey = `${rtId}|${currentWeek}`
           weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + actualAllocated / hpd)
           remainingHours.get(fId)!.set(rtId, Math.max(0, rem - actualAllocated))
