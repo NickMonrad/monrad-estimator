@@ -180,8 +180,14 @@ function NamedResourcesPanel({
                   <div className="border-b border-gray-100 dark:border-gray-700" style={{ height: 30 }} />
                   {/* Person bars */}
                   {people.map((nr, i) => {
-                    const start = Math.min(Math.max(nr.startWeek ?? 0, 0), scheduleEndWeek)
-                    const end = Math.min(Math.max(nr.endWeek ?? scheduleEndWeek, start), scheduleEndWeek)
+                    // Availability window: prefer explicit startWeek/endWeek,
+                    // fall back to actual allocation range so EFFORT-mode NRs
+                    // without explicit windows don't show a misleading
+                    // full-timeline dashed box.
+                    const windowStart = nr.startWeek ?? nr.actualAllocationStartWeek ?? 0
+                    const windowEnd = nr.endWeek ?? nr.actualAllocationEndWeek ?? scheduleEndWeek
+                    const start = Math.min(Math.max(windowStart, 0), scheduleEndWeek)
+                    const end = Math.min(Math.max(windowEnd, start), scheduleEndWeek)
                     const colour = RESOURCE_COLOURS[(colourIdx++) % RESOURCE_COLOURS.length]
                     const actualAllocatedWeeks = (nr.actualAllocatedWeeks ?? [])
                       .filter(allocation => allocation.week >= 0 && allocation.week <= scheduleEndWeek)
