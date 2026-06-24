@@ -311,6 +311,10 @@ export interface OverheadProfileRow {
   value: number
   computedDays: number
   estimatedCost: number | null
+  /** FTE required to deliver this overhead workload (computedDays / (projectDurationWeeks × 5)) */
+  requiredFTE: number
+  /** Current count of the linked resource type, if linked */
+  currentCount: number | null
 }
 
 export interface ResourceProfile {

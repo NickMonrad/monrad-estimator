@@ -549,13 +549,19 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const overheadRows = project.overheads.map(overhead => {
     const dayRate = overhead.resourceType?.dayRate ?? overhead.resourceType?.globalType?.defaultDayRate ?? null
     const resourceTypeName = overhead.resourceType?.name ?? null
+    const currentCount = overhead.resourceType?.count ?? null
     const computedDays =
       overhead.type === 'PERCENTAGE'
-        ? round2((overhead.value / 100) * totalEffortDays)  // % of effort, not allocated days
+        ? round2((overhead.value / 100) * totalEffortDays)
         : overhead.type === 'DAYS_PER_WEEK'
           ? round2(overhead.value * projectDurationWeeks)
           : round2(overhead.value)
     const estimatedCost = dayRate != null ? round2(computedDays * dayRate) : null
+    // Compute the effective FTE this overhead workload represents.
+    // requiredFTE = computedDays / (projectDurationWeeks * 5 working days/week).
+    const requiredFTE = projectDurationWeeks > 0
+      ? round2(computedDays / (projectDurationWeeks * 5))
+      : 0
     return {
       overheadId: overhead.id,
       name: overhead.name,
@@ -566,6 +572,8 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       value: overhead.value,
       computedDays,
       estimatedCost,
+      requiredFTE,
+      currentCount,
     }
   })
 
