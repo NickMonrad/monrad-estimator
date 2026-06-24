@@ -304,26 +304,56 @@ export default function ResourceProfileTab({
                 </Fragment>
               ))}
 
-              {profile.overheadRows.map(row => (
-                <tr key={row.overheadId} className="bg-amber-50 dark:bg-amber-950 text-gray-700 dark:text-gray-300 italic border-b border-amber-100 dark:border-amber-900">
-                  <td className="px-6 py-3">
-                    <div className="font-medium">{row.name}</div>
-                    {row.resourceTypeName && <p className="text-xs text-gray-500 dark:text-gray-400 normal-case not-italic">Linked to: {row.resourceTypeName}</p>}
-                  </td>
-                  <td className="text-center px-4 py-3">{profile.projectDurationWeeks > 0 ? formatNumber(row.computedDays / (profile.projectDurationWeeks * 5), 2) : '—'}</td>
-                  <td className="px-4 py-3">
-                    {row.type === 'PERCENTAGE' ? `— ${row.value}% of task days`
-                      : row.type === 'DAYS_PER_WEEK' ? `— ${formatNumber(row.value, 2)} d/wk × ${formatNumber(profile.projectDurationWeeks)} wks`
-                      : `— ${formatNumber(row.value, 2)} fixed days`}
-                  </td>
-                  <td className="text-center px-4 py-3">—</td>
-                  <td className="text-right px-4 py-3 font-medium text-gray-900 dark:text-white">{formatNumber(row.computedDays, 2)} d</td>
-                  <td className="px-4 py-3">—</td>
-                  <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">—</td>
-                  <td className="text-right px-4 py-3">{row.dayRate != null ? `$${formatNumber(row.dayRate, 0)}` : '—'}</td>
-                  {hasCost && <td className="text-right px-6 py-3 font-medium text-gray-900 dark:text-white">{row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}</td>}
-                </tr>
-              ))}
+              {profile.overheadRows.map(row => {
+                const fteExceedsCount = row.currentCount != null && row.requiredFTE > row.currentCount
+                return (
+                  <tr key={row.overheadId} className={`border-b border-amber-100 dark:border-amber-900 ${
+                    fteExceedsCount
+                      ? 'bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300'
+                      : 'bg-amber-50 dark:bg-amber-950 text-gray-700 dark:text-gray-300 italic'
+                  }`}>
+                    <td className="px-6 py-3">
+                      <div className="font-medium">{row.name}</div>
+                      {row.resourceTypeName && <p className="text-xs text-gray-500 dark:text-gray-400 normal-case not-italic">Linked to: {row.resourceTypeName}</p>}
+                    </td>
+                    <td className="text-center px-4 py-3 font-medium">
+                      {row.currentCount != null ? (
+                        <span>
+                          {row.currentCount}
+                          {row.currentCount > 0 && (
+                            <span title="Current count"></span>
+                          )}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {row.type === 'PERCENTAGE' ? `— ${row.value}% of task days`
+                        : row.type === 'DAYS_PER_WEEK' ? `— ${formatNumber(row.value, 2)} d/wk × ${formatNumber(profile.projectDurationWeeks)} wks`
+                        : `— ${formatNumber(row.value, 2)} fixed days`}
+                    </td>
+                    <td className="text-center px-4 py-3">—</td>
+                    <td className="text-right px-4 py-3 font-medium text-gray-900 dark:text-white">{formatNumber(row.computedDays, 2)} d</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`font-medium ${fteExceedsCount ? 'text-red-600 dark:text-red-400' : ''}`}>
+                          {formatNumber(row.requiredFTE, 2)} FTE
+                        </span>
+                        {fteExceedsCount && (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300"
+                            title={`${row.requiredFTE.toFixed(2)} FTE required but only ${row.currentCount!} configured`}
+                          >
+                            ⚠ Short {Math.ceil(row.requiredFTE - row.currentCount!)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">—</td>
+                    <td className="text-right px-4 py-3">{row.dayRate != null ? `$${formatNumber(row.dayRate, 0)}` : '—'}</td>
+                    {hasCost && <td className="text-right px-6 py-3 font-medium text-gray-900 dark:text-white">{row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}</td>}
+                  </tr>
+                )
+              })}
 
               {profile && (
                 <tr className="bg-gray-900 text-white font-semibold">
