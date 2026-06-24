@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Playwright E2E tests for Monrad Estimator",
   "scripts": {
-    "test": "playwright test --config=playwright.config.mjs",
+    "test": "playwright test",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",
     "report": "playwright show-report playwright-report",

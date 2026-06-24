@@ -199,8 +199,13 @@ test.describe('Timeline Gantt UX — scale toggle, expand/collapse, allocation',
     await expect(page.getByText(/features scheduled/)).toBeVisible({ timeout: 8_000 })
   })
 
-  test('Expand All and Collapse All toggle epic rows', async ({ page }) => {
-    await setupTimeline(page)
+  test('Expand All and Collapse All toggle epic rows persistently across refetch', async ({ page }) => {
+    const { featureName } = await setupTimeline(page)
+
+    // The feature label/title is rendered in the Gantt label panel.
+    // On first load, the single epic is auto-expanded, so the feature row is visible.
+    const featureLoc = page.locator(`[title="${featureName}"]`).first()
+    await expect(featureLoc).toBeVisible({ timeout: 8_000 })
 
     // "Collapse All" button — title attribute set by the component
     const collapseBtn = page.getByTitle('Collapse all epics')
@@ -209,21 +214,23 @@ test.describe('Timeline Gantt UX — scale toggle, expand/collapse, allocation',
     await expect(collapseBtn).toBeVisible()
     await expect(expandBtn).toBeVisible()
 
-    // Click Collapse All
+    // Click Collapse All — all epics should collapse, hiding child rows
     await collapseBtn.click()
-    await expect(collapseBtn).toHaveClass(/bg-lab3-navy/)
-
-    // Click Expand All
-    await expandBtn.click()
-    await expect(expandBtn).toHaveClass(/bg-lab3-navy/)
+    await expect(featureLoc).not.toBeVisible({ timeout: 5_000 })
 
     // Re-schedule to trigger a refetch — knownEpicIds ref prevents auto-expand
     // of previously known epics, verifying the persistence fix for #232.
     await quickSchedule(page)
-    await expect(expandBtn).toBeVisible({ timeout: 15_000 })
-    // After quick schedule, the epic is still known — expand should still work
+    await expect(featureLoc).not.toBeVisible({ timeout: 15_000 })
+
+    // Click Expand All — child rows should reappear
     await expandBtn.click()
-    await expect(expandBtn).toHaveClass(/bg-lab3-navy/)
+    await expect(featureLoc).toBeVisible({ timeout: 5_000 })
+
+    // Trigger another refetch and confirm expanded state persists
+    // (knownEpicIds ref maintains expanded state for known epics after manual toggle)
+    await quickSchedule(page)
+    await expect(featureLoc).toBeVisible({ timeout: 15_000 })
   })
 
   // Note: Named resource allocation editing and per-person histogram bar count tests
