@@ -79,27 +79,26 @@ export function getTimelineRecommendation(
   }
 
   const recommendSquadPlanner = complexityScore >= 3
-
   return recommendSquadPlanner
     ? {
         recommendedAction: 'squad-planner',
         badge: 'Recommended flow',
-        title: 'Use Squad Planner as the main workflow',
+        title: 'Review capacity planning first',
         summary:
-          'This timeline has enough moving parts that it is better to shape the team first, then apply the plan.',
+          'This timeline has enough moving parts that a capacity profile will be more useful before you update the dates.',
         rationale,
         secondarySummary:
-          'Quick schedule is still available for a fast baseline. Starting Team Finder can help you choose an initial squad first.',
+          'Update timeline remains the scheduling action. Generate or review a capacity profile for larger programmes in Squad Planner. Find a sensible starting squad size to use with Squad Planner.',
       }
     : {
         recommendedAction: 'quick-schedule',
         badge: 'Recommended flow',
-        title: 'Start with Quick schedule',
+        title: 'Update timeline',
         summary:
-          'This project looks simple enough for a quick baseline schedule before you use the heavier planning tools.',
+          'This project looks simple enough to recalculate dates directly before using the heavier planning tools.',
         rationale,
         secondarySummary:
-          'If the baseline exposes resourcing trade-offs, move into Starting Team Finder or Squad Planner next.',
+          'Update timeline is the scheduling action. Squad Planner is for larger programmes, and Starting Team Finder helps you find a sensible starting squad size.',
       }
 }
 

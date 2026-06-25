@@ -7,7 +7,7 @@ import os from 'os'
 /**
  * Shared setup for timeline tests 2-4.
  * Creates a project with one epic + one feature, navigates to Timeline, sets the
- * start date to 2026-06-01, clicks Quick schedule, and waits for Gantt entries
+ * start date to 2026-06-01, clicks Update timeline, and waits for Gantt entries
  * (the sequential/parallel toggle on the epic header row is the earliest reliable
  * signal that at least one entry has been rendered).
  */
@@ -48,14 +48,14 @@ async function setupTimeline(page: Page): Promise<{ projectName: string; epicNam
   await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 8_000 })
 
   // Set start date — fill triggers React onChange which updates startDateInput state.
-  // Wait for the DOM value to stabilise before clicking Quick schedule so that
+  // Wait for the DOM value to stabilise before clicking Update timeline so that
   // handleSchedule reads the correct startDateInput value.
   const dateInput = page.locator('input[type="date"]')
   await expect(dateInput).toBeVisible({ timeout: 8_000 })
   await dateInput.fill('2026-06-01')
   await expect(dateInput).toHaveValue('2026-06-01')
 
-  // Quick schedule — the server assigns 1-week default duration to features with no tasks,
+  // Update timeline — the server assigns 1-week default duration to features with no tasks,
   // so even a fresh epic/feature will produce Gantt entries.
   await quickSchedule(page)
 
@@ -145,11 +145,11 @@ test.describe('Timeline', () => {
     })
   })
 
-  test('quick schedule shows projected end date', async ({ page }) => {
+  test('update timeline shows projected end date', async ({ page }) => {
     await setupTimeline(page)
 
     // After setupTimeline the Gantt entries are already visible. The projectedEndDate
-    // field is rendered next to the Quick schedule action whenever timeline?.projectedEndDate
+    // field is rendered next to the Update timeline action whenever timeline?.projectedEndDate
     // is truthy. It should appear shortly after scheduling completes.
     await expect(page.getByText(/projected end:/i)).toBeVisible({ timeout: 15_000 })
   })
@@ -236,7 +236,7 @@ test.describe('Timeline — cache invalidation', () => {
       page.getByRole('heading', { name: /timeline planner/i })
     ).toBeVisible({ timeout: 8_000 })
 
-    // ── Set start date and Quick schedule ──
+    // ── Set start date and Update timeline ──
     const dateInput = page.locator('input[type="date"]')
     await expect(dateInput).toBeVisible({ timeout: 8_000 })
     await dateInput.fill('2026-06-01')
@@ -302,7 +302,7 @@ const OPTIMISER_CSV = [
 
 /**
  * Creates a fresh project, seeds it with resource types via CSV import,
- * navigates to the Timeline page, and runs Quick schedule.
+ * navigates to the Timeline page, and runs Update timeline.
  * Resources (Developer + Tech Lead) are required for the finder action
  * button to be enabled.
  */
@@ -338,7 +338,7 @@ async function setupOptimiserTimeline(page: Page): Promise<void> {
   await page.getByRole('button', { name: /timeline/i }).click()
   await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 8_000 })
 
-  // Set a start date and run Quick schedule so the scheduler has produced entries
+  // Set a start date and run Update timeline so the scheduler has produced entries
   const dateInput = page.locator('input[type="date"]')
   await expect(dateInput).toBeVisible({ timeout: 8_000 })
   await dateInput.fill('2026-06-01')
