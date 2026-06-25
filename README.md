@@ -229,6 +229,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Timeline scale toggle (week/month/quarter/year), cross-epic FeatureDependsOn in CSV, TemplateSize column in backlog CSV for template task auto-expand; Year scale (H1/H2 top row, Q1–Q4 bottom row); allocation mode/% + timeline start/end weeks in Resource Counts; Expand All / Collapse All toggle; dep picker search filter; top scrollbar mirror; full-width Gantt layout; named resource per-person T&M histogram; onboarding/buffer zone calc fix; auto-reschedule prevention on resource changes | #231 |
 | Document export — paginate Project Timeline Gantt across multiple A4-landscape pages so all epics and features are visible on large projects (previously clipped to the first ~3-4 epics) | #238 |
 | Resource Optimiser — Phase 4 frontend drawer with mode selector (speed/utilisation/balanced), per-RT count constraints, optional budget/duration ceilings, ranked candidate cards with KPI deltas, and apply-with-snapshot rollback | #239 |
+| Timeline workflow cleanup — canonical Update timeline CTA, hidden Level current timeline action, advanced planning copy updates | #314 |
 
 ---
 

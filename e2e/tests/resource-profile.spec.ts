@@ -315,8 +315,8 @@ test.describe('Resource Profile — cache invalidation from Timeline', () => {
     await dateInput.fill('2026-06-01')
     await expect(dateInput).toHaveValue('2026-06-01')
 
-    // Click Quick Schedule
-    const schedButton = page.getByRole('button', { name: /^quick schedule( again)?$/i }).first()
+    // Click Update timeline
+    const schedButton = page.getByRole('button', { name: /^update timeline$/i }).first()
     await expect(schedButton).toBeVisible({ timeout: 10_000 })
     await schedButton.click()
     await expect(

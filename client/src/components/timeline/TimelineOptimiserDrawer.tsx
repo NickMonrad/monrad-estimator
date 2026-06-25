@@ -547,7 +547,7 @@ export default function TimelineOptimiserDrawer({
           <div>
             <h2 className="text-base font-semibold text-gray-900 dark:text-white">🔧 Starting Team Finder</h2>
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Compare starting team options before you move into Squad Planner.
+              Find a sensible starting squad size to use with Squad Planner.
             </p>
           </div>
           <div className="flex items-center gap-3">

@@ -27,10 +27,10 @@ export async function createProject(page: Page, name: string) {
   await page.getByRole('heading', { name, exact: true }).first().waitFor({ timeout: 10_000 })
 }
 
-/** Click the timeline scheduling CTA using the current Timeline UX label. */
+/** Click the timeline update CTA using the current Timeline UX label. */
 export async function quickSchedule(page: Page) {
   const button = page.getByRole('button', {
-    name: /^quick schedule( again)?$/i,
+    name: /^update timeline$/i,
   }).first()
   await expect(button).toBeVisible({ timeout: 10_000 })
   await button.click()

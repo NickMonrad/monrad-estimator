@@ -690,14 +690,6 @@ export default function TimelinePage() {
     },
   })
 
-  const levelMutation = useMutation({
-    mutationFn: () => api.post(`/projects/${projectId}/timeline/level`, { dryRun: false }).then(r => r.data),
-    onSuccess: () => {
-      invalidateProjectPlanning(qc, projectId)
-    },
-  })
-  const handleLevel = () => levelMutation.mutate()
-
   const resetStoryTimeline = useMutation({
     mutationFn: (storyId: string) =>
       api.delete(`/projects/${projectId}/timeline/stories/${storyId}`),
@@ -809,10 +801,10 @@ export default function TimelinePage() {
     }
     return rtNamesWithDemand.size
   }, [timeline?.weeklyDemand])
-  const quickScheduleLabel = hasTimelineEntries ? 'Quick schedule again' : 'Quick schedule'
-  const quickScheduleDescription = hasTimelineEntries
-    ? 'Refresh the current timeline from the latest backlog and resourcing inputs.'
-    : 'Generate a fast baseline timeline from the current backlog.'
+  const updateTimelineLabel = 'Update timeline'
+  const updateTimelineDescription = hasTimelineEntries
+    ? 'Recalculate the timeline from the latest backlog, dependencies, and resource setup.'
+    : 'Generate a timeline from the latest backlog and resource setup.'
   const handleOptimiserRefine = useCallback(
     (
       candidate: OptimiserCandidate,
@@ -971,7 +963,7 @@ export default function TimelinePage() {
                       disabled={scheduleTimeline.isPending}
                       className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
                     >
-                      {scheduleTimeline.isPending ? 'Scheduling…' : quickScheduleLabel}
+                      {scheduleTimeline.isPending ? 'Scheduling…' : updateTimelineLabel}
                     </button>
                   ) : (
                     <button
@@ -983,8 +975,8 @@ export default function TimelinePage() {
                   )}
                   <p className="text-xs text-gray-500 dark:text-gray-400">
                     {timelineRecommendation.recommendedAction === 'quick-schedule'
-                      ? quickScheduleDescription
-                      : 'Shape the demand-bearing team first, then apply the plan back to the timeline.'}
+                      ? updateTimelineDescription
+                      : 'Generate or review a capacity profile for larger programmes.'}
                   </p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {timelineRecommendation.recommendedAction === 'quick-schedule' ? (
@@ -992,7 +984,7 @@ export default function TimelinePage() {
                         onClick={openSquadPlanner}
                         className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700"
                       >
-                        👥 Squad Planner
+                        👥 Open Squad Planner
                       </button>
                     ) : (
                       <button
@@ -1000,28 +992,21 @@ export default function TimelinePage() {
                         disabled={scheduleTimeline.isPending}
                         className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
                       >
-                        {quickScheduleLabel}
+                        {updateTimelineLabel}
                       </button>
                     )}
                     <button
                       onClick={() => setOptimiserOpen(true)}
                       className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700"
                     >
-                      🔧 Starting Team Finder
-                    </button>
-                    <button
-                      onClick={handleLevel}
-                      disabled={levelMutation.isPending}
-                      className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
-                    >
-                      {levelMutation.isPending ? 'Levelling…' : '⚖ Level current timeline'}
+                      🔧 Open Starting Team Finder
                     </button>
                     {hasManualOverrides && (
                       <button
                         onClick={() => resetAllManual.mutate()}
                         disabled={resetAllManual.isPending}
                         className="border border-blue-200 text-blue-600 px-3 py-2 rounded-lg text-sm hover:bg-blue-50 disabled:opacity-50"
-                        title="Remove all manual position overrides and let Quick schedule place everything automatically"
+                        title="Remove all manual position overrides and let Update timeline place everything automatically"
                       >
                         {resetAllManual.isPending ? 'Clearing…' : '✕ Clear overrides'}
                       </button>
@@ -1066,10 +1051,10 @@ export default function TimelinePage() {
         {scheduleStale && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
             <span className="text-amber-800">
-              ⚠ Timeline inputs changed (dependencies, sequencing, or resourcing). Refresh with <strong>Quick schedule</strong> for a fast baseline, or reopen <strong>Squad Planner</strong> if the team shape now needs rework.
+              ⚠ Timeline inputs changed. Update the timeline to recalculate dates from the latest backlog, dependencies, and resource setup.
             </span>
             <button onClick={handleSchedule} className="bg-amber-500 text-white px-3 py-1 rounded text-xs font-medium hover:bg-amber-600">
-              Quick schedule now
+              Update timeline
             </button>
           </div>
         )}
@@ -1079,7 +1064,7 @@ export default function TimelinePage() {
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 space-y-1">
             <p className="text-sm font-medium text-red-800">⚠ Parallel demand is outrunning the current team</p>
             <p className="text-xs text-red-700">
-              Use <strong>Starting Team Finder</strong> to choose a better opening squad, or go straight to <strong>Squad Planner</strong> to reshape demand-bearing roles.
+              Use Starting Team Finder to find a sensible starting squad size, or open Squad Planner to generate or review a capacity profile for larger programmes.
             </p>
             {(timeline!.parallelWarnings!).map((w, i) => (
               <p key={i} className="text-xs text-red-700">
@@ -1095,7 +1080,7 @@ export default function TimelinePage() {
             onClick={() => setResourcesOpen(o => !o)}
             className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
           >
-            <span>Resource Counts — adjust before Quick schedule or Squad Planner</span>
+            <span>Resource Counts — adjust before Update timeline</span>
             <span className="text-gray-400 dark:text-gray-500">{resourcesOpen ? '▲' : '▼'}</span>
           </button>
           {resourcesOpen && (
@@ -1267,7 +1252,7 @@ export default function TimelinePage() {
 
           {!isLoading && (!timeline?.entries || timeline.entries.length === 0) && (
             <div className="p-8 text-center text-gray-400 dark:text-gray-500 text-sm">
-              Set a start date, then use <strong>Quick schedule</strong> for a fast baseline or open <strong>Squad Planner</strong> for a more deliberate team plan.
+              Set a start date, then update the timeline.
             </div>
           )}
 
@@ -1429,7 +1414,7 @@ export default function TimelinePage() {
                         <button
                           onClick={() => resetManual.mutate(entry.featureId)}
                           disabled={resetManual.isPending}
-                          title="Clear manual override and re-run Quick schedule"
+                          title="Clear manual override and re-run Update timeline"
                           className="px-3 py-0.5 rounded text-xs text-orange-600 border border-orange-200 hover:bg-orange-50 disabled:opacity-50"
                         >
                         {resetManual.isPending ? 'Resetting…' : '↺ Reset to auto'}

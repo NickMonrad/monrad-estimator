@@ -7,7 +7,7 @@ import {
 } from '@/components/timeline/timelineUx'
 
 describe('getTimelineRecommendation', () => {
-  it('recommends quick schedule for a simple first-pass project', () => {
+  it('recommends update timeline for a simple first-pass project', () => {
     const recommendation = getTimelineRecommendation({
       hasEntries: false,
       scheduleStale: false,
@@ -19,7 +19,9 @@ describe('getTimelineRecommendation', () => {
     })
 
     expect(recommendation.recommendedAction).toBe('quick-schedule')
-    expect(recommendation.title).toContain('Quick schedule')
+    expect(recommendation.title).toContain('Update timeline')
+    expect(recommendation.secondarySummary).toContain('Squad Planner')
+    expect(recommendation.secondarySummary).toContain('Starting Team Finder')
   })
 
   it('recommends squad planner when warnings and complexity stack up', () => {
@@ -34,6 +36,10 @@ describe('getTimelineRecommendation', () => {
     })
 
     expect(recommendation.recommendedAction).toBe('squad-planner')
+    expect(recommendation.title).toContain('capacity planning')
+    expect(recommendation.secondarySummary).toContain('Generate or review a capacity profile for larger programmes')
+    expect(recommendation.secondarySummary).toContain('Update timeline remains the scheduling action')
+    expect(recommendation.secondarySummary).toContain('Find a sensible starting squad size to use with Squad Planner')
     expect(recommendation.rationale).toEqual(
       expect.arrayContaining([
         expect.stringContaining('parallel warnings'),

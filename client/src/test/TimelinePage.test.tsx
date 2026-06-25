@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import TimelinePage from '@/pages/TimelinePage'
@@ -11,6 +11,7 @@ import TimelinePage from '@/pages/TimelinePage'
 const mockGet = vi.hoisted(() => vi.fn())
 const mockPatch = vi.hoisted(() => vi.fn())
 const mockPost = vi.hoisted(() => vi.fn())
+const mockPut = vi.hoisted(() => vi.fn())
 const mockDelete = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/api', () => ({
@@ -18,6 +19,7 @@ vi.mock('@/lib/api', () => ({
     get: mockGet,
     patch: mockPatch,
     post: mockPost,
+    put: mockPut,
     delete: mockDelete,
   },
 }))
@@ -66,15 +68,37 @@ const mockProject = {
   updatedAt: '2026-06-01T00:00:00.000Z',
 }
 
-const mockTimeline = {
-  projectId,
-  startDate: '2026-01-15',
-  hoursPerDay: 8,
-  projectedEndDate: '2026-06-30T00:00:00.000Z',
-  entries: [],
-  bufferWeeks: 2,
-  onboardingWeeks: 3,
+const defaultTimelineEntry = {
+  epicId: 'epic-1',
+  epicName: 'Epic One',
+  epicOrder: 1,
+  featureId: 'feature-1',
+  featureName: 'Feature One',
+  featureOrder: 1,
+  startWeek: 0,
+  durationWeeks: 1,
+  isManual: false,
 }
+
+function createTimeline(overrides: Record<string, unknown> = {}) {
+  return {
+    projectId,
+    startDate: '2026-01-15',
+    hoursPerDay: 8,
+    projectedEndDate: '2026-06-30T00:00:00.000Z',
+    entries: [defaultTimelineEntry],
+    storyEntries: [],
+    weeklyDemand: [],
+    parallelWarnings: [],
+    namedResources: [],
+    bufferWeeks: 2,
+    onboardingWeeks: 3,
+    ...overrides,
+  }
+}
+
+let mockTimeline = createTimeline()
+let mockResourceTypes: any[] = []
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -108,6 +132,8 @@ describe('TimelinePage — Planning Settings', () => {
 
   beforeEach(() => {
     localStorageStore = {}
+    mockTimeline = createTimeline()
+    mockResourceTypes = []
 
     // Stub localStorage (jsdom doesn't provide it by default)
     vi.stubGlobal('localStorage', {
@@ -124,12 +150,16 @@ describe('TimelinePage — Planning Settings', () => {
     // Default: project, timeline, resource-types
     mockGet.mockImplementation((url: string) => {
       if (url.includes('/timeline')) return Promise.resolve({ data: mockTimeline })
-      if (url.includes('/resource-types')) return Promise.resolve({ data: [] })
+      if (url.includes('/resource-types')) return Promise.resolve({ data: mockResourceTypes })
       return Promise.resolve({ data: mockProject })
     })
 
+    mockPost.mockImplementation(() => Promise.resolve({ data: mockTimeline }))
+    mockPut.mockResolvedValue({ data: {} })
     mockPatch.mockResolvedValue({ data: mockProject })
+    mockDelete.mockResolvedValue({ data: {} })
   })
+
 
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -239,5 +269,75 @@ describe('TimelinePage — Planning Settings', () => {
 
     const bufferLabel = screen.getByText('Buffer Weeks')
     expect(bufferLabel).toHaveAttribute('for', 'timeline-buffer-weeks')
+  })
+  it('renders Update timeline and hides the level action', async () => {
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: /^update timeline$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /level current timeline/i })).not.toBeInTheDocument()
+  })
+
+  it('posts the schedule request when Update timeline is clicked', async () => {
+    renderPage()
+
+    await screen.findByDisplayValue('2026-01-15')
+    fireEvent.click(screen.getByRole('button', { name: /^update timeline$/i }))
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(`/projects/${projectId}/timeline/schedule`, {
+        startDate: '2026-01-15',
+        resourceLevel: false,
+      })
+    })
+  })
+
+  it('passes resourceLevel true when Resource leveling is enabled', async () => {
+    renderPage()
+
+    await screen.findByDisplayValue('2026-01-15')
+    const checkbox = screen.getByRole('checkbox', { name: /resource leveling/i })
+    fireEvent.click(checkbox)
+
+    await waitFor(() => {
+      expect(checkbox).toBeChecked()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /^update timeline$/i }))
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(`/projects/${projectId}/timeline/schedule`, {
+        startDate: '2026-01-15',
+        resourceLevel: true,
+      })
+    })
+  })
+
+  it('shows Update timeline in the stale banner after a resource edit', async () => {
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'Developer', demandDays: 5 }],
+    })
+    mockResourceTypes = [
+      { id: 'rt-dev', name: 'Developer', category: 'Engineering', count: 1, hoursPerDay: 8 },
+    ]
+
+    renderPage()
+
+    const hoursInput = (await screen.findByDisplayValue('8')) as HTMLInputElement
+
+    fireEvent.change(hoursInput!, { target: { value: '7' } })
+    fireEvent.blur(hoursInput!)
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(`/projects/${projectId}/resource-types/rt-dev`, {
+        hoursPerDay: 7,
+      })
+    })
+
+    const banner = screen.getByText(/timeline inputs changed/i).closest('div')
+    expect(banner).not.toBeNull()
+    expect(within(banner!).getByRole('button', { name: /update timeline/i })).toBeInTheDocument()
+    expect(
+      screen.getByText(/update the timeline to recalculate dates from the latest backlog, dependencies, and resource setup/i),
+    ).toBeInTheDocument()
   })
 })
