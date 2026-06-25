@@ -8,10 +8,11 @@ It is intentionally architecture-focused rather than user-guide focused. Use it 
 
 The app deliberately separates four related but different concepts:
 
+| Concept | Primary source | Owned by | Notes |
 |---|---|---|---|
 | Delivery effort | `Task.hoursEffort`, `Task.durationDays`, task `resourceTypeId` | Backlog / Effort Review | This is the estimated work required to deliver the scoped backlog. |
 | Scheduling reality | `TimelineEntry`, `StoryTimelineEntry`, `Project.weeklyDemandCache` | Timeline Planner | This is where work lands over time after dependencies, manual overrides, and optional resource levelling. |
-| Resource capacity / staffing shape | `ResourceType`, `NamedResource` | Resource Profile / planning controls | This describes which role/person/slot capacity is available by week. `CapacityPlan` is materialized to override resource-type `count` for the response read model and shared planning model, but is **not** passed directly into `runScheduler`. The scheduler receives raw `ResourceType.count` values. |
+| Resource capacity / staffing shape | `ResourceType`, `NamedResource` | Resource Profile / planning controls | This describes which role/person/slot capacity is available by week. `CapacityPlan` is materialized into weekly headcount and slot-window facts for the response/shared planning read model, but is **not** passed directly into `runScheduler`. The scheduler currently receives raw `ResourceType.count` values. |
 | Commercial pricing | `ResourceType.dayRate`, `NamedResource.pricingModel`, `ProjectOverhead`, `ProjectDiscount`, tax fields | Commercial / Resource Profile presentation | Pricing may use scheduled actual days, pro-rata allocation, full-project allocation, discounts, or overheads. It should not be treated as identical to effort or capacity. |
 
 ```mermaid
@@ -81,8 +82,9 @@ flowchart LR
   STE --> Gantt
   Profile --> Docs
   Commercial --> Docs
-## Core entity relationship diagram
+```
 
+## Core entity relationship diagram
 This ERD focuses on the scheduling/resource-planning domain. It omits unrelated auth, organisation, customer, template, and generated-document details except where they materially affect planning or commercial calculations.
 
 ```mermaid
