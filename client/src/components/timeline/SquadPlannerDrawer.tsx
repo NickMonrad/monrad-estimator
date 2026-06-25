@@ -489,7 +489,12 @@ export default function SquadPlannerDrawer({
       >
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">👥 Squad Planner</h2>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">👥 Squad Planner</h2>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Generate or review a capacity profile for larger programmes.
+            </p>
+          </div>
           <div className="flex items-center gap-3">
             <button
               onClick={resetToDefaults}

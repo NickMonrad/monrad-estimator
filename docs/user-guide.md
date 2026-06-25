@@ -168,7 +168,7 @@ Capacity plans are useful for modelling how staffing changes over time.
 
 For example, you may want to show that a project starts with one engineer, then grows to three engineers, then tapers back down.
 
-After changing resource counts, named resources, dependencies, sequencing, or capacity planning, the Timeline may be stale. The normal action is to click **Quick schedule again** to rebuild the Timeline from the latest inputs. If **Resource levelling** is enabled, Quick Schedule will try to avoid overloading resource types.
+After changing resource counts, named resources, dependencies, sequencing, or capacity planning, the Timeline may be stale. The normal action is to click **Update timeline** to rebuild the Timeline from the latest inputs. If **Resource levelling** is enabled, the regenerated schedule respects weekly resource capacity and tries to avoid overloading resource types.
 
 Capacity planning may also change Resource Profile, Commercial, and reporting views. Do not assume that changing a capacity plan automatically moves feature dates on the Timeline.
 
@@ -245,7 +245,7 @@ Possible causes:
 
 That is expected unless you re-run scheduling afterwards.
 
-Use **Quick schedule again** to refresh the Timeline dates. If you want a levelled schedule, turn on **Resource levelling** before clicking Quick schedule again.
+Use **Update timeline** to refresh the Timeline dates. If you want a levelled schedule, turn on **Resource levelling** first so the regenerated schedule respects weekly resource capacity.
 
 If dates still do not move after that, check resource type counts, named-resource availability, dependencies, sequencing modes, and manual pins.
 

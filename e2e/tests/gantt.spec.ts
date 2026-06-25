@@ -6,7 +6,7 @@
  * (class "h-6 cursor-pointer") positioned via CSS grid-column.
  *
  * Tests cover:
- *   1. Quick schedule populates the Gantt grid with feature bars.
+ *   1. Update timeline populates the Gantt grid with feature bars.
  *   2. The epic feature-mode button toggles sequential ↔ parallel.
  *   3. Clicking a feature bar (or label) opens the inline edit panel.
  *   4. Saving a manual start week via inline edit marks the bar with ✏.
@@ -20,7 +20,7 @@ import { login, createProject, quickSchedule } from './helpers'
 
 /**
  * Log in, create a project with 1 epic + 1 feature, navigate to the
- * Timeline page, fill the start date, click Quick schedule, and wait
+ * Timeline page, fill the start date, click Update timeline, and wait
  * until the Gantt grid footer ("X features scheduled") is visible.
  */
 async function setupTimeline(
@@ -62,7 +62,7 @@ async function setupTimeline(
     timeout: 8_000,
   })
 
-  // Set start date, then Quick schedule
+  // Set start date, then Update timeline
   const dateInput = page.locator('input[type="date"]')
   await expect(dateInput).toBeVisible({ timeout: 8_000 })
   await dateInput.fill('2026-06-01')
@@ -83,9 +83,9 @@ async function setupTimeline(
 
 test.describe('Gantt Chart', () => {
   // ──────────────────────────────────────────────────────────────────────────
-  // 1. Smoke test: feature bars are rendered after quick schedule
+  // 1. Smoke test: feature bars are rendered after update timeline
   // ──────────────────────────────────────────────────────────────────────────
-  test('quick schedule renders feature bars in the Gantt grid', async ({ page }) => {
+  test('update timeline renders feature bars in the Gantt grid', async ({ page }) => {
     await setupTimeline(page)
 
     // The footer "X weeks total · X features scheduled" is only rendered when
