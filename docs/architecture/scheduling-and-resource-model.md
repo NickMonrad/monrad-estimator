@@ -27,7 +27,7 @@ The app deliberately separates four related but different concepts:
 |---|---|---|---|
 | Delivery effort | `Task.hoursEffort`, `Task.durationDays`, task `resourceTypeId` | Backlog / Effort Review | This is the estimated work required to deliver the scoped backlog. |
 | Scheduling reality | `TimelineEntry`, `StoryTimelineEntry`, `Project.weeklyDemandCache` | Timeline Planner | This is where work lands over time after dependencies, manual overrides, and optional resource levelling. |
-| Resource capacity / staffing shape | `ResourceType`, `NamedResource` | Resource Profile / planning controls | This describes which role/person/slot capacity is available by week. `CapacityPlan` is materialized into weekly headcount and slot-window facts for the response/shared planning read model, but is **not** passed directly into `runScheduler`. The scheduler currently receives raw `ResourceType.count` values. |
+| Resource capacity / staffing shape | `ResourceType`, `NamedResource` | Resource Profile / planning controls | This describes which role/person/slot capacity is available by week. `CapacityPlan` is turned into week-by-week staffing numbers and named-resource windows for the response/shared planning read model, but is **not** passed directly into `runScheduler`. The scheduler currently receives raw `ResourceType.count` values. |
 | Commercial pricing | `ResourceType.dayRate`, `NamedResource.pricingModel`, `ProjectOverhead`, `ProjectDiscount`, tax fields | Commercial / Resource Profile presentation | Pricing may use scheduled actual days, pro-rata allocation, full-project allocation, discounts, or overheads. It should not be treated as identical to effort or capacity. |
 
 ```mermaid
@@ -107,6 +107,7 @@ This section is mainly for developers. It shows the database records involved in
 The ERD focuses on the scheduling/resource-planning domain. It omits unrelated auth, organisation, customer, template, and generated-document details except where they materially affect planning or commercial calculations.
 ```mermaid
 erDiagram
+  PROJECT ||--o{ EPIC : owns
   EPIC ||--o{ FEATURE : owns
   FEATURE ||--o{ USER_STORY : owns
   USER_STORY ||--o{ TASK : owns
