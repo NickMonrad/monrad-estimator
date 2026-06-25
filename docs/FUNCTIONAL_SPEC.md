@@ -3,6 +3,8 @@
 > **Status:** Living document. Update alongside feature releases.  
 > **Last updated:** March 2026 (reflects all features shipped through PR #164)
 
+
+> **Architecture guide:** [`docs/architecture/scheduling-and-resource-model.md`](architecture/scheduling-and-resource-model.md) explains the scheduling data-flow, resource levelling, named-resource allocation, capacity plans, commercial/resource-profile derivation, and cross-surface consistency. This functional spec covers user-facing behaviour; the architecture guide covers internal data flow and calculation details.
 ---
 
 ## Table of Contents
@@ -530,23 +532,31 @@ Weekly demand visualisation:
 
 ## Timeline Planner
 
+> **Architecture reference:** See [`docs/architecture/scheduling-and-resource-model.md`](architecture/scheduling-and-resource-model.md) for the detailed scheduling data-flow, bottleneck feature-duration calculation, resource capacity derivation, and cross-surface consistency model.
+
 ### Auto-Scheduler
 
-The scheduler places features on a timeline automatically using a **dependency-aware topological sort** and **proportional pool simulation**:
+The scheduler places features on a timeline automatically using a **dependency-aware topological sort** and optional resource-levelling simulation:
 
 1. Features within an Epic are ordered by their `order` field
 2. Epic `featureMode` determines whether features run **sequentially** (end-to-end) or **in parallel** (overlapping)
-3. Resource levelling: if multiple features need the same resource type simultaneously, their durations are spread proportionally to keep weekly demand within capacity
+3. Resource levelling: if enabled, work is simulated in 0.2-week steps against weekly capacity, greedily allocating small/nearly-done work to avoid sparse tails
 4. Features with manual overrides (`isManual = true`) are placed at their fixed `startWeek` and are not moved by the scheduler
 5. Feature dependencies (`FeatureDependency`) ensure a feature cannot start before all its dependencies complete
 6. Story-level dependencies (`StoryDependency`) are also respected for story bars
 
 ### Feature Duration Calculation
 
-```
-feature_duration_weeks = Σ(task.durationDays) / (hoursPerDay × 5)
-```
-Fractional weeks are preserved.
+The scheduler does **not** use a simple uniform spread. Instead, active-story task effort is grouped by resource type and the bottleneck resource type determines the duration:
+
+1. Active stories only are considered
+2. Tasks are grouped by `resourceTypeId`
+3. Each task's effective days are calculated from `durationDays` when present, otherwise from `hoursEffort / effectiveHoursPerDay`
+4. For each resource type, person-days are divided by the configured resource type `count`
+5. The largest resource-type duration becomes the feature duration floor, with a minimum of `0.2` weeks
+6. For parallel epics, a shared-resource minimum-span floor is applied so parallel features cannot complete faster than total demand divided by available weekly capacity
+
+See the [architecture guide](architecture/scheduling-and-resource-model.md) for the full Mermaid flowchart of this calculation.
 
 ### Manual Overrides
 
