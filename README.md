@@ -230,6 +230,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Document export — paginate Project Timeline Gantt across multiple A4-landscape pages so all epics and features are visible on large projects (previously clipped to the first ~3-4 epics) | #238 |
 | Resource Optimiser — Phase 4 frontend drawer with mode selector (speed/utilisation/balanced), per-RT count constraints, optional budget/duration ceilings, ranked candidate cards with KPI deltas, and apply-with-snapshot rollback | #239 |
 | Timeline workflow cleanup — canonical Update timeline CTA, hidden Level current timeline action, advanced planning copy updates | #314 |
+| Resource Counts allocation controls — stable named-resource columns, clearer planning-basis labels, preserved mode switching/start/end/allocation updates, and stale-banner behaviour | #315 |
 
 ---
 
