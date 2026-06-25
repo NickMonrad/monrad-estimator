@@ -4,6 +4,21 @@ This guide explains how Monrad Estimator turns backlog effort into a scheduled t
 
 It is intentionally architecture-focused rather than user-guide focused. Use it when investigating mismatches between Timeline, Resource Profile, Commercial, CSV, and PDF output.
 
+## Plain-English glossary
+
+A quick reference for terms used throughout this guide:
+
+| Term | What it means |
+|---|---|
+| **Backlog effort** | The estimated work to do — stored as hours and days on each Task, grouped by resource type. |
+| **Schedule / timeline** | When the work happens — feature and story start weeks and durations, plus optional manual pinning. |
+| **Capacity** | Who or what role is available in each week — defined by resource type *count* × *hoursPerDay*, optionally shaped by named resources or a capacity plan. |
+| **Demand** | How much work each role needs to do each week — produced by the scheduler and cached in `weeklyDemandCache`. |
+| **Named resource** | A real person or named staffing slot attached to a resource type. Has its own allocation mode, percentage, and optional window. |
+| **Weekly demand cache** | A saved week-by-week breakdown of demand from the last scheduler run. Consumers use it instead of falling back to a rough uniform spread. |
+| **Read model** | A combined view built from multiple source records for use by screens and exports. Not a new source of truth — just a query helper. |
+| **Derived** | Calculated from other data rather than manually entered. Named-resource assignments, weekly capacity, and the demand cache are all derived. |
+
 ## Source-of-truth boundaries
 
 The app deliberately separates four related but different concepts:
@@ -24,11 +39,12 @@ flowchart LR
     Task[Task effort<br/>hoursEffort + durationDays + resourceType]
     Epic --> Feature --> Story --> Task
   end
+
   subgraph Capacity[Resource Capacity / Staffing]
     RT[ResourceType<br/>count + hoursPerDay + dayRate]
     NR[NamedResource<br/>mode + percent + windows]
     CP[CapacityPlan<br/>period headcount]
-    Mat[capacityPlan →<br/>materialized RT overrides]
+    Mat[Capacity plan →<br/>week-by-week staffing facts]
     RT --> NR
     CP --> Mat
   end
@@ -37,7 +53,7 @@ flowchart LR
     Sched[runScheduler]
     TE[TimelineEntry<br/>feature start/duration]
     STE[StoryTimelineEntry<br/>story start/duration]
-    Cache[Project.weeklyDemandCache<br/>scheduler demand cache]
+    Cache[Project.weeklyDemandCache<br/>saved week-by-week demand]
     Sched --> TE
     Sched --> STE
     Sched --> Cache
@@ -85,11 +101,12 @@ flowchart LR
 ```
 
 ## Core entity relationship diagram
-This ERD focuses on the scheduling/resource-planning domain. It omits unrelated auth, organisation, customer, template, and generated-document details except where they materially affect planning or commercial calculations.
 
+This section is mainly for developers. It shows the database records involved in scheduling and resource planning.
+
+The ERD focuses on the scheduling/resource-planning domain. It omits unrelated auth, organisation, customer, template, and generated-document details except where they materially affect planning or commercial calculations.
 ```mermaid
 erDiagram
-  PROJECT ||--o{ EPIC : owns
   EPIC ||--o{ FEATURE : owns
   FEATURE ||--o{ USER_STORY : owns
   USER_STORY ||--o{ TASK : owns
@@ -288,6 +305,15 @@ erDiagram
 
 ## Scheduling data flow
 
+At a high level, the schedule endpoint does four things:
+
+1. **Load** the project settings, active backlog, dependencies, manual overrides, resource types, named resources, and the active capacity plan.
+2. **Run the scheduler** (`runScheduler`) to decide each feature's start week and duration, each story's placement, and the weekly demand per resource type.
+3. **Save** the resulting `TimelineEntry` and `StoryTimelineEntry` records, plus the week-by-week demand cache (`Project.weeklyDemandCache`).
+4. **Combine** the saved timeline data with the materialized capacity plan to build the shared planning read model, which feeds the Timeline UI, Resource Profile, commercial summaries, and CSV/PDF exports.
+
+The Mermaid diagram below shows the same flow in more detail.
+
 ```mermaid
 flowchart TD
   Request[POST /api/projects/:id/timeline/schedule]
@@ -479,7 +505,7 @@ The sparse-sliver regression from #283 came from proportional allocation leaving
 
 ## Shared planning read model
 
-`buildProjectPlanningModel` is the canonical read model for planning-derived facts. It does not own commercial pricing rules and it does not change the backlog effort source records.
+`buildProjectPlanningModel` is the shared place where Timeline, Resource Profile, Commercial, and exports get the same calculated planning view. It does not own commercial pricing rules and it does not change the backlog effort source records.
 
 ```mermaid
 flowchart TD
@@ -536,7 +562,7 @@ Assignment output includes:
 - `actualAllocationSegments`
 - `unallocatedDays` by resource type
 
-This is derived presentation data. It should not be confused with persisted named-resource configuration.
+This is calculated display data. It should not be confused with persisted named-resource configuration.
 
 ## Cross-surface consistency trace
 
