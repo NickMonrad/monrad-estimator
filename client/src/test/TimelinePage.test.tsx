@@ -341,3 +341,237 @@ describe('TimelinePage — Planning Settings', () => {
     ).toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Named-resource allocation controls — issue #311
+// ---------------------------------------------------------------------------
+describe('TimelinePage — named-resource allocation controls', () => {
+  const rtId = 'rt-dev'
+  const nrId = 'nr-1'
+
+  const baseResourceType = {
+    id: rtId,
+    name: 'Developer',
+    category: 'Engineering',
+    count: 1,
+    hoursPerDay: 8,
+  }
+
+  const baseNamedResource = {
+    id: nrId,
+    resourceTypeId: rtId,
+    name: 'Alice',
+    allocationMode: 'EFFORT' as const,
+    allocationPercent: 100,
+    allocationStartWeek: null,
+    allocationEndWeek: null,
+  }
+
+  beforeEach(() => {
+    const localStorageStore: Record<string, string> = {}
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => localStorageStore[key] ?? null,
+      setItem: (key: string, value: string) => { localStorageStore[key] = value },
+      removeItem: (key: string) => { delete localStorageStore[key] },
+      clear: () => { Object.keys(localStorageStore).forEach(k => delete localStorageStore[k]) },
+      length: 0,
+      key: () => null,
+    })
+
+    vi.clearAllMocks()
+
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes('/timeline')) return Promise.resolve({ data: mockTimeline })
+      if (url.includes('/resource-types')) return Promise.resolve({ data: mockResourceTypes })
+      return Promise.resolve({ data: mockProject })
+    })
+
+    mockPatch.mockImplementation((url: string, body: Record<string, unknown>) => {
+      if (url.includes('/named-resources/')) {
+        const nrId = url.split('/').pop()
+        mockTimeline = {
+          ...mockTimeline,
+          namedResources: (mockTimeline.namedResources ?? []).map((nr: any) =>
+            nr.id === nrId ? { ...nr, ...body } : nr,
+          ),
+        }
+        return Promise.resolve({ data: mockTimeline })
+      }
+
+      return Promise.resolve({ data: mockProject })
+    })
+    mockDelete.mockResolvedValue({ data: {} })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function setupWithNamedResource(nrOverrides: Partial<typeof baseNamedResource> = {}) {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'Developer', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource, ...nrOverrides }],
+    })
+  }
+
+  it('renders column headers when named resources exist', async () => {
+    setupWithNamedResource()
+    renderPage()
+
+
+    expect(await screen.findByText('Named resource')).toBeInTheDocument()
+    expect(screen.getByText('Planning basis')).toBeInTheDocument()
+    expect(screen.getByText('Allocation %')).toBeInTheDocument()
+    expect(screen.getByText('Start')).toBeInTheDocument()
+    expect(screen.getByText('End')).toBeInTheDocument()
+  })
+
+  it('renders the named-resource name in its row', async () => {
+    setupWithNamedResource()
+    renderPage()
+
+
+    const alice = await screen.findAllByText('Alice')
+    expect(alice.length).toBeGreaterThan(0)
+    expect(screen.getByText(/No assigned weeks.*Demand-following/i)).toBeInTheDocument()
+  })
+
+  it('shows a planning basis select defaulting to Demand-following', async () => {
+    setupWithNamedResource({ allocationMode: 'EFFORT' })
+    renderPage()
+
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('EFFORT')
+  })
+
+  it('mode switch fires PATCH with new mode and clears weeks when leaving TIMELINE', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('TIMELINE')
+
+    fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        expect.objectContaining({
+          allocationMode: 'FULL_PROJECT',
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(select).toHaveValue('FULL_PROJECT')
+    })
+  })
+
+  it('mode switch to TIMELINE preserves existing weeks', async () => {
+    setupWithNamedResource({
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 100,
+      allocationStartWeek: 3,
+      allocationEndWeek: 12,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    fireEvent.change(select, { target: { value: 'TIMELINE' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        expect.objectContaining({
+          allocationMode: 'TIMELINE',
+          allocationStartWeek: 3,
+          allocationEndWeek: 12,
+        }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(select).toHaveValue('TIMELINE')
+    })
+
+    const row = screen.getAllByText('Alice')[0].closest('div')
+    expect(row).not.toBeNull()
+    expect(within(row!).getByPlaceholderText('W1')).toHaveValue(3)
+    expect(within(row!).getByPlaceholderText('W∞')).toHaveValue(12)
+  })
+
+  it('switches to Capacity profile without losing the allocation percent', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    fireEvent.change(select, { target: { value: 'CAPACITY_PLAN' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        expect.objectContaining({
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 80,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(select).toHaveValue('CAPACITY_PLAN')
+    })
+  })
+
+  it('start/end week inputs are disabled for non-TIMELINE rows', async () => {
+    setupWithNamedResource({ allocationMode: 'FULL_PROJECT' })
+    renderPage()
+
+    await screen.findAllByText('Alice')
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
+  })
+
+  it('allocation % column shows — for EFFORT mode', async () => {
+    setupWithNamedResource({ allocationMode: 'EFFORT' })
+    renderPage()
+    await screen.findAllByText('Alice')
+    // No % input visible for EFFORT
+    const percentInputs = screen.queryAllByRole('spinbutton', { name: /allocation/i })
+    expect(percentInputs.length).toBe(0)
+  })
+
+  it('marks timeline stale after allocation mode change', async () => {
+    setupWithNamedResource({ allocationMode: 'EFFORT' })
+    renderPage()
+
+
+    const select = await screen.findByRole('combobox')
+    fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalled()
+    })
+
+    // stale banner should appear after patch resolves
+    await waitFor(() => {
+      expect(screen.getByText(/timeline inputs changed/i)).toBeInTheDocument()
+    })
+  })
+})
