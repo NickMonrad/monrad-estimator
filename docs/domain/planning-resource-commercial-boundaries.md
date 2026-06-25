@@ -4,6 +4,8 @@ Parent epic: #263
 Definition issue: #243  
 Related issues: #253, #255, #264, #265, #266, #267, #268, #269, #270, #271
 
+Related design: [`capacity-profile-design.md`](capacity-profile-design.md)
+
 ## Decision
 
 Monrad Estimator should treat **delivery effort**, **resource plan / capacity**, and **commercial pricing** as separate domain concepts with clear ownership.
