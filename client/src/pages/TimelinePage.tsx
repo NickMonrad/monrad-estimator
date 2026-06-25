@@ -127,10 +127,10 @@ function NamedResourcesPanel({
               {/* People rows */}
               {people.map((nr, i) => {
                 const mode = nr.allocationMode ?? 'EFFORT'
-                const modeLabel = mode === 'EFFORT' ? 'T&M'
-                  : mode === 'FULL_PROJECT' ? `Full Project · ${nr.allocationPct}%`
-                  : mode === 'CAPACITY_PLAN' ? `Capacity Plan · ${nr.allocationPct}%`
-                  : `Timeline · ${nr.allocationPct}%`
+                const modeLabel = mode === 'EFFORT' ? 'Demand-following'
+                  : mode === 'FULL_PROJECT' ? `Whole-project allocation · ${nr.allocationPct}%`
+                  : mode === 'CAPACITY_PLAN' ? `Capacity profile · ${nr.allocationPct}%`
+                  : `Availability window · ${nr.allocationPct}%`
                 return (
                   <div
                     key={`${rtName}-${nr.name}-${i}`}
@@ -1113,89 +1113,172 @@ export default function TimelinePage() {
                                   title="Add person"
                                 >+ Add</button>
                               </div>
-                              {nrs.length > 0 && (
-                                <div className="mt-1 space-y-0.5 pl-2">
-                                  {nrs.map((nr, i) => (
-                                    <div key={nr.id ?? `${rt.id}-${i}`} className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mt-0.5 pl-2">
-                                      <span className="flex-1 truncate text-gray-600 dark:text-gray-300">{nr.name}</span>
-                                      {/* Mode selector */}
-                                      {nr.id && (
-                                        <select
-                                          value={nr.allocationMode ?? 'EFFORT'}
-                                          onChange={e => {
-                                            const mode = e.target.value
-                                            const pct = mode === 'EFFORT' ? 100 : (nr.allocationPercent ?? 100)
-                                            updateNamedResource.mutate({ rtId: rt.id, nrId: nr.id!, allocationMode: mode, allocationPercent: pct })
-                                          }}
-                                          className="text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300"
-                                        >
-                                          <option value="EFFORT">T&amp;M</option>
-                                          <option value="FULL_PROJECT">Full Project</option>
-                                          <option value="TIMELINE">Timeline</option>
-                                          <option value="CAPACITY_PLAN">Capacity Plan</option>
-                                        </select>
-                                      )}
-                                      {/* % input — only shown for non-EFFORT modes */}
-                                      {nr.id && (nr.allocationMode ?? 'EFFORT') !== 'EFFORT' && (
-                                        <div className="flex items-center gap-0.5">
-                                          <input
-                                            type="number"
-                                            min={1}
-                                            max={100}
-                                            defaultValue={nr.allocationPercent ?? 100}
-                                            key={`${nr.id}-pct-${nr.allocationPercent}`}
-                                            onBlur={e => {
-                                              const val = Math.min(100, Math.max(1, parseInt(e.target.value) || 100))
-                                              updateNamedResource.mutate({ rtId: rt.id, nrId: nr.id!, allocationMode: nr.allocationMode ?? 'EFFORT', allocationPercent: val })
-                                            }}
-                                            className="w-12 text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
-                                          />
-                                          <span className="text-gray-400">%</span>
-                                        </div>
-                                      )}
-                                      {/* Start/end week — only for TIMELINE mode */}
-                                      {nr.id && nr.allocationMode === 'TIMELINE' && (
-                                        <div className="flex items-center gap-0.5 text-gray-400">
-                                          <span>W</span>
-                                          <input
-                                            type="number"
-                                            min={1}
-                                            placeholder="start"
-                                            defaultValue={nr.allocationStartWeek ?? ''}
-                                            key={`${nr.id}-sw-${nr.allocationStartWeek}`}
-                                            onBlur={e => {
-                                              const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
-                                              updateNamedResource.mutate({ rtId: rt.id, nrId: nr.id!, allocationMode: 'TIMELINE', allocationPercent: nr.allocationPercent ?? 100, allocationStartWeek: val })
-                                            }}
-                                            className="w-10 text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 placeholder-gray-300"
-                                          />
-                                          <span>–</span>
-                                          <input
-                                            type="number"
-                                            min={1}
-                                            placeholder="end"
-                                            defaultValue={nr.allocationEndWeek ?? ''}
-                                            key={`${nr.id}-ew-${nr.allocationEndWeek}`}
-                                            onBlur={e => {
-                                              const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
-                                              updateNamedResource.mutate({ rtId: rt.id, nrId: nr.id!, allocationMode: 'TIMELINE', allocationPercent: nr.allocationPercent ?? 100, allocationEndWeek: val })
-                                            }}
-                                            className="w-10 text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 placeholder-gray-300"
-                                          />
-                                        </div>
-                                      )}
-                                      {/* remove button */}
-                                      {nr.id && (
-                                        <button
-                                          onClick={() => handleRemoveNamedResource(rt.id, nr.id!)}
-                                          className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400 ml-0.5"
-                                          title="Remove person"
-                                        >×</button>
-                                      )}
+                                {nrs.length > 0 && (
+                                  <div className="mt-1 pl-2">
+                                    {/* Column headers */}
+                                    <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-x-1.5 text-xs text-gray-400 dark:text-gray-500 mb-0.5 pr-0.5">
+                                      <span>Named resource</span>
+                                      <span className="w-24">Planning basis</span>
+                                      <span className="w-14 text-right">Allocation %</span>
+                                      <span className="w-8 text-right">Start</span>
+                                      <span className="w-8 text-right">End</span>
+                                      <span className="w-4" />
                                     </div>
-                                  ))}
-                                </div>
-                              )}
+                                    {nrs.map((nr, i) => {
+                                      const mode = nr.allocationMode ?? 'EFFORT'
+                                      const isTimeline = mode === 'TIMELINE'
+                                      const showPct = mode !== 'EFFORT'
+                                      return (
+                                        <div
+                                          key={nr.id ?? `${rt.id}-${i}`}
+                                          className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-x-1.5 text-xs text-gray-500 dark:text-gray-400 mt-0.5 pr-0.5"
+                                        >
+                                          {/* Name */}
+                                          <span className="truncate text-gray-600 dark:text-gray-300 min-w-0">{nr.name}</span>
+
+                                          {/* Planning basis */}
+                                          <div className="w-24">
+                                            {nr.id ? (
+                                              <select
+                                                value={mode}
+                                                onChange={e => {
+                                                  const newMode = e.target.value
+                                                  const pct = newMode === 'EFFORT' ? 100 : (nr.allocationPercent ?? 100)
+                                                  updateNamedResource.mutate({
+                                                    rtId: rt.id,
+                                                    nrId: nr.id!,
+                                                    allocationMode: newMode,
+                                                    allocationPercent: pct,
+                                                    // Clear window when leaving TIMELINE mode
+                                                    allocationStartWeek:
+                                                      newMode === 'TIMELINE' ? nr.allocationStartWeek ?? nr.startWeek ?? null : null,
+                                                    allocationEndWeek:
+                                                      newMode === 'TIMELINE' ? nr.allocationEndWeek ?? nr.endWeek ?? null : null,
+                                                  })
+                                                }}
+                                                className="w-full text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300"
+                                              >
+                                                <option value="EFFORT">Demand-following</option>
+                                                <option value="FULL_PROJECT">Whole-project allocation</option>
+                                                <option value="TIMELINE">Availability window</option>
+                                                <option value="CAPACITY_PLAN">Capacity profile</option>
+                                              </select>
+                                            ) : (
+                                              <span className="text-gray-400 dark:text-gray-600">—</span>
+                                            )}
+                                          </div>
+
+                                          {/* Allocation % — stable column; disabled when not applicable */}
+                                          <div className="w-14 flex items-center justify-end gap-0.5">
+                                            {nr.id && showPct ? (
+                                              <>
+                                                <input
+                                                  key={`${nr.id}-pct-${nr.allocationPercent ?? 100}`}
+                                                  type="number"
+                                                  min={1}
+                                                  max={100}
+                                                  defaultValue={nr.allocationPercent ?? 100}
+                                                  onBlur={e => {
+                                                    const val = Math.min(100, Math.max(1, parseInt(e.target.value) || 100))
+                                                    updateNamedResource.mutate({
+                                                      rtId: rt.id,
+                                                      nrId: nr.id!,
+                                                      allocationMode: mode,
+                                                      allocationPercent: val,
+                                                      allocationStartWeek: nr.allocationStartWeek ?? nr.startWeek ?? null,
+                                                      allocationEndWeek: nr.allocationEndWeek ?? nr.endWeek ?? null,
+                                                    })
+                                                  }}
+                                                  className="w-10 text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                                                />
+                                                <span className="text-gray-400">%</span>
+                                              </>
+                                            ) : (
+                                              <span className="text-gray-300 dark:text-gray-600 select-none">—</span>
+                                            )}
+                                          </div>
+
+                                          {/* Start week — stable column; disabled when not TIMELINE */}
+                                          <div className="w-8">
+                                            {nr.id && isTimeline ? (
+                                              <input
+                                                key={`${nr.id}-start-${nr.allocationStartWeek ?? nr.startWeek ?? 'null'}`}
+                                                type="number"
+                                                min={1}
+                                                placeholder="W1"
+                                                defaultValue={nr.allocationStartWeek ?? nr.startWeek ?? ''}
+                                                onBlur={e => {
+                                                  const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
+                                                  updateNamedResource.mutate({
+                                                    rtId: rt.id,
+                                                    nrId: nr.id!,
+                                                    allocationMode: 'TIMELINE',
+                                                    allocationPercent: nr.allocationPercent ?? 100,
+                                                    allocationStartWeek: val,
+                                                    allocationEndWeek: nr.allocationEndWeek ?? nr.endWeek ?? null,
+                                                  })
+                                                }}
+                                                className="w-full text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 placeholder-gray-300"
+                                              />
+                                            ) : (
+                                              <input
+                                                type="number"
+                                                disabled
+                                                placeholder="—"
+                                                className="w-full text-xs border border-gray-100 dark:border-gray-700 rounded px-1 py-0 text-right bg-gray-50 dark:bg-gray-800 text-gray-300 dark:text-gray-600 placeholder-gray-300 cursor-not-allowed"
+                                              />
+                                            )}
+                                          </div>
+
+                                          {/* End week — stable column; disabled when not TIMELINE */}
+                                          <div className="w-8">
+                                            {nr.id && isTimeline ? (
+                                              <input
+                                                key={`${nr.id}-end-${nr.allocationEndWeek ?? nr.endWeek ?? 'null'}`}
+                                                type="number"
+                                                min={1}
+                                                placeholder="W∞"
+                                                defaultValue={nr.allocationEndWeek ?? nr.endWeek ?? ''}
+                                                onBlur={e => {
+                                                  const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
+                                                  updateNamedResource.mutate({
+                                                    rtId: rt.id,
+                                                    nrId: nr.id!,
+                                                    allocationMode: 'TIMELINE',
+                                                    allocationPercent: nr.allocationPercent ?? 100,
+                                                    allocationStartWeek: nr.allocationStartWeek ?? nr.startWeek ?? null,
+                                                    allocationEndWeek: val,
+                                                  })
+                                                }}
+                                                className="w-full text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 text-right bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 placeholder-gray-300"
+                                              />
+                                            ) : (
+                                              <input
+                                                type="number"
+                                                disabled
+                                                placeholder="—"
+                                                className="w-full text-xs border border-gray-100 dark:border-gray-700 rounded px-1 py-0 text-right bg-gray-50 dark:bg-gray-800 text-gray-300 dark:text-gray-600 placeholder-gray-300 cursor-not-allowed"
+                                              />
+                                            )}
+                                          </div>
+
+                                          {/* Remove */}
+                                          <div className="w-4 flex justify-center">
+                                            {nr.id ? (
+                                              <button
+                                                onClick={() => handleRemoveNamedResource(rt.id, nr.id!)}
+                                                className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400"
+                                                title="Remove person"
+                                              >×</button>
+                                            ) : (
+                                              <span />
+                                            )}
+                                          </div>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )}
                             </td>
                             <td className="py-1.5 text-right text-sm text-gray-700 dark:text-gray-300 align-top">{rt.count}</td>
                             <td className="py-1.5 text-right align-top">
