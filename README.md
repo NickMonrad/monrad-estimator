@@ -33,6 +33,7 @@ A full-stack project estimation tool that replaces a manual spreadsheet process.
 📖 **Architecture docs:** [`docs/architecture/scheduling-and-resource-model.md`](docs/architecture/scheduling-and-resource-model.md) — explains scheduling, resource levelling, named-resource allocation, capacity plans, commercial/resource-profile derivation, and cross-surface consistency.
 
 👤 **User guide:** [`docs/user-guide.md`](docs/user-guide.md) — explains the estimator workflow in plain English: backlog effort, Timeline, resources, capacity plans, Resource Profile, Commercial, and exports.
+
 ---
 
 ## Getting Started
