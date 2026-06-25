@@ -168,17 +168,9 @@ Capacity plans are useful for modelling how staffing changes over time.
 
 For example, you may want to show that a project starts with one engineer, then grows to three engineers, then tapers back down.
 
-Important current behaviour:
+After changing resource counts, named resources, dependencies, sequencing, or capacity planning, the Timeline may be stale. The normal action is to click **Quick schedule again** to rebuild the Timeline from the latest inputs. If **Resource levelling** is enabled, Quick Schedule will try to avoid overloading resource types.
 
-> Capacity plans currently shape the planning, reporting, Resource Profile, Commercial, and export views. They do not directly change the scheduler result unless the relevant staffing facts are already present in the scheduler inputs.
-
-In practical terms:
-
-- changing a capacity plan may change the Resource Profile or Commercial view;
-- changing a capacity plan may change displayed capacity or named-resource allocation; but
-- changing a capacity plan should not be assumed to automatically move feature dates on the Timeline.
-
-If you want the Timeline itself to change, check the resource type count, named resources, dependencies, manual pins, and whether resource levelling is enabled.
+Capacity planning may also change Resource Profile, Commercial, and reporting views. Do not assume that changing a capacity plan automatically moves feature dates on the Timeline.
 
 ## Resource Profile
 
@@ -251,11 +243,11 @@ Possible causes:
 
 ### I changed a capacity plan but feature dates did not move
 
-That is expected in the current implementation.
+That is expected unless you re-run scheduling afterwards.
 
-Capacity plans shape the planning, reporting, Resource Profile, Commercial, and export views. They do not directly drive the core scheduler result unless the relevant staffing facts are already present in the scheduling inputs.
+Use **Quick schedule again** to refresh the Timeline dates. If you want a levelled schedule, turn on **Resource levelling** before clicking Quick schedule again.
 
-To move feature dates, review resource type count, named resources, dependencies, manual pins, and resource levelling.
+If dates still do not move after that, check resource type counts, named-resource availability, dependencies, sequencing modes, and manual pins.
 
 ### Resource demand is higher than capacity
 
