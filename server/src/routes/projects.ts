@@ -85,12 +85,31 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
       resourceTypes: { include: { namedResources: true } },
       overheads: true,
       discounts: true,
+      timelineEntries: true,
+      storyTimelineEntries: true,
+      capacityPlans: {
+        include: {
+          periods: {
+            include: { entries: true },
+          },
+        },
+      },
       epics: {
         include: {
+          epicDependencies: true,
+          epicDependents: true,
           features: {
             include: {
+              dependencies: true,
+              dependents: true,
+              timelineEntry: true,
               userStories: {
-                include: { tasks: true },
+                include: {
+                  dependencies: true,
+                  dependents: true,
+                  timelineEntry: true,
+                  tasks: true,
+                },
               },
             },
           },
@@ -102,8 +121,11 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
 
   // #176: wrap entire clone in a transaction so partial failures roll back cleanly
   const clonedProject = await prisma.$transaction(async (tx) => {
-    // Build resource type id map: old id → new id
+    // Build ID maps for all cloned entities
     const rtIdMap = new Map<string, string>()
+    const epicIdMap = new Map<string, string>()
+    const featureIdMap = new Map<string, string>()
+    const storyIdMap = new Map<string, string>()
 
     const newProject = await tx.project.create({
       data: {
@@ -112,9 +134,10 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
         customerId: source.customerId,
         orgId: source.orgId,
         status: 'DRAFT',
-        hoursPerDay: source.hoursPerDay,
+        onboardingWeeks: source.onboardingWeeks,
         bufferWeeks: source.bufferWeeks,
         startDate: source.startDate,
+        hoursPerDay: source.hoursPerDay,
         taxRate: source.taxRate,
         taxLabel: source.taxLabel,
         ownerId: req.userId!,
@@ -160,6 +183,50 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
       }
     }
 
+    // Copy capacity plans, periods, and entries (remap resourceTypeId)
+    for (const plan of source.capacityPlans ?? []) {
+      const newPlan = await tx.capacityPlan.create({
+        data: {
+          projectId: newProject.id,
+          name: plan.name,
+          targetWeeks: plan.targetWeeks,
+          periodWeeks: plan.periodWeeks,
+          maxDelta: plan.maxDelta,
+          isActive: plan.isActive,
+          totalCost: plan.totalCost,
+          deliveryWeeks: plan.deliveryWeeks,
+        },
+      })
+      for (const period of plan.periods ?? []) {
+        const newPeriod = await tx.capacityPlanPeriod.create({
+          data: {
+            planId: newPlan.id,
+            periodIndex: period.periodIndex,
+            startWeek: period.startWeek,
+            endWeek: period.endWeek,
+          },
+        })
+        for (const entry of period.entries ?? []) {
+          const newRtId = rtIdMap.get(entry.resourceTypeId)
+          if (!newRtId) {
+            throw new Error(
+              `Clone failed: capacity plan entry references resource type "${entry.resourceTypeId}" which was not cloned. ` +
+              `All resource types must be cloned for a valid deep copy.`,
+            )
+          }
+          await tx.capacityPlanEntry.create({
+            data: {
+              periodId: newPeriod.id,
+              resourceTypeId: newRtId,
+              headcount: entry.headcount,
+              demandFTE: entry.demandFTE,
+              utilisationPct: entry.utilisationPct,
+            },
+          })
+        }
+      }
+    }
+
     // Copy overheads
     for (const oh of source.overheads) {
       await tx.projectOverhead.create({
@@ -188,7 +255,7 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
       })
     }
 
-    // Copy epics → features → stories → tasks
+    // Copy epics → features → stories → tasks, building ID maps
     for (const epic of source.epics) {
       const newEpic = await tx.epic.create({
         data: {
@@ -203,6 +270,7 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
           projectId: newProject.id,
         },
       })
+      epicIdMap.set(epic.id, newEpic.id)
 
       for (const feature of epic.features) {
         const newFeature = await tx.feature.create({
@@ -212,9 +280,13 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
             assumptions: feature.assumptions,
             order: feature.order,
             isActive: feature.isActive,
+            featureMode: feature.featureMode,
+            timelineColour: feature.timelineColour,
+            timelineStartWeek: feature.timelineStartWeek,
             epicId: newEpic.id,
           },
         })
+        featureIdMap.set(feature.id, newFeature.id)
 
         for (const story of feature.userStories) {
           const newStory = await tx.userStory.create({
@@ -228,6 +300,7 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
               featureId: newFeature.id,
             },
           })
+          storyIdMap.set(story.id, newStory.id)
 
           for (const task of story.tasks) {
             await tx.task.create({
@@ -242,6 +315,79 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
                 resourceTypeId: task.resourceTypeId ? (rtIdMap.get(task.resourceTypeId) ?? null) : null,
               },
             })
+          }
+        }
+      }
+    }
+
+    // Recreate epic dependencies (remap both epicId and dependsOnId)
+    for (const epic of source.epics) {
+      for (const dep of epic.epicDependencies ?? []) {
+        const newEpicId = epicIdMap.get(dep.epicId)
+        const newDependsOnId = epicIdMap.get(dep.dependsOnId)
+        if (newEpicId && newDependsOnId) {
+          await tx.epicDependency.create({
+            data: { epicId: newEpicId, dependsOnId: newDependsOnId },
+          })
+        }
+      }
+    }
+
+    // Recreate feature dependencies + timeline entries
+    for (const epic of source.epics) {
+      for (const feature of epic.features) {
+        for (const dep of feature.dependencies ?? []) {
+          const newFeatureId = featureIdMap.get(dep.featureId)
+          const newDependsOnId = featureIdMap.get(dep.dependsOnId)
+          if (newFeatureId && newDependsOnId) {
+            await tx.featureDependency.create({
+              data: { featureId: newFeatureId, dependsOnId: newDependsOnId },
+            })
+          }
+        }
+        if (feature.timelineEntry) {
+          const newFeatureId = featureIdMap.get(feature.id)
+          if (newFeatureId) {
+            await tx.timelineEntry.create({
+              data: {
+                projectId: newProject.id,
+                featureId: newFeatureId,
+                startWeek: feature.timelineEntry.startWeek,
+                durationWeeks: feature.timelineEntry.durationWeeks,
+                isManual: feature.timelineEntry.isManual,
+              },
+            })
+          }
+        }
+      }
+    }
+
+    // Recreate story dependencies + story timeline entries
+    for (const epic of source.epics) {
+      for (const feature of epic.features) {
+        for (const story of feature.userStories) {
+          for (const dep of story.dependencies ?? []) {
+            const newStoryId = storyIdMap.get(dep.storyId)
+            const newDependsOnId = storyIdMap.get(dep.dependsOnId)
+            if (newStoryId && newDependsOnId) {
+              await tx.storyDependency.create({
+                data: { storyId: newStoryId, dependsOnId: newDependsOnId },
+              })
+            }
+          }
+          if (story.timelineEntry) {
+            const newStoryId = storyIdMap.get(story.id)
+            if (newStoryId) {
+              await tx.storyTimelineEntry.create({
+                data: {
+                  projectId: newProject.id,
+                  storyId: newStoryId,
+                  startWeek: story.timelineEntry.startWeek,
+                  durationWeeks: story.timelineEntry.durationWeeks,
+                  isManual: story.timelineEntry.isManual,
+                },
+              })
+            }
           }
         }
       }
