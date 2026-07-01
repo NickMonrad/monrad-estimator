@@ -252,10 +252,9 @@ Commercial turns the planning model into pricing.
 It may include:
 
 - day rates;
-- billing basis;
 - scheduled or assigned days;
+- billing basis, such as actual scheduled days or planned allocation;
 - whole-project allocation;
-- billing basis (actual scheduled days or planned allocation);
 - overheads;
 - discounts; and
 - tax such as GST.
@@ -320,10 +319,8 @@ Check whether the bar is showing:
 
 - the configured availability window;
 - the actual assigned window;
-- a whole-project allocation;
-- an availability window; or
+- a whole-project allocation; or
 - calculated demand segments.
-
 Different views may show planned availability and actual demand differently.
 
 ### There are gaps in the Timeline
