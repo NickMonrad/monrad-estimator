@@ -109,7 +109,7 @@ function createProps(
     updateAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     updateNrAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     startEditAllocation: vi.fn(),
-    getAllocationBadge: () => ({ label: 'T&M', color: 'bg-gray-100 text-gray-600', sub: null }),
+    getAllocationBadge: () => ({ label: 'Demand-following', color: 'bg-gray-100 text-gray-600', sub: null }),
     ...overrides,
   }
 }
@@ -511,5 +511,182 @@ describe('ResourceProfileTab Planning Context', () => {
     expect(screen.queryByText('Extra weeks added to project end date for contingency')).not.toBeInTheDocument()
     expect(screen.queryByText('Onboarding Weeks')).toBeInTheDocument()
     expect(screen.queryByText('Buffer Weeks')).toBeInTheDocument()
+  })
+})
+
+describe('Capacity Profile labels', () => {
+  it('shows Resource Profile heading and capacity profile help text', () => {
+    render(<ResourceProfileTab {...createProps(1)} />)
+    expect(screen.getByText('Resource Profile')).toBeInTheDocument()
+    // Help text: the <strong> element contains "Capacity profiles"
+    expect(screen.getByText('Capacity profiles')).toBeInTheDocument()
+    // "Planning basis" appears in both subtitle and column header
+    expect(screen.getAllByText(/planning basis/i)).toHaveLength(2)
+  })
+
+  it('shows resource identity as Role-level capacity when no named resources exist', () => {
+    render(<ResourceProfileTab {...createProps(1)} />)
+    expect(screen.getByText('Role-level capacity')).toBeInTheDocument()
+  })
+
+  it('shows resource identity as Named person when named resources are non-synthetic', () => {
+    render(<ResourceProfileTab {...createProps(1, {
+      profile: {
+        projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 0,
+        bufferWeeks: 0, onboardingWeeks: 0,
+        resourceRows: [{
+          resourceTypeId: 'rt', name: 'Dev', category: 'ENG', count: 1,
+          hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+          effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          derivedStartWeek: null, derivedEndWeek: null, estimatedCost: null,
+          epics: [], namedResources: [{
+            id: 'nr1', name: 'Alice', allocationMode: 'EFFORT',
+            allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+            startWeek: null, endWeek: null, allocatedDays: 5,
+            derivedStartWeek: null, derivedEndWeek: null,
+            actualAllocatedDays: 0, actualAllocationStartWeek: null, actualAllocationEndWeek: null,
+            actualAllocatedWeeks: [], actualAllocationSegments: [],
+            synthetic: false,
+          }],
+        }],
+        overheadRows: [],
+        summary: { totalHours: 0, totalDays: 0, totalCost: null, hasCost: false },
+      },
+      filteredResourceRows: [{
+        resourceTypeId: 'rt', name: 'Dev', category: 'ENG', count: 1,
+        hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+        effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        derivedStartWeek: null, derivedEndWeek: null, estimatedCost: null,
+        epics: [], namedResources: [{
+          id: 'nr1', name: 'Alice', allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null, allocatedDays: 5,
+          derivedStartWeek: null, derivedEndWeek: null,
+          actualAllocatedDays: 0, actualAllocationStartWeek: null, actualAllocationEndWeek: null,
+          actualAllocatedWeeks: [], actualAllocationSegments: [],
+          synthetic: false,
+        }],
+      }],
+    })} />)
+    expect(screen.getByText('Named person')).toBeInTheDocument()
+  })
+
+  it('shows resource identity as Planned resource when all named resources are synthetic', () => {
+    render(<ResourceProfileTab {...createProps(1, {
+      profile: {
+        projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 0,
+        bufferWeeks: 0, onboardingWeeks: 0,
+        resourceRows: [{
+          resourceTypeId: 'rt', name: 'Planned Dev', category: 'ENG', count: 1,
+          hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+          effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          derivedStartWeek: null, derivedEndWeek: null, estimatedCost: null,
+          epics: [], namedResources: [{
+            id: 'nr1', name: 'Planned Dev', allocationMode: 'EFFORT',
+            allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+            startWeek: null, endWeek: null, allocatedDays: 5,
+            derivedStartWeek: null, derivedEndWeek: null,
+            actualAllocatedDays: 0, actualAllocationStartWeek: null, actualAllocationEndWeek: null,
+            actualAllocatedWeeks: [], actualAllocationSegments: [],
+            synthetic: true,
+          }],
+        }],
+        overheadRows: [],
+        summary: { totalHours: 0, totalDays: 0, totalCost: null, hasCost: false },
+      },
+      filteredResourceRows: [{
+        resourceTypeId: 'rt', name: 'Planned Dev', category: 'ENG', count: 1,
+        hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+        effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        derivedStartWeek: null, derivedEndWeek: null, estimatedCost: null,
+        epics: [], namedResources: [{
+          id: 'nr1', name: 'Planned Dev', allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null, allocatedDays: 5,
+          derivedStartWeek: null, derivedEndWeek: null,
+          actualAllocatedDays: 0, actualAllocationStartWeek: null, actualAllocationEndWeek: null,
+          actualAllocatedWeeks: [], actualAllocationSegments: [],
+          synthetic: true,
+        }],
+      }],
+    })} />)
+    expect(screen.getByText('Planned resource')).toBeInTheDocument()
+  })
+
+  it('shows Demand-following planning basis badge by default', () => {
+    render(<ResourceProfileTab {...createProps(1)} />)
+    expect(screen.getByText(/Demand-following/i)).toBeInTheDocument()
+  })
+
+  it('rejects forbidden internal terms in the Resource Profile UI', () => {
+    render(<ResourceProfileTab {...createProps(1)} />)
+    const forbidden = [
+      'Capacity Plan', 'Timeline allocation', 'Full Project',
+      'SyntheticSlot', 'Allocation mode', 'ActualAllocatedDays',
+      'PricingModel', 'Capacity Plan',
+    ]
+    for (const term of forbidden) {
+      expect(screen.queryByText(term, { exact: false })).toBeNull()
+    }
+  })
+
+  it('shows Availability window badge for TIMELINE allocation mode', () => {
+    render(<ResourceProfileTab {...createProps(1, {
+      profile: {
+        projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 0,
+        bufferWeeks: 0, onboardingWeeks: 0,
+        resourceRows: [{
+          resourceTypeId: 'rt', name: 'Dev', category: 'ENG', count: 1,
+          hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+          effortDays: 5, allocatedDays: 5, allocationMode: 'TIMELINE',
+          allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10,
+          derivedStartWeek: 0, derivedEndWeek: 12, estimatedCost: null,
+          epics: [], namedResources: [],
+        }],
+        overheadRows: [],
+        summary: { totalHours: 0, totalDays: 0, totalCost: null, hasCost: false },
+      },
+      filteredResourceRows: [{
+        resourceTypeId: 'rt', name: 'Dev', category: 'ENG', count: 1,
+        hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+        effortDays: 5, allocatedDays: 5, allocationMode: 'TIMELINE',
+        allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10,
+        derivedStartWeek: 0, derivedEndWeek: 12, estimatedCost: null,
+        epics: [], namedResources: [],
+      }],
+    })} />)
+    expect(screen.getByText(/Availability window · 100%/)).toBeInTheDocument()
+  })
+
+  it('shows Whole-project allocation badge for FULL_PROJECT mode with percent', () => {
+    render(<ResourceProfileTab {...createProps(1, {
+      profile: {
+        projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 10,
+        bufferWeeks: 0, onboardingWeeks: 0,
+        resourceRows: [{
+          resourceTypeId: 'rt', name: 'Dev', category: 'ENG', count: 1,
+          hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+          effortDays: 5, allocatedDays: 5, allocationMode: 'FULL_PROJECT',
+          allocationPercent: 75, allocationStartWeek: null, allocationEndWeek: null,
+          derivedStartWeek: 0, derivedEndWeek: 10, estimatedCost: null,
+          epics: [], namedResources: [],
+        }],
+        overheadRows: [],
+        summary: { totalHours: 0, totalDays: 0, totalCost: null, hasCost: false },
+      },
+      filteredResourceRows: [{
+        resourceTypeId: 'rt', name: 'Dev', category: 'ENG', count: 1,
+        hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+        effortDays: 5, allocatedDays: 5, allocationMode: 'FULL_PROJECT',
+        allocationPercent: 75, allocationStartWeek: null, allocationEndWeek: null,
+        derivedStartWeek: 0, derivedEndWeek: 10, estimatedCost: null,
+        epics: [], namedResources: [],
+      }],
+    })} />)
+    expect(screen.getByText(/Whole-project allocation · 75%/)).toBeInTheDocument()
   })
 })
