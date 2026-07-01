@@ -53,11 +53,11 @@ function formatNamedResourceWeeks(
 export const buildProfileCsv = (profileData: ResourceProfile) => {
   const rows: string[][] = [
     [
-      'Section', 'Role', 'NamedResource', 'Resource identity', 'Category',
-      'Count', 'HoursPerDay', 'EffortDays', 'Assigned days', 'Billable days',
-      'DayRate', 'Cost', 'WindowStart', 'WindowEnd',
-      'ActualStart', 'ActualEnd', 'Segments', 'Weeks',
-      'Billing basis',
+      'Section', 'Role', 'Resource name', 'Resource identity', 'Category',
+      'Resource count', 'Hours per day', 'Effort days', 'Assigned days', 'Billable days',
+      'Day rate', 'Subtotal', 'Availability window start', 'Availability window end',
+      'Assigned start', 'Assigned end', 'Assignment segments', 'Assigned weeks',
+      'Billing basis', 'Handover notes',
     ],
   ]
 
@@ -76,18 +76,19 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
           nr.actualAllocationEndWeek != null ? formatWeekLabel(nr.actualAllocationEndWeek) : '',
           formatNamedResourceSegments(nr),
           formatNamedResourceWeeks(nr),
-          nr.pricingModel === 'PRO_RATA' ? 'Planned allocation' : 'Actual scheduled days',
+          nr.pricingModel === 'PRO_RATA' ? 'Bill planned allocation' : 'Bill actual scheduled days',
+          '',
         ])
       })
       return
     }
     rows.push([
-      'Resource', row.name, '', '', row.category,
+      'Resource', row.name, '', 'Role-level capacity', row.category,
       String(row.count), String(row.hoursPerDay), String(row.effortDays),
       String(row.totalDays), '',
       row.dayRate != null ? String(row.dayRate) : '',
       row.dayRate != null && row.totalDays != null ? (row.totalDays * row.dayRate).toFixed(2) : '',
-      '', '', '', '', '', '', '',
+      '', '', '', '', '', '', '', '',
     ])
   })
 
@@ -95,10 +96,9 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
     rows.push([
       'Overhead', row.name, '', '', '',
       '', '', '', String(row.computedDays), '',
-      '', '',
-      row.estimatedCost != null ? String(row.estimatedCost) : '',
+      '', row.estimatedCost != null ? String(row.estimatedCost) : '',
       '', '', '', '', '',
-      row.resourceTypeName ?? '',
+      row.resourceTypeName ?? '', '',
     ])
   })
 
