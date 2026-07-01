@@ -58,7 +58,7 @@ export function useAllocationEditing(projectId: string | undefined) {
 
   const getAllocationBadge = (row: CommercialRow, profile: ResourceProfile | undefined) => {
     if (row.allocationMode === 'AGGREGATE') {
-      return { label: 'Aggregate', color: 'bg-gray-100 text-gray-400', sub: null as string | null }
+      return { label: 'Named resources: mixed modes', color: 'bg-gray-100 text-gray-400', sub: null as string | null }
     } else if (row.allocationMode === 'EFFORT') {
       return { label: 'Demand-following', color: 'bg-gray-100 text-gray-600', sub: null }
     } else if (row.allocationMode === 'TIMELINE') {
