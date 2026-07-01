@@ -15,13 +15,11 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
 
     /* Linting */
-    "ignoreDeprecations": "6.0",
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
