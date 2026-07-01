@@ -512,6 +512,8 @@ test.describe('Resource Profile allocation', () => {
     const badge = devRow.locator('button[title="Click to edit allocation"]')
     await expect(badge).toBeVisible()
     await badge.click()
+    const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
+    await expect(modeSelect).toBeVisible({ timeout: 5_000 })
 
     // Change mode to Whole-project allocation (has % field)
     await modeSelect.selectOption('FULL_PROJECT')

@@ -101,4 +101,64 @@ describe('buildProfileCsv', () => {
     expect(csv).not.toContain('\u2014')
     expect(csv).not.toContain('\u00d7')
   })
+
+  it('every row has same column count as header', () => {
+    const profile: ResourceProfile = {
+      ...BASE,
+      resourceRows: [
+        {
+          resourceTypeId: 'rt-named', name: 'Developer', category: 'ENG',
+          count: 1, hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+          effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          derivedStartWeek: 2, derivedEndWeek: 3, estimatedCost: 4000, epics: [],
+          namedResources: [{
+            id: 'nr1', name: 'Alice', allocationMode: 'EFFORT',
+            allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+            startWeek: null, endWeek: null, allocatedDays: 5,
+            derivedStartWeek: 2, derivedEndWeek: 3,
+            actualAllocatedDays: 5, actualAllocationStartWeek: 2, actualAllocationEndWeek: 3,
+            actualAllocatedWeeks: [], actualAllocationSegments: [],
+            pricingModel: 'PRO_RATA', synthetic: false,
+          }],
+        },
+        {
+          resourceTypeId: 'rt-plan', name: 'Tech Lead', category: 'ENG',
+          count: 1, hoursPerDay: 8, dayRate: 1000, totalHours: 40, totalDays: 5,
+          effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          derivedStartWeek: 2, derivedEndWeek: 3, estimatedCost: 5000, epics: [],
+          namedResources: [],
+        },
+        {
+          resourceTypeId: 'rt-planned', name: 'Security Consultant', category: 'GOV',
+          count: 1, hoursPerDay: 8, dayRate: 1200, totalHours: 40, totalDays: 5,
+          effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          derivedStartWeek: 2, derivedEndWeek: 3, estimatedCost: 6000, epics: [],
+          namedResources: [{
+            id: 'nr2', name: 'Planned Security', allocationMode: 'EFFORT',
+            allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+            startWeek: null, endWeek: null, allocatedDays: 5,
+            derivedStartWeek: 2, derivedEndWeek: 3,
+            actualAllocatedDays: 5, actualAllocationStartWeek: 2, actualAllocationEndWeek: 3,
+            actualAllocatedWeeks: [], actualAllocationSegments: [],
+            pricingModel: 'PRO_RATA', synthetic: true,
+          }],
+        },
+      ],
+      overheadRows: [
+        { name: 'Travel', computedDays: 10, estimatedCost: 5000, resourceTypeName: 'Travel' },
+      ],
+    }
+
+    const csv = buildProfileCsv(profile)
+    const lines = csv.split('\n').filter(l => l.length > 0)
+    const headerCols = lines[0].split(',').length
+    expect(headerCols).toBe(20)
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').length
+      expect(cols, `row ${i} has ${cols} columns, expected ${headerCols}`).toBe(headerCols)
+    }
+  })
 })

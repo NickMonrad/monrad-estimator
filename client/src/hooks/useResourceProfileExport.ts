@@ -98,7 +98,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       '', '', '', String(row.computedDays), '',
       '', row.estimatedCost != null ? String(row.estimatedCost) : '',
       '', '', '', '', '',
-      row.resourceTypeName ?? '', '',
+      '', '', row.resourceTypeName ?? '',
     ])
   })
 
