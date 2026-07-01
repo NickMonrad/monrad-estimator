@@ -455,7 +455,7 @@ test.describe('Resource Profile allocation', () => {
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
 
-    // The initial badge shows "Timeline · 100%" (database default for new resource types)
+    // The initial badge shows "Availability window · 100%" (database default for new resource types)
     const badge = devRow.locator('button[title="Click to edit allocation"]')
     await expect(badge).toBeVisible()
     // The initial badge shows "Availability window · 100%" (database default for new resource types)
