@@ -98,7 +98,7 @@ export default function CommercialTab({
         <h2 className="text-base font-semibold text-gray-900 dark:text-white">Cost Summary</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400">Breakdown by resource type with day rates and discounts</p>
         <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-          Allocation mode and schedule settings are managed in the <strong>Resource Profile</strong> tab.
+          Planning basis and schedule settings are managed in the <strong>Resource Profile</strong> tab.
         </p>
       </header>
       {!commercialData || commercialData.rows.length === 0 ? (
@@ -111,12 +111,12 @@ export default function CommercialTab({
           <table className="min-w-full text-sm">
             <thead>
               <tr className="bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
-                <th className="text-left px-6 py-3 font-medium">Resource Type</th>
+                <th className="text-left px-6 py-3 font-medium">Role</th>
                 <th className="text-center px-4 py-3 font-medium">Count</th>
                 <th className="text-right px-4 py-3 font-medium">Effort Days</th>
-                <th className="text-left px-4 py-3 font-medium">Allocation</th>
+                <th className="text-left px-4 py-3 font-medium">Planning basis</th>
                 <th className="text-left px-4 py-3 font-medium">Period</th>
-                <th className="text-right px-4 py-3 font-medium">Allocated Days</th>
+                <th className="text-right px-4 py-3 font-medium">Billable days</th>
                 <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                 <th className="text-right px-6 py-3 font-medium">Subtotal</th>
               </tr>
@@ -130,7 +130,7 @@ export default function CommercialTab({
                       {row.kind === 'overhead' && <span className="text-xs text-amber-600 ml-2">(overhead)</span>}
                       {row.kind === 'named-resource' && (
                         <span className="text-xs text-blue-500 ml-2">
-                          (person · {row.pricingModel === 'PRO_RATA' ? 'planned allocation' : 'actual scheduled days'})
+                          (named person · {row.pricingModel === 'PRO_RATA' ? 'bill planned allocation' : 'bill actual scheduled days'})
                         </span>
                       )}
                     </td>
