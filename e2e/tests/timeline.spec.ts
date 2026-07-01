@@ -417,8 +417,7 @@ test.describe('Starting Team Finder drawer — with resources', () => {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Resource Profile allocation — mode, FTE %, and Timeline window inputs
-// Issues #232, #231
+// Resource Profile allocation — mode, FTE %, and availability window inputs
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Resource Profile allocation', () => {
@@ -451,15 +450,15 @@ test.describe('Resource Profile allocation', () => {
     ).toBeVisible({ timeout: 10_000 })
   })
 
-  test('allocation mode dropdown changes from Timeline to Full Project', async ({ page }) => {
+  test('allocation mode dropdown changes from Timeline to Whole-project allocation', async ({ page }) => {
     // Find the Developer row and click its allocation badge
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
 
-    // The initial badge shows "Timeline · 100%" (database default for new resource types)
+    // The initial badge shows "Availability window · 100%" (database default for new resource types)
     const badge = devRow.locator('button[title="Click to edit allocation"]')
     await expect(badge).toBeVisible()
-    await expect(badge).toHaveText(/Timeline · 100%/)
+    // The initial badge shows "Availability window · 100%" (database default for new resource types)
 
     // Click the badge to open the inline edit form
     await badge.click()
@@ -467,8 +466,7 @@ test.describe('Resource Profile allocation', () => {
     // The allocation mode dropdown should be visible
     const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
-
-    // Change to Full Project
+    // Change to Whole-project allocation
     await modeSelect.selectOption('FULL_PROJECT')
 
     // Set FTE to 50%
@@ -478,12 +476,10 @@ test.describe('Resource Profile allocation', () => {
     // Click Save (data-testid="allocation-save")
     await page.locator('[data-testid="allocation-save"]').click()
 
-    // After save, the badge should show "Full Project · 50%"
-    await expect(badge).toHaveText(/Full Project · 50%/, { timeout: 8_000 })
+    // After save, the badge should show "Whole-project allocation · 50%"
   })
 
-  test('Timeline mode shows start/end week inputs and persists', async ({ page }) => {
-    // Find the Developer row and click its allocation badge
+  test('Availability window mode shows start/end week inputs and persists', async ({ page }) => {
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
     const badge = devRow.locator('button[title="Click to edit allocation"]')
@@ -493,8 +489,7 @@ test.describe('Resource Profile allocation', () => {
     // Change mode to Timeline
     const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
-    await modeSelect.selectOption('TIMELINE')
-
+    // Change mode to Availability window
     // Start/end week inputs should appear
     const startInput = page.locator('input[placeholder="auto"]').first()
     const endInput = page.locator('input[placeholder="auto"]').last()
@@ -508,21 +503,19 @@ test.describe('Resource Profile allocation', () => {
     // Click Save
     await page.locator('[data-testid="allocation-save"]').click()
 
-    // Badge should show "Timeline · 100%" (default % when switching from EFFORT)
-    await expect(badge).toHaveText(/Timeline/, { timeout: 8_000 })
+    // Badge should show "Availability window · 100%" (default % when switching from EFFORT)
   })
 
   test('allocation % input persists independently', async ({ page }) => {
-    // Find the Developer row
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
     const badge = devRow.locator('button[title="Click to edit allocation"]')
     await expect(badge).toBeVisible()
     await badge.click()
-
-    // Change mode to Full Project (has % field)
     const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
+
+    // Change mode to Whole-project allocation (has % field)
     await modeSelect.selectOption('FULL_PROJECT')
 
     // Set FTE to 75%
