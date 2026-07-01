@@ -73,6 +73,14 @@ export default function AppLayout({ breadcrumb, onLogoClick, children }: AppLayo
                 >
                   Team
                 </Link>
+                <a
+                  href="https://github.com/NickMonrad/monrad-estimator/blob/main/docs/user-guide.md"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2"
+                >
+                  Guide
+                </a>
                 <Link
                   to="/customers"
                   className="text-sm text-gray-500 dark:text-gray-400 hover:text-lab3-navy dark:hover:text-lab3-blue transition-colors ml-2"

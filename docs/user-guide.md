@@ -46,15 +46,16 @@ A normal estimate usually follows this path:
 
 1. **Create or import a project.**
 2. **Build the backlog** with epics, features, stories, tasks, descriptions, and assumptions.
-3. **Estimate effort** by giving tasks hours or duration days and assigning resource types.
+3. **Estimate effort** by giving tasks hours or duration days and assigning resource types (roles).
 4. **Define resource types** such as Senior Engineer, Project Manager, or Principal Consultant.
 5. **Set rates and capacity** such as day rate, hours per day, and resource count.
-6. **Add named resources or capacity plans** if you need to model specific people or a staffing shape over time.
-7. **Run the Timeline scheduler** to place work onto the delivery timeline.
-8. **Review the Timeline** for feature/story bars, warnings, gaps, dependencies, and manual overrides.
-9. **Review Resource Profile** for role demand, named-resource allocation, utilisation, and unallocated work.
-10. **Review Commercial** for pricing, discounts, overheads, and tax.
-11. **Export outputs** such as CSV, PDF, and generated documents.
+6. **Set planning basis** on the Resource Counts panel — choose how each role is planned (demand-following or whole-project allocation), set availability windows, and configure capacity profiles.
+7. **Add named people or named resources** if you need to model specific people or a staffing shape over time.
+8. **Click Update timeline** to schedule the work onto the delivery timeline.
+9. **Review the Timeline** for feature/story bars, warnings, gaps, dependencies, and manual overrides.
+10. **Review Resource Profile** for role demand, named-resource allocation, utilisation, and unallocated work.
+11. **Review Commercial** for pricing, discounts, overheads, and tax.
+12. **Export outputs** such as CSV, PDF, and generated documents.
 
 You can repeat this loop as the estimate changes.
 
@@ -82,13 +83,30 @@ The important point is that backlog effort answers this question:
 
 It does not, by itself, decide exactly when the work will happen or what the final price will be.
 
-## Timeline Planner
+## Timeline
 
-The Timeline Planner answers a different question:
+The Timeline answers a different question:
 
 > Given the backlog, dependencies, resource setup, and manual overrides, when should the work happen?
 
 The scheduler creates feature and story bars on the Gantt chart. It considers sequencing, dependencies, manual pins, and optionally resource levelling.
+
+### Update timeline — the main scheduling action
+
+**Update timeline** is the normal action to rebuild the Timeline from the latest inputs.
+
+Use it after changing any of the following:
+
+- backlog items (new, removed, or reordered);
+- dependencies between features or epics;
+- project start date;
+- resource counts or planning basis settings;
+- named people or named resources;
+- capacity settings that affect how much work a role can handle per week.
+
+If **Resource levelling** is enabled, the regenerated schedule respects weekly resource capacity and tries to avoid overloading resource types.
+
+> **Tip:** If the Timeline is not showing what you expect after an input change, try clicking **Update timeline** first before investigating other causes.
 
 ### Epic scheduling mode
 
@@ -145,22 +163,59 @@ In plain English:
 
 Resource levelling can create gaps or push work later. That does not always mean something is broken. It may mean the required role is busy on another feature, or a dependency is blocking progress.
 
-## Resource types, named resources, demand, and capacity
+## Resource types, roles, and capacity
 
 Resource planning has several terms that sound similar.
 
 | Term | Meaning |
 |---|---|
-| **Resource type** | A role or category of work, such as Senior Engineer or Project Manager. |
-| **Resource count** | How many people or equivalent slots are available for that resource type. |
-| **Named resource** | A specific person or named staffing slot attached to a resource type. |
-| **Capacity** | How much work a role or person can absorb in a week. |
-| **Demand** | How much work the scheduled backlog needs from that role in a week. |
-| **Allocation** | How much of a named resource is assigned, and for which weeks. |
+| **Role (resource type)** | A category of work, such as Senior Engineer or Project Manager. |
+| **Planned resource** | A role-level staffing slot defined by the resource count. |
+| **Named person / named resource** | A specific person attached to a role, with their own availability and allocation. |
+| **Capacity profile** | How headcount for a role or person changes over the project — for example starting with one person, growing to three, then tapering back down. |
+| **Assigned days** | The days a role or person is actually scheduled to work. |
+| **Billable days** | The days used for commercial pricing, which may differ from assigned days depending on the billing basis. |
+| **Billing basis** | The commercial rule that decides billable days, such as actual scheduled days or planned allocation. |
 
-A resource type can have no named resources, one named resource, or many named resources.
+A role can have no named people, one named person, or many named people.
 
-If a resource type has a count greater than the number of named resources, the remaining capacity is treated as unnamed capacity. Think of it as planned staffing slots that are not tied to a specific person yet.
+If a role has a count greater than the number of named people, the remaining capacity is treated as unnamed capacity. Think of it as planned staffing slots that are not tied to a specific person yet.
+
+## Resource Counts / planning basis
+
+The Resource Counts panel lets you control how each role's capacity is planned.
+
+### Demand-following
+
+The role gets exactly as many people each week as the scheduled work demands, up to the resource count. This is the simplest mode: set a count and let the scheduler decide how many are needed each week.
+
+### Whole-project allocation
+
+The role is assigned a fixed allocation for the entire project (or for a specific date range), regardless of how much scheduled work exists in each week. This is useful for roles like project management that are billed as a consistent effort throughout the project rather than varying week to week.
+
+### Availability window
+
+The date range during which a role or named person is available. Work outside this window is not scheduled against that resource.
+
+### Capacity profile
+
+A model of how headcount changes over time. For example, a project may start with one engineer, grow to three engineers during the main delivery phase, and then taper back down. Capacity profiles let you represent this shape.
+
+After changing resource counts, planning basis, named people, capacity profiles, or dependencies, the Timeline may be stale. Click **Update timeline** to rebuild it.
+
+## Squad Planner and Starting Team Finder
+
+These are secondary tools for exploring capacity, not the normal way to refresh the Timeline.
+
+### Starting Team Finder
+
+Starting Team Finder helps you find a sensible starting squad size. Given the backlog and timeline constraints, it suggests a resource count that fits the work. It is useful early in a project when you are deciding how many people you need.
+
+### Squad Planner
+
+Squad Planner generates or reviews a capacity profile. You can use it to model how headcount changes over time — for example ramping up, sustaining, and ramping down. It is a planning aid, not the normal scheduling action.
+
+> **Remember:** **Update timeline** is the normal action to refresh the schedule. Squad Planner and Starting Team Finder are tools for exploring and refining capacity settings, not for regenerating the timeline.
 
 ## Capacity plans
 
@@ -180,8 +235,8 @@ Resource Profile helps answer:
 
 Use it to review:
 
-- days by resource type;
-- cost by resource type;
+- days by role;
+- cost by role;
 - FTE or equivalent staffing levels;
 - named-resource allocation bars;
 - utilisation over time;
@@ -198,9 +253,9 @@ It may include:
 
 - day rates;
 - pricing models;
-- scheduled or actual days;
+- scheduled or assigned days;
 - full-project allocations;
-- pro-rata allocations;
+- billing basis (actual scheduled days or planned allocation);
 - overheads;
 - discounts; and
 - tax such as GST.
@@ -209,7 +264,7 @@ The key point is:
 
 > Price is not the same thing as effort, capacity, or demand.
 
-For example, a person may have available capacity, but only part of that capacity may be charged to the project. Or a role may be priced using a full-project allocation rather than only the exact days produced by task effort.
+For example, a person may have available capacity, but only part of that capacity may be charged to the project. Or a role may be priced using a whole-project allocation rather than only the exact days produced by task effort.
 
 ## Exports and documents
 
@@ -237,7 +292,7 @@ Possible causes:
 
 - the commercial view is using a pricing model that is not based only on scheduled days;
 - query/data refresh has not happened yet;
-- the relevant resource is priced as full-project or pro-rata allocation;
+- the relevant resource is priced as whole-project allocation or another billing basis;
 - overheads or discounts are masking the change; or
 - the change affected timing but not total chargeable effort.
 
@@ -257,15 +312,15 @@ Possible causes:
 - resource levelling is disabled;
 - dependencies or manual pins prevent the scheduler from spreading work;
 - resource count or named-resource availability is too low; or
-- the capacity plan/resource setup does not match the intended staffing model.
+- the capacity profile or resource setup does not match the intended staffing model.
 
 ### A named resource bar is wider than expected
 
 Check whether the bar is showing:
 
 - the configured availability window;
-- the actual allocation window;
-- a full-project allocation;
+- the actual assigned window;
+- a whole-project allocation;
 - a timeline allocation; or
 - calculated demand segments.
 
