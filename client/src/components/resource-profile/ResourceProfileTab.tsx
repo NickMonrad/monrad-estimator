@@ -53,7 +53,7 @@ export default function ResourceProfileTab({
                 <th className="text-left px-4 py-3 font-medium">Hrs/Day</th>
                 <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Hours</th>
                 <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Days</th>
-                <th className="text-left px-4 py-3 font-medium">Allocation</th>
+                <th className="text-left px-4 py-3 font-medium">Planning basis</th>
                 <th className="text-left px-4 py-3 font-medium">Period</th>
                 <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                 {hasCost && <th className="text-right px-6 py-3 font-medium">Cost</th>}
@@ -142,11 +142,11 @@ export default function ResourceProfileTab({
                         const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
                         const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
                         const badge = (() => {
-                          if (mode === 'EFFORT') return { label: 'T&M', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
-                          if (mode === 'TIMELINE') return { label: `Timeline · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
-                          if (mode === 'FULL_PROJECT') return { label: `Full Project · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
-                          if (mode === 'CAPACITY_PLAN') return { label: `Capacity Plan · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
-                          return { label: `Full Project · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'EFFORT') return { label: 'Demand-following', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
+                          if (mode === 'TIMELINE') return { label: `Availability window · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
+                          if (mode === 'FULL_PROJECT') return { label: `Whole-project allocation · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'CAPACITY_PLAN') return { label: `Capacity profile · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
+                          return { label: `Whole-project allocation · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
                         })()
                         return (
                           <div>
@@ -205,13 +205,13 @@ export default function ResourceProfileTab({
                       <td colSpan={columnCount} className="px-6 py-4">
                         <div className="flex flex-wrap items-end gap-4">
                           <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Allocation Mode</label>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Planning basis</label>
                             <select value={allocationDraft.allocationMode} onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
                               className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                              <option value="EFFORT">T&M (effort only)</option>
-                              <option value="TIMELINE">Timeline window</option>
-                              <option value="FULL_PROJECT">Full project</option>
-                              <option value="CAPACITY_PLAN">Capacity Plan</option>
+                              <option value="EFFORT">Demand-following</option>
+                              <option value="TIMELINE">Availability window</option>
+                              <option value="FULL_PROJECT">Whole-project allocation</option>
+                              <option value="CAPACITY_PLAN">Capacity profile</option>
                             </select>
                           </div>
                           <div>

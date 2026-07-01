@@ -53,11 +53,11 @@ function formatNamedResourceWeeks(
 export const buildProfileCsv = (profileData: ResourceProfile) => {
   const rows: string[][] = [
     [
-      'Section', 'Role', 'NamedResource', 'SyntheticSlot', 'Category',
-      'Count', 'HoursPerDay', 'EffortDays', 'AllocatedDays', 'ActualAllocatedDays',
+      'Section', 'Role', 'NamedResource', 'Resource identity', 'Category',
+      'Count', 'HoursPerDay', 'EffortDays', 'Assigned days', 'Billable days',
       'DayRate', 'Cost', 'WindowStart', 'WindowEnd',
       'ActualStart', 'ActualEnd', 'Segments', 'Weeks',
-      'PricingModel',
+      'Billing basis',
     ],
   ]
 
@@ -65,7 +65,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
     if (row.namedResources && row.namedResources.length > 0) {
       row.namedResources.forEach(nr => {
         rows.push([
-          'Resource', row.name, nr.name, nr.synthetic ? 'Yes' : 'No',
+          'Resource', row.name, nr.name, nr.synthetic ? 'Planned resource' : 'Named person',
           row.category, String(row.count), String(row.hoursPerDay),
           String(row.effortDays), String(nr.allocatedDays), String(nr.actualAllocatedDays),
           row.dayRate != null ? String(row.dayRate) : '',

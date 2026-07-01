@@ -70,7 +70,7 @@ describe('buildProfileCsv', () => {
     const csv = buildProfileCsv(profile)
 
     expect(csv).toContain('Section,Role,NamedResource')
-    expect(csv).toContain('Resource,Security Consultant,Alex - Security,No')
+    expect(csv).toContain('Resource,Security Consultant,Alex - Security,Named person')
     expect(csv).toContain('W3-W4 (2.50d)')
     expect(csv).toContain('W3=1.50; W4=1.00')
     expect(csv).not.toContain('—')
