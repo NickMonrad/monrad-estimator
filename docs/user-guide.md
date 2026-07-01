@@ -53,7 +53,7 @@ A normal estimate usually follows this path:
 7. **Add named people or named resources** if you need to model specific people or a staffing shape over time.
 8. **Click Update timeline** to schedule the work onto the delivery timeline.
 9. **Review the Timeline** for feature/story bars, warnings, gaps, dependencies, and manual overrides.
-10. **Review Resource Profile** for role demand, named-resource allocation, utilisation, and unallocated work.
+10. **Review Resource Profile** for role demand, named-person availability and assignment, utilisation, and unallocated work.
 11. **Review Commercial** for pricing, discounts, overheads, and tax.
 12. **Export outputs** such as CSV, PDF, and generated documents.
 
@@ -217,15 +217,15 @@ Squad Planner generates or reviews a capacity profile. You can use it to model h
 
 > **Remember:** **Update timeline** is the normal action to refresh the schedule. Squad Planner and Starting Team Finder are tools for exploring and refining capacity settings, not for regenerating the timeline.
 
-## Capacity plans
+## Capacity profiles
 
-Capacity plans are useful for modelling how staffing changes over time.
+Capacity profiles are useful for modelling how staffing changes over time.
 
 For example, you may want to show that a project starts with one engineer, then grows to three engineers, then tapers back down.
 
-After changing resource counts, named resources, dependencies, sequencing, or capacity planning, the Timeline may be stale. The normal action is to click **Update timeline** to rebuild the Timeline from the latest inputs. If **Resource levelling** is enabled, the regenerated schedule respects weekly resource capacity and tries to avoid overloading resource types.
+After changing resource counts, named resources, dependencies, sequencing, or capacity profiles, the Timeline may be stale. The normal action is to click **Update timeline** to rebuild the Timeline from the latest inputs. If **Resource levelling** is enabled, the regenerated schedule respects weekly resource capacity and tries to avoid overloading resource types.
 
-Capacity planning may also change Resource Profile, Commercial, and reporting views. Do not assume that changing a capacity plan automatically moves feature dates on the Timeline.
+Capacity profile changes may also change Resource Profile, Commercial, and reporting views. Do not assume that changing a capacity profile automatically moves feature dates on the Timeline.
 
 ## Resource Profile
 
@@ -238,10 +238,10 @@ Use it to review:
 - days by role;
 - cost by role;
 - FTE or equivalent staffing levels;
-- named-resource allocation bars;
+- named-person availability and assignment bars;
 - utilisation over time;
 - unallocated demand; and
-- overhead or full-project resources.
+- overhead or whole-project resources.
 
 A resource can appear in Resource Profile even when it does not correspond to a single backlog task. For example, project management, governance, onboarding, and overhead-style activities may be modelled differently from delivery tasks.
 
@@ -252,9 +252,9 @@ Commercial turns the planning model into pricing.
 It may include:
 
 - day rates;
-- pricing models;
+- billing basis;
 - scheduled or assigned days;
-- full-project allocations;
+- whole-project allocation;
 - billing basis (actual scheduled days or planned allocation);
 - overheads;
 - discounts; and
@@ -290,13 +290,13 @@ If an export does not match what you expect, first check which screen or model t
 
 Possible causes:
 
-- the commercial view is using a pricing model that is not based only on scheduled days;
+- the commercial view is using a billing basis that is not based only on scheduled days;
 - query/data refresh has not happened yet;
 - the relevant resource is priced as whole-project allocation or another billing basis;
 - overheads or discounts are masking the change; or
 - the change affected timing but not total chargeable effort.
 
-### I changed a capacity plan but feature dates did not move
+### I changed a capacity profile but feature dates did not move
 
 That is expected unless you re-run scheduling afterwards.
 
@@ -321,7 +321,7 @@ Check whether the bar is showing:
 - the configured availability window;
 - the actual assigned window;
 - a whole-project allocation;
-- a timeline allocation; or
+- an availability window; or
 - calculated demand segments.
 
 Different views may show planned availability and actual demand differently.
