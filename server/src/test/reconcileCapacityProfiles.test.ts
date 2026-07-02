@@ -314,6 +314,10 @@ describe('reconcileCapacityProfiles', () => {
     expect(segMismatch).toBeDefined()
     expect(segMismatch!.expected).toBe(1)
     expect(segMismatch!.actual).toBe(0)
+    // matchedProfiles should be 0 because segment mismatch exists
+    expect(report.matchedProfiles).toBe(0)
+    // Profile has correct owner key, so it should NOT be reported as extra
+    expect(report.mismatches.filter(m => m.type === 'extraPersistedProfile')).toHaveLength(0)
   })
 
   it('detects extra segment', async () => {
@@ -541,6 +545,10 @@ describe('reconcileCapacityProfiles', () => {
     expect(dupMismatch).toBeDefined()
     expect(dupMismatch!.ownerId).toBe('rt-1')
     expect(dupMismatch!.message).toContain('cp-2')
+    // Duplicate key means profile is not fully matched even if canonical row matches
+    expect(report.matchedProfiles).toBe(0)
+    // No extra persisted profile should be reported for this owner
+    expect(report.mismatches.filter(m => m.type === 'extraPersistedProfile')).toHaveLength(0)
   })
 
   it('detects duplicate persisted named-person profile', async () => {
@@ -580,6 +588,10 @@ describe('reconcileCapacityProfiles', () => {
     expect(dupMismatch).toBeDefined()
     expect(dupMismatch!.ownerId).toBe('nr-1')
     expect(dupMismatch!.message).toContain('cp-2')
+    // Duplicate key means profile is not fully matched even if canonical row matches
+    expect(report.matchedProfiles).toBe(0)
+    // No extra persisted profile should be reported for this owner
+    expect(report.mismatches.filter(m => m.type === 'extraPersistedProfile')).toHaveLength(0)
   })
 
   it('does not count profile as matched when it has a planningBasis mismatch', async () => {
@@ -602,6 +614,8 @@ describe('reconcileCapacityProfiles', () => {
     expect(report.actualProfiles).toBe(1)
     expect(report.matchedProfiles).toBe(0) // mismatch means not fully matched
     expect(report.mismatches.length).toBeGreaterThanOrEqual(1)
+    // Profile has correct owner key, so it should NOT be reported as extra
+    expect(report.mismatches.filter(m => m.type === 'extraPersistedProfile')).toHaveLength(0)
   })
 
   it('counts fully matching profile with expectedProfiles=1 actualProfiles=1 matchedProfiles=1', async () => {

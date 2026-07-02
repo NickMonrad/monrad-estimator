@@ -210,8 +210,10 @@ export async function reconcileCapacityProfiles(
       }
     }
 
-    // Track which persisted profiles were matched
-    const matchedPersistedKeys = new Set<string>()
+    // Track key sets for extra detection vs fully-matched counting:
+    //   comparedPersistedKeys — every key where an expected profile found a persisted row
+    //   duplicateKeys — keys where >1 persisted row existed (from duplicate detection above)
+    const comparedPersistedKeys = new Set<string>()
 
     // Compare each expected profile against persisted
     for (const expected of expectedProfiles) {
@@ -232,6 +234,9 @@ export async function reconcileCapacityProfiles(
         })
         continue
       }
+
+      // Record that we found a persisted row for this key (regardless of field match quality)
+      comparedPersistedKeys.add(key)
 
       // Compare profile fields
       const mismatchesBefore = report.mismatches.length
@@ -280,15 +285,15 @@ export async function reconcileCapacityProfiles(
       }
 
       // Only count as fully matched if no mismatches were added for this profile
-      if (report.mismatches.length === mismatchesBefore) {
+      // AND no duplicate key exists for this owner (duplicate means data is inconsistent)
+      if (report.mismatches.length === mismatchesBefore && !duplicateKeys.has(key)) {
         report.matchedProfiles++
-        matchedPersistedKeys.add(key)
       }
     }
 
-    // Detect extra persisted profiles (not matched by any expected)
+    // Detect extra persisted profiles (not found by any expected profile)
     for (const [key, pp] of persistedByKey) {
-      if (!matchedPersistedKeys.has(key) && !duplicateKeys.has(key)) {
+      if (!comparedPersistedKeys.has(key)) {
         const kind = normalizeEnum(pp.ownerKind)
         const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
         report.mismatches.push({
