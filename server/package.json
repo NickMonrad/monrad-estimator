@@ -12,6 +12,9 @@
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "e2e:cleanup": "tsx scripts/e2e-cleanup.ts",
+    "capacity-profiles:backfill": "tsx src/scripts/backfillCapacityProfiles.ts",
+    "capacity-profiles:backfill:dry-run": "tsx src/scripts/backfillCapacityProfiles.ts --dry-run",
+    "capacity-profiles:reconcile": "tsx src/scripts/backfillCapacityProfiles.ts --reconcile-only",
     "postinstall": "prisma generate"
   },
   "prisma": {
