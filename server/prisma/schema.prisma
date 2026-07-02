@@ -78,6 +78,7 @@ model Project {
   weeklyDemandCache Json?
   generatedDocuments GeneratedDocument[]
   capacityPlans      CapacityPlan[]
+  capacityProfiles   CapacityProfile[]
 }
 
 enum ProjectStatus {
@@ -109,6 +110,7 @@ model ResourceType {
   overheads     ProjectOverhead[]
   namedResources NamedResource[]
   discounts      ProjectDiscount[]
+  capacityProfiles CapacityProfile[]
 
   @@index([projectId])
 }
@@ -146,6 +148,29 @@ enum AllocationMode {
   TIMELINE
   FULL_PROJECT
   CAPACITY_PLAN
+}
+
+enum CapacityProfileOwnerKind {
+  ROLE
+  NAMED_PERSON
+  PLANNED_RESOURCE
+}
+
+enum CapacityProfilePlanningBasis {
+  DEMAND_FOLLOWING
+  AVAILABILITY_WINDOW
+  WHOLE_PROJECT_ALLOCATION
+  CAPACITY_PROFILE
+}
+
+enum CapacityProfileSource {
+  FIXED
+  MANUAL
+  AVAILABILITY_WINDOW
+  SQUAD_PLANNER
+  IMPORTED
+  DERIVED
+  LEGACY
 }
 
 model Epic {
@@ -359,8 +384,63 @@ model NamedResource {
   pricingModel   String       @default("ACTUAL_DAYS")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+  capacityProfiles CapacityProfile[]
 
   @@index([resourceTypeId])
+}
+
+/// First-class capacity profile record, derived from legacy fields.
+/// Legacy fields on ResourceType and NamedResource remain authoritative.
+/// Exactly one owner per profile: resourceTypeId for role-owned, or namedResourceId for person/planned.
+/// DB-level uniqueness/constraint enforcement deferred (see backfill tests).
+model CapacityProfile {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  resourceTypeId  String?
+  resourceType    ResourceType? @relation(fields: [resourceTypeId], references: [id], onDelete: Cascade)
+
+  namedResourceId String?
+  namedResource   NamedResource? @relation(fields: [namedResourceId], references: [id], onDelete: Cascade)
+
+  ownerKind       CapacityProfileOwnerKind
+  planningBasis   CapacityProfilePlanningBasis
+  source          CapacityProfileSource
+
+  defaultPercent  Float?
+  startWeek       Float?
+  endWeek         Float?
+
+  /// Original legacy field values for traceability.
+  legacy          Json?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  segments        CapacitySegment[]
+
+  @@index([projectId])
+  @@index([resourceTypeId])
+  @@index([namedResourceId])
+}
+
+/// A segment within a capacity profile, representing variable capacity over a week range.
+/// Derived from existing CapacityPlan periods or manual input.
+model CapacitySegment {
+  id                String   @id @default(cuid())
+  capacityProfileId String
+  capacityProfile   CapacityProfile @relation(fields: [capacityProfileId], references: [id], onDelete: Cascade)
+
+  startWeek         Float
+  endWeek           Float
+  capacityPercent   Float
+  source            CapacityProfileSource
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([capacityProfileId])
 }
 
 model CapacityPlan {
