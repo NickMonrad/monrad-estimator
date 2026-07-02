@@ -210,54 +210,56 @@ export async function backfillCapacityProfiles(
           profile.owner.kind === 'role' ? null : profile.owner.id,
       } satisfies Record<string, unknown>
 
-      // Upsert the profile: try to find existing by lookup criteria
-      const existing = await prisma.capacityProfile.findFirst({
-        where: criteria,
-      })
-
-      if (existing) {
-        await prisma.capacityProfile.update({
-          where: { id: existing.id },
-          data,
+      // Wrap the whole upsert + segment replacement in a transaction to
+      // prevent orphaned profiles or partial segment data on failure.
+      await prisma.$transaction(async (tx) => {
+        const existing = await tx.capacityProfile.findFirst({
+          where: criteria,
         })
-        result.profilesUpdated++
 
-        // Replace segments: delete existing, create new
-        const deleted = await prisma.capacitySegment.deleteMany({
-          where: { capacityProfileId: existing.id },
-        })
-        result.segmentsDeleted += deleted.count
-
-        for (const seg of profile.segments) {
-          await prisma.capacitySegment.create({
-            data: {
-              capacityProfileId: existing.id,
-              startWeek: seg.startWeek,
-              endWeek: seg.endWeek,
-              capacityPercent: seg.capacityPercent,
-              source: toPrismaSource(seg.source),
-            },
+        if (existing) {
+          await tx.capacityProfile.update({
+            where: { id: existing.id },
+            data,
           })
-          result.segmentsCreated++
-        }
-      } else {
-        // Create new profile
-        await prisma.capacityProfile.create({
-          data: {
-            ...data,
-            segments: {
-              create: profile.segments.map((seg) => ({
+          result.profilesUpdated++
+
+          const deleted = await tx.capacitySegment.deleteMany({
+            where: { capacityProfileId: existing.id },
+          })
+          result.segmentsDeleted += deleted.count
+
+          for (const seg of profile.segments) {
+            await tx.capacitySegment.create({
+              data: {
+                capacityProfileId: existing.id,
                 startWeek: seg.startWeek,
                 endWeek: seg.endWeek,
                 capacityPercent: seg.capacityPercent,
                 source: toPrismaSource(seg.source),
-              })),
+              },
+            })
+            result.segmentsCreated++
+          }
+        } else {
+          // Create new profile
+          await tx.capacityProfile.create({
+            data: {
+              ...data,
+              segments: {
+                create: profile.segments.map((seg) => ({
+                  startWeek: seg.startWeek,
+                  endWeek: seg.endWeek,
+                  capacityPercent: seg.capacityPercent,
+                  source: toPrismaSource(seg.source),
+                })),
+              },
             },
-          },
-        })
-        result.profilesCreated++
-        result.segmentsCreated += profile.segments.length
-      }
+          })
+          result.profilesCreated++
+          result.segmentsCreated += profile.segments.length
+        }
+      })
     }
   }
 
