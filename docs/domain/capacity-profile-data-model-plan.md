@@ -215,6 +215,16 @@ type CapacitySegmentDTO = {
 }
 ```
 
+### Schema-safety constraints
+
+Any future schema implementation must enforce these constraints:
+
+- **Exactly one owner per CapacityProfile**: either `resourceTypeId` is set, or `namedResourceId` is set, but not both and not neither. This prevents orphaned or doubly-owned profiles. The polymorphic-owner design requires application-level enforcement (Prisma does not support exclusive-union constraints natively).
+
+- **Nullable unique-index behaviour**: The proposed `@@unique([projectId, resourceTypeId])` and `@@unique([projectId, namedResourceId])` rely on nullable columns. Database behaviour varies — PostgreSQL treats multiple NULL entries in a unique index as distinct (allowed), which is the desired behaviour here (each project can have at most one profile per resource type, and at most one profile per named resource, but can have profiles for both). Implementations must verify this behaviour is correct for the target database and handle any migration-specific index rebuilds.
+
+These are documented as design constraints. No schema changes have been made in this PR.
+
 ### Migration of existing fields
 
 | Current field | Target |
@@ -245,7 +255,11 @@ type CapacitySegmentDTO = {
 
 ## Migration approach
 
-### PR 1: Read-only mapping helpers (this PR — design only)
+### PR 1: Design doc only — this PR
+
+This document. No code changes.
+
+### PR 2: Read-only mapping helpers + parity tests
 
 Add pure mapping functions that convert existing fields to the proposed DTO shape. These functions:
 - Accept the current `ResourceType` and `NamedResource` records as input.
@@ -254,40 +268,39 @@ Add pure mapping functions that convert existing fields to the proposed DTO shap
 
 Tests prove that the DTO output matches the current implicit capacity profile behaviour.
 
-### PR 2: Add read-only API endpoint
+### PR 3: Add read-only capacity-profile API endpoint
 
 Add `GET /api/projects/:id/capacity-profiles` that returns capacity profiles derived from existing fields via the mapping helpers. The existing Resource Profile, Timeline, and Commercial routes are unchanged. Add integration tests comparing the new endpoint against existing route data.
 
-### PR 3: Add CapacityProfile model + migration helper
+### PR 4: Add additive Prisma schema + idempotent backfill/migration helper
 
 Add the `CapacityProfile` and `CapacitySegment` Prisma models. Add a migration that populates them from existing `ResourceType` and `NamedResource` fields. The helper is **additive** — it creates profile records for existing data without changing any existing fields.
 
-**Backward compatibility:** All old fields remain functional. The migration helper can be re-run for existing projects that were created before the model existed.
+**Backward compatibility:** All old fields remain authoritative. The migration helper can be re-run for existing projects that were created before the model existed. Legacy fields on `ResourceType` and `NamedResource` continue to be the data source for all routes.
 
-### PR 4: Wire server routes to consume CapacityProfile
+### PR 5: Server routes consume new profiles with fallback to legacy fields
 
 Update the Resource Profile route (`resourceProfile.ts`), Timeline route (`timeline.ts`), and Squad Planner apply route (`squadPlan.ts`) to read from `CapacityProfile` where available, falling back to the legacy fields for projects without profiles.
 
 The `materializeCapacityPlanResources` function is updated to prefer profile segments over plan entries when a profile exists.
 
-### PR 5: Wire client to consume CapacityProfile
+### PR 6: Client reads/writes through capacity-profile API
 
 Update `useResourceProfile.ts`, `useAllocationEditing.ts`, and `SquadPlannerDrawer.tsx` to read from the new capacity-profile endpoint and write through it where appropriate.
 
 The existing allocation editing UI continues to work — it now reads/writes the profile model behind the same user-facing controls.
 
-### PR 6: UI for segmented capacity editing
+### PR 7: Segmented capacity editor
 
 Add a segmented-profile editor in the Resource Profile tab (capacity profile detail panel). This is where users can manually define ramp-up/sustain/ramp-down segments.
 
-### PR 7: Squad Planner generates CapacityProfile segments
+### PR 8: Squad Planner apply writes capacity-profile segments
 
 When Squad Planner output is applied, it creates or updates `CapacityProfile` records with `source: 'squadPlanner'` and the appropriate segments, rather than only persisting to the `CapacityPlan` model.
 
-### PR 8: Retire legacy fields (optional, future)
+### PR 9: Optional future legacy-field retirement
 
 Once all projects have been migrated and all routes consume the new model, redundant fields on `ResourceType` and `NamedResource` can be deprecated and eventually removed. This is a separate PR well after the migration is proven stable.
-
 ## API impact
 
 No API changes in this PR. Future API changes:
@@ -315,7 +328,7 @@ No export changes in this PR. Future export improvements:
 
 ## Testing approach
 
-### Phase 1: Mapping helper tests (PR 1-2)
+### Phase 1: Mapping helper tests (PR 2)
 
 - Input a `ResourceType` with `allocationMode: 'TIMELINE'`, `allocationPercent: 75`, `allocationStartWeek: 2`, `allocationEndWeek: 10`.
 - Assert the helper produces a `CapacityProfileDTO` with `planningBasis: 'availabilityWindow'`, `defaultPercent: 75`, `startWeek: 2`, `endWeek: 10`, empty segments.
@@ -340,23 +353,21 @@ No export changes in this PR. Future export improvements:
 - Squad Planner apply creates profiles.
 - Resource Profile, Timeline, Commercial, and export output unchanged.
 - No data loss for existing projects.
-
 ## Rollout plan
 
 ```mermaid
 graph LR
-    A[PR 1: Design doc] --> B[PR 2: Read mapping + tests]
-    B --> C[PR 3: Read-only API endpoint + tests]
-    C --> D[PR 4: Schema + migration helper + backward compat]
+    A[PR 1: Design doc] --> B[PR 2: Mapping helpers + parity tests]
+    B --> C[PR 3: Read-only API endpoint]
+    C --> D[PR 4: Schema + backfill migration helper]
     D --> E[PR 5: Server routes consume new model]
-    E --> F[PR 6: Client read/write new model]
+    E --> F[PR 6: Client read/write]
     F --> G[PR 7: Segmented UI editor]
     G --> H[PR 8: Squad Planner generates profiles]
     H --> I[PR 9: Retire legacy fields]
 ```
 
 Each PR is independently mergeable and backward-compatible. The rollout pauses if any regression is detected.
-
 ## Open questions
 
 1. **Should `CapacityPlan` remain as a separate model or fold into `CapacityProfile`?** The current design keeps it as a generation audit log. If Squad Planner's generated output is always stored as profiles, the plan model could be simplified or removed later.
