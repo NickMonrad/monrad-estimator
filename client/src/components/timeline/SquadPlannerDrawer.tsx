@@ -763,7 +763,7 @@ export default function SquadPlannerDrawer({
             disabled={generate.isPending || effectiveMonths < 1}
             className="w-full bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
           >
-            {generate.isPending ? 'Generating…' : '▶ Generate Plan'}
+            {generate.isPending ? 'Generating…' : '▶ Generate capacity profile'}
           </button>
 
           {/* Error */}
@@ -788,7 +788,7 @@ export default function SquadPlannerDrawer({
             <div className="space-y-4">
               {/* Summary KPIs */}
               <div>
-                <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Summary</div>
+                <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Capacity profile summary</div>
                 <div className="grid grid-cols-2 gap-2">
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-2">
                     <div className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Peak</div>
@@ -812,9 +812,9 @@ export default function SquadPlannerDrawer({
                 </p>
               </div>
 
-              {/* Capacity Plan Table */}
+              {/* Capacity Profile Table */}
               <div>
-                <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Capacity Plan</div>
+                <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Capacity profile</div>
                 <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
                   <table className="min-w-full text-xs">
                     <thead>
@@ -877,13 +877,13 @@ export default function SquadPlannerDrawer({
               <div className="flex gap-2">
                 <button
                   onClick={() => {
-                    if (!window.confirm('Apply this plan? Resource profiles will be updated.')) return
+                    if (!window.confirm('Apply this capacity profile? Resource profiles will be updated.')) return
                     apply.mutate(result)
                   }}
                   disabled={apply.isPending}
                   className="flex-1 bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
                 >
-                  {apply.isPending ? 'Applying…' : '✓ Apply Plan'}
+                  {apply.isPending ? 'Applying…' : '✓ Apply capacity profile'}
                 </button>
                 <button
                   onClick={() => exportCsv(result, periodWeeks)}
