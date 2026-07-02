@@ -32,10 +32,15 @@ export default function ResourceProfileTab({
     <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
       <header className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Summary</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Active scope only — role mix, overheads, and allocation modes</p>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Capacity profile summary</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Capacity profiles, planning basis, and resource allocation by role</p>
         </div>
       </header>
+      <div className="px-6 py-3 bg-blue-50 dark:bg-blue-950/30 border-b border-blue-100 dark:border-blue-900">
+        <p className="text-xs text-blue-700 dark:text-blue-300">
+          <strong className="font-medium">Capacity profiles</strong> describe how much of a role, named person, or planned resource is available over time. Changing a profile affects planning capacity and scheduling. Commercial billing basis and billable days are managed separately on the <strong className="font-medium">Commercial</strong> tab.
+        </p>
+      </div>
       {profileLoading && <div className="py-12 text-center text-gray-400 dark:text-gray-500">Loading resource profile…</div>}
       {!profileLoading && profile && profile.resourceRows.length === 0 && profile.overheadRows.length === 0 && (
         <div className="py-12 text-center text-gray-400 dark:text-gray-500">
@@ -75,6 +80,18 @@ export default function ResourceProfileTab({
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{row.category.replace('_', ' ')}</p>
                       {row.count > 1 && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">({formatNumber(row.totalHours / row.count)}h / {formatNumber(row.totalDays / row.count)}d per person)</p>
+                      )}
+                      {/* Resource identity label */}
+                      {row.namedResources && row.namedResources.length > 0 ? (
+                        row.namedResources.every(nr => nr.synthetic) ? (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Planned resource</p>
+                        ) : row.namedResources.some(nr => nr.synthetic) ? (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Mixed (named person + planned resource)</p>
+                        ) : (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Named person</p>
+                        )
+                      ) : (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Role-level capacity</p>
                       )}
                       {row.namedResources && row.namedResources.some(namedResource => (namedResource.actualAllocationSegments?.length ?? 0) > 0) && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
@@ -136,7 +153,7 @@ export default function ResourceProfileTab({
                     <td className="px-4 py-3">
                       {(() => {
                         if (row.namedResources && row.namedResources.length > 0) {
-                          return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Aggregate</span>
+                          return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Named resources: mixed modes</span>
                         }
                         const mode = row.allocationMode ?? 'EFFORT'
                         const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
@@ -215,7 +232,7 @@ export default function ResourceProfileTab({
                             </select>
                           </div>
                           <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">FTE %</label>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Capacity %</label>
                             <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
                               onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
                               className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
