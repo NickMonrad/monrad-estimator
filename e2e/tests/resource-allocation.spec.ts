@@ -120,19 +120,19 @@ test.describe('Resource Allocation', () => {
     await badge.click({ force: true })
 
     await expect(page.getByText(/Planning basis/i).first()).toBeVisible({ timeout: 8_000 })
-    await expect(page.getByText(/FTE %/i).first()).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByText(/Capacity %/i).first()).toBeVisible({ timeout: 5_000 })
 
     const modeSelect = page.locator('select').filter({ hasText: /Demand-following|Availability window|Whole-project allocation/ }).first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
 
-    const fteInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
-    await expect(fteInput).toBeVisible({ timeout: 5_000 })
+    const capacityInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
+    await expect(capacityInput).toBeVisible({ timeout: 5_000 })
 
     await expect(page.locator('[data-testid="allocation-save"]')).toBeVisible()
     await expect(page.locator('[data-testid="allocation-cancel"]')).toBeVisible()
   })
 
-  test('changing FTE % updates allocated days', async ({ page }) => {
+  test('changing Capacity % updates allocated days', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
@@ -141,10 +141,10 @@ test.describe('Resource Allocation', () => {
     await expect(badge).toBeVisible({ timeout: 10_000 })
     await badge.click({ force: true })
 
-    await expect(page.getByText(/FTE %/i).first()).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText(/Capacity %/i).first()).toBeVisible({ timeout: 8_000 })
 
-    const fteInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
-    await fteInput.fill('50')
+    const capacityInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
+    await capacityInput.fill('50')
 
     await page.locator('[data-testid="allocation-save"]').click()
 
