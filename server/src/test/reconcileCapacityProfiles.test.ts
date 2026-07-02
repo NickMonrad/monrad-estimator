@@ -511,6 +511,122 @@ describe('reconcileCapacityProfiles', () => {
     expect(report.mismatches).toHaveLength(0)
     expect(report.matchedProfiles).toBe(1)
   })
+
+  it('detects duplicate persisted role profile', async () => {
+    vi.mocked(prisma.project.findMany).mockResolvedValue([
+      makeProject(
+        'proj-1',
+        [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+        [],
+        [
+          makePersistedProfile('cp-1', 'proj-1', 'ROLE', 'rt-1', {
+            planningBasis: 'DEMAND_FOLLOWING',
+            source: 'FIXED',
+            defaultPercent: 100,
+          }),
+          makePersistedProfile('cp-2', 'proj-1', 'ROLE', 'rt-1', {
+            planningBasis: 'DEMAND_FOLLOWING',
+            source: 'FIXED',
+            defaultPercent: 100,
+          }),
+        ],
+      ),
+    ] as any)
+
+    const report = await reconcileCapacityProfiles(prisma as any)
+
+    const dupMismatch = report.mismatches.find(
+      (m) => m.type === 'duplicatePersistedProfile',
+    )
+    expect(dupMismatch).toBeDefined()
+    expect(dupMismatch!.ownerId).toBe('rt-1')
+    expect(dupMismatch!.message).toContain('cp-2')
+  })
+
+  it('detects duplicate persisted named-person profile', async () => {
+    vi.mocked(prisma.project.findMany).mockResolvedValue([
+      makeProject(
+        'proj-1',
+        [makeRt('rt-1', 'Engineer', {
+          allocationMode: 'TIMELINE',
+          namedResources: [
+            makeNr('nr-1', 'Alice', {
+              allocationMode: 'TIMELINE',
+              allocationPercent: 50,
+            }),
+          ],
+        })],
+        [],
+        [
+          makePersistedProfile('cp-1', 'proj-1', 'NAMED_PERSON', 'nr-1', {
+            planningBasis: 'AVAILABILITY_WINDOW',
+            source: 'AVAILABILITY_WINDOW',
+            defaultPercent: 50,
+          }),
+          makePersistedProfile('cp-2', 'proj-1', 'NAMED_PERSON', 'nr-1', {
+            planningBasis: 'AVAILABILITY_WINDOW',
+            source: 'AVAILABILITY_WINDOW',
+            defaultPercent: 50,
+          }),
+        ],
+      ),
+    ] as any)
+
+    const report = await reconcileCapacityProfiles(prisma as any)
+
+    const dupMismatch = report.mismatches.find(
+      (m) => m.type === 'duplicatePersistedProfile',
+    )
+    expect(dupMismatch).toBeDefined()
+    expect(dupMismatch!.ownerId).toBe('nr-1')
+    expect(dupMismatch!.message).toContain('cp-2')
+  })
+
+  it('does not count profile as matched when it has a planningBasis mismatch', async () => {
+    vi.mocked(prisma.project.findMany).mockResolvedValue([
+      makeProject(
+        'proj-1',
+        [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+        [],
+        [makePersistedProfile('cp-1', 'proj-1', 'ROLE', 'rt-1', {
+          planningBasis: 'AVAILABILITY_WINDOW', // wrong — should be DEMAND_FOLLOWING
+          source: 'FIXED',
+          defaultPercent: 100,
+        })],
+      ),
+    ] as any)
+
+    const report = await reconcileCapacityProfiles(prisma as any)
+
+    expect(report.expectedProfiles).toBe(1)
+    expect(report.actualProfiles).toBe(1)
+    expect(report.matchedProfiles).toBe(0) // mismatch means not fully matched
+    expect(report.mismatches.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('counts fully matching profile with expectedProfiles=1 actualProfiles=1 matchedProfiles=1', async () => {
+    vi.mocked(prisma.project.findMany).mockResolvedValue([
+      makeProject(
+        'proj-1',
+        [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+        [],
+        [makePersistedProfile('cp-1', 'proj-1', 'ROLE', 'rt-1', {
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+        })],
+      ),
+    ] as any)
+
+    const report = await reconcileCapacityProfiles(prisma as any)
+
+    expect(report.projectsChecked).toBe(1)
+    expect(report.expectedProfiles).toBe(1)
+    expect(report.actualProfiles).toBe(1)
+    expect(report.matchedProfiles).toBe(1)
+    expect(report.mismatches).toHaveLength(0)
+  })
+
 })
 
 describe('formatReconciliationReport', () => {

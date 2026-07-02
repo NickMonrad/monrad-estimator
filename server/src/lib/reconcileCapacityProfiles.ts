@@ -19,6 +19,7 @@ import { materializeCapacityPlanResources } from './capacityPlanMaterialisation.
 export type CapacityProfileMismatchType =
   | 'missingPersistedProfile'
   | 'extraPersistedProfile'
+  | 'duplicatePersistedProfile'
   | 'profileFieldMismatch'
   | 'segmentMismatch'
 
@@ -182,16 +183,31 @@ export async function reconcileCapacityProfiles(
 
     report.expectedProfiles += expectedProfiles.length
 
-    // Build map of persisted profiles by owner key
+    // Build map of persisted profiles by owner key (first per key is canonical)
     const persistedProfiles = project.capacityProfiles
     report.actualProfiles += persistedProfiles.length
 
     const persistedByKey = new Map<string, typeof persistedProfiles[number]>()
+    const duplicateKeys = new Set<string>()
     for (const pp of persistedProfiles) {
       const kind = normalizeEnum(pp.ownerKind)
       const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
       const key = profileKey(project.id, kind, ownerId)
-      persistedByKey.set(key, pp)
+      if (persistedByKey.has(key)) {
+        // Duplicate persisted profile for same owner — record mismatch
+        duplicateKeys.add(key)
+        report.mismatches.push({
+          projectId: project.id,
+          ownerKind: kind,
+          ownerId,
+          type: 'duplicatePersistedProfile',
+          message: `Duplicate persisted profile for ${kind} owner ${ownerId} (id: ${pp.id})`,
+          expected: persistedByKey.get(key)!.id,
+          actual: pp.id,
+        })
+      } else {
+        persistedByKey.set(key, pp)
+      }
     }
 
     // Track which persisted profiles were matched
@@ -217,10 +233,9 @@ export async function reconcileCapacityProfiles(
         continue
       }
 
-      matchedPersistedKeys.add(key)
-      report.matchedProfiles++
-
       // Compare profile fields
+      const mismatchesBefore = report.mismatches.length
+
       const fieldMismatches = [
         compareField(project.id, kind, ownerId, 'ownerKind', kind, normalizeEnum(persisted.ownerKind)),
         compareField(project.id, kind, ownerId, 'planningBasis', expected.planningBasis, normalizeEnum(persisted.planningBasis)),
@@ -263,11 +278,17 @@ export async function reconcileCapacityProfiles(
 
         report.mismatches.push(...segMismatches)
       }
+
+      // Only count as fully matched if no mismatches were added for this profile
+      if (report.mismatches.length === mismatchesBefore) {
+        report.matchedProfiles++
+        matchedPersistedKeys.add(key)
+      }
     }
 
     // Detect extra persisted profiles (not matched by any expected)
     for (const [key, pp] of persistedByKey) {
-      if (!matchedPersistedKeys.has(key)) {
+      if (!matchedPersistedKeys.has(key) && !duplicateKeys.has(key)) {
         const kind = normalizeEnum(pp.ownerKind)
         const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
         report.mismatches.push({

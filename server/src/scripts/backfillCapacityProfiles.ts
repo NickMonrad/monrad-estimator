@@ -51,7 +51,6 @@ async function main() {
       console.log('Phase 1: Running backfill…')
       const backfillResult = await backfillCapacityProfiles(prisma)
 
-      console.log(`  Projects scanned:      ${backfillResult.profilesCreated + backfillResult.profilesUpdated > 0 ? 'done' : 'none'}`)
       console.log(`  Profiles created:      ${backfillResult.profilesCreated}`)
       console.log(`  Profiles updated:      ${backfillResult.profilesUpdated}`)
       console.log(`  Segments created:      ${backfillResult.segmentsCreated}`)
