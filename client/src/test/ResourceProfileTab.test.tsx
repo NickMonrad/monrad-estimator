@@ -517,7 +517,7 @@ describe('ResourceProfileTab Planning Context', () => {
 describe('Capacity Profile labels', () => {
   it('shows Resource Profile heading and capacity profile help text', () => {
     render(<ResourceProfileTab {...createProps(1)} />)
-    expect(screen.getByText('Resource Profile')).toBeInTheDocument()
+    expect(screen.getByText('Capacity profile summary')).toBeInTheDocument()
     // Help text: the <strong> element contains "Capacity profiles"
     expect(screen.getByText('Capacity profiles')).toBeInTheDocument()
     // "Planning basis" appears in both subtitle and column header

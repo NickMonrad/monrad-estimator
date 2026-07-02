@@ -32,7 +32,7 @@ export default function ResourceProfileTab({
     <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
       <header className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Resource Profile</h2>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Capacity profile summary</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">Capacity profiles, planning basis, and resource allocation by role</p>
         </div>
       </header>
