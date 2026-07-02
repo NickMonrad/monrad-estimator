@@ -216,6 +216,54 @@ describe('mapResourceTypeToCapacityProfile', () => {
     })
   })
 
+  it('EFFORT with supplied capacityPlanSlots produces no segments and source=fixed', () => {
+    const rt = defaultRt({ allocationMode: 'EFFORT' })
+    const slots: CapacityPlanSlotInput[] = [
+      { startWeek: 0, endWeek: 3, allocationPercent: 100 },
+    ]
+    const result = mapResourceTypeToCapacityProfile({
+      projectId: 'p1',
+      resourceType: rt,
+      capacityPlanSlots: slots,
+    })
+
+    expect(result.planningBasis).toBe('demandFollowing')
+    expect(result.segments).toEqual([])
+    expect(result.source).toBe('fixed')
+  })
+
+  it('TIMELINE with supplied capacityPlanSlots produces no segments and source=availabilityWindow', () => {
+    const rt = defaultRt({ allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 2, allocationEndWeek: 10 })
+    const slots: CapacityPlanSlotInput[] = [
+      { startWeek: 0, endWeek: 3, allocationPercent: 100 },
+    ]
+    const result = mapResourceTypeToCapacityProfile({
+      projectId: 'p1',
+      resourceType: rt,
+      capacityPlanSlots: slots,
+    })
+
+    expect(result.planningBasis).toBe('availabilityWindow')
+    expect(result.segments).toEqual([])
+    expect(result.source).toBe('availabilityWindow')
+  })
+
+  it('FULL_PROJECT with supplied capacityPlanSlots produces no segments and source=fixed', () => {
+    const rt = defaultRt({ allocationMode: 'FULL_PROJECT' })
+    const slots: CapacityPlanSlotInput[] = [
+      { startWeek: 0, endWeek: 3, allocationPercent: 100 },
+    ]
+    const result = mapResourceTypeToCapacityProfile({
+      projectId: 'p1',
+      resourceType: rt,
+      capacityPlanSlots: slots,
+    })
+
+    expect(result.planningBasis).toBe('wholeProjectAllocation')
+    expect(result.segments).toEqual([])
+    expect(result.source).toBe('fixed')
+  })
+
   it('preserves legacy fields in the legacy snapshot', () => {
     const rt = defaultRt({
       allocationMode: 'TIMELINE',
@@ -304,6 +352,64 @@ describe('mapNamedResourceToCapacityProfile', () => {
     })
 
     expect(result.planningBasis).toBe('demandFollowing')
+  })
+
+  it('inherits CAPACITY_PLAN from RT when NR mode is null, uses supplied slots → segments', () => {
+    const rt = defaultRt({ allocationMode: 'CAPACITY_PLAN' })
+    const nr = defaultNr({ allocationMode: null })
+    const slots: CapacityPlanSlotInput[] = [
+      { startWeek: 0, endWeek: 3, allocationPercent: 100 },
+    ]
+    const result = mapNamedResourceToCapacityProfile({
+      projectId: 'p1',
+      resourceType: rt,
+      namedResource: nr,
+      capacityPlanSlots: slots,
+    })
+
+    expect(result.planningBasis).toBe('capacityProfile')
+    expect(result.segments).toHaveLength(1)
+    expect(result.segments[0].capacityPercent).toBe(100)
+    expect(result.source).toBe('squadPlanner')
+  })
+
+  it('overrides RT CAPACITY_PLAN to EFFORT, ignores supplied slots → no segments', () => {
+    const rt = defaultRt({ allocationMode: 'CAPACITY_PLAN' })
+    const nr = defaultNr({ allocationMode: 'EFFORT' })
+    const slots: CapacityPlanSlotInput[] = [
+      { startWeek: 0, endWeek: 3, allocationPercent: 100 },
+    ]
+    const result = mapNamedResourceToCapacityProfile({
+      projectId: 'p1',
+      resourceType: rt,
+      namedResource: nr,
+      capacityPlanSlots: slots,
+    })
+
+    expect(result.planningBasis).toBe('demandFollowing')
+    expect(result.segments).toEqual([])
+    expect(result.source).toBe('fixed')
+  })
+
+  it('overrides RT CAPACITY_PLAN to TIMELINE, ignores supplied slots → no segments', () => {
+    const rt = defaultRt({ allocationMode: 'CAPACITY_PLAN' })
+    const nr = defaultNr({ allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 5, allocationEndWeek: 12 })
+    const slots: CapacityPlanSlotInput[] = [
+      { startWeek: 0, endWeek: 3, allocationPercent: 100 },
+    ]
+    const result = mapNamedResourceToCapacityProfile({
+      projectId: 'p1',
+      resourceType: rt,
+      namedResource: nr,
+      capacityPlanSlots: slots,
+    })
+
+    expect(result.planningBasis).toBe('availabilityWindow')
+    expect(result.segments).toEqual([])
+    expect(result.source).toBe('availabilityWindow')
+    expect(result.defaultPercent).toBe(50)
+    expect(result.startWeek).toBe(5)
+    expect(result.endWeek).toBe(12)
   })
 
   it('preserves NR allocationPercent over allocationPct', () => {

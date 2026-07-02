@@ -214,9 +214,12 @@ export function mapResourceTypeToCapacityProfile(input: {
 }): CapacityProfileDTO {
   const { projectId, resourceType, capacityPlanSlots } = input
   const mode = resourceType.allocationMode ?? null
-  const hasActivePlanSlots = capacityPlanSlots !== undefined && capacityPlanSlots.length > 0
+  const usesCapacityPlanSegments =
+    mode === 'CAPACITY_PLAN' &&
+    capacityPlanSlots !== undefined &&
+    capacityPlanSlots.length > 0
   const planningBasis = allocationModeToPlanningBasis(mode)
-  const segments = hasActivePlanSlots
+  const segments = usesCapacityPlanSegments
     ? deriveSegmentsFromSlotWindows(resourceType.id, capacityPlanSlots!)
     : []
 
@@ -233,7 +236,7 @@ export function mapResourceTypeToCapacityProfile(input: {
     startWeek: resourceType.allocationStartWeek ?? null,
     endWeek: resourceType.allocationEndWeek ?? null,
     segments,
-    source: deriveSource(mode, hasActivePlanSlots),
+    source: deriveSource(mode, usesCapacityPlanSegments),
     legacy: buildLegacyFields({
       allocationMode: mode,
       allocationPercent: resourceType.allocationPercent,
@@ -253,9 +256,12 @@ export function mapNamedResourceToCapacityProfile(input: {
 }): CapacityProfileDTO {
   const { projectId, resourceType, namedResource, capacityPlanSlots } = input
   const mode = namedResource.allocationMode ?? resourceType.allocationMode ?? null
-  const hasActivePlanSlots = capacityPlanSlots !== undefined && capacityPlanSlots.length > 0
+  const usesCapacityPlanSegments =
+    mode === 'CAPACITY_PLAN' &&
+    capacityPlanSlots !== undefined &&
+    capacityPlanSlots.length > 0
   const planningBasis = allocationModeToPlanningBasis(mode)
-  const segments = hasActivePlanSlots
+  const segments = usesCapacityPlanSegments
     ? deriveSegmentsFromSlotWindows(resourceType.id, capacityPlanSlots!)
     : []
 
@@ -278,7 +284,7 @@ export function mapNamedResourceToCapacityProfile(input: {
     startWeek: resolvedStartWeek,
     endWeek: resolvedEndWeek,
     segments,
-    source: deriveSource(mode, hasActivePlanSlots),
+    source: deriveSource(mode, usesCapacityPlanSegments),
     legacy: buildLegacyFields({
       allocationMode: mode,
       allocationPercent: namedResource.allocationPercent,
