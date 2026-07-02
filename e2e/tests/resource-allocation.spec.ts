@@ -96,7 +96,7 @@ async function gotoResourceProfile(page: import('@playwright/test').Page, projec
     page.goto(`/projects/${projectId}/resource-profile`),
   ])
   expect(rtLoadResponse.ok()).toBeTruthy()
-  await expect(page.getByRole('heading', { name: /^summary$/i }).first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('heading', { name: /capacity profile summary/i }).first()).toBeVisible({ timeout: 15_000 })
 }
 
 test.describe('Resource Allocation', () => {
