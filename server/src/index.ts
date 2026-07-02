@@ -34,6 +34,7 @@ import customerRoutes from './routes/customers.js'
 import documentRoutes from './routes/documents.js'
 import optimiserRoutes from './routes/optimiser.js'
 import squadPlanRoutes from './routes/squadPlan.js'
+import capacityProfileRoutes from './routes/capacityProfiles.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3001
@@ -78,6 +79,7 @@ app.use('/api/projects/:projectId/apply-rate-card', applyRateCardRouter)
 app.use('/api/projects/:projectId/documents', documentRoutes)
 app.use('/api/projects/:projectId/optimise', optimiserRoutes)
 app.use('/api/projects/:projectId/squad-plan', squadPlanRoutes)
+app.use('/api/projects/:projectId/capacity-profiles', capacityProfileRoutes)
 app.use('/api/projects/:projectId/squad-plans', squadPlanRoutes)
 app.use('/api/orgs', authenticate, orgRoutes)
 app.use('/api/customers', authenticate, customerRoutes)
