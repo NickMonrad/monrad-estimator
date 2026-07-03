@@ -65,6 +65,37 @@ function mockNr(id: string, name: string, overrides: Record<string, unknown> = {
   }
 }
 
+// ─── Helper: build a mock persisted capacity profile ────────────────────────
+
+function mockPersistedProfile(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    resourceTypeId: null,
+    namedResourceId: null,
+    ownerKind: 'ROLE',
+    planningBasis: 'DEMAND_FOLLOWING',
+    source: 'FIXED',
+    defaultPercent: null,
+    startWeek: null,
+    endWeek: null,
+    segments: [],
+    ...overrides,
+  }
+}
+
+// ─── Helper: build a mock persisted segment ─────────────────────────────────
+
+function mockPersistedSegment(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'seg-1',
+    startWeek: 0,
+    endWeek: 8,
+    capacityPercent: 100,
+    source: 'SQUAD_PLANNER',
+    ...overrides,
+  }
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 describe('GET /api/projects/:projectId/capacity-profiles', () => {
@@ -180,7 +211,7 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
             {
               periodIndex: 0,
               startWeek: 0,
-              endWeek: 8,
+              endWeek: 7,
               entries: [{ resourceTypeId: 'rt-1', headcount: 1 }],
             },
           ],
@@ -215,7 +246,7 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
             {
               periodIndex: 0,
               startWeek: 0,
-              endWeek: 8,
+              endWeek: 7,
               entries: [{ resourceTypeId: 'rt-1', headcount: 1 }],
             },
           ],
@@ -248,5 +279,241 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
     expect(prisma.project.update).not.toHaveBeenCalled()
     expect(prisma.project.updateMany).not.toHaveBeenCalled()
     expect(prisma.project.delete).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Persisted-read tests ────────────────────────────────────────────────────
+
+describe('persisted profiles', () => {
+  it('returns persisted DTOs when persisted profiles are reconciled', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles).toHaveLength(1)
+    // Should have the persisted profile's id, not the resource type's id
+    expect(res.body.capacityProfiles[0].id).toBe('cp-1')
+    expect(res.body.capacityProfiles[0].owner).toMatchObject({
+      kind: 'role',
+      id: 'rt-1',
+      name: 'Engineer',
+    })
+    expect(res.body.capacityProfiles[0].planningBasis).toBe('demandFollowing')
+    expect(res.body.capacityProfiles[0].defaultPercent).toBe(100)
+  })
+
+  it('maps persisted role profile correctly', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 2, allocationEndWeek: 10 })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 2,
+        endWeek: 10,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0]).toMatchObject({
+      owner: { kind: 'role', id: 'rt-1', name: 'Engineer' },
+      planningBasis: 'availabilityWindow',
+      defaultPercent: 75,
+      startWeek: 2,
+      endWeek: 10,
+    })
+  })
+
+  it('maps persisted named-person profile correctly', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', {
+        allocationMode: 'EFFORT',
+        namedResources: [mockNr('nr-1', 'Alice')],
+      })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0]).toMatchObject({
+      owner: { kind: 'namedPerson', id: 'nr-1', name: 'Alice', roleId: 'rt-1' },
+      planningBasis: 'demandFollowing',
+    })
+  })
+
+  it('maps persisted capacity profile segments correctly', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'CAPACITY_PLAN' })],
+      capacityPlans: [{
+        id: 'plan-1',
+        isActive: true,
+        periods: [{
+          periodIndex: 0,
+          startWeek: 0,
+          endWeek: 8,
+          entries: [{ resourceTypeId: 'rt-1', headcount: 1 }],
+        }],
+      }],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [
+          mockPersistedSegment({ endWeek: 7 }),
+        ],
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].id).toBe('cp-1')
+    expect(res.body.capacityProfiles[0]).toMatchObject({
+      planningBasis: 'capacityProfile',
+      source: 'squadPlanner',
+    })
+    expect(res.body.capacityProfiles[0].segments).toHaveLength(1)
+    expect(res.body.capacityProfiles[0].segments[0]).toMatchObject({
+      startWeek: 0,
+      endWeek: 7,
+      capacityPercent: 100,
+      source: 'squadPlanner',
+    })
+  })
+
+  it('falls back to legacy mapper when planningBasis mismatches', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW', // wrong — should be DEMAND_FOLLOWING
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    // Falls back to legacy — should have the resource type id, not the persisted id
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+    expect(res.body.capacityProfiles[0].planningBasis).toBe('demandFollowing')
+  })
+
+  it('falls back to legacy when persisted profile is missing (partial data)', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [
+        mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' }),
+        mockRt('rt-2', 'Designer', { allocationMode: 'EFFORT' }),
+      ],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+      // No persisted profile for rt-2
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    // Falls back to legacy — returns both resource types
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles).toHaveLength(2)
+    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+    expect(res.body.capacityProfiles[1].id).toBe('rt-2')
+  })
+
+  it('falls back to legacy when duplicate persisted owner rows exist', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+      capacityProfiles: [
+        mockPersistedProfile('cp-1', {
+          resourceTypeId: 'rt-1',
+          ownerKind: 'ROLE',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+        }),
+        mockPersistedProfile('cp-2', {
+          resourceTypeId: 'rt-1',
+          ownerKind: 'ROLE',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+        }),
+      ],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    // Falls back to legacy — duplicate means reconciliation fails
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+  })
+
+  it('performs no database writes on persisted-read path', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+    }))
+
+    await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(prisma.capacityProfile.create).not.toHaveBeenCalled()
+    expect(prisma.capacityProfile.update).not.toHaveBeenCalled()
+    expect(prisma.capacityProfile.delete).not.toHaveBeenCalled()
+    expect(prisma.capacityProfile.deleteMany).not.toHaveBeenCalled()
+    expect(prisma.capacitySegment.create).not.toHaveBeenCalled()
+    expect(prisma.capacitySegment.update).not.toHaveBeenCalled()
+    expect(prisma.capacitySegment.delete).not.toHaveBeenCalled()
+    expect(prisma.capacitySegment.deleteMany).not.toHaveBeenCalled()
   })
 })

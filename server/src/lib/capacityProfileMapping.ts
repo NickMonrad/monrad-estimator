@@ -339,3 +339,112 @@ export function mapProjectToCapacityProfiles(input: {
 
   return profiles
 }
+
+// ─── Map persisted CapacityProfile rows to DTOs ────────────────────────────
+
+/**
+ * Convert persisted CapacityProfile/CapacitySegment rows to the standard
+ * CapacityProfileDTO shape, resolving owner name from project resource data.
+ *
+ * @param persistedProfiles  Raw persisted profile rows (with segments included)
+ * @param resourceTypeById   Map of resource type id → { id, name }
+ * @param namedResourceById  Map of named resource id → { id, name, resourceTypeId }
+ * @returns                  CapacityProfileDTO[] in stable order (role first, then named)
+ */
+export function mapPersistedProfilesToDTOs(
+  persistedProfiles: ReadonlyArray<{
+    id: string
+    resourceTypeId: string | null
+    namedResourceId: string | null
+    ownerKind: string
+    planningBasis: string
+    source: string
+    defaultPercent: number | null
+    startWeek: number | null
+    endWeek: number | null
+    segments: ReadonlyArray<{
+      startWeek: number
+      endWeek: number
+      capacityPercent: number
+      source: string
+    }>
+  }>,
+  resourceTypeById: ReadonlyMap<string, { id: string; name: string }>,
+  namedResourceById: ReadonlyMap<string, { id: string; name: string; resourceTypeId: string }>,
+): CapacityProfileDTO[] {
+  // Normalize UPPER_SNAKE_CASE to camelCase
+  function toCamel(value: string): string {
+    return value.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+  }
+
+  const dtos: CapacityProfileDTO[] = []
+
+  for (const pp of persistedProfiles) {
+    const ownerKind = toCamel(pp.ownerKind) as CapacityProfileOwnerKind
+    const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
+
+    let ownerName: string
+    let roleId: string | undefined
+    let roleName: string | undefined
+
+    if (ownerKind === 'role') {
+      const rt = resourceTypeById.get(pp.resourceTypeId!)
+      ownerName = rt?.name ?? 'Unknown'
+    } else {
+      const nr = namedResourceById.get(pp.namedResourceId!)
+      ownerName = nr?.name ?? 'Unknown'
+      if (nr?.resourceTypeId) {
+        roleId = nr.resourceTypeId
+        const rt = resourceTypeById.get(nr.resourceTypeId)
+        roleName = rt?.name
+      }
+    }
+
+    const owner: CapacityProfileDTO['owner'] = {
+      kind: ownerKind,
+      id: ownerId,
+      name: ownerName,
+    }
+    if (roleId) (owner as Record<string, string>).roleId = roleId
+    if (roleName) (owner as Record<string, string>).roleName = roleName
+
+    const dto: CapacityProfileDTO = {
+      id: pp.id,
+      projectId: '',
+      owner,
+      planningBasis: toCamel(pp.planningBasis) as CapacityProfilePlanningBasis,
+      source: toCamel(pp.source) as CapacityProfileSource,
+      defaultPercent: pp.defaultPercent ?? null,
+      startWeek: pp.startWeek ?? null,
+      endWeek: pp.endWeek ?? null,
+      segments: (pp.segments ?? []).map(s => ({
+        id: '',
+        startWeek: s.startWeek,
+        endWeek: s.endWeek,
+        capacityPercent: s.capacityPercent,
+        source: toCamel(s.source) as CapacityProfileSource,
+      })),
+      legacy: {
+        allocationMode: null,
+        allocationPercent: null,
+        allocationPct: null,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+      },
+    }
+
+    dtos.push(dto)
+  }
+
+  // Stable order: role profiles first, then named/person/planned
+  dtos.sort((a, b) => {
+    if (a.owner.kind !== b.owner.kind) {
+      return a.owner.kind === 'role' ? -1 : 1
+    }
+    return a.owner.id.localeCompare(b.owner.id)
+  })
+
+  return dtos
+}
