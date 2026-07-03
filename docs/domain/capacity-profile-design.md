@@ -312,3 +312,64 @@ It produces a structured report with:
 - **No schema or migration changes** are required for the backfill/reconciliation.
 - The backfill is idempotent — running it multiple times is safe.
 - The `--dry-run` flag currently implements reconcile-only mode. True dry-run (showing what would be written without writing) is deferred for a future PR if needed.
+
+## Persisted-read endpoint
+
+The read-only `GET /api/projects/:projectId/capacity-profiles` endpoint now prefers
+persisted `CapacityProfile`/`CapacitySegment` rows when they exist and pass reconciliation.
+
+### Decision flow
+
+1. Fetch the project with its resource types, named resources, active capacity plans,
+   and persisted capacity profiles (with segments).
+2. If no persisted profiles exist → return legacy mapper-derived DTOs.
+3. If persisted profiles exist:
+   a. Run `compareCapacityProfiles` (from the reconciliation helper) against the
+      already-fetched data.
+   b. If zero mismatches → map persisted rows to `CapacityProfileDTO[]` and return.
+   c. If mismatches → `console.warn` with project id + mismatch count,
+      then fall back to legacy mapper-derived DTOs (200, not 500).
+
+### Key properties
+
+- **No database writes.** The endpoint is read-only. Write methods (`create`, `update`,
+  `delete`, `deleteMany` for both `CapacityProfile` and `CapacitySegment`) are never called.
+- **DTO shape unchanged.** The response contract remains `{ capacityProfiles: CapacityProfileDTO[] }`.
+- **Legacy fields remain authoritative.** The fallback path uses the existing
+  `mapProjectToCapacityProfiles` mapper. Runtime write adoption is deferred.
+- **Auth and ownership preserved.** The same `authenticate` middleware and
+  `ownerId`-scoped project lookup apply to both paths.
+
+### Reuse of reconciliation logic
+
+The endpoint does **not** call the all-project `reconcileCapacityProfiles`. Instead:
+
+- The `compareCapacityProfiles` pure function (in `reconcileCapacityProfiles.ts`)
+  was extracted from the per-project loop of `reconcileCapacityProfiles`.
+- It accepts already-fetched data (expected DTOs + persisted raw rows) and
+  returns a `PerProjectComparison` (no DB access).
+- `reconcileCapacityProfiles` iterates over all projects and delegates to
+  `compareCapacityProfiles` per project.
+- The endpoint reuses `compareCapacityProfiles` on its already-fetched project data,
+  avoiding a second query.
+
+The existing all-project `reconcileCapacityProfiles` and `formatReconciliationReport`
+remain unchanged for the backfill runner.
+
+### Persisted-to-DTO mapping
+
+`mapPersistedProfilesToDTOs` (in `capacityProfileMapping.ts`) converts persisted
+`CapacityProfile`/`CapacitySegment` rows to the standard `CapacityProfileDTO` shape:
+
+- `ownerKind` enum → camelCase `owner.kind`
+- `owner.id` resolved from `resourceTypeId` (role) or `namedResourceId` (person/planned)
+- `owner.name` resolved from the project's resource type or named resource data
+- `planningBasis`, `source` → camelCase via `normalizeEnum`-equivalent
+- `segments` mapped with camelCase `source`
+- `legacy` set to all-null (legacy fields are on ResourceType/NamedResource, not copied)
+- Stable sort order: role profiles first, then named/person/planned by owner id
+
+### Future work
+
+- Runtime write adoption: make save/update operations write to `CapacityProfile` tables.
+- True dry-run support in the backfill runner (showing what would be written).

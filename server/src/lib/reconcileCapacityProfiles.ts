@@ -2,7 +2,8 @@
  * reconcileCapacityProfiles.ts — Reconciliation/parity helper for capacity profiles.
  *
  * Compares legacy mapper-derived profiles against persisted CapacityProfile/CapacitySegment
- * rows to detect mismatches. Used by the backfill runner to verify data integrity.
+ * rows to detect mismatches. Used by the backfill runner to verify data integrity
+ * and by the read-only capacity-profile endpoint to decide persisted-read vs fallback.
  */
 import type { PrismaClient } from '@prisma/client'
 
@@ -11,6 +12,7 @@ import type {
   CapacityProfileResourceTypeLike,
   CapacityProfileNamedResourceLike,
   CapacityPlanSlotInput,
+  CapacityProfileDTO,
 } from './capacityProfileMapping.js'
 import { materializeCapacityPlanResources } from './capacityPlanMaterialisation.js'
 
@@ -41,14 +43,22 @@ export interface CapacityProfileReconciliationReport {
   mismatches: CapacityProfileMismatch[]
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+/** Per-project slice returned by compareCapacityProfiles. */
+export interface PerProjectComparison {
+  expectedProfiles: number
+  actualProfiles: number
+  matchedProfiles: number
+  mismatches: CapacityProfileMismatch[]
+}
+
+// ─── Helpers (exported for reuse by endpoint and mapper) ────────────────────
 
 /**
  * Build a stable key for a profile based on owner semantics.
  * Uses projectId + ownerKind + resourceTypeId for role-owned profiles,
  * and projectId + ownerKind + namedResourceId for named/planned-resource profiles.
  */
-function profileKey(
+export function profileKey(
   projectId: string,
   ownerKind: string,
   ownerId: string,
@@ -60,13 +70,13 @@ function profileKey(
  * Normalize Prisma enum value (UPPER_SNAKE_CASE) to camelCase for comparison.
  * E.g., DEMAND_FOLLOWING → demandFollowing, SQUAD_PLANNER → squadPlanner
  */
-function normalizeEnum(value: string): string {
+export function normalizeEnum(value: string): string {
   return value
     .toLowerCase()
     .replace(/_([a-z])/g, (_, c) => c.toUpperCase())
 }
-/**
 
+/**
  * Compare two values, treating null and undefined as equivalent.
  */
 function valuesEqual(a: unknown, b: unknown): boolean {
@@ -99,10 +109,170 @@ function compareField(
   }
 }
 
-// ─── Main reconciliation function ─────────────────────────────────────────
+// ─── Pure comparison (no DB access) ────────────────────────────────────────
 
 /**
- * Reconcile mapper-derived profiles against persisted CapacityProfile/CapacitySegment rows.
+ * Compare expected (mapper-derived) profiles against persisted profiles
+ * for a single project. This is a pure function — no database access.
+ *
+ * The caller is responsible for fetching the persisted profiles and segments
+ * (with included segments) and deriving the expected profiles via mapProjectToCapacityProfiles.
+ */
+export function compareCapacityProfiles(
+  projectId: string,
+  expectedProfiles: CapacityProfileDTO[],
+  persistedProfiles: ReadonlyArray<{
+    id: string
+    resourceTypeId: string | null
+    namedResourceId: string | null
+    ownerKind: string
+    planningBasis: string
+    source: string
+    defaultPercent: number | null
+    startWeek: number | null
+    endWeek: number | null
+    segments: ReadonlyArray<{
+      startWeek: number
+      endWeek: number
+      capacityPercent: number
+      source: string
+    }>
+  }>,
+): PerProjectComparison {
+  const mismatches: CapacityProfileMismatch[] = []
+  let matchedProfiles = 0
+
+  // Build map of persisted profiles by owner key (first per key is canonical)
+  const persistedByKey = new Map<string, (typeof persistedProfiles)[number]>()
+  const duplicateKeys = new Set<string>()
+  for (const pp of persistedProfiles) {
+    const kind = normalizeEnum(pp.ownerKind)
+    const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
+    const key = profileKey(projectId, kind, ownerId)
+    if (persistedByKey.has(key)) {
+      duplicateKeys.add(key)
+      mismatches.push({
+        projectId,
+        ownerKind: kind,
+        ownerId,
+        type: 'duplicatePersistedProfile',
+        message: `Duplicate persisted profile for ${kind} owner ${ownerId} (id: ${pp.id})`,
+        expected: persistedByKey.get(key)!.id,
+        actual: pp.id,
+      })
+    } else {
+      persistedByKey.set(key, pp)
+    }
+  }
+
+  // Track keys where an expected profile found a persisted row
+  const comparedPersistedKeys = new Set<string>()
+
+  // Compare each expected profile against persisted
+  for (const expected of expectedProfiles) {
+    const kind = expected.owner.kind
+    const ownerId = expected.owner.id
+    const key = profileKey(projectId, kind, ownerId)
+
+    const persisted = persistedByKey.get(key)
+
+    if (!persisted) {
+      mismatches.push({
+        projectId,
+        ownerKind: kind,
+        ownerId,
+        type: 'missingPersistedProfile',
+        message: `No persisted profile found for ${kind} owner ${ownerId}`,
+        expected: { ownerKind: kind, ownerId },
+      })
+      continue
+    }
+
+    // Record that we found a persisted row for this key (regardless of field match quality)
+    comparedPersistedKeys.add(key)
+
+    // Compare profile fields
+    const mismatchesBefore = mismatches.length
+
+    const fieldMismatches = [
+      compareField(projectId, kind, ownerId, 'ownerKind', kind, normalizeEnum(persisted.ownerKind)),
+      compareField(projectId, kind, ownerId, 'planningBasis', expected.planningBasis, normalizeEnum(persisted.planningBasis)),
+      compareField(projectId, kind, ownerId, 'source', expected.source, normalizeEnum(persisted.source)),
+      compareField(projectId, kind, ownerId, 'defaultPercent', expected.defaultPercent ?? null, persisted.defaultPercent),
+      compareField(projectId, kind, ownerId, 'startWeek', expected.startWeek ?? null, persisted.startWeek),
+      compareField(projectId, kind, ownerId, 'endWeek', expected.endWeek ?? null, persisted.endWeek),
+    ].filter(Boolean) as CapacityProfileMismatch[]
+
+    mismatches.push(...fieldMismatches)
+
+    // Compare segments
+    const expectedSegments = [...expected.segments].sort((a, b) => a.startWeek - b.startWeek)
+    const actualSegments = [...persisted.segments].sort((a, b) => a.startWeek - b.startWeek)
+
+    if (expectedSegments.length !== actualSegments.length) {
+      mismatches.push({
+        projectId,
+        ownerKind: kind,
+        ownerId,
+        type: 'segmentMismatch',
+        message: `Segment count mismatch: expected ${expectedSegments.length}, got ${actualSegments.length}`,
+        expected: expectedSegments.length,
+        actual: actualSegments.length,
+      })
+    }
+
+    // Compare segments pairwise (up to the minimum count)
+    const minSegmentCount = Math.min(expectedSegments.length, actualSegments.length)
+    for (let i = 0; i < minSegmentCount; i++) {
+      const exp = expectedSegments[i]
+      const act = actualSegments[i]
+
+      const segMismatches = [
+        compareField(projectId, kind, ownerId, `segment[${i}].startWeek`, exp.startWeek, act.startWeek),
+        compareField(projectId, kind, ownerId, `segment[${i}].endWeek`, exp.endWeek, act.endWeek),
+        compareField(projectId, kind, ownerId, `segment[${i}].capacityPercent`, exp.capacityPercent, act.capacityPercent),
+        compareField(projectId, kind, ownerId, `segment[${i}].source`, exp.source, normalizeEnum(act.source)),
+      ].filter(Boolean) as CapacityProfileMismatch[]
+
+      mismatches.push(...segMismatches)
+    }
+
+    // Only count as fully matched if no mismatches were added for this profile
+    // AND no duplicate key exists for this owner (duplicate means data is inconsistent)
+    if (mismatches.length === mismatchesBefore && !duplicateKeys.has(key)) {
+      matchedProfiles++
+    }
+  }
+
+  // Detect extra persisted profiles (not found by any expected profile)
+  for (const [key, pp] of persistedByKey) {
+    if (!comparedPersistedKeys.has(key)) {
+      const kind = normalizeEnum(pp.ownerKind)
+      const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
+      mismatches.push({
+        projectId,
+        ownerKind: kind,
+        ownerId,
+        type: 'extraPersistedProfile',
+        message: `Persisted profile found with no corresponding expected profile for ${kind} owner ${ownerId}`,
+        actual: { ownerKind: kind, ownerId },
+      })
+    }
+  }
+
+  return {
+    expectedProfiles: expectedProfiles.length,
+    actualProfiles: persistedProfiles.length,
+    matchedProfiles,
+    mismatches,
+  }
+}
+
+// ─── Main reconciliation function (all projects, DB) ───────────────────────
+
+/**
+ * Reconcile mapper-derived profiles against persisted CapacityProfile/CapacitySegment rows
+ * for all projects. Uses the pure compareCapacityProfiles per project.
  *
  * @param prisma - PrismaClient instance
  * @returns Reconciliation report with any mismatches found
@@ -181,131 +351,16 @@ export async function reconcileCapacityProfiles(
       capacityPlanSlotsByResourceTypeId,
     })
 
-    report.expectedProfiles += expectedProfiles.length
+    const comparison = compareCapacityProfiles(
+      project.id,
+      expectedProfiles,
+      project.capacityProfiles,
+    )
 
-    // Build map of persisted profiles by owner key (first per key is canonical)
-    const persistedProfiles = project.capacityProfiles
-    report.actualProfiles += persistedProfiles.length
-
-    const persistedByKey = new Map<string, typeof persistedProfiles[number]>()
-    const duplicateKeys = new Set<string>()
-    for (const pp of persistedProfiles) {
-      const kind = normalizeEnum(pp.ownerKind)
-      const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
-      const key = profileKey(project.id, kind, ownerId)
-      if (persistedByKey.has(key)) {
-        // Duplicate persisted profile for same owner — record mismatch
-        duplicateKeys.add(key)
-        report.mismatches.push({
-          projectId: project.id,
-          ownerKind: kind,
-          ownerId,
-          type: 'duplicatePersistedProfile',
-          message: `Duplicate persisted profile for ${kind} owner ${ownerId} (id: ${pp.id})`,
-          expected: persistedByKey.get(key)!.id,
-          actual: pp.id,
-        })
-      } else {
-        persistedByKey.set(key, pp)
-      }
-    }
-
-    // Track key sets for extra detection vs fully-matched counting:
-    //   comparedPersistedKeys — every key where an expected profile found a persisted row
-    //   duplicateKeys — keys where >1 persisted row existed (from duplicate detection above)
-    const comparedPersistedKeys = new Set<string>()
-
-    // Compare each expected profile against persisted
-    for (const expected of expectedProfiles) {
-      const kind = expected.owner.kind
-      const ownerId = expected.owner.id
-      const key = profileKey(project.id, kind, ownerId)
-
-      const persisted = persistedByKey.get(key)
-
-      if (!persisted) {
-        report.mismatches.push({
-          projectId: project.id,
-          ownerKind: kind,
-          ownerId,
-          type: 'missingPersistedProfile',
-          message: `No persisted profile found for ${kind} owner ${ownerId}`,
-          expected: { ownerKind: kind, ownerId },
-        })
-        continue
-      }
-
-      // Record that we found a persisted row for this key (regardless of field match quality)
-      comparedPersistedKeys.add(key)
-
-      // Compare profile fields
-      const mismatchesBefore = report.mismatches.length
-
-      const fieldMismatches = [
-        compareField(project.id, kind, ownerId, 'ownerKind', kind, normalizeEnum(persisted.ownerKind)),
-        compareField(project.id, kind, ownerId, 'planningBasis', expected.planningBasis, normalizeEnum(persisted.planningBasis)),
-        compareField(project.id, kind, ownerId, 'source', expected.source, normalizeEnum(persisted.source)),
-        compareField(project.id, kind, ownerId, 'defaultPercent', expected.defaultPercent ?? null, persisted.defaultPercent),
-        compareField(project.id, kind, ownerId, 'startWeek', expected.startWeek ?? null, persisted.startWeek),
-        compareField(project.id, kind, ownerId, 'endWeek', expected.endWeek ?? null, persisted.endWeek),
-      ].filter(Boolean) as CapacityProfileMismatch[]
-
-      report.mismatches.push(...fieldMismatches)
-
-      // Compare segments
-      const expectedSegments = [...expected.segments].sort((a, b) => a.startWeek - b.startWeek)
-      const actualSegments = [...persisted.segments].sort((a, b) => a.startWeek - b.startWeek)
-
-      if (expectedSegments.length !== actualSegments.length) {
-        report.mismatches.push({
-          projectId: project.id,
-          ownerKind: kind,
-          ownerId,
-          type: 'segmentMismatch',
-          message: `Segment count mismatch: expected ${expectedSegments.length}, got ${actualSegments.length}`,
-          expected: expectedSegments.length,
-          actual: actualSegments.length,
-        })
-      }
-
-      // Compare segments pairwise (up to the minimum count)
-      const minSegmentCount = Math.min(expectedSegments.length, actualSegments.length)
-      for (let i = 0; i < minSegmentCount; i++) {
-        const exp = expectedSegments[i]
-        const act = actualSegments[i]
-
-        const segMismatches = [
-          compareField(project.id, kind, ownerId, `segment[${i}].startWeek`, exp.startWeek, act.startWeek),
-          compareField(project.id, kind, ownerId, `segment[${i}].endWeek`, exp.endWeek, act.endWeek),
-          compareField(project.id, kind, ownerId, `segment[${i}].capacityPercent`, exp.capacityPercent, act.capacityPercent),
-          compareField(project.id, kind, ownerId, `segment[${i}].source`, exp.source, normalizeEnum(act.source)),
-        ].filter(Boolean) as CapacityProfileMismatch[]
-
-        report.mismatches.push(...segMismatches)
-      }
-
-      // Only count as fully matched if no mismatches were added for this profile
-      // AND no duplicate key exists for this owner (duplicate means data is inconsistent)
-      if (report.mismatches.length === mismatchesBefore && !duplicateKeys.has(key)) {
-        report.matchedProfiles++
-      }
-    }
-
-    // Detect extra persisted profiles (not found by any expected profile)
-    for (const [key, pp] of persistedByKey) {
-      if (!comparedPersistedKeys.has(key)) {
-        const kind = normalizeEnum(pp.ownerKind)
-        const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
-        report.mismatches.push({
-          projectId: project.id,
-          ownerKind: kind,
-          ownerId,
-          type: 'extraPersistedProfile',
-          message: `Persisted profile found with no corresponding expected profile for ${kind} owner ${ownerId}`,
-          actual: { ownerKind: kind, ownerId },
-        })
-      }
-    }
+    report.expectedProfiles += comparison.expectedProfiles
+    report.actualProfiles += comparison.actualProfiles
+    report.matchedProfiles += comparison.matchedProfiles
+    report.mismatches.push(...comparison.mismatches)
   }
 
   return report
