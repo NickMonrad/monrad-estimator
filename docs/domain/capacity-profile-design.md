@@ -265,3 +265,50 @@ Billable days: based on reserved/planned capacity
 - Should billing basis be editable only in Commercial?
 - Do we need a legacy resource-profile export during transition?
 - Should Quick schedule be renamed to Update Timeline in the first implementation slice?
+
+## Backfill and Reconciliation
+
+### Running the backfill
+
+The capacity-profile backfill is an idempotent operation that derives CapacityProfile and CapacitySegment records from existing ResourceType, NamedResource, and CapacityPlan data. It is safe to run multiple times.
+
+**Run backfill + reconcile (writes data):**
+```bash
+npm run capacity-profiles:backfill --workspace=server
+```
+
+**Run reconcile only (read-only, no writes):**
+```bash
+npm run capacity-profiles:reconcile --workspace=server
+```
+
+**What success/failure means:**
+- **Success** (exit code 0): All persisted CapacityProfile/CapacitySegment rows match the mapper-derived profiles.
+- **Failure** (exit code 1): Mismatches detected between expected and actual profiles. The output includes a detailed mismatch report.
+
+### Reconciliation report
+
+The reconciliation helper compares:
+- Legacy mapper-derived profiles (using `mapProjectToCapacityProfiles`)
+- Persisted CapacityProfile and CapacitySegment rows
+
+It produces a structured report with:
+- `projectsChecked`: number of projects examined
+- `expectedProfiles`: profiles derived from legacy fields
+- `actualProfiles`: profiles found in the database
+- `matchedProfiles`: profiles that matched
+- `mismatches`: array of detailed mismatch objects
+
+**Mismatch types:**
+- `missingPersistedProfile`: Expected profile not found in database
+- `extraPersistedProfile`: Database profile not expected by mapper
+- `profileFieldMismatch`: Field value differs (ownerKind, planningBasis, source, defaultPercent, startWeek, endWeek)
+- `segmentMismatch`: Segment count or field values differ
+
+### Important notes
+
+- **Legacy fields remain authoritative** until a later runtime-adoption PR.
+- **No existing routes consume CapacityProfile** yet. This is additive only.
+- **No schema or migration changes** are required for the backfill/reconciliation.
+- The backfill is idempotent — running it multiple times is safe.
+- The `--dry-run` flag currently implements reconcile-only mode. True dry-run (showing what would be written without writing) is deferred for a future PR if needed.
