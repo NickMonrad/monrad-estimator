@@ -10,6 +10,7 @@ import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
+import { mapPersistedProfilesToDTOs } from '../lib/capacityProfileMapping.js'
 
 process.env.JWT_SECRET = 'test-secret'
 
@@ -390,7 +391,7 @@ describe('persisted profiles', () => {
         source: 'SQUAD_PLANNER',
         defaultPercent: 100,
         segments: [
-          mockPersistedSegment({ endWeek: 7 }),
+          mockPersistedSegment({ id: 'seg-capacity-1', endWeek: 7 }),
         ],
       })],
     }))
@@ -407,6 +408,7 @@ describe('persisted profiles', () => {
     })
     expect(res.body.capacityProfiles[0].segments).toHaveLength(1)
     expect(res.body.capacityProfiles[0].segments[0]).toMatchObject({
+      id: 'seg-capacity-1',
       startWeek: 0,
       endWeek: 7,
       capacityPercent: 100,
@@ -517,6 +519,41 @@ describe('persisted profiles', () => {
     expect(prisma.capacitySegment.update).not.toHaveBeenCalled()
     expect(prisma.capacitySegment.delete).not.toHaveBeenCalled()
     expect(prisma.capacitySegment.deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('mapPersistedProfilesToDTOs sorts persisted segments by startWeek then endWeek', () => {
+    const resourceTypeById = new Map([['rt-1', { id: 'rt-1', name: 'Engineer' }]])
+    const namedResourceById = new Map()
+
+    const profiles = [{
+      id: 'cp-1',
+      projectId: 'proj-1',
+      resourceTypeId: 'rt-1' as const,
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      segments: [
+        { id: 'seg-week-3', startWeek: 3, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+        { id: 'seg-week-1b', startWeek: 1, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+        { id: 'seg-week-1a', startWeek: 1, endWeek: 2, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+      ],
+    }]
+
+    const dtos = mapPersistedProfilesToDTOs(
+      profiles as any,
+      resourceTypeById,
+      namedResourceById,
+    )
+
+    expect(dtos[0].segments.map(s => s.id)).toEqual([
+      'seg-week-1a',
+      'seg-week-1b',
+      'seg-week-3',
+    ])
   })
 
 })
