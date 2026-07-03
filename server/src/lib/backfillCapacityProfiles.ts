@@ -15,6 +15,7 @@ import { CapacityProfileValidationError } from './syncCapacityProfiles.js'
 export interface BackfillResult {
   profilesCreated: number
   profilesUpdated: number
+  profilesDeleted: number
   segmentsCreated: number
   segmentsDeleted: number
 }
@@ -32,6 +33,7 @@ export async function backfillCapacityProfiles(
   const result: BackfillResult = {
     profilesCreated: 0,
     profilesUpdated: 0,
+    profilesDeleted: 0,
     segmentsCreated: 0,
     segmentsDeleted: 0,
   }
@@ -61,6 +63,7 @@ export async function backfillCapacityProfiles(
     const syncResult = await syncCapacityProfilesForProject(prisma, project.id)
     result.profilesCreated += syncResult.profilesCreated
     result.profilesUpdated += syncResult.profilesUpdated
+    result.profilesDeleted += syncResult.profilesDeleted
     result.segmentsCreated += syncResult.segmentsCreated
     result.segmentsDeleted += syncResult.segmentsDeleted
   }

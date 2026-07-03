@@ -141,6 +141,7 @@ describe('backfillCapacityProfiles', () => {
 
     expect(result.profilesCreated).toBe(1)
     expect(result.segmentsCreated).toBe(0)
+    expect(result.profilesDeleted).toBe(0)
 
     const createCall = vi.mocked(prisma.capacityProfile.create).mock.calls[0][0]
     expect(createCall.data.ownerKind).toBe('ROLE')
@@ -275,6 +276,7 @@ describe('backfillCapacityProfiles', () => {
 
     expect(result.profilesCreated).toBe(1)
     expect(result.segmentsCreated).toBe(0)
+    expect(result.profilesDeleted).toBe(0)
   })
 
   it('running twice does not duplicate profiles (idempotent update)', async () => {
@@ -357,11 +359,13 @@ describe('backfillCapacityProfiles', () => {
     expect(first.profilesCreated).toBe(1)
     expect(first.segmentsCreated).toBe(1)
     expect(first.segmentsDeleted).toBe(0)
+    expect(first.profilesDeleted).toBe(0)
 
     const second = await backfillCapacityProfiles(prisma as any)
     expect(second.profilesCreated).toBe(0)
     expect(second.segmentsCreated).toBe(1)
     expect(second.segmentsDeleted).toBe(1)
+    expect(second.profilesDeleted).toBe(0)
 
     expect(vi.mocked(prisma.capacityProfile.create)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(prisma.capacityProfile.update)).toHaveBeenCalledTimes(1)

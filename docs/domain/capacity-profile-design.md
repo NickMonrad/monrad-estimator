@@ -386,17 +386,21 @@ remain unchanged for the backfill runner.
 
 The helper is called inside existing write transactions:
 - `PUT /api/projects/:projectId/resource-types/:id` — resource type allocation mode/percent/weeks
+- `PATCH /api/projects/:projectId/resource-types/:id` — resource type count change (named-resource creation/deletion)
 - `DELETE /api/projects/:projectId/resource-types/:id` — resource type removal
 - `POST /api/projects/:projectId/resource-types/:rtId/named-resources` — named resource creation
 - `PUT /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource update
 - `PATCH /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource allocation update
-- `DELETE /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource deletion
-- `POST /api/projects/:projectId/squad-plan` (POST) — capacity plan create/apply
+- `DELETE /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource deletion (after RT count update)
+- `POST /api/projects` — project creation
+
+**Deferred:** Squad-plan apply sync is not yet atomic with legacy writes. It will be wired in a follow-up PR that wraps the apply route in a single transaction.
 
 ### Write transactionality
 
-- Routes that already use `prisma.$transaction` have the sync call inside the same transaction, so sync failure rolls back the legacy write.
-- The squad plan apply route does not use a single transaction; sync runs after all writes as a best-effort update.
+- Routes that use `prisma.$transaction` have the sync call inside the same transaction, so sync failure rolls back the legacy write.
+- Named-resource DELETE ensures sync runs after the resource-type count is updated, so the persisted profile reflects the final count.
+- Owner-key normalization uses `prismaOwnerKindToDtoKind` to map Prisma enum values (`NAMED_PERSON`, `PLANNED_RESOURCE`) to DTO format (`namedPerson`, `plannedResource`), ensuring stable persisted IDs across syncs.
 
 ### Backfill refactor
 

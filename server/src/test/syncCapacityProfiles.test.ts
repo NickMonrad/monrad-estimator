@@ -295,4 +295,79 @@ describe('syncCapacityProfilesForProject', () => {
     expect(prisma.capacityProfile.create).toHaveBeenCalled()
     expect(prisma.capacitySegment.create).not.toHaveBeenCalled()
   })
+  it('updates existing NAMED_PERSON profile instead of creating/deleting', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(
+      mockProject('proj-1', [makeRt('rt-1', 'Engineer', { namedResources: [{ id: 'nr-1', name: 'Alice', allocationPct: 100, allocationMode: null, allocationPercent: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null, createdAt: new Date() }] })]),
+    )
+    vi.mocked(mapProjectToCapacityProfiles).mockReturnValue([
+      {
+        id: 'rt-1',
+        projectId: 'proj-1',
+        owner: { kind: 'namedPerson', id: 'nr-1', name: 'Alice' },
+        planningBasis: 'demandFollowing',
+        source: 'fixed',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        segments: [],
+        legacy: null as any,
+      },
+    ])
+    // Persisted profile has NAMED_PERSON (Prisma enum) — should match namedPerson (DTO)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      { id: 'cp-nr-1', ownerKind: 'NAMED_PERSON', resourceTypeId: null, namedResourceId: 'nr-1', segments: [] },
+    ] as any)
+    vi.mocked(prisma.capacityProfile.update).mockResolvedValue({} as any)
+    vi.mocked(prisma.capacitySegment.deleteMany).mockResolvedValue({ count: 0 } as any)
+
+    const result = await syncCapacityProfilesForProject(prisma, 'proj-1')
+
+    expect(result.profilesUpdated).toBe(1)
+    expect(result.profilesCreated).toBe(0)
+    expect(result.profilesDeleted).toBe(0)
+    expect(prisma.capacityProfile.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'cp-nr-1' } }),
+    )
+    expect(prisma.capacityProfile.create).not.toHaveBeenCalled()
+  })
+
+  it('updates existing PLANNED_RESOURCE profile instead of creating/deleting', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(
+      mockProject('proj-1', [makeRt('rt-1', 'Engineer', { namedResources: [{ id: 'nr-planned', name: 'Planned Dev', allocationPct: 100, allocationMode: null, allocationPercent: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null, createdAt: new Date() }] })]),
+    )
+    vi.mocked(mapProjectToCapacityProfiles).mockReturnValue([
+      {
+        id: 'rt-1',
+        projectId: 'proj-1',
+        owner: { kind: 'plannedResource', id: 'nr-planned', name: 'Planned Dev' },
+        planningBasis: 'capacityProfile',
+        source: 'squadPlanner',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        segments: [
+          { id: 'seg-1', startWeek: 0, endWeek: 8, capacityPercent: 100, source: 'squadPlanner' },
+        ],
+        legacy: null as any,
+      },
+    ])
+    // Persisted profile has PLANNED_RESOURCE (Prisma enum) — should match plannedResource (DTO)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      { id: 'cp-pr-1', ownerKind: 'PLANNED_RESOURCE', resourceTypeId: null, namedResourceId: 'nr-planned', segments: [] },
+    ] as any)
+    vi.mocked(prisma.capacityProfile.update).mockResolvedValue({} as any)
+    vi.mocked(prisma.capacitySegment.deleteMany).mockResolvedValue({ count: 0 } as any)
+    vi.mocked(prisma.capacitySegment.create).mockResolvedValue({ id: 'seg-new' } as any)
+
+    const result = await syncCapacityProfilesForProject(prisma, 'proj-1')
+
+    expect(result.profilesUpdated).toBe(1)
+    expect(result.profilesCreated).toBe(0)
+    expect(result.profilesDeleted).toBe(0)
+    expect(prisma.capacityProfile.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'cp-pr-1' } }),
+    )
+    expect(prisma.capacityProfile.create).not.toHaveBeenCalled()
+  })
+
 })

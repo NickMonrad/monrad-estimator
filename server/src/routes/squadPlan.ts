@@ -26,7 +26,6 @@ import {
   type CapacityPlanSlotWindow,
   type CapacityPlanPeriodInput,
 } from '../lib/capacityPlanMaterialisation.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 
 type ApplyPeriodEntry = {
   resourceTypeId: string
@@ -761,7 +760,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       data: { weeklyDemandCache: refreshedWeeklyDemandCache },
     })
   }
-  await syncCapacityProfilesForProject(prisma, projectId)
 
   res.status(201).json(plan)
 }))

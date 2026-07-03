@@ -218,6 +218,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
 
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
+    await syncCapacityProfilesForProject(tx, req.params.projectId as string)
     return result
   })
   res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })

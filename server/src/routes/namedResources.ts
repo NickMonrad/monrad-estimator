@@ -217,11 +217,12 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
     await tx.namedResource.delete({ where: { id } })
     await clearWeeklyDemandCache(projectId, tx)
-    await syncCapacityProfilesForProject(tx, projectId)
 
     // Sync resource type count (can reach 0 when all named resources are deleted)
     const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
     await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
+
+    await syncCapacityProfilesForProject(tx, projectId)
   })
 
   res.status(204).send()

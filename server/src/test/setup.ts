@@ -79,13 +79,3 @@ vi.mock('../lib/prisma.js', () => {
   }
 })
 
-// Mock syncCapacityProfilesForProject so route tests don't need per-file mocks
-vi.mock('../lib/syncCapacityProfiles.js', () => ({
-  syncCapacityProfilesForProject: vi.fn().mockResolvedValue({
-    profilesCreated: 0,
-    profilesUpdated: 0,
-    profilesDeleted: 0,
-    segmentsCreated: 0,
-    segmentsDeleted: 0,
-  }),
-}))

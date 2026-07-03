@@ -60,6 +60,21 @@ export function toPrismaSource(
     default: throw new Error(`Unknown source: ${source}`)
   }
 }
+// ─── Reverse enum mapping (Prisma UPPER_CASE → DTO camelCase) ──────────
+
+export function prismaOwnerKindToDtoKind(kind: string): 'role' | 'namedPerson' | 'plannedResource' {
+  switch (kind) {
+    case 'ROLE':
+      return 'role'
+    case 'NAMED_PERSON':
+      return 'namedPerson'
+    case 'PLANNED_RESOURCE':
+      return 'plannedResource'
+    default:
+      throw new Error(`Unknown persisted owner kind: ${kind}`)
+  }
+}
+
 
 // ─── Sync result type ──────────────────────────────────────────────────────
 
@@ -207,7 +222,7 @@ export async function syncCapacityProfilesForProject(
   // Build lookup map of persisted profiles by owner key
   const persistedByKey = new Map<string, any>()
   for (const pp of existingPersistedProfiles) {
-    const ownerKind = pp.ownerKind.toLowerCase()
+    const ownerKind = prismaOwnerKindToDtoKind(pp.ownerKind)
     const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
     const key = `${projectId}::${ownerKind}::${ownerId}`
     if (!persistedByKey.has(key)) {
