@@ -26,6 +26,7 @@ import {
   type CapacityPlanSlotWindow,
   type CapacityPlanPeriodInput,
 } from '../lib/capacityPlanMaterialisation.js'
+import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 
 type ApplyPeriodEntry = {
   resourceTypeId: string
@@ -434,137 +435,145 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   })
   await pruneSnapshots(prisma, projectId)
 
-  // ── 2. Deactivate existing active plans ─────────────────────────────────
+
+  // ── 2. Compute planner-derived values from request data (no DB) ──────────
+  let maxHeadcountByRt: Map<string, number> | undefined
+  let slotWindowsByRt: Map<string, CapacityPlanSlotWindow[]> | undefined
   if (shouldActivate) {
-    await prisma.capacityPlan.updateMany({
-      where: { projectId, isActive: true },
-      data: { isActive: false },
-    })
-  }
-
-  // ── 3. Create the new plan with nested periods & entries ────────────────
-  const plan = await prisma.capacityPlan.create({
-    data: {
-      projectId,
-      name,
-      targetWeeks,
-      periodWeeks,
-      maxDelta,
-      isActive: shouldActivate,
-      totalCost,
-      deliveryWeeks,
-      periods: {
-        create: normalisedPeriods.map(p => ({
-          periodIndex: p.periodIndex,
-          startWeek: p.startWeek,
-          endWeek: p.endWeek,
-          entries: {
-            create: p.entries.map(e => ({
-              resourceTypeId: e.resourceTypeId,
-              headcount: e.headcount,
-              demandFTE: e.demandFTE,
-              utilisationPct: e.utilisationPct,
-            })),
-          },
-        })),
-      },
-    },
-    include: { periods: { include: { entries: true } } },
-  })
-
-  // ── 4. Update RT counts + allocation mode, re-run scheduler ─────────────
-  if (shouldActivate) {
-    let refreshedWeeklyDemandCache: Record<string, number>
-
-    // Compute max headcount per RT across all periods
-    const maxHeadcountByRt = new Map<string, number>()
+    maxHeadcountByRt = new Map<string, number>()
     for (const p of normalisedPeriods) {
       for (const e of p.entries) {
         const current = maxHeadcountByRt.get(e.resourceTypeId) ?? 0
         maxHeadcountByRt.set(e.resourceTypeId, Math.max(current, e.headcount))
       }
     }
+    slotWindowsByRt = deriveSlotWindowsByResourceType(normalisedPeriods)
+  }
 
-    // Update RT counts and allocation mode for demand RTs
-    for (const [rtId, count] of maxHeadcountByRt) {
-      await prisma.resourceType.update({
-        where: { id: rtId },
-        data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
+  // ── 3. Transaction: plan + capacity-profile-affecting writes + sync ──────
+  const plan = await prisma.$transaction(async tx => {
+    // Deactivate existing active plans
+    if (shouldActivate) {
+      await tx.capacityPlan.updateMany({
+        where: { projectId, isActive: true },
+        data: { isActive: false },
       })
     }
 
-    // Also set ALL other project RTs to CAPACITY_PLAN (overhead RTs keep their count)
-    await prisma.resourceType.updateMany({
-      where: { projectId, id: { notIn: [...maxHeadcountByRt.keys()] } },
-      data: { allocationMode: 'CAPACITY_PLAN' },
+    // Create the new plan with nested periods & entries
+    const createdPlan = await tx.capacityPlan.create({
+      data: {
+        projectId,
+        name,
+        targetWeeks,
+        periodWeeks,
+        maxDelta,
+        isActive: shouldActivate,
+        totalCost,
+        deliveryWeeks,
+        periods: {
+          create: normalisedPeriods.map(p => ({
+            periodIndex: p.periodIndex,
+            startWeek: p.startWeek,
+            endWeek: p.endWeek,
+            entries: {
+              create: p.entries.map(e => ({
+                resourceTypeId: e.resourceTypeId,
+                headcount: e.headcount,
+                demandFTE: e.demandFTE,
+                utilisationPct: e.utilisationPct,
+              })),
+            },
+          })),
+        },
+      },
+      include: { periods: { include: { entries: true } } },
     })
 
-    // Update ALL named resources allocation mode
-    await prisma.namedResource.updateMany({
-      where: { resourceType: { projectId } },
-      data: { allocationMode: 'CAPACITY_PLAN' },
-    })
-
-    // ── Compute fractional-aware slot windows per RT ──────────────────────────
-    // Uses the shared materialisation library so fractional headcount (e.g. 0.25,
-    // 1.25) produces the correct number of NR windows with the right
-    // allocationPercent values (e.g. 0.25 HC → one window at 25%).
-    const slotWindowsByRt = deriveSlotWindowsByResourceType(normalisedPeriods)
-
-    // ── Auto-create missing NRs then assign slot windows ────────────────────
-    for (const [rtId] of maxHeadcountByRt) {
-      const slotWindows = slotWindowsByRt.get(rtId) ?? []
-
-      // Fetch existing NRs with stable ordering (oldest first = lowest id)
-      const existingNRs = await prisma.namedResource.findMany({
-        where: { resourceTypeId: rtId },
-        orderBy: { id: 'asc' },
-        select: { id: true },
-      })
-
-      const missing = Math.max(0, slotWindows.length - existingNRs.length)
-      if (missing > 0) {
-        const rt = await prisma.resourceType.findUnique({
+    // Update RT counts + allocation mode + NR assignments (capacity-profile-affecting)
+    if (shouldActivate && maxHeadcountByRt && slotWindowsByRt) {
+      // Update RT counts and allocation mode for demand RTs
+      for (const [rtId, count] of maxHeadcountByRt) {
+        await tx.resourceType.update({
           where: { id: rtId },
-          select: { name: true },
+          data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
         })
-        const baseName = rt?.name ?? 'Resource'
-        const startIndex = existingNRs.length + 1
-        const newNRs = Array.from({ length: missing }, (_, i) => ({
-          resourceTypeId: rtId,
-          name: `${baseName} ${startIndex + i}`,
-          allocationMode: 'CAPACITY_PLAN' as const,
-          startWeek: 0,   // placeholder; updated immediately below
-        }))
-        await prisma.namedResource.createMany({ data: newNRs })
       }
 
-      // Re-fetch all NRs (including any just created) with stable ordering
-      const allNRs = await prisma.namedResource.findMany({
-        where: { resourceTypeId: rtId },
-        orderBy: { id: 'asc' },
-        select: { id: true },
+      // Also set ALL other project RTs to CAPACITY_PLAN
+      await tx.resourceType.updateMany({
+        where: { projectId, id: { notIn: [...maxHeadcountByRt.keys()] } },
+        data: { allocationMode: 'CAPACITY_PLAN' },
       })
 
-      // Assign each NR one slot window (startWeek, endWeek, allocationPercent).
-      // Surplus NRs become inactive (startWeek=-1, endWeek=-1, allocationPercent=100).
-      await Promise.all(
-        allNRs.map((nr, idx) => {
-          const win = slotWindows[idx] ?? { startWeek: -1, endWeek: -1, allocationPercent: 100 }
-          return prisma.namedResource.update({
-            where: { id: nr.id },
-            data: {
-              startWeek: win.startWeek,
-              endWeek: win.endWeek,
-              allocationPercent: win.allocationPercent,
-              allocationMode: 'CAPACITY_PLAN',
-            },
-          })
+      // Update ALL named resources allocation mode
+      await tx.namedResource.updateMany({
+        where: { resourceType: { projectId } },
+        data: { allocationMode: 'CAPACITY_PLAN' },
+      })
+
+      // Auto-create missing NRs then assign slot windows
+      for (const [rtId] of maxHeadcountByRt) {
+        const slotWindows = slotWindowsByRt.get(rtId) ?? []
+
+        // Fetch existing NRs with stable ordering
+        const existingNRs = await tx.namedResource.findMany({
+          where: { resourceTypeId: rtId },
+          orderBy: { id: 'asc' },
+          select: { id: true },
         })
-      )
+
+        const missing = Math.max(0, slotWindows.length - existingNRs.length)
+        if (missing > 0) {
+          const rt = await tx.resourceType.findUnique({
+            where: { id: rtId },
+            select: { name: true },
+          })
+          const baseName = rt?.name ?? 'Resource'
+          const startIndex = existingNRs.length + 1
+          const newNRs = Array.from({ length: missing }, (_, i) => ({
+            resourceTypeId: rtId,
+            name: `${baseName} ${startIndex + i}`,
+            allocationMode: 'CAPACITY_PLAN' as const,
+            startWeek: 0,
+          }))
+          await tx.namedResource.createMany({ data: newNRs })
+        }
+
+        // Re-fetch all NRs (including any just created) with stable ordering
+        const allNRs = await tx.namedResource.findMany({
+          where: { resourceTypeId: rtId },
+          orderBy: { id: 'asc' },
+          select: { id: true },
+        })
+
+        // Assign each NR one slot window
+        await Promise.all(
+          allNRs.map((nr, idx) => {
+            const win = slotWindows[idx] ?? { startWeek: -1, endWeek: -1, allocationPercent: 100 }
+            return tx.namedResource.update({
+              where: { id: nr.id },
+              data: {
+                startWeek: win.startWeek,
+                endWeek: win.endWeek,
+                allocationPercent: win.allocationPercent,
+                allocationMode: 'CAPACITY_PLAN',
+              },
+            })
+          })
+        )
+      }
+
+      // Sync capacity profiles after all authoritative legacy writes
+      await syncCapacityProfilesForProject(tx, projectId)
     }
 
-    // ── 5. Materialise timeline using the projected schedule ───────────────
+    return createdPlan
+  })
+
+  // ── 4. Materialise timeline using the projected schedule ─────────────────
+  if (shouldActivate && maxHeadcountByRt && slotWindowsByRt) {
+    let refreshedWeeklyDemandCache: Record<string, number>
 
     if (clientLevellingResult?.featureStartWeeks && Object.keys(clientLevellingResult.featureStartWeeks).length > 0) {
       // ── Direct persistence path: derive spans from planner allocations ───
@@ -615,7 +624,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       const hpd = project.hoursPerDay
 
-      // Compute feature spans from actual weekly allocations produced by planner
       const featureStartWeeks = clientLevellingResult.featureStartWeeks
       const featureRows: Array<{
         projectId: string; featureId: string; startWeek: number; durationWeeks: number; isManual: false
@@ -637,7 +645,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             fallbackStartWeek,
           )
 
-          // Compute demand per RT (same as sa-planner.ts lines 104-112)
           const demandByRt = new Map<string, number>()
           const activeStories = feature.userStories.filter(s => s.isActive !== false)
           for (const story of activeStories) {
@@ -657,8 +664,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             isManual: false as const,
           })
 
-          // Create story-level entries: each story starts at parent feature's start
-          // with proportional duration based on its share of total effort
           const totalFeatureDays = Array.from(demandByRt.values()).reduce((sum, d) => sum + d, 0)
           for (const story of activeStories) {
             let storyDays = 0
@@ -710,13 +715,11 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         )
       )
 
-      // Prepare levelled epics for scheduler
       const levelledEpics = schedulerInput.epics.map(e => ({
         ...e,
         timelineStartWeek: epicStartWeeks.get(e.id) ?? e.timelineStartWeek,
       }))
 
-      // Run scheduler with levelled start weeks
       const { featureSchedule, storySchedule, weeklyConsumptionMap } = runScheduler({
         ...schedulerInput,
         epics: levelledEpics,

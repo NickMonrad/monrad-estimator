@@ -26,6 +26,16 @@ import {
 } from '../routes/squadPlan.js'
 import type { SchedulerResourceType } from '../lib/scheduler.js'
 
+
+vi.mock('../lib/syncCapacityProfiles.js', () => ({
+  syncCapacityProfilesForProject: vi.fn().mockResolvedValue({
+    profilesCreated: 0,
+    profilesUpdated: 0,
+    profilesDeleted: 0,
+    segmentsCreated: 0,
+    segmentsDeleted: 0,
+  }),
+}))
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -247,6 +257,21 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
         ],
       })
 
+    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
+    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
+      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
+      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
+      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn(), deleteMany: vi.fn() },
+      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn() },
+      project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
+      timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
+      storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
+      epic: { update: vi.fn(), findMany: vi.fn() },
+      epicDependency: { findMany: vi.fn() },
+      storyDependency: { findMany: vi.fn() },
+    }))
+
     expect(res.status).toBe(400)
     expect(res.body.error).toContain('Unknown resourceTypeId')
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
@@ -337,6 +362,21 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       ...mockProject,
       weeklyDemandCache: { 'rt-dev|0': 2 },
     } as never)
+
+    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
+    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
+      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
+      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
+      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn(), deleteMany: vi.fn() },
+      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn() },
+      project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
+      timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
+      storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
+      epic: { update: vi.fn(), findMany: vi.fn() },
+      epicDependency: { findMany: vi.fn() },
+      storyDependency: { findMany: vi.fn() },
+    }))
 
     const res = await request(app)
       .post('/api/projects/proj-1/squad-plan/apply')
@@ -464,6 +504,21 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       ...mockProject,
       weeklyDemandCache: {},
     } as never)
+
+    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
+    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
+      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
+      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
+      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn(), deleteMany: vi.fn() },
+      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn() },
+      project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
+      timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
+      storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
+      epic: { update: vi.fn(), findMany: vi.fn() },
+      epicDependency: { findMany: vi.fn() },
+      storyDependency: { findMany: vi.fn() },
+    }))
 
     const res = await request(app)
       .post('/api/projects/proj-1/squad-plan/apply')
