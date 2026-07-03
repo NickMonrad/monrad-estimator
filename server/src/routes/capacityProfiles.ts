@@ -34,7 +34,14 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
       },
       capacityProfiles: {
-        include: { segments: true },
+        include: {
+          segments: {
+            orderBy: [
+              { startWeek: 'asc' },
+              { endWeek: 'asc' },
+            ],
+          },
+        },
       },
     },
   })
@@ -98,7 +105,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
 
     console.warn(
-      `[capacity-profiles] Reconcilation failed for project ${projectId}: ` +
+      `[capacity-profiles] Reconciliation failed for project ${projectId}: ` +
       `${comparison.mismatches.length} mismatch(es). Falling back to legacy mapper.`,
     )
   }

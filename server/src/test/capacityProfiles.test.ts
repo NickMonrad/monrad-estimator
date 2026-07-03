@@ -70,6 +70,7 @@ function mockNr(id: string, name: string, overrides: Record<string, unknown> = {
 function mockPersistedProfile(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
+    projectId: 'proj-1',
     resourceTypeId: null,
     namedResourceId: null,
     ownerKind: 'ROLE',
@@ -303,6 +304,7 @@ describe('persisted profiles', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.capacityProfiles).toHaveLength(1)
+    expect(res.body.capacityProfiles[0].projectId).toBe('proj-1')
     // Should have the persisted profile's id, not the resource type's id
     expect(res.body.capacityProfiles[0].id).toBe('cp-1')
     expect(res.body.capacityProfiles[0].owner).toMatchObject({
@@ -516,4 +518,5 @@ describe('persisted profiles', () => {
     expect(prisma.capacitySegment.delete).not.toHaveBeenCalled()
     expect(prisma.capacitySegment.deleteMany).not.toHaveBeenCalled()
   })
+
 })

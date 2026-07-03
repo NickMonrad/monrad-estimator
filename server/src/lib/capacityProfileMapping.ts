@@ -354,6 +354,7 @@ export function mapProjectToCapacityProfiles(input: {
 export function mapPersistedProfilesToDTOs(
   persistedProfiles: ReadonlyArray<{
     id: string
+    projectId: string
     resourceTypeId: string | null
     namedResourceId: string | null
     ownerKind: string
@@ -363,6 +364,7 @@ export function mapPersistedProfilesToDTOs(
     startWeek: number | null
     endWeek: number | null
     segments: ReadonlyArray<{
+      id: string
       startWeek: number
       endWeek: number
       capacityPercent: number
@@ -408,17 +410,22 @@ export function mapPersistedProfilesToDTOs(
     if (roleId) (owner as Record<string, string>).roleId = roleId
     if (roleName) (owner as Record<string, string>).roleName = roleName
 
+    // Defensive sort: startWeek ascending, then endWeek ascending
+    const sortedSegments = [...(pp.segments ?? [])].sort(
+      (a, b) => a.startWeek - b.startWeek || a.endWeek - b.endWeek,
+    )
+
     const dto: CapacityProfileDTO = {
       id: pp.id,
-      projectId: '',
+      projectId: pp.projectId,
       owner,
       planningBasis: toCamel(pp.planningBasis) as CapacityProfilePlanningBasis,
       source: toCamel(pp.source) as CapacityProfileSource,
       defaultPercent: pp.defaultPercent ?? null,
       startWeek: pp.startWeek ?? null,
       endWeek: pp.endWeek ?? null,
-      segments: (pp.segments ?? []).map(s => ({
-        id: '',
+      segments: sortedSegments.map(s => ({
+        id: s.id,
         startWeek: s.startWeek,
         endWeek: s.endWeek,
         capacityPercent: s.capacityPercent,
