@@ -393,14 +393,14 @@ The helper is called inside existing write transactions:
 - `PATCH /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource allocation update
 - `DELETE /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource deletion (after RT count update)
 - `POST /api/projects` — project creation
-
-**Deferred:** Squad-plan apply sync is not yet atomic with legacy writes. It will be wired in a follow-up PR that wraps the apply route in a single transaction.
+- `POST /api/projects/:projectId/squad-plan/apply` — squad plan apply (transactional, inside same transaction as RT/NR writes)
 
 ### Write transactionality
 
 - Routes that use `prisma.$transaction` have the sync call inside the same transaction, so sync failure rolls back the legacy write.
 - Named-resource DELETE ensures sync runs after the resource-type count is updated, so the persisted profile reflects the final count.
 - Owner-key normalization uses `prismaOwnerKindToDtoKind` to map Prisma enum values (`NAMED_PERSON`, `PLANNED_RESOURCE`) to DTO format (`namedPerson`, `plannedResource`), ensuring stable persisted IDs across syncs.
+- Squad-plan apply wraps plan creation, RT/NR updates, and sync in a single `$transaction`. Timeline materialisation (epic start weeks, timeline entries, weekly demand cache) runs after the transaction — these downstream writes do not affect capacity profile output.
 
 ### Backfill refactor
 
