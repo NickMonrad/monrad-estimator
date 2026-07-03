@@ -8,10 +8,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { prisma } from '../lib/prisma.js'
 import {
   backfillCapacityProfiles,
-  CapacityProfileValidationError,
 } from '../lib/backfillCapacityProfiles.js'
+import { CapacityProfileValidationError } from '../lib/syncCapacityProfiles.js'
+import { materializeCapacityPlanResources } from '../lib/capacityPlanMaterialisation.js'
+// Override the global sync mock so backfill tests exercise the real implementation
+vi.mock('../lib/syncCapacityProfiles.js', async (importOriginal: () => Promise<any>) => {
+  return await importOriginal()
+})
+vi.mock('../lib/reconcileCapacityProfiles.js', () => ({
+  compareCapacityProfiles: vi.fn().mockReturnValue({
+    mismatches: [],
+    expectedProfiles: 0,
+    actualProfiles: 0,
+    matchedProfiles: 0,
+  }),
+}))
+vi.mock('../lib/capacityPlanMaterialisation.js', () => ({
+  materializeCapacityPlanResources: vi.fn().mockReturnValue(new Map()),
+}))
 
 beforeEach(() => vi.clearAllMocks())
+
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -51,6 +68,19 @@ interface PeriodMock {
   endWeek: number
   entries: Array<{ resourceTypeId: string; headcount: number }>
 }
+interface ProjectStub {
+  id: string
+  resourceTypes: RtMock[]
+  capacityPlans: PlanMock[]
+}
+
+function stubProject(project: ProjectStub) {
+  ;(prisma.project.findMany as any).mockResolvedValue([project])
+  ;(prisma.project.findFirst as any).mockResolvedValue(project)
+  // Sync uses findMany for persisted profiles; default to empty
+  ;(prisma.capacityProfile.findMany as any).mockResolvedValue([])
+}
+
 
 function makeProject(
   id: string,
@@ -59,6 +89,7 @@ function makeProject(
 ) {
   return { id, resourceTypes, capacityPlans }
 }
+
 
 function makeRt(
   id: string,
@@ -102,9 +133,7 @@ function makeNr(
 
 describe('backfillCapacityProfiles', () => {
   it('creates a role-owned profile from a ResourceType with EFFORT → DEMAND_FOLLOWING', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })]),
-    ] as any)
+    stubProject(makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })]))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
 
@@ -112,6 +141,7 @@ describe('backfillCapacityProfiles', () => {
 
     expect(result.profilesCreated).toBe(1)
     expect(result.segmentsCreated).toBe(0)
+    expect(result.profilesDeleted).toBe(0)
 
     const createCall = vi.mocked(prisma.capacityProfile.create).mock.calls[0][0]
     expect(createCall.data.ownerKind).toBe('ROLE')
@@ -122,16 +152,14 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('maps TIMELINE → AVAILABILITY_WINDOW preserving percent/start/end', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [
-        makeRt('rt-1', 'Dev', {
-          allocationMode: 'TIMELINE',
-          allocationPercent: 75,
-          allocationStartWeek: 2,
-          allocationEndWeek: 10,
-        }),
-      ]),
-    ] as any)
+    stubProject(makeProject('proj-1', [
+      makeRt('rt-1', 'Dev', {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 75,
+        allocationStartWeek: 2,
+        allocationEndWeek: 10,
+      }),
+    ]))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
 
@@ -147,9 +175,7 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('maps FULL_PROJECT → WHOLE_PROJECT_ALLOCATION', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [makeRt('rt-1', 'PM', { allocationMode: 'FULL_PROJECT' })]),
-    ] as any)
+    stubProject(makeProject('proj-1', [makeRt('rt-1', 'PM', { allocationMode: 'FULL_PROJECT' })]))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
 
@@ -161,19 +187,20 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('maps CAPACITY_PLAN → CAPACITY_PROFILE with segments', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'CAPACITY_PLAN' })], [
-        {
-          id: 'plan-1',
-          isActive: true,
-          periods: [
-            { periodIndex: 0, startWeek: 0, endWeek: 8, entries: [{ resourceTypeId: 'rt-1', headcount: 1 }] },
-          ],
-        },
-      ]),
-    ] as any)
+    stubProject(makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'CAPACITY_PLAN' })], [
+      {
+        id: 'plan-1',
+        isActive: true,
+        periods: [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, entries: [{ resourceTypeId: 'rt-1', headcount: 1 }] },
+        ],
+      },
+    ]))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
+    vi.mocked(materializeCapacityPlanResources).mockReturnValue(new Map([
+      ['rt-1', { slotWindows: [{ startWeek: 0, endWeek: 7, allocationPercent: 100 }], totalDays: 0, weeklyHeadcount: new Map(), resourceTypeId: 'rt-1', startWeek: null, endWeek: null }],
+    ]))
 
     await backfillCapacityProfiles(prisma as any)
 
@@ -190,17 +217,15 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('does not create segments for non-CAPACITY_PLAN mode even with active plan', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })], [
-        {
-          id: 'plan-1',
-          isActive: true,
-          periods: [
-            { periodIndex: 0, startWeek: 0, endWeek: 8, entries: [{ resourceTypeId: 'rt-1', headcount: 1 }] },
-          ],
-        },
-      ]),
-    ] as any)
+    stubProject(makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })], [
+      {
+        id: 'plan-1',
+        isActive: true,
+        periods: [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, entries: [{ resourceTypeId: 'rt-1', headcount: 1 }] },
+        ],
+      },
+    ]))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
     await backfillCapacityProfiles(prisma as any)
@@ -213,14 +238,12 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('creates named-person profile from a persisted NamedResource', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [
-        makeRt('rt-1', 'Engineer', {
-          allocationMode: 'EFFORT',
-          namedResources: [makeNr('nr-1', 'Alice')],
-        }),
-      ]),
-    ] as any)
+    stubProject(makeProject('proj-1', [
+      makeRt('rt-1', 'Engineer', {
+        allocationMode: 'EFFORT',
+        namedResources: [makeNr('nr-1', 'Alice')],
+      }),
+    ]))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
 
@@ -233,10 +256,7 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('does not create fake named-person profiles from role count', async () => {
-    // A role with count=3 and no named resources should produce ONE role profile
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [makeRt('rt-1', 'Engineer', { count: 3, allocationMode: 'EFFORT', namedResources: [] })]),
-    ] as any)
+    stubProject(makeProject('proj-1', [makeRt('rt-1', 'Engineer', { count: 3, allocationMode: 'EFFORT', namedResources: [] })]))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
 
@@ -248,9 +268,7 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('handles missing/inactive capacity plans safely', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })], []),
-    ] as any)
+    stubProject(makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })], []))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
 
@@ -258,16 +276,16 @@ describe('backfillCapacityProfiles', () => {
 
     expect(result.profilesCreated).toBe(1)
     expect(result.segmentsCreated).toBe(0)
+    expect(result.profilesDeleted).toBe(0)
   })
 
   it('running twice does not duplicate profiles (idempotent update)', async () => {
-    // First call: no existing profile → create
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })]),
-    ] as any)
-    vi.mocked(prisma.capacityProfile.findFirst)
-      .mockResolvedValueOnce(null) // first call: no existing
-      .mockResolvedValueOnce({ id: 'cp-1' } as any) // second call: found
+    stubProject(makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })]))
+    vi.mocked(prisma.capacityProfile.findMany)
+      .mockResolvedValueOnce([]) // first call 1: no existing
+      .mockResolvedValueOnce([]) // first call 2: reconciliation check
+      .mockResolvedValueOnce([{ id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, segments: [] }] as any) // second call 1: found
+      .mockResolvedValueOnce([{ id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, segments: [] }] as any) // second call 2: reconciliation check
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
     vi.mocked(prisma.capacityProfile.update).mockResolvedValue({ id: 'cp-1' } as any)
     vi.mocked(prisma.capacitySegment.deleteMany).mockResolvedValue({ count: 0 })
@@ -282,10 +300,10 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('does not modify legacy fields on existing records', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })]),
+    stubProject(makeProject('proj-1', [makeRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })]))
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, segments: [] },
     ] as any)
-    vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue({ id: 'cp-1' } as any)
     vi.mocked(prisma.capacityProfile.update).mockResolvedValue({ id: 'cp-1' } as any)
     vi.mocked(prisma.capacitySegment.deleteMany).mockResolvedValue({ count: 0 })
 
@@ -298,16 +316,14 @@ describe('backfillCapacityProfiles', () => {
   })
 
   it('preserves legacy fields in the legacy JSON', async () => {
-    vi.mocked(prisma.project.findMany).mockResolvedValue([
-      makeProject('proj-1', [
-        makeRt('rt-1', 'Engineer', {
-          allocationMode: 'TIMELINE',
-          allocationPercent: 80,
-          allocationStartWeek: 1,
-          allocationEndWeek: 8,
-        }),
-      ]),
-    ] as any)
+    stubProject(makeProject('proj-1', [
+      makeRt('rt-1', 'Engineer', {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 80,
+        allocationStartWeek: 1,
+        allocationEndWeek: 8,
+      }),
+    ]))
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
 
@@ -325,11 +341,15 @@ describe('backfillCapacityProfiles', () => {
     const proj = makeProject('proj-2', [makeRt('rt-2', 'Dev', { allocationMode: 'CAPACITY_PLAN' })], [
       { id: 'plan-1', isActive: true, periods: [{ periodIndex: 0, startWeek: 0, endWeek: 8, entries: [{ resourceTypeId: 'rt-2', headcount: 1 }] }] },
     ])
-
-    vi.mocked(prisma.project.findMany).mockResolvedValue([proj] as any)
-    vi.mocked(prisma.capacityProfile.findFirst)
-      .mockResolvedValueOnce(null)                // first: no existing → create
-      .mockResolvedValueOnce({ id: 'cp-2' } as any) // second: found → update
+    stubProject(proj)
+    vi.mocked(materializeCapacityPlanResources).mockReturnValue(new Map([
+      ['rt-2', { slotWindows: [{ startWeek: 0, endWeek: 7, allocationPercent: 100 }], totalDays: 0, weeklyHeadcount: new Map(), resourceTypeId: 'rt-2', startWeek: null, endWeek: null }],
+    ]))
+    vi.mocked(prisma.capacityProfile.findMany)
+      .mockResolvedValueOnce([]) // first call 1: no existing → create
+      .mockResolvedValueOnce([]) // first call 2: reconciliation check
+      .mockResolvedValueOnce([{ id: 'cp-2', ownerKind: 'ROLE', resourceTypeId: 'rt-2', namedResourceId: null, segments: [{ startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' }] }] as any) // second call 1: found → update
+      .mockResolvedValueOnce([{ id: 'cp-2', ownerKind: 'ROLE', resourceTypeId: 'rt-2', namedResourceId: null, segments: [{ startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' }] }] as any) // second call 2: reconciliation check
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-2' } as any)
     vi.mocked(prisma.capacityProfile.update).mockResolvedValue({ id: 'cp-2' } as any)
     vi.mocked(prisma.capacitySegment.deleteMany).mockResolvedValue({ count: 1 })
@@ -339,11 +359,13 @@ describe('backfillCapacityProfiles', () => {
     expect(first.profilesCreated).toBe(1)
     expect(first.segmentsCreated).toBe(1)
     expect(first.segmentsDeleted).toBe(0)
+    expect(first.profilesDeleted).toBe(0)
 
     const second = await backfillCapacityProfiles(prisma as any)
     expect(second.profilesCreated).toBe(0)
     expect(second.segmentsCreated).toBe(1)
     expect(second.segmentsDeleted).toBe(1)
+    expect(second.profilesDeleted).toBe(0)
 
     expect(vi.mocked(prisma.capacityProfile.create)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(prisma.capacityProfile.update)).toHaveBeenCalledTimes(1)

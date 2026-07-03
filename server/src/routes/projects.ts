@@ -2,6 +2,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 
 const router = Router()
 router.use(authenticate)
@@ -469,6 +470,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     },
     include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
   })
+  await syncCapacityProfilesForProject(prisma, project.id)
   res.status(201).json(project)
 }))
 
