@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
+import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 
 
@@ -130,6 +131,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
 
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
+    await syncCapacityProfilesForProject(tx, req.params.projectId as string)
 
     return updated
   })
@@ -216,6 +218,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
 
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
+    await syncCapacityProfilesForProject(tx, req.params.projectId as string)
     return result
   })
   res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })
@@ -231,6 +234,7 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     })
     if (deleted.count > 0) {
       await clearWeeklyDemandCache(req.params.projectId as string, tx)
+      await syncCapacityProfilesForProject(tx, req.params.projectId as string)
     }
     return deleted.count
   })
