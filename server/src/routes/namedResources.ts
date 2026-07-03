@@ -4,6 +4,7 @@ import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
+import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 
 const router = Router({ mergeParams: true })
@@ -117,6 +118,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     // Sync resource type count to match total named resources
     const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
     await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
+    await syncCapacityProfilesForProject(tx, projectId)
 
     return created
   })
@@ -158,6 +160,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       data,
     })
     await clearWeeklyDemandCache(projectId, tx)
+    await syncCapacityProfilesForProject(tx, projectId)
     return updated
   })
   res.json(resource)
@@ -188,6 +191,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       data,
     })
     await clearWeeklyDemandCache(projectId, tx)
+    await syncCapacityProfilesForProject(tx, projectId)
     return updated
   })
   res.json(resource)
@@ -213,6 +217,7 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
     await tx.namedResource.delete({ where: { id } })
     await clearWeeklyDemandCache(projectId, tx)
+    await syncCapacityProfilesForProject(tx, projectId)
 
     // Sync resource type count (can reach 0 when all named resources are deleted)
     const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
