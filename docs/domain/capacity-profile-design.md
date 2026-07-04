@@ -418,3 +418,16 @@ Legacy `ResourceType`/`NamedResource`/`CapacityPlan` fields remain authoritative
 
 - Runtime write adoption: make save/update operations write to `CapacityProfile` tables.
 - True dry-run support in the backfill runner (showing what would be written).
+
+### Integration test coverage
+
+Runtime persisted DTO integration tests now cover:
+- ResourceType writes (PATCH count) — profiles persisted, endpoint returns persisted DTOs
+- NamedResource writes (PUT update, PATCH allocation) — named-person/planned-resource profiles correct
+- NamedResource delete — stale persisted profiles removed
+- Squad Planner apply — capacity-profile segments persisted and returned
+- Persisted-read success path — endpoint returns persisted DTOs on reconciliation
+- Legacy fallback — endpoint returns legacy-derived DTOs on reconciliation mismatch
+- Repair cycle — write after corruption restores persisted path
+
+Tests use the real `syncCapacityProfilesForProject` helper (not mocked). See `server/src/test/capacityProfilePersistedDtoIntegration.test.ts` (8 tests).
