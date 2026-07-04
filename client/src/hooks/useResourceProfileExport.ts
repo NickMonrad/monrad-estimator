@@ -50,13 +50,27 @@ function formatNamedResourceWeeks(
     .join('; ')
 }
 
+function formatCapacityProfileSegments(
+  capacityProfile: { segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }> } | undefined,
+) {
+  if (!capacityProfile || capacityProfile.segments.length === 0) return ''
+  return capacityProfile.segments
+    .map(s => {
+      const start = formatWeekLabel(s.startWeek)
+      if (s.startWeek === s.endWeek) return `${start} ${s.capacityPercent}%`
+      const end = formatWeekLabel(s.endWeek)
+      return `${start}-${end} ${s.capacityPercent}%`
+    })
+    .join('; ')
+}
+
 export const buildProfileCsv = (profileData: ResourceProfile) => {
   const rows: string[][] = [
     [
       'Section', 'Role', 'Resource name', 'Resource identity', 'Category',
       'Resource count', 'Hours per day', 'Effort days', 'Assigned days', 'Billable days',
       'Day rate', 'Subtotal', 'Availability window start', 'Availability window end',
-      'Assigned start', 'Assigned end', 'Assignment segments', 'Assigned weeks',
+      'Assigned start', 'Assigned end', 'Capacity profile', 'Assignment segments', 'Assigned weeks',
       'Billing basis', 'Handover notes',
     ],
   ]
@@ -74,6 +88,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
           nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '',
           nr.actualAllocationStartWeek != null ? formatWeekLabel(nr.actualAllocationStartWeek) : '',
           nr.actualAllocationEndWeek != null ? formatWeekLabel(nr.actualAllocationEndWeek) : '',
+          formatCapacityProfileSegments(nr.capacityProfile),
           formatNamedResourceSegments(nr),
           formatNamedResourceWeeks(nr),
           nr.pricingModel === 'PRO_RATA' ? 'Bill planned allocation' : 'Bill actual scheduled days',
@@ -88,7 +103,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       String(row.totalDays), '',
       row.dayRate != null ? String(row.dayRate) : '',
       row.dayRate != null && row.totalDays != null ? (row.totalDays * row.dayRate).toFixed(2) : '',
-      '', '', '', '', '', '', '', '',
+      '', '', formatCapacityProfileSegments(row.capacityProfile), '', '', '',
     ])
   })
 

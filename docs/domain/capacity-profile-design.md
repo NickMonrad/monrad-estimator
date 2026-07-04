@@ -431,3 +431,75 @@ Runtime persisted DTO integration tests now cover:
 - Repair cycle — write after corruption restores persisted path
 
 Tests use the real `syncCapacityProfilesForProject` helper (not mocked). See `server/src/test/capacityProfilePersistedDtoIntegration.test.ts` (8 tests).
+
+## Resource Profile and Export Adoption
+
+### Adapter
+
+`server/src/lib/capacityProfileResourceAdapter.ts` provides a narrow adapter
+`buildResourceCapacityProfileMap` that takes the same project query shape as the
+Resource Profile route and returns a `Map<string, CapacityProfileResourceData>`
+keyed by resource-type id (role profiles) or named-resource id (named person /
+planned resource).
+
+The adapter uses the same persisted-read vs fallback decision as the
+`GET /capacity-profiles` endpoint:
+
+1. Derive legacy profiles via `mapProjectToCapacityProfiles`.
+2. If persisted `CapacityProfile` rows exist, compare via `compareCapacityProfiles`.
+3. If zero mismatches → map persisted rows to DTOs and use them.
+4. Otherwise → fall back to legacy-derived profiles.
+
+### Resource Profile route
+
+`GET /api/projects/:projectId/resource-profile` now includes `capacityProfiles`
+with `segments` in its Prisma query and calls `buildResourceCapacityProfileMap`.
+
+Each named-resource entry in the response gains an optional `capacityProfile`
+field containing `{ planningBasis, source, segments }`. Role-level rows without
+named resources get a `capacityProfile` field at the row level.
+
+### Client types
+
+`client/src/types/backlog.ts` — `ResourceProfileRow` gains an optional
+`capacityProfile` field (row level and per named-resource entry) with
+`{ planningBasis, source, segments }`.
+
+### Export CSV
+
+`client/src/hooks/useResourceProfileExport.ts` — the profile CSV now includes a
+`Capacity profile` column showing segments in a human-readable format
+(e.g. `W1-W4 50%; W5-W10 100%`), distinct from the existing `Assignment segments`
+column (which reflects actual scheduled assignment).
+
+### Behavioural invariants
+
+- **Legacy fields remain authoritative.** The adapter is additive enrichment.
+  If capacity-profile data is unreconciled or unavailable, the route behaves
+  exactly as before (no enrichment emitted).
+- **CapacityProfile is still a derived read model.** Source-of-truth migration
+  is tracked separately in #340.
+- **Commercial calculations are unchanged.** The `capacityProfile` field is
+  presentation-only in Resource Profile; Commercial billing formulas, billable
+  days, discounts, tax, and totals are unaffected.
+- **Entity identity preserved.** One named person or planned resource with
+  multiple capacity segments is still one row/entity. The adapter keyed the map
+  by owner id, so duplicate entries never result from segment data.
+
+### File changes
+
+| File | Change |
+|---|---|
+| `server/src/lib/capacityProfileResourceAdapter.ts` | New adapter — `buildResourceCapacityProfileMap` |
+| `server/src/routes/resourceProfile.ts` | Added `capacityProfiles` include, adapter call, `capacityProfile` in response |
+| `client/src/types/backlog.ts` | Added optional `capacityProfile` to `ResourceProfileRow` |
+| `client/src/hooks/useResourceProfileExport.ts` | Added `Capacity profile` column to CSV export |
+| `server/src/test/capacityProfileResourceAdapter.test.ts` | 7 unit tests for adapter |
+| `docs/domain/capacity-profile-design.md` | This section |
+| `docs/domain/planning-resource-commercial-boundaries.md` | Updated |
+
+### Related issues
+
+- #340 — Make CapacityProfile source of truth
+- #342 — Legacy cleanup
+

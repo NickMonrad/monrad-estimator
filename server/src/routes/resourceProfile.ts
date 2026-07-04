@@ -10,6 +10,7 @@ import {
 } from '../lib/capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
 import { buildFallbackWeeklyDemand, mergeWeeklyDemand, computePlanningWindow, convertWeeklyDemandCache } from '../lib/projectPlanningModel.js'
+import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceAdapter.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
@@ -59,6 +60,16 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         take: 1,
         include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
       },
+      capacityProfiles: {
+        include: {
+          segments: {
+            orderBy: [
+              { startWeek: 'asc' },
+              { endWeek: 'asc' },
+            ],
+          },
+        },
+      },
     },
   })
 
@@ -72,6 +83,8 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   // Materialize capacity plan for shared model consumption
   const activePlan = project.capacityPlans?.[0] ?? null
   const capacityPlanByRt = materializeCapacityPlanResources(activePlan?.periods ?? [])
+  // Build capacity-profile enrichment map (persisted-read with legacy fallback)
+  const capacityProfileMap = buildResourceCapacityProfileMap(project as unknown as Parameters<typeof buildResourceCapacityProfileMap>[0])
 
   // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
   const planningWindow = computePlanningWindow(
@@ -404,6 +417,11 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         actualAllocatedWeeks: Array<{ week: number; days: number; capacityDays: number }>
         actualAllocationSegments: Array<{ startWeek: number; endWeek: number; days: number }>
         synthetic: boolean
+        capacityProfile?: {
+          planningBasis: string
+          source: string
+          segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+        }
       }>
 
       if (hasNamedResources) {
@@ -451,6 +469,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             actualAllocatedWeeks: actualNamedResource?.actualAllocatedWeeks ?? [],
             actualAllocationSegments: actualNamedResource?.actualAllocationSegments ?? [],
             synthetic: actualNamedResource?.synthetic ?? false,
+            capacityProfile: capacityProfileMap.get(nr.id) ?? undefined,
           }
         })
         const existingIds = new Set(namedResourcesOutput.map(nr => nr.id))
@@ -475,6 +494,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           actualAllocatedWeeks: actual.actualAllocatedWeeks,
           actualAllocationSegments: actual.actualAllocationSegments,
           synthetic: actual.synthetic,
+          capacityProfile: capacityProfileMap.get(actual.id) ?? undefined,
         })))
         const plannedAllocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
         const actualAllocatedDays = round2(actualNamedResourceAssignment?.actualAllocatedDays ?? 0)
@@ -534,6 +554,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         estimatedCost,
         epics,
         namedResources: namedResourcesOutput,
+        capacityProfile: capacityProfileMap.get(resourceType.id) ?? undefined,
       }
     })
     .sort((a, b) => {
