@@ -147,7 +147,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
 
     if (include?.capacityProfiles) {
       const subInclude = include.capacityProfiles.include
-      let profiles = store.capacityProfiles
+      const profiles = store.capacityProfiles
         .filter((cp: any) => cp.projectId === store.project.id)
         .map((cp: any) => {
           const p = { ...cp }
