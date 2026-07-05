@@ -127,8 +127,8 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       '',   // Capacity profile
       '',   // Assignment segments
       '',   // Assigned weeks
-      row.resourceTypeName ?? '',  // Billing basis
-      '',   // Handover notes
+      '',   // Billing basis
+      row.resourceTypeName ?? '',  // Handover notes
     ])
   })
 

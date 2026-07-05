@@ -266,4 +266,42 @@ describe('buildProfileCsv', () => {
     expect(csv).toContain('Bill planned allocation')
     expect(csv).toContain('Bill actual scheduled days')
   })
+
+  it('overhead row has blank Billing basis and resourceTypeName in Handover notes', () => {
+    const csv = buildProfileCsv({
+      ...BASE,
+      overheadRows: [
+        { name: 'Travel', computedDays: 10, estimatedCost: 5000, resourceTypeName: 'Travel overhead' },
+        { name: 'Management', computedDays: 5, estimatedCost: 2500, resourceTypeName: null },
+      ],
+    })
+    const lines = csv.split('\n').filter(l => l.length > 0)
+    const header = lines[0].split(',')
+    const billingBasisIdx = header.indexOf('Billing basis')
+    const handoverNotesIdx = header.indexOf('Handover notes')
+    const colCount = header.length
+
+    expect(billingBasisIdx).toBeGreaterThanOrEqual(0)
+    expect(handoverNotesIdx).toBeGreaterThanOrEqual(0)
+
+    // Overhead rows start at line 2 (after header and any resource rows)
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',')
+      if (cols[0] !== 'Overhead') continue
+      expect(cols.length, `Overhead row ${i} column count`).toBe(colCount)
+      expect(cols[billingBasisIdx]).toBe('')
+    }
+
+    // First overhead row has resourceTypeName in Handover notes
+    const overhead1Line = lines.find(l => l.startsWith('Overhead,Travel,'))
+    expect(overhead1Line).toBeDefined()
+    const overhead1 = overhead1Line!.split(',')
+    expect(overhead1[handoverNotesIdx]).toBe('Travel overhead')
+
+    // Second overhead row (null resourceTypeName) has blank Handover notes
+    const overhead2Line = lines.find(l => l.startsWith('Overhead,Management,'))
+    expect(overhead2Line).toBeDefined()
+    const overhead2 = overhead2Line!.split(',')
+    expect(overhead2[handoverNotesIdx]).toBe('')
+  })
 })
