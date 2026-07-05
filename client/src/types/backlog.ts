@@ -298,7 +298,17 @@ export interface ResourceProfileRow {
       days: number
     }>
     synthetic: boolean
+    capacityProfile?: {
+      planningBasis: string
+      source: string
+      segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    }
   }>
+  capacityProfile?: {
+    planningBasis: string
+    source: string
+    segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+  }
 }
 
 export interface OverheadProfileRow {

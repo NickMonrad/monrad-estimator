@@ -309,3 +309,22 @@ This decision is satisfied when:
 This document does not implement the refactor. It intentionally avoids changing runtime behaviour.
 
 The implementation work belongs in the follow-up issues under #263, especially #264 through #271.
+
+## Implementation status
+
+### Adopted: Resource Profile + export consume capacity-profile DTO data (#341)
+
+`server/src/lib/capacityProfileResourceAdapter.ts` enriches the Resource Profile
+response with capacity-profile data (`planningBasis`, `source`, `segments`) from
+the derived read model introduced in #326. The export CSV includes a `Capacity
+profile` column.
+
+Key constraints preserved:
+
+- Legacy ResourceType/NamedResource fields remain authoritative.
+- CapacityProfile is still a derived read model (source-of-truth migration is #340).
+- Commercial billing formulas, billable days, discounts, tax, and totals are unchanged.
+- Entity identity is preserved — one named person / planned resource with multiple
+  capacity segments is one row, not multiple.
+
+See `capacity-profile-design.md#resource-profile-and-export-adoption` for details.
