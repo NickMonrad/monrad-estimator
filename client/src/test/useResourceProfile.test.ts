@@ -36,6 +36,7 @@ describe('buildProfileCsv', () => {
     expect(headers).toContain('Availability window end')
     expect(headers).toContain('Assigned start')
     expect(headers).toContain('Assigned end')
+    expect(headers).toContain('Capacity profile')
     expect(headers).toContain('Assignment segments')
     expect(headers).toContain('Assigned weeks')
     expect(headers).toContain('Billing basis')
@@ -155,10 +156,114 @@ describe('buildProfileCsv', () => {
     const csv = buildProfileCsv(profile)
     const lines = csv.split('\n').filter(l => l.length > 0)
     const headerCols = lines[0].split(',').length
-    expect(headerCols).toBe(20)
+    expect(headerCols).toBe(21)
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(',').length
       expect(cols, `row ${i} has ${cols} columns, expected ${headerCols}`).toBe(headerCols)
     }
+  })
+
+  it('capacity profile column contains segments for named-resource rows with capacityProfile', () => {
+    const csv = buildProfileCsv({
+      ...BASE,
+      resourceRows: [{
+        resourceTypeId: 'rt1', name: 'Engineer', category: 'ENG',
+        count: 1, hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+        effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        derivedStartWeek: 2, derivedEndWeek: 3, estimatedCost: 4000, epics: [],
+        namedResources: [{
+          id: 'nr1', name: 'Alice', allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null, allocatedDays: 5,
+          derivedStartWeek: 2, derivedEndWeek: 3,
+          actualAllocatedDays: 5, actualAllocationStartWeek: 2, actualAllocationEndWeek: 3,
+          actualAllocatedWeeks: [], actualAllocationSegments: [],
+          synthetic: false, capacityProfile: {
+            planningBasis: 'availabilityWindow',
+            source: 'availabilityWindow',
+            segments: [
+              { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+              { startWeek: 4, endWeek: 7, capacityPercent: 100 },
+            ],
+          },
+        }],
+      }],
+    })
+    const lines = csv.split('\n').filter(l => l.length > 0)
+    const header = lines[0].split(',')
+    const capacityProfileIdx = header.indexOf('Capacity profile')
+    const assignmentSegmentsIdx = header.indexOf('Assignment segments')
+    const assignedWeeksIdx = header.indexOf('Assigned weeks')
+    expect(capacityProfileIdx).toBeGreaterThanOrEqual(0)
+    expect(assignmentSegmentsIdx).toBeGreaterThanOrEqual(0)
+
+    // Find the data row (second line, after header)
+    const dataRow = lines[1].split(',')
+    expect(dataRow[capacityProfileIdx]).toBe('W1-W4 50%; W5-W8 100%')
+    // Assignment segments and assigned weeks remain independent
+    expect(dataRow[assignmentSegmentsIdx]).toBe('')  // empty in this fixture
+    expect(dataRow[assignedWeeksIdx]).toBe('')       // empty in this fixture
+  })
+
+  it('capacity profile lands in correct column for role-level row', () => {
+    const csv = buildProfileCsv({
+      ...BASE,
+      resourceRows: [{
+        resourceTypeId: 'rt1', name: 'Engineer', category: 'ENG',
+        count: 2, hoursPerDay: 8, dayRate: 800, totalHours: 80, totalDays: 10,
+        effortDays: 10, allocatedDays: 10, allocationMode: 'TIMELINE',
+        allocationPercent: 75, allocationStartWeek: 0, allocationEndWeek: 7,
+        derivedStartWeek: 0, derivedEndWeek: 7, estimatedCost: 8000, epics: [],
+        namedResources: [],
+        capacityProfile: {
+          planningBasis: 'availabilityWindow',
+          source: 'availabilityWindow',
+          segments: [{ startWeek: 0, endWeek: 7, capacityPercent: 75 }],
+        },
+      }],
+    })
+    const lines = csv.split('\n').filter(l => l.length > 0)
+    const header = lines[0].split(',')
+    const capacityProfileIdx = header.indexOf('Capacity profile')
+    const assignedStartIdx = header.indexOf('Assigned start')
+    expect(capacityProfileIdx).toBeGreaterThan(assignedStartIdx)
+
+    const row = lines[1].split(',')
+    // Capacity profile value at correct column, not earlier
+    expect(row[capacityProfileIdx]).toBe('W1-W8 75%')
+    expect(row[assignedStartIdx]).toBe('')
+  })
+
+  it('billing basis exports plain English regardless of capacity profile', () => {
+    const csv = buildProfileCsv({
+      ...BASE,
+      resourceRows: [{
+        resourceTypeId: 'rt1', name: 'Dev', category: 'ENG',
+        count: 1, hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+        effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        derivedStartWeek: 2, derivedEndWeek: 3, estimatedCost: 4000, epics: [],
+        namedResources: [{
+          id: 'nrA', name: 'Alice', allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null, allocatedDays: 5,
+          derivedStartWeek: 2, derivedEndWeek: 3,
+          actualAllocatedDays: 5, actualAllocationStartWeek: 2, actualAllocationEndWeek: 3,
+          actualAllocatedWeeks: [], actualAllocationSegments: [],
+          pricingModel: 'PRO_RATA', synthetic: false,
+        }, {
+          id: 'nrB', name: 'Bob', allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null, allocatedDays: 5,
+          derivedStartWeek: 2, derivedEndWeek: 3,
+          actualAllocatedDays: 5, actualAllocationStartWeek: 2, actualAllocationEndWeek: 3,
+          actualAllocatedWeeks: [], actualAllocationSegments: [],
+          synthetic: false,
+        }],
+      }],
+    })
+    expect(csv).toContain('Bill planned allocation')
+    expect(csv).toContain('Bill actual scheduled days')
   })
 })

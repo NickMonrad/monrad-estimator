@@ -103,7 +103,15 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       String(row.totalDays), '',
       row.dayRate != null ? String(row.dayRate) : '',
       row.dayRate != null && row.totalDays != null ? (row.totalDays * row.dayRate).toFixed(2) : '',
-      '', '', formatCapacityProfileSegments(row.capacityProfile), '', '', '',
+      '',   // Availability window start
+      '',   // Availability window end
+      '',   // Assigned start
+      '',   // Assigned end
+      formatCapacityProfileSegments(row.capacityProfile), // Capacity profile
+      '',   // Assignment segments
+      '',   // Assigned weeks
+      '',   // Billing basis
+      '',   // Handover notes
     ])
   })
 
@@ -112,8 +120,15 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       'Overhead', row.name, '', '', '',
       '', '', '', String(row.computedDays), '',
       '', row.estimatedCost != null ? String(row.estimatedCost) : '',
-      '', '', '', '', '',
-      '', '', row.resourceTypeName ?? '',
+      '',   // Availability window start
+      '',   // Availability window end
+      '',   // Assigned start
+      '',   // Assigned end
+      '',   // Capacity profile
+      '',   // Assignment segments
+      '',   // Assigned weeks
+      row.resourceTypeName ?? '',  // Billing basis
+      '',   // Handover notes
     ])
   })
 
