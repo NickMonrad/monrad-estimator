@@ -42,6 +42,9 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       capacitySegments: [] as any[],
       backlogSnapshots: [] as any[],
       epics: [] as any[],
+      features: [] as any[],
+      userStories: [] as any[],
+      tasks: [] as any[],
       timelineEntries: [] as any[],
       storyTimelineEntries: [] as any[],
       epicDependencies: [] as any[],
@@ -178,11 +181,57 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
     }
 
     // Default empty arrays for includes not otherwise resolved.
-    // Required by the Resource Profile route which includes epics, overheads, timelineEntries, storyTimelineEntries.
-    if (include?.epics && !result.epics) result.epics = []
-    if (include?.overheads && !result.overheads) result.overheads = []
-    if (include?.timelineEntries && !result.timelineEntries) result.timelineEntries = []
-    if (include?.storyTimelineEntries && !result.storyTimelineEntries) result.storyTimelineEntries = []
+    // Required by the Resource Profile route.
+    if (!result.epics && include?.epics) result.epics = []
+    if (!result.overheads && include?.overheads) result.overheads = []
+    if (!result.timelineEntries && include?.timelineEntries) result.timelineEntries = []
+    if (!result.storyTimelineEntries && include?.storyTimelineEntries) result.storyTimelineEntries = []
+
+    // Resolve nested includes for epics when data exists in the store
+    if (include?.epics && store.epics.length > 0) {
+      const epicsInclude = include.epics.include
+      result.epics = store.epics
+        .filter((e: any) => e.projectId === store.project.id)
+        .map((e: any) => {
+          const epic = { ...e }
+          if (epicsInclude?.features) {
+            const featsInclude = epicsInclude.features.include
+            const features = store.features
+              .filter((f: any) => f.epicId === e.id)
+              .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+              .map((f: any) => {
+                const feature = { ...f }
+                if (featsInclude?.userStories) {
+                  const storiesInclude = featsInclude.userStories.include
+                  feature.userStories = store.userStories
+                    .filter((us: any) => us.featureId === f.id)
+                    .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+                    .map((us: any) => {
+                      const story = { ...us }
+                      if (storiesInclude?.tasks) {
+                        const tasksInclude = storiesInclude.tasks.include
+                        story.tasks = store.tasks
+                          .filter((t: any) => t.userStoryId === us.id)
+                          .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+                          .map((t: any) => {
+                            const task = { ...t }
+                            if (tasksInclude?.resourceType) {
+                              task.resourceType =
+                                store.resourceTypes.find((rt: any) => rt.id === task.resourceTypeId) ?? null
+                            }
+                            return task
+                          })
+                      }
+                      return story
+                    })
+                }
+                return feature
+              })
+            epic.features = features
+          }
+          return epic
+        })
+    }
 
     return result
   }
@@ -579,6 +628,96 @@ function addPersistedProfile(
   return profile
 }
 
+function addEpic(
+  id: string,
+  name: string,
+  order = 0,
+  overrides: Record<string, any> = {},
+) {
+  const now = new Date()
+  const epic = {
+    id,
+    projectId,
+    name,
+    order,
+    isActive: true,
+    featureMode: 'sequential',
+    scheduleMode: 'auto',
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  }
+  storeRef.current.epics.push(epic)
+  return epic
+}
+
+function addFeature(
+  id: string,
+  name: string,
+  epicId: string,
+  order = 0,
+  overrides: Record<string, any> = {},
+) {
+  const now = new Date()
+  const feature = {
+    id,
+    epicId,
+    name,
+    order,
+    isActive: true,
+    timelineStartWeek: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  }
+  storeRef.current.features.push(feature)
+  return feature
+}
+
+function addUserStory(
+  id: string,
+  featureId: string,
+  order = 0,
+  overrides: Record<string, any> = {},
+) {
+  const now = new Date()
+  const story = {
+    id,
+    featureId,
+    order,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  }
+  storeRef.current.userStories.push(story)
+  return story
+}
+
+function addTask(
+  id: string,
+  userStoryId: string,
+  resourceTypeId: string,
+  hoursEffort = 80,
+  overrides: Record<string, any> = {},
+) {
+  const now = new Date()
+  const task = {
+    id,
+    userStoryId,
+    resourceTypeId,
+    hoursEffort,
+    durationDays: null,
+    order: 0,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  }
+  storeRef.current.tasks.push(task)
+  return task
+}
+
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('persisted capacity-profile DTO integration', () => {
@@ -871,4 +1010,106 @@ describe('persisted capacity-profile DTO integration', () => {
     })
   })
 
+
+
+  describe('7. Real adapter Resource Profile integration', () => {
+    const epId = 'epic-rp'
+    const featId = 'feat-rp'
+    const storyId = 'story-rp'
+    const taskId = 'task-rp'
+
+    function getResourceProfile() {
+      return request(app)
+        .get(`/api/projects/${projectId}/resource-profile`)
+        .set('Authorization', authHeader)
+    }
+
+    it('uses reconciled persisted capacity profiles via the real adapter path', async () => {
+      addResourceType(rtId, userName, 1)
+      addNamedResource('nr-rp-1', 'RP Person', rtId)
+
+      // Add backlog so route produces resource rows
+      addEpic(epId, 'RP Epic')
+      addFeature(featId, 'RP Feature', epId)
+      addUserStory(storyId, featId)
+      addTask(taskId, storyId, rtId, 160)
+      storeRef.current.timelineEntries.push({ featureId: featId, startWeek: 0, durationWeeks: 4 })
+
+      // Directly add a named-person profile that matches what the legacy mapper produces
+      addPersistedProfile('cp-nr-rp', {
+        resourceTypeId: rtId,
+        namedResourceId: 'nr-rp-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+
+      // Call the REAL Resource Profile route (adapter NOT mocked)
+      const res = await getResourceProfile()
+      expect(res.status).toBe(200)
+      expect(res.body.resourceRows).toBeDefined()
+
+      const rtRow = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
+      expect(rtRow).toBeDefined()
+
+      // Named resource has capacityProfile enrichment (persisted → reconciled)
+      const nr = rtRow.namedResources.find((n: any) => n.id === 'nr-rp-1')
+      expect(nr).toBeDefined()
+      expect(nr.capacityProfile).toBeDefined()
+      expect(nr.capacityProfile.planningBasis).toBe('demandFollowing')
+      expect(nr.capacityProfile.source).toBe('fixed')
+      expect(nr.capacityProfile.segments).toBeDefined()
+
+      // Legacy fields remain intact
+      expect(nr.allocationMode).toBe('EFFORT')
+      expect(nr.allocationPercent).toBe(100)
+      expect(nr.pricingModel).toBe('ACTUAL_DAYS')
+
+      // One named resource (not duplicated)
+      expect(rtRow.namedResources).toHaveLength(1)
+    })
+
+    it('falls back safely when persisted profiles do not reconcile', async () => {
+      addResourceType('rt-fallback', 'Fallback RT', 1, {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+      })
+      addNamedResource('nr-fb-1', 'Fallback Person', 'rt-fallback', {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        pricingModel: 'PRO_RATA',
+      })
+      addEpic('epic-fb', 'FB Epic')
+      addFeature('feat-fb', 'FB Feature', 'epic-fb')
+      addUserStory('story-fb', 'feat-fb')
+      addTask('task-fb', 'story-fb', 'rt-fallback', 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-fb', startWeek: 0, durationWeeks: 4 })
+
+      // Add a corrupt persisted profile that won't reconcile with legacy
+      addPersistedProfile('cp-corrupt-fb', {
+        resourceTypeId: 'rt-fallback',
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+
+      const res = await getResourceProfile()
+      expect(res.status).toBe(200)
+      expect(res.body.resourceRows).toBeDefined()
+
+      const rtRow = res.body.resourceRows.find((r: any) => r.resourceTypeId === 'rt-fallback')
+      expect(rtRow).toBeDefined()
+
+      // No duplicate named resources despite corrupt profile
+      expect(rtRow.namedResources).toHaveLength(1)
+      expect(rtRow.namedResources[0].id).toBe('nr-fb-1')
+
+      // Legacy allocation fields intact
+      expect(rtRow.namedResources[0].allocationMode).toBe('EFFORT')
+      expect(rtRow.namedResources[0].allocationPercent).toBe(100)
+      expect(rtRow.namedResources[0].pricingModel).toBe('PRO_RATA')
+    })
+  })
  })
