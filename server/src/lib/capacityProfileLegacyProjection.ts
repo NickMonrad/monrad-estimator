@@ -36,6 +36,10 @@ export interface CapacityProfileLike {
   planningBasis: string
   source: string
   defaultPercent?: number | null
+  /** Legacy fallback availability-window start week (e.g. TIMELINE without explicit segments). */
+  startWeek?: number | null
+  /** Legacy fallback availability-window end week. */
+  endWeek?: number | null
   segments: SegmentLike[]
 }
 
@@ -108,9 +112,21 @@ export function projectCapacityProfileToLegacyAllocation(
   const allocationMode = planningBasisToAllocationMode(profile.planningBasis)
   const segments = profile.segments ?? []
   const defaultPercent = profile.defaultPercent ?? 100
+  const profileStartWeek = profile.startWeek ?? null
+  const profileEndWeek = profile.endWeek ?? null
 
-  // ── No segments → effort / fixed-FTE projection ─────────────────────────
+  // ── No segments → effort / availability-window projection ────────────
   if (segments.length === 0) {
+    // For availability-window / TIMELINE profiles, preserve the start/end range
+    if (profileStartWeek != null || profileEndWeek != null) {
+      return {
+        allocationMode: 'TIMELINE',
+        allocationPercent: defaultPercent,
+        allocationStartWeek: profileStartWeek,
+        allocationEndWeek: profileEndWeek,
+        lossy: false,
+      }
+    }
     return {
       allocationMode,
       allocationPercent: defaultPercent,
