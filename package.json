@@ -23,10 +23,12 @@
     "concurrently": "^8.2.2"
   },
   "dependencies": {
+    "ip-address": "^10.1.0"
+  },
+  "optionalDependencies": {
     "@esbuild/win32-x64": "0.27.3",
     "@rolldown/binding-win32-x64-msvc": "1.0.0-rc.13",
     "@tailwindcss/oxide-win32-x64-msvc": "4.2.1",
-    "ip-address": "^10.1.0",
     "lightningcss-win32-x64-msvc": "1.31.1"
   }
 }

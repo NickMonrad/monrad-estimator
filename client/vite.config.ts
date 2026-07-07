@@ -13,12 +13,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:3002',
+      '/api': 'http://localhost:3001',
     },
   },
   preview: {
     proxy: {
-      '/api': 'http://localhost:3002',
+      '/api': 'http://localhost:3001',
     },
   },
 })
