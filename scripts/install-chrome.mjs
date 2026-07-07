@@ -21,12 +21,22 @@ function getPuppeteerBuildId() {
   try {
     const puppeteerPkg = require('puppeteer/package.json')
     // puppeteer stores its pinned revision in the nested puppeteer.chrome config
-    if (puppeteerPkg?.puppeteer?.chrome) return puppeteerPkg.puppeteer.chrome
-    // Fallback: launch puppeteer and read executablePath to extract version
-    const p = require('puppeteer')
-    const exePath = p.executablePath()
-    const match = exePath.match(/mac_arm-([^/]+)|linux-([^/]+)|win64-([^/]+)/)
-    if (match) return match[1] || match[2] || match[3]
+    let id = puppeteerPkg?.puppeteer?.chrome
+    if (!id) {
+      // Fallback: launch puppeteer and read executablePath to extract version
+      const p = require('puppeteer')
+      const exePath = p.executablePath()
+      const match = exePath.match(/mac_arm-([^/\\]+)|linux-([^/\\]+)|win64-([^/\\]+)/)
+      id = match?.[1] || match?.[2] || match?.[3]
+    }
+    // On Windows, puppeteer.chrome includes a platform suffix like
+    // "146.0.7680.153\chrome-win64\chrome.exe" — strip everything after
+    // the version number so @puppeteer/browsers resolves the correct cache path.
+    if (id) {
+      const versionOnly = id.split(/[/\\]/)[0]
+      if (versionOnly) return versionOnly
+    }
+    return id
   } catch {}
   return null
 }
@@ -38,9 +48,8 @@ async function main() {
     process.exit(0)
   }
 
-  const cacheEntries = existsSync(join(CACHE_DIR, BROWSER))
-    ? (await import('fs')).default.readdirSync(join(CACHE_DIR, BROWSER))
-    : []
+  const cacheDir = join(CACHE_DIR, BROWSER)
+  const cacheEntries = existsSync(cacheDir) ? readdirSync(cacheDir) : []
   const alreadyCached = cacheEntries.some(entry => entry.includes(buildId))
   if (alreadyCached) {
     console.log(`[puppeteer] Chrome ${buildId} already cached — skipping download.`)
