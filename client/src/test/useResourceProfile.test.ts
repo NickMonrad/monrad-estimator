@@ -304,4 +304,120 @@ describe('buildProfileCsv', () => {
     const overhead2 = overhead2Line!.split(',')
     expect(overhead2[handoverNotesIdx]).toBe('')
   })
+
+  it('CSV roundtrip preserves multi-segment capacity profile separately from assignment/billing columns', () => {
+    const csv = buildProfileCsv({
+      ...BASE,
+      resourceRows: [{
+        resourceTypeId: 'rt-csv-multi', name: 'Multi Dev', category: 'ENG',
+        count: 1, hoursPerDay: 8, dayRate: 800, totalHours: 40, totalDays: 5,
+        effortDays: 5, allocatedDays: 5, allocationMode: 'EFFORT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        derivedStartWeek: 2, derivedEndWeek: 3, estimatedCost: 4000, epics: [],
+        namedResources: [{
+          id: 'nr-csv', name: 'CSV Person', allocationMode: 'EFFORT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null, allocatedDays: 5,
+          derivedStartWeek: 2, derivedEndWeek: 3,
+          actualAllocatedDays: 5, actualAllocationStartWeek: 2, actualAllocationEndWeek: 3,
+          actualAllocatedWeeks: [{ week: 2, days: 2.5, capacityDays: 5 }, { week: 3, days: 2.5, capacityDays: 5 }],
+          actualAllocationSegments: [{ startWeek: 2, endWeek: 3, days: 5 }],
+          synthetic: false,
+          capacityProfile: {
+            planningBasis: 'capacityProfile',
+            source: 'squadPlanner',
+            segments: [
+              { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+              { startWeek: 4, endWeek: 7, capacityPercent: 100 },
+            ],
+          },
+        }],
+      }],
+    })
+
+    const lines = csv.split('\n').filter(l => l.length > 0)
+    const header = lines[0].split(',')
+    const capacityProfileIdx = header.indexOf('Capacity profile')
+    const assignmentSegmentsIdx = header.indexOf('Assignment segments')
+    const assignedWeeksIdx = header.indexOf('Assigned weeks')
+    const billingBasisIdx = header.indexOf('Billing basis')
+
+    expect(capacityProfileIdx).toBeGreaterThanOrEqual(0)
+    expect(assignmentSegmentsIdx).toBeGreaterThanOrEqual(0)
+    expect(assignedWeeksIdx).toBeGreaterThanOrEqual(0)
+    expect(billingBasisIdx).toBeGreaterThanOrEqual(0)
+
+    // Find the named-resource data row
+    const dataRow = lines.find(l => l.startsWith('Resource,Multi Dev,CSV Person,'))
+    expect(dataRow).toBeDefined()
+    const cols = dataRow!.split(',')
+
+    // Column count matches header
+    expect(cols.length).toBe(header.length)
+
+    // Capacity profile column has multi-segment value
+    expect(cols[capacityProfileIdx]).toBe('W1-W4 50%; W5-W8 100%')
+
+    // Assignment segments and assigned weeks are their own columns
+    expect(cols[assignmentSegmentsIdx]).toBe('W3-W4 (5.00d)')
+    expect(cols[assignedWeeksIdx]).toBe('W3=2.50; W4=2.50')
+
+    // Billing basis is separate (default ACTUAL_DAYS → "Bill actual scheduled days")
+    expect(cols[billingBasisIdx]).toBe('Bill actual scheduled days')
+
+    // Resource identity column says "Named person"
+    const identityIdx = header.indexOf('Resource identity')
+    expect(identityIdx).toBeGreaterThanOrEqual(0)
+    expect(cols[identityIdx]).toBe('Named person')
+  })
+
+  it('multi-segment planned resource CSV has capacity profile and stays one row', () => {
+    const csv = buildProfileCsv({
+      ...BASE,
+      resourceRows: [{
+        resourceTypeId: 'rt-plan-csv', name: 'Planned Role', category: 'CONSULTING',
+        count: 1, hoursPerDay: 8, dayRate: 1000, totalHours: 80, totalDays: 10,
+        effortDays: 10, allocatedDays: 10, allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        derivedStartWeek: 0, derivedEndWeek: 7, estimatedCost: 10000, epics: [],
+        namedResources: [{
+          id: 'nr-plan-csv', name: 'Planned Resource', allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null, allocatedDays: 10,
+          derivedStartWeek: 0, derivedEndWeek: 7,
+          actualAllocatedDays: 0, actualAllocationStartWeek: null, actualAllocationEndWeek: null,
+          actualAllocatedWeeks: [], actualAllocationSegments: [],
+          synthetic: true,
+          capacityProfile: {
+            planningBasis: 'capacityProfile',
+            source: 'squadPlanner',
+            segments: [
+              { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+              { startWeek: 4, endWeek: 7, capacityPercent: 100 },
+            ],
+          },
+        }],
+      }],
+    })
+
+    const lines = csv.split('\n').filter(l => l.length > 0)
+    const header = lines[0].split(',')
+    const capacityProfileIdx = header.indexOf('Capacity profile')
+    const identityIdx = header.indexOf('Resource identity')
+    const colCount = header.length
+
+    // Find the planned resource row (not the role section row)
+    const dataRow = lines.find(l => l.startsWith('Resource,Planned Role,Planned Resource,'))
+    expect(dataRow).toBeDefined()
+    const cols = dataRow!.split(',')
+
+    // Column count matches header
+    expect(cols.length).toBe(colCount)
+
+    // Capacity profile has multi-segment value
+    expect(cols[capacityProfileIdx]).toBe('W1-W4 50%; W5-W8 100%')
+
+    // Resource identity shows Planned resource
+    expect(cols[identityIdx]).toBe('Planned resource')
+  })
 })

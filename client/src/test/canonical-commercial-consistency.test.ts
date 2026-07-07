@@ -179,4 +179,46 @@ describe('canonical commercial consistency', () => {
       expect(row.subtotal).toBeGreaterThan(0)
     }
   })
+
+  it('adding capacityProfile enrichment does not change commercial totals', () => {
+    const base = buildCanonicalProfile()
+    const baseResult = computeCommercialData(base, [], { taxRate: null, taxLabel: 'GST' })
+
+    // Add capacityProfile enrichment to the same profile
+    const enriched: ResourceProfile = {
+      ...base,
+      resourceRows: base.resourceRows.map(row => ({
+        ...row,
+        capacityProfile: {
+          planningBasis: 'capacityProfile',
+          source: 'squadPlanner',
+          segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
+        },
+        namedResources: row.namedResources.map(nr => ({
+          ...nr,
+          capacityProfile: {
+            planningBasis: 'capacityProfile',
+            source: 'squadPlanner',
+            segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
+          },
+        })),
+      })),
+    }
+    const enrichedResult = computeCommercialData(enriched, [], { taxRate: null, taxLabel: 'GST' })
+
+    expect(enrichedResult).not.toBeNull()
+    expect(baseResult).not.toBeNull()
+
+    // Commercial totals are identical
+    expect(enrichedResult!.subtotal).toBe(baseResult!.subtotal)
+    expect(enrichedResult!.grandTotal).toBe(baseResult!.grandTotal)
+    expect(enrichedResult!.taxAmount).toBe(baseResult!.taxAmount)
+
+    // Per-row billable days and subtotals unchanged
+    for (let i = 0; i < enrichedResult!.rows.length; i++) {
+      expect(enrichedResult!.rows[i].billableDays).toBe(baseResult!.rows[i].billableDays)
+      expect(enrichedResult!.rows[i].subtotal).toBe(baseResult!.rows[i].subtotal)
+      expect(enrichedResult!.rows[i].pricingModel).toBe(baseResult!.rows[i].pricingModel)
+    }
+  })
 })
