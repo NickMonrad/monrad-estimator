@@ -503,3 +503,6 @@ column (which reflects actual scheduled assignment).
 - #340 — Make CapacityProfile source of truth
 - #342 — Legacy cleanup
 
+### Source-of-truth migration plan
+
+See the separate [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md) for the staged migration plan, field audit, regression matrix, and open decisions.
