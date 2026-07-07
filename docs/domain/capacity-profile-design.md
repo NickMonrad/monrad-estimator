@@ -500,8 +500,8 @@ column (which reflects actual scheduled assignment).
 
 ### Related issues
 
-- [#340 — Make CapacityProfile source of truth](../..issues/340)
-- [#342 — Legacy cleanup](../..issues/342)
+- #340 — Make CapacityProfile source of truth
+- #342 — Legacy cleanup
 
 ### Source-of-truth migration plan
 

@@ -2,19 +2,19 @@
 
 **Epic:** #340  
 **Status:** Plan / audit only — not yet implemented  
-**PR:** <!--link to this PR-->
+**PR:** #344
 
 ## Overview
 
-Issues [#326](../..issues/326), [#336](../..issues/336), [#337](../..issues/337), [#338](../..issues/338), [#339](../..issues/339), and [#341](../..issues/341) delivered `CapacityProfile` / `CapacitySegment` as an **additive derived read model**. Legacy `ResourceType`, `NamedResource`, and `CapacityPlan` fields remain authoritative. The adapter in `capacityProfileResourceAdapter.ts` reads profiles and falls back to legacy-derived values when persisted data does not match.
+Issues #326, #336, #337, #338, #339, and #341 delivered `CapacityProfile` / `CapacitySegment` as an **additive derived read model**. Legacy `ResourceType`, `NamedResource`, and `CapacityPlan` fields remain authoritative. The adapter in `capacityProfileResourceAdapter.ts` reads profiles and falls back to legacy-derived values when persisted data does not match.
 
-Issue [#340](../..issues/340) is the larger migration where capacity profiles become the **actual source of truth** for allocation data.
+Issue #340 is the larger migration where capacity profiles become the **actual source of truth** for allocation data.
 
 ## Principles
 
 1. **Read adoption before write migration.** Read paths were migrated first (#336, #341). No write path is authoritative on capacity profiles yet.
 2. **Migrate one authoritative write path at a time.** Each phase flips one write path to produce capacity profiles as source of truth and project legacy fields as compatibility.
-3. **Keep legacy fields as compatibility projections** until all consumers have migrated. Do not remove them until [#342](../..issues/342).
+3. **Keep legacy fields as compatibility projections** until all consumers have migrated. Do not remove them until #342.
 4. **Commercial remains billing-only.** Capacity profiles describe availability, not billing.
 5. **Reconcile after each migrated write path.** `compareCapacityProfiles` validates that persisted profiles match expected state. Once writes are flipped, reconciliation direction must invert.
 6. **Keep rollback possible** while legacy projections remain current. The fallback in `capacityProfileResourceAdapter.ts` is the safety net.
@@ -33,14 +33,26 @@ Issue [#340](../..issues/340) is the larger migration where capacity profiles be
 | `ResourceType` | `allocationEndWeek` | role availability-window segment end |
 | `NamedResource` | `allocationMode` | `CapacityProfile.planningBasis` (per-named-resource) |
 | `NamedResource` | `allocationPercent` / `allocationPct` | default segment `capacityPercent` (field precedence: `allocationPercent > allocationPct`) |
-| `NamedResource` | `allocationStartWeek` | per-nr availability-window segment start |
-| `NamedResource` | `allocationEndWeek` | per-nr availability-window segment end |
-| `NamedResource` | `startWeek` / `endWeek` | segment windows (actual assignment) |
 | `CapacityPlan` | all periods/entries | Squad Planner generated profiles |
 
 #### Legacy compatibility projections
 
-Once source of truth flips, the same fields above become **read-only compatibility projections** that must be kept in sync with the `CapacityProfile` table. The `syncCapacityProfilesForProject` helper is currently derived → profile. After migration it must become profile → derived.
+Once source of truth flips, fields above under **Future CapacityProfile source-of-truth fields** become **read-only compatibility projections** that must be kept in sync with the `CapacityProfile` table. The `syncCapacityProfilesForProject` helper is currently derived → profile. After migration it must become profile → derived.
+
+Additional NamedResource fields that serve as legacy availability-window compatibility fields:
+
+| Table | Field | Role |
+|-------|-------|------|
+| `NamedResource` | `allocationStartWeek` | explicit legacy availability-window compatibility field |
+| `NamedResource` | `allocationEndWeek` | explicit legacy availability-window compatibility field |
+| `NamedResource` | `startWeek` / `endWeek` | legacy fallback availability-window fields used by older paths; not actual scheduled assignment source of truth |
+
+> **Capacity vs assignment separation:** `CapacityProfile` / `CapacitySegment` describe **availability/capacity over time**. Actual assignment windows, weeks, and segments produced by the scheduler/planning model are not CapacityProfile-owned. The profile describes what *could* be assigned; the scheduler decides what *is* assigned. Commercial billing basis is independent metadata owned by the Commercial domain.
+
+This means:
+- Capacity profile = what capacity exists (W1–W4: 50%, W5–W8: 100%)
+- Assigned work = what the scheduler allocated (actual demand consumed)
+- Billing basis = what Commercial charges for (bill planned allocation, bill actual scheduled days, etc.)
 
 #### Independent metadata (not capacity-profile-owned)
 
@@ -229,7 +241,7 @@ Once writes are profile-first:
 
 ### Phase 7 — Legacy cleanup (#342)
 
-Tracked separately by [#342](../..issues/342).
+Tracked separately by #342.
 
 #### Preconditions
 
