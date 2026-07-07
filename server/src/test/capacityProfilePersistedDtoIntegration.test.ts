@@ -1111,5 +1111,141 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(rtRow.namedResources[0].allocationPercent).toBe(100)
       expect(rtRow.namedResources[0].pricingModel).toBe('PRO_RATA')
     })
+
+    it('preserves multi-segment persisted capacity profile data through the real adapter', async () => {
+      const segRtId = 'rt-seg'
+      const segNrId = 'nr-seg-1'
+
+      // Resource type with default mode (EFFORT); named resource uses CAPACITY_PLAN so the
+      // legacy mapper derives segments from capacity plan slot windows.
+      // Keeping RT mode != CAPACITY_PLAN avoids the route-level capacity plan fallback that
+      // would inflate named resources from slot windows.
+      addResourceType(segRtId, 'Segmented RT', 1)
+      addNamedResource(segNrId, 'Seg Person', segRtId, {
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100,
+        pricingModel: 'PRO_RATA',
+      })
+
+      // Backlog data so route produces resource rows
+      addEpic('epic-seg', 'Seg Epic')
+      addFeature('feat-seg', 'Seg Feature', 'epic-seg')
+      addUserStory('story-seg', 'feat-seg')
+      addTask('task-seg', 'story-seg', segRtId, 160)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-seg', startWeek: 0, durationWeeks: 10 })
+
+      // Seed a capacity plan with two periods/entries that produce distinct slot windows
+      const now = new Date()
+      const cpId = 'cp-plan-seg'
+      storeRef.current.capacityPlans.push({
+        id: cpId,
+        projectId,
+        name: 'Seg Plan',
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+      storeRef.current.capacityPlanPeriods.push({
+        id: 'cpp-seg-0',
+        capacityPlanId: cpId,
+        periodIndex: 0,
+        startWeek: 0,
+        endWeek: 4,
+        createdAt: now,
+        updatedAt: now,
+      })
+      storeRef.current.capacityPlanEntries.push({
+        id: 'cpe-seg-0',
+        capacityPlanPeriodId: 'cpp-seg-0',
+        resourceTypeId: segRtId,
+        headcount: 0.5,
+        createdAt: now,
+        updatedAt: now,
+      })
+      storeRef.current.capacityPlanPeriods.push({
+        id: 'cpp-seg-1',
+        capacityPlanId: cpId,
+        periodIndex: 1,
+        startWeek: 6,
+        endWeek: 10,
+        createdAt: now,
+        updatedAt: now,
+      })
+      storeRef.current.capacityPlanEntries.push({
+        id: 'cpe-seg-1',
+        capacityPlanPeriodId: 'cpp-seg-1',
+        resourceTypeId: segRtId,
+        headcount: 1.0,
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      // Persisted profile that exactly matches what the legacy mapper would produce
+      // Legacy: CAPACITY_PLAN + slot windows from periods above → capacityProfile + squadPlanner
+      const persProfileId = 'cp-seg'
+      storeRef.current.capacityProfiles.push({
+        id: persProfileId,
+        projectId,
+        resourceTypeId: segRtId,
+        namedResourceId: segNrId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      // Two persisted segments matching the derived slot windows:
+      // P0 headcount 0.5 → 2 quanta → 50% at 0–3
+      // P1 headcount 1.0 → 4 quanta → 100% at 6–9 (gap from week 4–5)
+      storeRef.current.capacitySegments.push({
+        id: 'cseg-seg-0',
+        capacityProfileId: persProfileId,
+        startWeek: 0,
+        endWeek: 3,
+        capacityPercent: 50,
+        source: 'SQUAD_PLANNER',
+        createdAt: now,
+        updatedAt: now,
+      })
+      storeRef.current.capacitySegments.push({
+        id: 'cseg-seg-1',
+        capacityProfileId: persProfileId,
+        startWeek: 6,
+        endWeek: 9,
+        capacityPercent: 100,
+        source: 'SQUAD_PLANNER',
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      // Call the REAL Resource Profile route (adapter NOT mocked)
+      const res = await getResourceProfile()
+      expect(res.status).toBe(200)
+      expect(res.body.resourceRows).toBeDefined()
+
+      const rtRow = res.body.resourceRows.find((r: any) => r.resourceTypeId === segRtId)
+      expect(rtRow).toBeDefined()
+
+      // One named resource (not duplicated by persisted segments)
+      expect(rtRow.namedResources).toHaveLength(1)
+
+      const nr = rtRow.namedResources[0]
+      expect(nr.id).toBe(segNrId)
+
+      // Capacity profile enrichment with both segments from persisted data
+      expect(nr.capacityProfile).toBeDefined()
+      expect(nr.capacityProfile.segments).toHaveLength(2)
+      expect(nr.capacityProfile.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 50 })
+      expect(nr.capacityProfile.segments[1]).toMatchObject({ startWeek: 6, endWeek: 9, capacityPercent: 100 })
+
+      // Legacy fields remain intact
+      expect(nr.allocationMode).toBe('CAPACITY_PLAN')
+      expect(nr.allocationPercent).toBe(100)
+      expect(nr.pricingModel).toBe('PRO_RATA')
+    })
   })
  })
