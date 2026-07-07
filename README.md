@@ -69,6 +69,11 @@ This installs all workspace dependencies and automatically:
 
 > **Note:** Chrome is cached to `~/.cache/puppeteer` and only downloaded once. If you're offline or the download fails, PDF generation won't work until you run `npm run install:chrome` manually.
 
+> **Windows:** `npm install` should work out of the box on Windows. Native bindings for
+> Vite (rolldown, lightningcss, esbuild) and Tailwind CSS Oxide are declared as root
+> `optionalDependencies` and are automatically installed on Windows. The postinstall script
+> verifies these bindings are present and prints a warning if any are missing.
+
 ### 3. Configure environment
 
 ```bash
@@ -118,7 +123,19 @@ npm run dev          # API on :3001 + Vite on :5173 (concurrently)
 
 Server logs are written to `logs/dev-servers.log` when running in the background. The `logs/` directory is created automatically by `npm install`.
 
-> **Troubleshooting:** If `npm run dev` exits immediately with no output, check that `logs/` exists (`mkdir -p logs`) and that the Puppeteer Chrome browser was downloaded successfully (`npm run install:chrome`).
+> **Troubleshooting:** If `npm run dev` exits immediately with no output, ensure the
+> `logs/` directory exists (`npm install` creates it automatically; you can also create it
+> manually with `mkdir logs` in bash or `New-Item -ItemType Directory logs` in PowerShell).
+> Also verify that the Puppeteer Chrome browser was downloaded successfully
+> (`npm run install:chrome` retries the download).
+
+> **Windows native bindings:** If the postinstall script reports that Windows native
+> bindings are missing, first try running `npm install` again — the root
+> `optionalDependencies` should install them on Windows. If they still fail, run the
+> `npm install` command printed by postinstall (e.g.
+> `npm install @rolldown/binding-win32-x64-msvc`). This is caused by a known npm issue
+> ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) where nested optional dependencies
+> with native binaries may be skipped on Windows.
 
 ### Run tests
 
