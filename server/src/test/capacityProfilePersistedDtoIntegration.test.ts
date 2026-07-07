@@ -177,6 +177,13 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       result.capacityProfiles = profiles
     }
 
+    // Default empty arrays for includes not otherwise resolved.
+    // Required by the Resource Profile route which includes epics, overheads, timelineEntries, storyTimelineEntries.
+    if (include?.epics && !result.epics) result.epics = []
+    if (include?.overheads && !result.overheads) result.overheads = []
+    if (include?.timelineEntries && !result.timelineEntries) result.timelineEntries = []
+    if (include?.storyTimelineEntries && !result.storyTimelineEntries) result.storyTimelineEntries = []
+
     return result
   }
 
@@ -863,4 +870,5 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(afterDto!.planningBasis).toBe('demandFollowing')
     })
   })
-})
+
+ })
