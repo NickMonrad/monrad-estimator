@@ -1,8 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
+import * as capacityProfileAdapter from '../lib/capacityProfileResourceAdapter.js'
+
+// Mock the adapter to return empty maps by default (existing tests don't assert on capacityProfile)
+vi.mock('../lib/capacityProfileResourceAdapter.js', async (importOriginal) => {
+  const actual: Record<string, unknown> = await importOriginal()
+  return {
+    ...actual,
+    buildResourceCapacityProfileMap: vi.fn(() => new Map()),
+  }
+})
 
 process.env.JWT_SECRET = 'test-secret'
 
@@ -1829,5 +1839,303 @@ describe('overhead FTE scaling', () => {
     expect(pmRow.requiredFTE).toBe(2.4)
     expect(pmRow.currentCount).toBe(1)
     expect(pmRow.requiredFTE).toBeGreaterThan(pmRow.currentCount)
+  })
+})
+
+describe('capacity profile enrichment in resource profile', () => {
+  const mockAdapterMap = vi.mocked(capacityProfileAdapter.buildResourceCapacityProfileMap)
+
+  afterEach(() => {
+    mockAdapterMap.mockImplementation(() => new Map())
+  })
+
+  const BASE_PROJECT = {
+    id: 'proj-1', ownerId: userId, name: 'Test',
+    startDate: new Date('2026-01-05T00:00:00.000Z'),
+    hoursPerDay: 8, bufferWeeks: 0, onboardingWeeks: 0,
+    weeklyDemandCache: null,
+    capacityPlans: [],
+  }
+
+  const BASE_EPIC = (rtId: string) => [{
+    id: 'epic-1', name: 'E1', order: 0, isActive: true,
+    featureMode: 'sequential', scheduleMode: 'auto',
+    features: [{
+      id: 'feat-1', name: 'F1', order: 0, isActive: true,
+      featureMode: 'sequential', timelineStartWeek: null,
+      userStories: [{
+        isActive: true,
+        tasks: [{ resourceTypeId: rtId, hoursEffort: 160, durationDays: null, resourceType: { id: rtId, name: 'Dev', hoursPerDay: 8 } }],
+      }],
+    }],
+  }]
+
+  it('returns capacityProfile on named-resource row when adapter provides enrichment', async () => {
+    const rtId = 'rt-cap-test'
+    const nrId = 'nr-cap-1'
+    mockAdapterMap.mockReturnValue(new Map([
+      [nrId, {
+        planningBasis: 'availabilityWindow',
+        source: 'availabilityWindow',
+        segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
+      }],
+    ]))
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...BASE_PROJECT,
+      resourceTypes: [{
+        id: rtId, name: 'Dev', category: 'ENGINEERING',
+        count: 1, hoursPerDay: 8, dayRate: 500,
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 0, allocationEndWeek: 8,
+        globalType: null,
+        namedResources: [{
+          id: nrId, name: 'Cap Test', startWeek: null, endWeek: null,
+          allocationPct: 100, allocationMode: 'TIMELINE', allocationPercent: 100,
+          allocationStartWeek: 0, allocationEndWeek: 8,
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+      }],
+      epics: BASE_EPIC(rtId),
+      overheads: [],
+      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 4 }],
+      storyTimelineEntries: [],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const row = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
+    expect(row).toBeDefined()
+    expect(row.namedResources).toHaveLength(1)
+
+    const nr = row.namedResources[0]
+    expect(nr.id).toBe(nrId)
+    expect(nr.capacityProfile).toBeDefined()
+    expect(nr.capacityProfile.planningBasis).toBe('availabilityWindow')
+    expect(nr.capacityProfile.source).toBe('availabilityWindow')
+    expect(nr.capacityProfile.segments).toHaveLength(1)
+    expect(nr.capacityProfile.segments[0]).toMatchObject({ startWeek: 0, endWeek: 4, capacityPercent: 100 })
+
+    // Legacy fields remain intact
+    expect(nr.allocationMode).toBe('TIMELINE')
+    expect(nr.allocationPercent).toBe(100)
+    expect(nr.pricingModel).toBe('ACTUAL_DAYS')
+  })
+
+  it('includes capacityProfile on role-level row', async () => {
+    const rtId = 'rt-role-cap'
+    const nrId = 'nr-role-1'
+    mockAdapterMap.mockReturnValue(new Map([
+      [nrId, {
+        planningBasis: 'availabilityWindow',
+        source: 'availabilityWindow',
+        segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+      }],
+      [rtId, {
+        planningBasis: 'availabilityWindow',
+        source: 'legacy',
+        segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+      }],
+    ]))
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...BASE_PROJECT,
+      resourceTypes: [{
+        id: rtId, name: 'Role Cap', category: 'ENGINEERING',
+        count: 1, hoursPerDay: 8, dayRate: 500,
+        allocationMode: 'TIMELINE', allocationPercent: 75,
+        allocationStartWeek: 0, allocationEndWeek: 8,
+        globalType: null,
+        namedResources: [{
+          id: nrId, name: 'Role NR', startWeek: null, endWeek: null,
+          allocationPct: 75, allocationMode: 'TIMELINE', allocationPercent: 75,
+          allocationStartWeek: 0, allocationEndWeek: 8,
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+      }],
+      epics: BASE_EPIC(rtId),
+      overheads: [],
+      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 8 }],
+      storyTimelineEntries: [],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const row = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
+    expect(row).toBeDefined()
+
+    expect(row.capacityProfile).toBeDefined()
+    expect(row.capacityProfile.planningBasis).toBe('availabilityWindow')
+    expect(row.capacityProfile.segments).toHaveLength(1)
+
+    // Named resource also has its own capacityProfile
+    expect(row.namedResources[0].capacityProfile).toBeDefined()
+    expect(row.namedResources[0].capacityProfile.planningBasis).toBe('availabilityWindow')
+  })
+
+  it('multi-segment named person remains one entity in resource profile', async () => {
+    const rtId = 'rt-multi'
+    const nrId = 'nr-multi-1'
+    mockAdapterMap.mockReturnValue(new Map([
+      [nrId, {
+        planningBasis: 'capacityProfile',
+        source: 'squadPlanner',
+        segments: [
+          { startWeek: 0, endWeek: 4, capacityPercent: 50 },
+          { startWeek: 4, endWeek: 8, capacityPercent: 100 },
+        ],
+      }],
+    ]))
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...BASE_PROJECT,
+      resourceTypes: [{
+        id: rtId, name: 'Multi', category: 'ENGINEERING',
+        count: 1, hoursPerDay: 8, dayRate: 500,
+        allocationMode: 'EFFORT', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+        globalType: null,
+        namedResources: [{
+          id: nrId, name: 'Multi Person', startWeek: null, endWeek: null,
+          allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          pricingModel: 'PRO_RATA',
+        }],
+      }],
+      epics: BASE_EPIC(rtId),
+      overheads: [],
+      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 8 }],
+      storyTimelineEntries: [],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const row = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
+    expect(row).toBeDefined()
+
+    // One named resource (not duplicated per segment)
+    expect(row.namedResources).toHaveLength(1)
+
+    const nr = row.namedResources[0]
+    expect(nr.id).toBe(nrId)
+    expect(nr.capacityProfile).toBeDefined()
+    expect(nr.capacityProfile.segments).toHaveLength(2)
+    expect(nr.capacityProfile.segments[0].capacityPercent).toBe(50)
+    expect(nr.capacityProfile.segments[1].capacityPercent).toBe(100)
+
+    // Legacy fields remain separate from capacity profile
+    expect(nr.allocationMode).toBe('EFFORT')
+    expect(nr.allocationPercent).toBe(100)
+    expect(nr.pricingModel).toBe('PRO_RATA')
+  })
+
+  it('falls back gracefully when adapter returns empty map', async () => {
+    const rtId = 'rt-no-cap'
+    const nrId = 'nr-no-cap'
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...BASE_PROJECT,
+      resourceTypes: [{
+        id: rtId, name: 'NoCap', category: 'ENGINEERING',
+        count: 1, hoursPerDay: 8, dayRate: 500,
+        allocationMode: 'EFFORT', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+        globalType: null,
+        namedResources: [{
+          id: nrId, name: 'NoCap NR', startWeek: null, endWeek: null,
+          allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+      }],
+      epics: BASE_EPIC(rtId),
+      overheads: [],
+      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 4 }],
+      storyTimelineEntries: [],
+    } as never)
+
+    // Adapter already mocked to return empty map (from afterEach default)
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const row = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
+    expect(row).toBeDefined()
+
+    // No duplicate resources
+    expect(row.namedResources).toHaveLength(1)
+    expect(row.namedResources[0].id).toBe(nrId)
+
+    // capacityProfile is absent when adapter returns empty map
+    expect(row.namedResources[0].capacityProfile).toBeUndefined()
+
+    // Legacy allocation fields are still present
+    expect(row.namedResources[0].allocationMode).toBe('EFFORT')
+    expect(row.namedResources[0].allocationPercent).toBe(100)
+  })
+
+  it('capacity profile, assigned work, and billing basis remain separate', async () => {
+    const rtId = 'rt-sep'
+    const nrId = 'nr-sep-1'
+    mockAdapterMap.mockReturnValue(new Map([
+      [nrId, {
+        planningBasis: 'capacityProfile',
+        source: 'availabilityWindow',
+        segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+      }],
+    ]))
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...BASE_PROJECT,
+      resourceTypes: [{
+        id: rtId, name: 'Sep', category: 'ENGINEERING',
+        count: 1, hoursPerDay: 8, dayRate: 500,
+        allocationMode: 'TIMELINE', allocationPercent: 75,
+        allocationStartWeek: 0, allocationEndWeek: 8,
+        globalType: null,
+        namedResources: [{
+          id: nrId, name: 'Sep NR', startWeek: null, endWeek: null,
+          allocationPct: 75, allocationMode: 'TIMELINE', allocationPercent: 75,
+          allocationStartWeek: 0, allocationEndWeek: 8,
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+      }],
+      epics: BASE_EPIC(rtId),
+      overheads: [],
+      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 8 }],
+      storyTimelineEntries: [],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const row = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
+    expect(row).toBeDefined()
+
+    const nr = row.namedResources[0]
+
+    // 1. Capacity profile is available as enrichment
+    expect(nr.capacityProfile).toBeDefined()
+    expect(nr.capacityProfile.planningBasis).toBe('capacityProfile')
+
+    // 2. Assigned work is separate (derived from allocation mode + hours)
+    expect(nr.allocatedDays).toBeDefined()
+    expect(nr.derivedStartWeek).toBeDefined()
+    expect(nr.derivedEndWeek).toBeDefined()
+
+    // 3. Billing basis is separate
+    expect(nr.pricingModel).toBe('ACTUAL_DAYS')
   })
 })
