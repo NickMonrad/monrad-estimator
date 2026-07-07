@@ -131,11 +131,12 @@ Server logs are written to `logs/dev-servers.log` when running in the background
 
 > **Windows native bindings:** If the postinstall script reports that Windows native
 > bindings are missing, first try running `npm install` again — the root
-> `optionalDependencies` should install them on Windows. If they still fail, install each
-> missing package individually as printed in the warning message (e.g.
+> `optionalDependencies` should install them on Windows. If they still fail, run the
+> `npm install` command printed by postinstall (e.g.
 > `npm install @rolldown/binding-win32-x64-msvc`). This is caused by a known npm issue
 > ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) where nested optional dependencies
 > with native binaries may be skipped on Windows.
+
 ### Run tests
 
 ```bash
