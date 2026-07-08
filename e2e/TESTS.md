@@ -8,6 +8,8 @@
 # From repo root
 npm run test:e2e              # headless (use for CI / pre-PR check)
 npm run test:e2e:headed       # with browser visible (debugging)
+# Local Windows/dev runner starts isolated API/Vite servers and chooses free ports
+npm run test:e2e:local
 npm run test:e2e:report       # open last HTML report
 
 # From /e2e directory

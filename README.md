@@ -147,8 +147,8 @@ cd server && npm test
 cd server && npx tsc --noEmit
 cd client && npx tsc --noEmit
 
-# E2E (requires both dev servers running)
-cd e2e && ./node_modules/.bin/playwright test --workers=1
+# E2E (local runner starts isolated API/Vite servers, chooses free ports, and skips screenshots)
+npm run test:e2e:local
 ```
 
 ---
