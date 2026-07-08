@@ -131,8 +131,11 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       data: {
         allocationMode: projection.allocationMode,
         allocationPercent: projection.allocationPercent ?? 100,
+        allocationPct: projection.allocationPercent ?? 100,
         allocationStartWeek: projection.allocationStartWeek,
         allocationEndWeek: projection.allocationEndWeek,
+        startWeek: projection.allocationStartWeek,
+        endWeek: projection.allocationEndWeek,
       },
     })
 
@@ -140,7 +143,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
     await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
     // Sync remaining profiles (role-level, other NRs) for full project reconciliation
-    await syncCapacityProfilesForProject(tx, projectId)
+    await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [created.id] })
 
 
     return updated
@@ -198,12 +201,15 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       data: {
         allocationMode: projection.allocationMode,
         allocationPercent: projection.allocationPercent ?? 100,
+        allocationPct: projection.allocationPercent ?? 100,
         allocationStartWeek: projection.allocationStartWeek,
         allocationEndWeek: projection.allocationEndWeek,
+        startWeek: projection.allocationStartWeek,
+        endWeek: projection.allocationEndWeek,
       },
     })
     // Sync remaining profiles (role-level, other NRs) for full project reconciliation
-    await syncCapacityProfilesForProject(tx, projectId)
+    await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
 
     await clearWeeklyDemandCache(projectId, tx)
     return updated
@@ -242,12 +248,15 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       data: {
         allocationMode: projection.allocationMode,
         allocationPercent: projection.allocationPercent ?? 100,
+        allocationPct: projection.allocationPercent ?? 100,
         allocationStartWeek: projection.allocationStartWeek,
         allocationEndWeek: projection.allocationEndWeek,
+        startWeek: projection.allocationStartWeek,
+        endWeek: projection.allocationEndWeek,
       },
     })
     // Sync remaining profiles (role-level, other NRs) for full project reconciliation
-    await syncCapacityProfilesForProject(tx, projectId)
+    await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
 
     await clearWeeklyDemandCache(projectId, tx)
     return updated

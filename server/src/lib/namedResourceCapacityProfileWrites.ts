@@ -40,6 +40,11 @@ export interface NamedResourceCapacityPayload {
   startWeek?: number | null
   endWeek?: number | null
 }
+
+export interface NRProfileWriteOptions {
+  /** Whether the named resource is a synthetic/planned resource (true) or a named person (false/null/undefined). */
+  synthetic?: boolean | null
+}
 /**
  * ## Flow
  *
@@ -59,14 +64,15 @@ export interface NamedResourceCapacityPayload {
  * @param nrId       NamedResource ID
  * @param rtId       ResourceType ID the NR belongs to
  * @param payload    Incoming capacity/allocation fields from the request
- * @returns LegacyAllocationProjection for the caller to write to NamedResource
+ * @param options    Optional: { synthetic } to control owner kind. Default { synthetic: false } → NAMED_PERSON.
  */
 export async function upsertNRProfileAndProjectLegacy(
   tx: any,
   projectId: string,
   nrId: string,
-  rtId: string,
+  _rtId: string,
   payload: NamedResourceCapacityPayload,
+  options: NRProfileWriteOptions = {},
 ): Promise<LegacyAllocationProjection> {
   // ── 1. Normalise incoming fields ───────────────────────────────────────
   const mode = payload.allocationMode ?? 'EFFORT'
@@ -100,10 +106,10 @@ export async function upsertNRProfileAndProjectLegacy(
 
   await tx.capacityProfile.create({
     data: {
+      ownerKind: options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
       projectId,
-      resourceTypeId: rtId,
+      resourceTypeId: null,
       namedResourceId: nrId,
-      ownerKind: 'NAMED_PERSON',
       planningBasis,
       source,
       defaultPercent: percent,

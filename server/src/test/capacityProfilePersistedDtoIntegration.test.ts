@@ -1248,4 +1248,124 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(nr.pricingModel).toBe('PRO_RATA')
     })
   })
+
+  describe('8. Named-resource profile-first write integration', () => {
+    const pwrRtId = 'rt-pwr-1'
+    const pwrNrId = 'nr-pwr-1'
+
+    it('PUT creates CapacityProfile row and preserves compatibility fields', async () => {
+      addResourceType(pwrRtId, 'Write RT', 1)
+      addNamedResource(pwrNrId, 'Write Person', pwrRtId, {
+        pricingModel: 'PRO_RATA',
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${pwrRtId}/named-resources/${pwrNrId}`)
+        .set('Authorization', authHeader)
+        .send({
+          name: 'Updated Person',
+          allocationMode: 'TIMELINE',
+          allocationPercent: 75,
+          allocationPct: 75,
+          allocationStartWeek: 2,
+          allocationEndWeek: 10,
+          startWeek: 2,
+          endWeek: 10,
+          pricingModel: 'PRO_RATA',
+        })
+
+      expect(res.status).toBe(200)
+
+      // CapacityProfile row exists with profile-first data
+      const profiles = storeRef.current.capacityProfiles.filter(
+        (cp: any) => cp.namedResourceId === pwrNrId,
+      )
+      expect(profiles).toHaveLength(1)
+      const cp = profiles[0]
+      expect(cp.ownerKind).toBe('NAMED_PERSON')
+      expect(cp.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(cp.source).toBe('AVAILABILITY_WINDOW')
+      expect(cp.defaultPercent).toBe(75)
+      expect(cp.startWeek).toBe(2)
+      expect(cp.endWeek).toBe(10)
+
+      // NamedResource compatibility fields updated
+      const nr = storeRef.current.namedResources.find((n: any) => n.id === pwrNrId)
+      expect(nr).toBeDefined()
+      expect(nr.allocationMode).toBe('TIMELINE')
+      expect(nr.allocationPercent).toBe(75)
+      expect(nr.allocationPct).toBe(75)
+      expect(nr.allocationStartWeek).toBe(2)
+      expect(nr.allocationEndWeek).toBe(10)
+      expect(nr.startWeek).toBe(2)
+      expect(nr.endWeek).toBe(10)
+      expect(nr.pricingModel).toBe('PRO_RATA')
+      expect(nr.name).toBe('Updated Person')
+
+      // Profile-first row was not overwritten by legacy-derived sync
+      // (sync preserves this NR's profile)
+      const profilesAfterSync = storeRef.current.capacityProfiles.filter(
+        (cp: any) => cp.namedResourceId === pwrNrId,
+      )
+      expect(profilesAfterSync).toHaveLength(1)
+      expect(profilesAfterSync[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+    })
+
+    it('Resource Profile response remains compatible with capacity profile enrichment', async () => {
+      addResourceType('rt-cr-1', 'Compat RT', 1)
+      addNamedResource('nr-cr-1', 'Compat Person', 'rt-cr-1', {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 75,
+        allocationStartWeek: 2,
+        allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      // Add backlog + timeline so the Resource Profile route produces a resource row
+      addEpic('epic-cr', 'Compat Epic')
+      addFeature('feat-cr', 'Compat Feature', 'epic-cr')
+      addUserStory('story-cr', 'feat-cr')
+      addTask('task-cr', 'story-cr', 'rt-cr-1', 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-cr', startWeek: 0, durationWeeks: 4 })
+      // Manually add a matching persisted profile so the adapter reconciles
+      addPersistedProfile('cp-cr-1', {
+        resourceTypeId: null,
+        namedResourceId: 'nr-cr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 2,
+        endWeek: 10,
+      })
+
+      const res = await request(app)
+        .get(`/api/projects/${projectId}/resource-profile`)
+        .set('Authorization', authHeader)
+
+      expect(res.status).toBe(200)
+      expect(res.body.resourceRows).toBeDefined()
+
+      const rtRow = res.body.resourceRows.find((r: any) => r.resourceTypeId === 'rt-cr-1')
+      expect(rtRow).toBeDefined()
+
+      // One named resource, not duplicated
+      expect(rtRow.namedResources).toHaveLength(1)
+      const nr = rtRow.namedResources[0]
+      expect(nr.id).toBe('nr-cr-1')
+
+      // capacityProfile present with expected data
+      expect(nr.capacityProfile).toBeDefined()
+      expect(nr.capacityProfile.planningBasis).toBe('availabilityWindow')
+      expect(nr.capacityProfile.source).toBe('availabilityWindow')
+
+      // Legacy allocation fields remain present
+      expect(nr.allocationMode).toBe('TIMELINE')
+      expect(nr.allocationPercent).toBe(75)
+      expect(nr.allocationStartWeek).toBe(2)
+      expect(nr.allocationEndWeek).toBe(10)
+
+      // pricingModel remains a separate field
+      expect(nr.pricingModel).toBe('ACTUAL_DAYS')
+    })
+  })
  })
