@@ -15,6 +15,8 @@ import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityPro
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function mockTx() {
+  let cpCounter = 0
+  let segCounter = 0
   const store: {
     capacityProfiles: any[]
     capacitySegments: any[]
@@ -25,8 +27,27 @@ function mockTx() {
 
   const tx = {
     capacityProfile: {
+      findMany: vi.fn(async (args: any) => {
+        let results = [...store.capacityProfiles]
+        if (args?.where) {
+          const where = args.where
+          if (where.namedResourceId) {
+            results = results.filter(p => p.namedResourceId === where.namedResourceId)
+          }
+          if (where.projectId) {
+            results = results.filter(p => p.projectId === where.projectId)
+          }
+        }
+        // Handle select (just return all fields — test only uses .id)
+        return results
+      }),
       deleteMany: vi.fn(async (args: any) => {
-        if (args?.where?.namedResourceId) {
+        if (args?.where?.id?.in) {
+          const ids = args.where.id.in as string[]
+          store.capacityProfiles = store.capacityProfiles.filter(
+            (p: any) => !ids.includes(p.id),
+          )
+        } else if (args?.where?.namedResourceId) {
           store.capacityProfiles = store.capacityProfiles.filter(
             (p: any) => p.namedResourceId !== args.where.namedResourceId,
           )
@@ -40,15 +61,21 @@ function mockTx() {
         return { count: 0 }
       }),
       create: vi.fn(async (args: any) => {
+        cpCounter++
         const data = args.data ?? args
-        const record = { id: `cp-${store.capacityProfiles.length + 1}`, ...data }
+        const record = { id: `cp-${cpCounter}`, ...data }
         store.capacityProfiles.push(record)
         return { ...record }
       }),
     },
     capacitySegment: {
       deleteMany: vi.fn(async (args: any) => {
-        if (args?.where?.capacityProfile?.namedResourceId) {
+        if (args?.where?.capacityProfileId?.in) {
+          const ids = args.where.capacityProfileId.in as string[]
+          store.capacitySegments = store.capacitySegments.filter(
+            (s: any) => !ids.includes(s.capacityProfileId),
+          )
+        } else if (args?.where?.capacityProfile?.namedResourceId) {
           store.capacitySegments = store.capacitySegments.filter(
             (s: any) => s.capacityProfileId !==
               store.capacityProfiles.find(
@@ -65,8 +92,9 @@ function mockTx() {
         return { count: 0 }
       }),
       create: vi.fn(async (args: any) => {
+        segCounter++
         const data = args.data ?? args
-        const record = { id: `seg-${store.capacitySegments.length + 1}`, ...data }
+        const record = { id: `seg-${segCounter}`, ...data }
         store.capacitySegments.push(record)
         return { ...record }
       }),
@@ -260,5 +288,62 @@ describe('upsertNRProfileAndProjectLegacy', () => {
     const tx4 = mockTx() as any
     await upsertNRProfileAndProjectLegacy(tx4, projectId, `${nrId}-4`, rtId, {})
     expect(tx4._store.capacityProfiles[0].ownerKind).toBe('NAMED_PERSON')
+  })
+
+  it('allocationPct-only payload projects percent correctly when allocationPercent is omitted', async () => {
+    const tx = mockTx() as any
+
+    const result = await upsertNRProfileAndProjectLegacy(tx, projectId, nrId, rtId, {
+      allocationPct: 50,
+    })
+
+    expect(result.allocationPercent).toBe(50)
+    expect(tx._store.capacityProfiles[0].defaultPercent).toBe(50)
+  })
+
+  it('startWeek/endWeek-only payload preserves window through projection', async () => {
+    const tx = mockTx() as any
+
+    const result = await upsertNRProfileAndProjectLegacy(tx, projectId, nrId, rtId, {
+      startWeek: 2,
+      endWeek: 10,
+    })
+
+    // Helper should treat presence of start/end as TIMELINE-compatible
+    expect(result.allocationMode).toBe('TIMELINE')
+    expect(result.allocationStartWeek).toBe(2)
+    expect(result.allocationEndWeek).toBe(10)
+    expect(result.allocationPercent).toBe(100)
+    expect(result.lossy).toBe(false)
+
+    // Persisted profile should have the window
+    const cp = tx._store.capacityProfiles[0]
+    expect(cp.startWeek).toBe(2)
+    expect(cp.endWeek).toBe(10)
+  })
+
+  it('explicit cleanup deletes stale segments by concrete profile IDs', async () => {
+    const tx = mockTx() as any
+
+    // First write: create a profile
+    await upsertNRProfileAndProjectLegacy(tx, projectId, nrId, rtId, {
+      allocationMode: 'TIMELINE',
+      allocationPercent: 50,
+      startWeek: 0,
+      endWeek: 4,
+    })
+    expect(tx._store.capacityProfiles).toHaveLength(1)
+    const firstProfileId = tx._store.capacityProfiles[0].id
+
+    // Second write: different mode — should replace profile
+    await upsertNRProfileAndProjectLegacy(tx, projectId, nrId, rtId, {
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+    })
+
+    // Old profile should be gone
+    expect(tx._store.capacityProfiles).toHaveLength(1)
+    expect(tx._store.capacityProfiles[0].id).not.toBe(firstProfileId)
+    expect(tx._store.capacityProfiles[0].planningBasis).toBe('DEMAND_FOLLOWING')
   })
 })

@@ -565,6 +565,7 @@ describe('named-resource auto-name race safety', () => {
         resourceType: { update: vi.fn().mockResolvedValue({}) },
         project: { update: vi.fn().mockResolvedValue({}) },
         capacityProfile: {
+          findMany: vi.fn().mockResolvedValue([]),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
           create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
         },
