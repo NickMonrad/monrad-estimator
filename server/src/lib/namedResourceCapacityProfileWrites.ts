@@ -75,13 +75,20 @@ export async function upsertNRProfileAndProjectLegacy(
   options: NRProfileWriteOptions = {},
 ): Promise<LegacyAllocationProjection> {
   // ── 1. Normalise incoming fields ───────────────────────────────────────
-  const mode = payload.allocationMode ?? 'EFFORT'
-  const percent = payload.allocationPercent ?? payload.allocationPct ?? 100
   const allocationStartWeek = payload.allocationStartWeek ?? payload.startWeek ?? null
   const allocationEndWeek = payload.allocationEndWeek ?? payload.endWeek ?? null
 
-  const planningBasis = ALLOCATION_MODE_TO_PLANNING_BASIS[mode] ?? 'DEMAND_FOLLOWING'
-  const source = deriveProfileSource(mode)
+  // Normalise mode: explicit allocationMode wins; if window fields are present, infer TIMELINE
+  let mode: string | null | undefined = payload.allocationMode
+  const hasAllocationMode = mode !== undefined && mode !== null
+  const hasWindow = allocationStartWeek != null || allocationEndWeek != null
+  if (!hasAllocationMode) {
+    mode = hasWindow ? 'TIMELINE' : 'EFFORT'
+  }
+  const percent = payload.allocationPercent ?? payload.allocationPct ?? 100
+
+  const planningBasis = ALLOCATION_MODE_TO_PLANNING_BASIS[mode as string] ?? 'DEMAND_FOLLOWING'
+  const source = deriveProfileSource(mode as string)
 
   // Build the in-memory profile shape (camelCase for the projection helper).
   const profile = {
@@ -90,19 +97,32 @@ export async function upsertNRProfileAndProjectLegacy(
     defaultPercent: percent,
     // For simple legacy fields there are no explicit segments.
     // The projection helper uses startWeek/endWeek when segments are empty.
-    startWeek: planningBasis === 'AVAILABILITY_WINDOW' ? allocationStartWeek : null,
-    endWeek: planningBasis === 'AVAILABILITY_WINDOW' ? allocationEndWeek : null,
+    // Always include window values if present, regardless of planning basis.
+    // This ensures explicit startWeek/endWeek inputs are preserved through
+    // the projection cycle even when allocationMode was omitted/defaulted.
+    startWeek: allocationStartWeek,
+    endWeek: allocationEndWeek,
     segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number; source: string }>,
   }
 
   // ── 2. Persist CapacityProfile ─────────────────────────────────────────
   // Delete any existing profile + segments for this NR first.
-  await tx.capacitySegment.deleteMany({
-    where: { capacityProfile: { namedResourceId: nrId, projectId } },
-  })
-  await tx.capacityProfile.deleteMany({
+  // Use explicit profile lookup + ID-based delete for compatibility with
+  // both Prisma's nested relation filters and the integration test store.
+  const existingProfiles = await tx.capacityProfile.findMany({
     where: { namedResourceId: nrId, projectId },
+    select: { id: true },
   })
+  const existingProfileIds = existingProfiles.map((p: { id: string }) => p.id)
+
+  if (existingProfileIds.length > 0) {
+    await tx.capacitySegment.deleteMany({
+      where: { capacityProfileId: { in: existingProfileIds } },
+    })
+    await tx.capacityProfile.deleteMany({
+      where: { id: { in: existingProfileIds } },
+    })
+  }
 
   await tx.capacityProfile.create({
     data: {

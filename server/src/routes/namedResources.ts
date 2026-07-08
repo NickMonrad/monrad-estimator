@@ -111,15 +111,28 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       },
     })
 
-    // Build capacity payload from request + inherited RT allocation defaults
+    // Build capacity payload: explicit request fields win, fall back to inherited RT defaults
+    const hasPost = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
     const capacityPayload: NamedResourceCapacityPayload = {
-      allocationMode: req.body.allocationMode ?? (inheritAllocation ? rtAllocationMode : undefined),
-      allocationPercent: req.body.allocationPercent ?? (inheritAllocation ? rtAllocationPercent : undefined),
-      allocationPct: req.body.allocationPct,
-      allocationStartWeek: req.body.allocationStartWeek ?? (inheritAllocation ? rtAllocationStartWeek : undefined),
-      allocationEndWeek: req.body.allocationEndWeek ?? (inheritAllocation ? rtAllocationEndWeek : undefined),
-      startWeek: req.body.startWeek,
-      endWeek: req.body.endWeek,
+      allocationMode: hasPost('allocationMode') ? req.body.allocationMode : (inheritAllocation ? rtAllocationMode : undefined),
+      allocationPercent: hasPost('allocationPercent')
+        ? req.body.allocationPercent
+        : hasPost('allocationPct')
+          ? undefined
+          : (inheritAllocation ? rtAllocationPercent : undefined),
+      allocationPct: hasPost('allocationPct') ? req.body.allocationPct : undefined,
+      allocationStartWeek: hasPost('allocationStartWeek')
+        ? req.body.allocationStartWeek
+        : hasPost('startWeek')
+          ? undefined
+          : (inheritAllocation ? rtAllocationStartWeek : undefined),
+      allocationEndWeek: hasPost('allocationEndWeek')
+        ? req.body.allocationEndWeek
+        : hasPost('endWeek')
+          ? undefined
+          : (inheritAllocation ? rtAllocationEndWeek : undefined),
+      startWeek: hasPost('startWeek') ? req.body.startWeek : undefined,
+      endWeek: hasPost('endWeek') ? req.body.endWeek : undefined,
     }
 
     // Profile-first write + project back to legacy
@@ -179,15 +192,29 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   Object.keys(nrData).forEach(key => {
     if (nrData[key] === undefined) delete nrData[key]
   })
-  // Capacity payload: request fields take precedence, fall back to existing NR
+
+  // Capacity payload: explicit request fields win, fall back to existing NR
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
   const capacityPayload: NamedResourceCapacityPayload = {
-    allocationMode: allocationMode ?? existing.allocationMode,
-    allocationPercent: allocationPercent ?? existing.allocationPercent,
-    allocationPct: allocationPct ?? existing.allocationPct,
-    allocationStartWeek: allocationStartWeek ?? existing.allocationStartWeek,
-    allocationEndWeek: allocationEndWeek ?? existing.allocationEndWeek,
-    startWeek: startWeek ?? existing.startWeek,
-    endWeek: endWeek ?? existing.endWeek,
+    allocationMode: has('allocationMode') ? allocationMode : undefined,
+    allocationPercent: has('allocationPercent')
+      ? allocationPercent
+      : has('allocationPct')
+        ? undefined
+        : existing.allocationPercent,
+    allocationPct: has('allocationPct') ? allocationPct : existing.allocationPct,
+    allocationStartWeek: has('allocationStartWeek')
+      ? allocationStartWeek
+      : has('startWeek')
+        ? undefined
+        : existing.allocationStartWeek,
+    allocationEndWeek: has('allocationEndWeek')
+      ? allocationEndWeek
+      : has('endWeek')
+        ? undefined
+        : existing.allocationEndWeek,
+    startWeek: has('startWeek') ? startWeek : existing.startWeek,
+    endWeek: has('endWeek') ? endWeek : existing.endWeek,
   }
 
   const resource = await prisma.$transaction(async tx => {
