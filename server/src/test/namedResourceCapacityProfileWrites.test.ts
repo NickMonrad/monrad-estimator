@@ -103,7 +103,7 @@ describe('upsertNRProfileAndProjectLegacy', () => {
     expect(tx._store.capacityProfiles).toHaveLength(1)
     const cp = tx._store.capacityProfiles[0]
     expect(cp.namedResourceId).toBe(nrId)
-    expect(cp.resourceTypeId).toBe(rtId)
+    expect(cp.resourceTypeId).toBeNull()
     expect(cp.ownerKind).toBe('NAMED_PERSON')
     expect(cp.planningBasis).toBe('DEMAND_FOLLOWING')
     expect(cp.source).toBe('FIXED')
@@ -233,5 +233,32 @@ describe('upsertNRProfileAndProjectLegacy', () => {
     await upsertNRProfileAndProjectLegacy(tx, projectId, nrId, rtId, payload)
 
     expect(payload).toEqual({ allocationMode: 'TIMELINE', allocationPercent: 50 })
+  })
+
+  it('uses synthetic true → PLANNED_RESOURCE owner kind', async () => {
+    const tx = mockTx() as any
+
+    await upsertNRProfileAndProjectLegacy(tx, projectId, nrId, rtId, {}, { synthetic: true })
+
+    expect(tx._store.capacityProfiles).toHaveLength(1)
+    expect(tx._store.capacityProfiles[0].ownerKind).toBe('PLANNED_RESOURCE')
+  })
+
+  it('uses synthetic false/null/undefined → NAMED_PERSON owner kind', async () => {
+    const tx1 = mockTx() as any
+    await upsertNRProfileAndProjectLegacy(tx1, projectId, nrId, rtId, {}, { synthetic: false })
+    expect(tx1._store.capacityProfiles[0].ownerKind).toBe('NAMED_PERSON')
+
+    const tx2 = mockTx() as any
+    await upsertNRProfileAndProjectLegacy(tx2, projectId, `${nrId}-2`, rtId, {}, { synthetic: null })
+    expect(tx2._store.capacityProfiles[0].ownerKind).toBe('NAMED_PERSON')
+
+    const tx3 = mockTx() as any
+    await upsertNRProfileAndProjectLegacy(tx3, projectId, `${nrId}-3`, rtId, {}, {})
+    expect(tx3._store.capacityProfiles[0].ownerKind).toBe('NAMED_PERSON')
+
+    const tx4 = mockTx() as any
+    await upsertNRProfileAndProjectLegacy(tx4, projectId, `${nrId}-4`, rtId, {})
+    expect(tx4._store.capacityProfiles[0].ownerKind).toBe('NAMED_PERSON')
   })
 })

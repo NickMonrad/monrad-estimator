@@ -370,4 +370,22 @@ describe('syncCapacityProfilesForProject', () => {
     expect(prisma.capacityProfile.create).not.toHaveBeenCalled()
   })
 
+  it('accepts preserveNamedResourceIds option and filters persisted profiles', async () => {
+    vi.mocked(mapProjectToCapacityProfiles).mockReturnValue([
+      { id: 'nr-1', projectId: 'proj-1', owner: { kind: 'namedPerson' as const, id: 'nr-1', name: 'NR 1' }, planningBasis: 'demandFollowing' as const, source: 'fixed' as const, defaultPercent: 100, startWeek: null, endWeek: null, segments: [], legacy: null as any },
+    ])
+    // Persisted profile for NR (profile-first row)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      { id: 'cp-nr-1', ownerKind: 'NAMED_PERSON', resourceTypeId: null, namedResourceId: 'nr-1', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null, segments: [] },
+    ] as any)
+    vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-new' } as any)
+    vi.mocked(prisma.capacityProfile.delete).mockResolvedValue({} as any)
+
+    await syncCapacityProfilesForProject(prisma, 'proj-1', { preserveNamedResourceIds: ['nr-1'] })
+
+    // Preserved NR's persisted profile should not be created or deleted
+    expect(prisma.capacityProfile.create).not.toHaveBeenCalled()
+    expect(prisma.capacityProfile.delete).not.toHaveBeenCalled()
+  })
+
 })

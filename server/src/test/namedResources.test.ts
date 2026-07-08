@@ -65,6 +65,19 @@ describe('named-resource capacity profile write', () => {
       .send({ name: 'Updated' })
 
     expect(upsertNRProfileAndProjectLegacy).toHaveBeenCalledWith(tx, 'proj-1', 'nr-1', 'rt-1', expect.any(Object))
+    // Route writes all projected compatibility fields to NamedResource
+    expect(tx.namedResource.update).toHaveBeenCalledWith({
+      where: { id: 'nr-1' },
+      data: {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationPct: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
   })
 
   it('PATCH named-resource update calls upsertNRProfileAndProjectLegacy inside the transaction', async () => {
@@ -96,6 +109,8 @@ describe('named-resource capacity profile write', () => {
     expect(upsertNRProfileAndProjectLegacy).toHaveBeenCalledWith(tx, 'proj-1', 'nr-1', 'rt-1', expect.objectContaining({
       allocationMode: 'TIMELINE',
     }))
+    // Sync called with preserveNamedResourceIds
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', { preserveNamedResourceIds: ['nr-1'] })
   })
 
   it('PUT calls both upsertNRProfileAndProjectLegacy (profile-first) and sync (role-level fill)', async () => {
@@ -117,7 +132,7 @@ describe('named-resource capacity profile write', () => {
     // Profile-first write is called
     expect(upsertNRProfileAndProjectLegacy).toHaveBeenCalled()
     // Sync also called to create role-level and other profiles
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', { preserveNamedResourceIds: ['nr-1'] })
   })
 
   it('DELETE named-resource still calls sync for full project reconciliation', async () => {

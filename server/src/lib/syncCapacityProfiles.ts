@@ -86,6 +86,11 @@ export interface SyncResult {
   segmentsDeleted: number
 }
 
+export interface SyncOptions {
+  /** Named resource IDs whose capacity profiles should not be overwritten by the legacy-derived sync. */
+  preserveNamedResourceIds?: string[]
+}
+
 // ─── Validation ────────────────────────────────────────────────────────────
 
 export class CapacityProfileValidationError extends Error {
@@ -131,12 +136,13 @@ function validateOwner(profile: {
  * is atomic with the legacy write.
  *
  * @param prismaOrTx  PrismaClient (standalone) or TransactionClient (inside a transaction)
- * @param projectId   The project whose profiles should be synced
+ * @param options     Optional: SyncOptions (preserveNamedResourceIds, etc.)
  * @throws            If the project is not found or reconciliation fails after sync
  */
 export async function syncCapacityProfilesForProject(
   prismaOrTx: any,
   projectId: string,
+  options?: SyncOptions,
 ): Promise<SyncResult> {
   const result: SyncResult = {
     profilesCreated: 0,
@@ -230,9 +236,26 @@ export async function syncCapacityProfilesForProject(
     }
   }
 
+  // Remove preserved NR profiles from persistedByKey so sync won't touch them
+  const preserveIds = new Set(options?.preserveNamedResourceIds ?? [])
+  if (preserveIds.size > 0) {
+    for (const [key, pp] of persistedByKey) {
+      if (pp.namedResourceId && preserveIds.has(pp.namedResourceId)) {
+        persistedByKey.delete(key)
+      }
+    }
+  }
+
   // 6. Upsert/create each expected profile and replace its segments
   for (const profile of expectedProfiles) {
     validateOwner(profile)
+    // Skip expected profiles for NRs preserved by profile-first writes
+    if (profile.owner.kind !== 'role' && preserveIds.has(profile.owner.id)) {
+      const skipKey = `${project.id}::${profile.owner.kind}::${profile.owner.id}`
+      persistedByKey.delete(skipKey)
+      continue
+    }
+
     const key = `${project.id}::${profile.owner.kind}::${profile.owner.id}`
 
     const ownerKind = toPrismaOwnerKind(profile.owner.kind)
@@ -313,7 +336,7 @@ export async function syncCapacityProfilesForProject(
     result.profilesDeleted++
   }
 
-  // 8. Verify reconciliation after sync
+  // 8. Verify reconciliation after sync (exclude preserved NRs)
   const afterSyncPersisted = await (
     prismaOrTx as any
   ).capacityProfile.findMany({
@@ -325,10 +348,17 @@ export async function syncCapacityProfilesForProject(
     },
   })
 
+  const filterPreserved = (p: any) =>
+    preserveIds.size === 0 || !('namedResourceId' in p) || !p.namedResourceId || !preserveIds.has(p.namedResourceId)
+  const filteredExpected = expectedProfiles.filter(
+    (p: any) => preserveIds.size === 0 || p.owner.kind === 'role' || !preserveIds.has(p.owner.id),
+  )
+  const filteredPersisted = afterSyncPersisted.filter(filterPreserved)
+
   const comparison = compareCapacityProfiles(
     projectId,
-    expectedProfiles,
-    afterSyncPersisted.map((pp: any) => ({
+    filteredExpected,
+    filteredPersisted.map((pp: any) => ({
       id: pp.id,
       resourceTypeId: pp.resourceTypeId,
       namedResourceId: pp.namedResourceId,
