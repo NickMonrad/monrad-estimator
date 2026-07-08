@@ -54,7 +54,10 @@ describe('named-resource capacity profile write', () => {
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
 
     const tx = {
-      namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }) },
+      namedResource: {
+        update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+      },
       project: { update: vi.fn() },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -64,22 +67,18 @@ describe('named-resource capacity profile write', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
 
+    // Helper still called to ensure a profile exists
     expect(upsertNRProfileAndProjectLegacy).toHaveBeenCalledWith(tx, 'proj-1', 'nr-1', 'rt-1', expect.any(Object))
-    // Route writes all projected compatibility fields to NamedResource
+    // Non-capacity update always happens (name field)
     expect(tx.namedResource.update).toHaveBeenCalledWith({
       where: { id: 'nr-1' },
-      data: {
-        allocationMode: 'EFFORT',
-        allocationPercent: 100,
-        allocationPct: 100,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        startWeek: null,
-        endWeek: null,
-      },
+      data: { name: 'Updated' },
     })
+    // No capacity-input → route does NOT update legacy fields via a second update
+    expect(tx.namedResource.update).toHaveBeenCalledTimes(1)
+    // Route re-reads the NR after creating the profile
+    expect(tx.namedResource.findFirst).toHaveBeenCalledWith({ where: { id: 'nr-1' } })
   })
-
   it('PATCH named-resource update calls upsertNRProfileAndProjectLegacy inside the transaction', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
@@ -119,7 +118,10 @@ describe('named-resource capacity profile write', () => {
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
 
     const tx = {
-      namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }) },
+      namedResource: {
+        update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+      },
       project: { update: vi.fn() },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))

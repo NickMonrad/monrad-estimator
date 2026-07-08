@@ -193,26 +193,47 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     if (nrData[key] === undefined) delete nrData[key]
   })
 
-  // Capacity payload: explicit request fields win, fall back to existing NR
+  // Capacity payload: distinguish explicit capacity input from non-capacity-only changes.
+  // When no capacity fields are provided, preserve existing capacity state.
+  // When capacity fields are provided but allocationMode is omitted, pass undefined
+  // so the helper can infer TIMELINE from explicit startWeek/endWeek presence.
   const has = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
+  const hasCapacityInput =
+    has('allocationMode') ||
+    has('allocationPercent') ||
+    has('allocationPct') ||
+    has('allocationStartWeek') ||
+    has('allocationEndWeek') ||
+    has('startWeek') ||
+    has('endWeek')
+
   const capacityPayload: NamedResourceCapacityPayload = {
-    allocationMode: has('allocationMode') ? allocationMode : undefined,
+    allocationMode: has('allocationMode')
+      ? allocationMode
+      : hasCapacityInput
+        ? undefined          // let helper infer TIMELINE from startWeek/endWeek
+        : existing.allocationMode,  // preserve existing mode
+
     allocationPercent: has('allocationPercent')
       ? allocationPercent
       : has('allocationPct')
         ? undefined
         : existing.allocationPercent,
+
     allocationPct: has('allocationPct') ? allocationPct : existing.allocationPct,
+
     allocationStartWeek: has('allocationStartWeek')
       ? allocationStartWeek
       : has('startWeek')
         ? undefined
         : existing.allocationStartWeek,
+
     allocationEndWeek: has('allocationEndWeek')
       ? allocationEndWeek
       : has('endWeek')
         ? undefined
         : existing.allocationEndWeek,
+
     startWeek: has('startWeek') ? startWeek : existing.startWeek,
     endWeek: has('endWeek') ? endWeek : existing.endWeek,
   }
@@ -220,21 +241,41 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const resource = await prisma.$transaction(async tx => {
     // Write non-capacity fields first
     await tx.namedResource.update({ where: { id }, data: nrData })
-    // Profile-first write + project back to legacy
-    const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
-    // Write projected legacy fields as compatibility
-    const updated = await tx.namedResource.update({
-      where: { id },
-      data: {
-        allocationMode: projection.allocationMode,
-        allocationPercent: projection.allocationPercent ?? 100,
-        allocationPct: projection.allocationPercent ?? 100,
-        allocationStartWeek: projection.allocationStartWeek,
-        allocationEndWeek: projection.allocationEndWeek,
-        startWeek: projection.allocationStartWeek,
-        endWeek: projection.allocationEndWeek,
-      },
-    })
+
+    let updated
+    if (hasCapacityInput) {
+      // Capacity fields provided — profile-first write + project back to legacy
+      const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
+      updated = await tx.namedResource.update({
+        where: { id },
+        data: {
+          allocationMode: projection.allocationMode,
+          allocationPercent: projection.allocationPercent ?? 100,
+          allocationPct: projection.allocationPercent ?? 100,
+          allocationStartWeek: projection.allocationStartWeek,
+          allocationEndWeek: projection.allocationEndWeek,
+          startWeek: projection.allocationStartWeek,
+          endWeek: projection.allocationEndWeek,
+        },
+      })
+    } else {
+      // No capacity changes — ensure a profile exists without changing legacy fields.
+      // Suppress window fields so an EFFORT-mode NR with historical window values
+      // does not have its projection silently changed to TIMELINE.
+      await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, {
+        allocationMode: existing.allocationMode,
+        allocationPercent: existing.allocationPercent,
+        allocationPct: existing.allocationPct,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+      })
+      // Don't touch legacy fields — existing values remain intact
+      updated = await tx.namedResource.findFirst({ where: { id } })
+      if (!updated) throw new Error('NamedResource not found after update')
+    }
+
     // Sync remaining profiles (role-level, other NRs) for full project reconciliation
     await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
 
