@@ -1538,5 +1538,121 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(rtRow.namedResources).toHaveLength(1)
       expect(rtRow.namedResources[0].capacityProfile).toBeDefined()
     })
+
+    it('non-capacity PUT preserves existing CAPACITY_PLAN state', async () => {
+      const cpRtId = 'rt-cap-plan'
+      const cpNrId = 'nr-cap-plan'
+      addResourceType(cpRtId, 'CapPlan RT', 1)
+      addNamedResource(cpNrId, 'CapPlan Person', cpRtId, {
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        pricingModel: 'PRO_RATA',
+      })
+      // Pre-create a matching profile (simulating previous profile-first write)
+      addPersistedProfile('cp-cap-plan', {
+        resourceTypeId: null,
+        namedResourceId: cpNrId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+      })
+      // Add backlog + timeline so Resource Profile route produces a row
+      addEpic('epic-cp', 'CapPlan Epic')
+      addFeature('feat-cp', 'CapPlan Feature', 'epic-cp')
+      addUserStory('story-cp', 'feat-cp')
+      addTask('task-cp', 'story-cp', cpRtId, 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-cp', startWeek: 0, durationWeeks: 4 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${cpRtId}/named-resources/${cpNrId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Only' })
+
+      expect(res.status).toBe(200)
+
+      // NamedResource name updated, capacity state preserved
+      expect(res.body.name).toBe('Renamed Only')
+      expect(res.body.allocationMode).toBe('CAPACITY_PLAN')
+      expect(res.body.allocationPercent).toBe(100)
+      expect(res.body.allocationPct).toBe(100)
+
+      // CapacityProfile preserved
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === cpNrId,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('CAPACITY_PROFILE')
+      expect(profile!.source).toBe('SQUAD_PLANNER')
+
+      // Profile-first row survives sync
+      const profilesAfter = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === cpNrId,
+      )
+      expect(profilesAfter).toHaveLength(1)
+      expect(profilesAfter[0].planningBasis).toBe('CAPACITY_PROFILE')
+    })
+
+    it('non-capacity PUT does not infer TIMELINE from historical window values', async () => {
+      const histRtId = 'rt-hist'
+      const histNrId = 'nr-hist'
+      addResourceType(histRtId, 'Hist RT', 1)
+      addNamedResource(histNrId, 'Hist Person', histRtId, {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        startWeek: 2,
+        endWeek: 10,
+        allocationStartWeek: 2,
+        allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      // Pre-create a matching profile (simulating previous profile-first write)
+      addPersistedProfile('cp-hist', {
+        resourceTypeId: null,
+        namedResourceId: histNrId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 2,
+        endWeek: 10,
+      })
+      // Add backlog + timeline so Resource Profile route produces a row
+      addEpic('epic-hist', 'Hist Epic')
+      addFeature('feat-hist', 'Hist Feature', 'epic-hist')
+      addUserStory('story-hist', 'feat-hist')
+      addTask('task-hist', 'story-hist', histRtId, 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-hist', startWeek: 0, durationWeeks: 4 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${histRtId}/named-resources/${histNrId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Only' })
+
+      expect(res.status).toBe(200)
+
+      // NamedResource name updated, capacity state preserved
+      expect(res.body.name).toBe('Renamed Only')
+      expect(res.body.allocationMode).toBe('EFFORT')
+      expect(res.body.allocationPercent).toBe(100)
+
+      // Route did not infer TIMELINE just because existing startWeek/endWeek values are present
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === histNrId,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('DEMAND_FOLLOWING')
+
+      // Profile-first row survives sync
+      const profilesAfter = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === histNrId,
+      )
+      expect(profilesAfter).toHaveLength(1)
+      expect(profilesAfter[0].planningBasis).toBe('DEMAND_FOLLOWING')
+    })
   })
  })
