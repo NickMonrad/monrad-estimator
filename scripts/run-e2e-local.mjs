@@ -16,6 +16,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 
@@ -28,7 +29,7 @@ const e2eDir = fileURLToPath(new URL('../e2e/', import.meta.url))
 
 /** Read and parse server/.env, return a plain object. */
 function loadDotEnv() {
-  const envPath = fileURLToPath(new URL('server/.env', root))
+  const envPath = path.join(root, 'server', '.env')
   let raw
   try {
     raw = fs.readFileSync(envPath, 'utf8')
@@ -69,6 +70,16 @@ function loadDotEnv() {
 const fileEnv = loadDotEnv()
 const resolvedEnv = { ...fileEnv, ...process.env }
 
+// ── Validation mode ──────────────────────────────────────────────────────────
+// `--validate` loads and merges server/.env then exits — lets CI check the
+// runner can parse without starting servers.
+if (process.argv.includes('--validate')) {
+  const keys = Object.keys(fileEnv).sort()
+  console.log(`[e2e-local] server/.env loaded: ${keys.length} var(s)`)
+  console.log(`[e2e-local] DATABASE_URL: ${resolvedEnv.DATABASE_URL ? 'set' : 'unset'}`)
+  console.log('[e2e-local] Validation OK')
+  process.exit(0)
+}
 // ── Port discovery ──────────────────────────────────────────────────────────
 
 const host = process.env.E2E_HOST ?? '127.0.0.1'
