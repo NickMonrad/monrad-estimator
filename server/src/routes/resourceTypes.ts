@@ -130,24 +130,58 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     allocationMode === undefined &&
     count !== undefined
 
+  const shouldPreserveRTOwnedProfile = !hasCapacityInput || shouldExitCapacityPlan
+
   const rt = await prisma.$transaction(async tx => {
     let updated
 
-    // Override mode to CAPACITY_PLAN if we are exiting — the sync needs to see
-    // the current CAPACITY_PLAN state to clean up plan slots before we transition.
-    // The projection returned will reflect the new mode after we tell the helper
-    // the real target mode via the payload (the helper handles non-window suppression).
-    const helperPayload = shouldExitCapacityPlan
-      ? { ...capacityPayload, allocationMode: existing.allocationMode }
-      : capacityPayload
+    if (shouldExitCapacityPlan) {
+      // Exit always produces TIMELINE/100/null/null — request-provided
+      // allocationPercent is ignored because exitCapacityPlanForManualScheduling
+      // hardcodes 100 for the RT legacy fields. Keep profile and RT consistent.
+      const exitPayload = {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      }
 
-    if (hasCapacityInput) {
-      // Capacity fields provided — profile-first write + project back to legacy
       const projection = await upsertRTProfileAndProjectLegacy(
         tx, req.params.projectId as string, req.params.id as string,
-        helperPayload,
+        exitPayload,
       )
-      // Write projected legacy fields + non-capacity fields
+
+      await exitCapacityPlanForManualScheduling(existing.id, tx)
+
+      const exitData = {
+        ...data,
+        allocationMode: projection.allocationMode,
+        allocationPercent: projection.allocationPercent ?? 100,
+        allocationStartWeek: projection.allocationStartWeek,
+        allocationEndWeek: projection.allocationEndWeek,
+      }
+      updated = await tx.resourceType.update({
+        where: { id: req.params.id as string },
+        data: exitData,
+      })
+
+      await tx.namedResource.updateMany({
+        where: { resourceTypeId: existing.id, allocationMode: 'CAPACITY_PLAN' },
+        data: {
+          allocationMode: projection.allocationMode,
+          allocationPercent: projection.allocationPercent ?? 100,
+          allocationStartWeek: projection.allocationStartWeek,
+          allocationEndWeek: projection.allocationEndWeek,
+          allocationPct: projection.allocationPercent ?? 100,
+          startWeek: projection.allocationStartWeek,
+          endWeek: projection.allocationEndWeek,
+        },
+      })
+    } else if (hasCapacityInput) {
+      const projection = await upsertRTProfileAndProjectLegacy(
+        tx, req.params.projectId as string, req.params.id as string,
+        capacityPayload,
+      )
       updated = await tx.resourceType.update({
         where: { id: req.params.id as string },
         data: {
@@ -158,25 +192,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           allocationEndWeek: projection.allocationEndWeek,
         },
       })
-
-      // Handle CAPACITY_PLAN exit if applicable
-      if (shouldExitCapacityPlan) {
-        await exitCapacityPlanForManualScheduling(existing.id, tx)
-        await tx.namedResource.updateMany({
-          where: { resourceTypeId: existing.id, allocationMode: 'CAPACITY_PLAN' },
-          data: {
-            allocationMode: projection.allocationMode,
-            allocationPercent: projection.allocationPercent ?? 100,
-            allocationStartWeek: projection.allocationStartWeek,
-            allocationEndWeek: projection.allocationEndWeek,
-            allocationPct: projection.allocationPercent ?? 100,
-            startWeek: projection.allocationStartWeek,
-            endWeek: projection.allocationEndWeek,
-          },
-        })
-      }
     } else {
-      // No capacity changes — preserve existing role-level profile if present.
       const existingProfiles = await tx.capacityProfile.findMany({
         where: { resourceTypeId: req.params.id as string, namedResourceId: null, projectId: req.params.projectId as string },
         select: { id: true },
@@ -185,35 +201,12 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         await upsertRTProfileAndProjectLegacy(tx, req.params.projectId as string, req.params.id as string,
           buildMissingRTProfilePayload(existing))
       }
-
       updated = await tx.resourceType.update({
         where: { id: req.params.id as string },
         data,
       })
-
-      if (shouldExitCapacityPlan) {
-        data.allocationMode = 'TIMELINE'
-        data.allocationPercent = 100
-        data.allocationStartWeek = null
-        data.allocationEndWeek = null
-        await exitCapacityPlanForManualScheduling(existing.id, tx)
-        updated = await tx.resourceType.update({ where: { id: req.params.id as string }, data })
-        await tx.namedResource.updateMany({
-          where: { resourceTypeId: existing.id, allocationMode: 'CAPACITY_PLAN' },
-          data: {
-            allocationMode: 'TIMELINE',
-            allocationPercent: 100,
-            allocationStartWeek: null,
-            allocationEndWeek: null,
-            allocationPct: 100,
-            startWeek: null,
-            endWeek: null,
-          },
-        })
-      }
     }
-    // 3. Fetch existing named-resource IDs for this RT so profile-first rows
-    //    are preserved during the global sync.
+
     const existingNRs = await tx.namedResource.findMany({
       where: { resourceTypeId: req.params.id as string },
       select: { id: true },
@@ -221,10 +214,11 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const preserveNRIds = existingNRs.map((nr: { id: string }) => nr.id)
 
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
-    await syncCapacityProfilesForProject(tx, req.params.projectId as string, {
-      preserveNamedResourceIds: preserveNRIds,
-      ...(hasCapacityInput ? {} : { preserveResourceTypeIds: [req.params.id as string] }),
-    })
+    const syncOptions: Record<string, unknown> = { preserveNamedResourceIds: preserveNRIds }
+    if (shouldPreserveRTOwnedProfile) {
+      syncOptions.preserveResourceTypeIds = [req.params.id as string]
+    }
+    await syncCapacityProfilesForProject(tx, req.params.projectId as string, syncOptions)
 
     return updated
   })

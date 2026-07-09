@@ -2381,5 +2381,140 @@ describe('persisted capacity-profile DTO integration', () => {
       const nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-b3-2')
       expect(nrProfiles).toHaveLength(1)
     })
+
+    // ── CAPACITY_PLAN exit tests ─────────────────────────────────────
+
+    it('count-only exit from CAPACITY_PLAN without NRs writes TIMELINE role profile', async () => {
+      const rtId = 'rt-cp-1'
+      addResourceType(rtId, 'Role CP1', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 2 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationPercent).toBe(100)
+      expect(res.body.allocationStartWeek).toBeNull()
+      expect(res.body.allocationEndWeek).toBeNull()
+
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(roleProfiles[0].defaultPercent).toBe(100)
+      expect(roleProfiles[0].startWeek).toBeNull()
+      expect(roleProfiles[0].endWeek).toBeNull()
+    })
+
+    it('count-only exit from CAPACITY_PLAN with NRs writes TIMELINE role profile', async () => {
+      const rtId = 'rt-cp-2'
+      addResourceType(rtId, 'Role CP2', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 })
+      addNamedResource('nr-cp-2a', 'Person A', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addNamedResource('nr-cp-2b', 'Person B', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 2 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationPercent).toBe(100)
+
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(roleProfiles[0].defaultPercent).toBe(100)
+      expect(storeRef.current.capacityProfiles.filter((p: any) => p.resourceTypeId === rtId)).toHaveLength(1)
+
+      expect(storeRef.current.namedResources.find((n: any) => n.id === 'nr-cp-2a')!.allocationMode).toBe('TIMELINE')
+      expect(storeRef.current.namedResources.find((n: any) => n.id === 'nr-cp-2b')!.allocationMode).toBe('TIMELINE')
+    })
+
+    it('count-only exit cleans up stale CAPACITY_PROFILE role profile and segments', async () => {
+      const rtId = 'rt-cp-3'
+      addResourceType(rtId, 'Role CP3', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 })
+      addPersistedProfile('cp-stale-3', {
+        resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER',
+        defaultPercent: 90, startWeek: 3, endWeek: 8,
+      })
+      const now3 = new Date()
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-stale-3a', capacityProfileId: 'cp-stale-3', startWeek: 3, endWeek: 5, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: now3, updatedAt: now3 },
+        { id: 'seg-stale-3b', capacityProfileId: 'cp-stale-3', startWeek: 6, endWeek: 8, capacityPercent: 80, source: 'SQUAD_PLANNER', createdAt: now3, updatedAt: now3 },
+      )
+      addNamedResource('nr-cp-3a', 'Person 3', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 2 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-stale-3')).toBeUndefined()
+
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+
+      expect(storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === 'cp-stale-3')).toHaveLength(0)
+      expect(storeRef.current.namedResources.find((n: any) => n.id === 'nr-cp-3a')!.allocationMode).toBe('TIMELINE')
+    })
+
+    it('exit with allocationPercent provided uses exit-default 100 (exit overrides percent)', async () => {
+      // When exiting CAPACITY_PLAN, exitCapacityPlanForManualScheduling hardcodes
+      // allocationPercent: 100. The projection values are consumed by the name-resource
+      // update but the RT legacy fields reflect the exit default. This is accepted
+      // because the exit semantics always produce TIMELINE+100+null windows.
+      const rtId = 'rt-cp-4'
+      addResourceType(rtId, 'Role CP4', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 })
+      addNamedResource('nr-cp-4a', 'Person 4', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 2, allocationPercent: 60 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      // The exit overrides: allocationPercent is 100 regardless of request
+      expect(res.body.allocationPercent).toBe(100)
+      expect(res.body.allocationStartWeek).toBeNull()
+      expect(res.body.allocationEndWeek).toBeNull()
+
+      // Role profile is TIMELINE/manual state
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      // Profile uses the exit value (100), not the request value (60)
+      expect(roleProfiles[0].defaultPercent).toBe(100)
+    })
   })
  })
