@@ -1895,5 +1895,81 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.allocationStartWeek).toBe(4)
       expect(res.body.allocationEndWeek).toBe(8)
     })
+
+    it('non-capacity PUT creates TIMELINE profile with preserved window when missing', async () => {
+      const mtRtId = 'rt-miss-tl'
+      const mtNrId = 'nr-miss-tl'
+      addResourceType(mtRtId, 'MissTL RT', 1)
+      addNamedResource(mtNrId, 'MissTL Person', mtRtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 60,
+        allocationStartWeek: 4,
+        allocationEndWeek: 9,
+        startWeek: 4,
+        endWeek: 9,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      // No backlog/timeline — not checking Resource Profile response
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${mtRtId}/named-resources/${mtNrId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Only' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.name).toBe('Renamed Only')
+      // Legacy fields preserved
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationStartWeek).toBe(4)
+      expect(res.body.allocationEndWeek).toBe(9)
+
+      // New profile created with TIMELINE semantics
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === mtNrId,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(profile!.source).toBe('AVAILABILITY_WINDOW')
+      expect(profile!.startWeek).toBe(4)
+      expect(profile!.endWeek).toBe(9)
+      expect(profile!.defaultPercent).toBe(60)
+    })
+
+    it('non-capacity PUT creates EFFORT profile with null windows when missing', async () => {
+      const meRtId = 'rt-miss-eff'
+      const meNrId = 'nr-miss-eff'
+      addResourceType(meRtId, 'MissEff RT', 1)
+      addNamedResource(meNrId, 'MissEff Person', meRtId, {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        startWeek: 3,
+        endWeek: 8,
+        allocationStartWeek: 3,
+        allocationEndWeek: 8,
+        pricingModel: 'PRO_RATA',
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${meRtId}/named-resources/${meNrId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Only' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.name).toBe('Renamed Only')
+      // Legacy fields preserved (not rewritten)
+      expect(res.body.allocationMode).toBe('EFFORT')
+      expect(res.body.allocationStartWeek).toBe(3)
+      expect(res.body.allocationEndWeek).toBe(8)
+
+      // New profile created with null windows (stale windows suppressed)
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === meNrId,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(profile!.startWeek).toBeNull()
+      expect(profile!.endWeek).toBeNull()
+      expect(profile!.defaultPercent).toBe(100)
+    })
   })
  })
