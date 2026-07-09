@@ -147,8 +147,12 @@ cd server && npm test
 cd server && npx tsc --noEmit
 cd client && npx tsc --noEmit
 
-# E2E (local runner starts isolated API/Vite servers, chooses free ports, and skips screenshots)
+# E2E (preferred — local runner starts isolated API/Vite servers, chooses free ports)
+# Loads server/.env, runs e2e-cleanup before seed, passes resolved env to all processes
 npm run test:e2e:local
+
+# E2E (requires both dev servers already running)
+npm run test:e2e
 ```
 
 ---
@@ -248,6 +252,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Resource Optimiser — Phase 4 frontend drawer with mode selector (speed/utilisation/balanced), per-RT count constraints, optional budget/duration ceilings, ranked candidate cards with KPI deltas, and apply-with-snapshot rollback | #239 |
 | Timeline workflow cleanup — canonical Update timeline CTA, hidden Level current timeline action, advanced planning copy updates | #314 |
 | Resource Counts allocation controls — stable named-resource columns, clearer planning-basis labels, preserved mode switching/start/end/allocation updates, and stale-banner behaviour | #315 |
+| Windows E2E local runner — unified env loading (server/.env + shell), cleanup-before-seed, resolved env across all processes | #354 |
 
 ---
 

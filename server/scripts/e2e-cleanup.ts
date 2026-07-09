@@ -1,9 +1,8 @@
 /**
- * E2E test data cleanup script.
+ * Deletes all data created by the Playwright test user and any FeatureTemplates
+ * whose name starts with the E2E prefix ("E2E ").
  *
- * Deletes all data created by the Playwright test user (test@example.com)
- * and any FeatureTemplates whose name starts with the E2E prefix ("E2E ").
- *
+ * User email is taken from TEST_EMAIL env var (default: test@example.com).
  * Safe to run against a local dev database; never run against production.
  *
  * Usage:
@@ -11,12 +10,13 @@
  *   # or via npm:
  *   cd server && npm run e2e:cleanup
  */
-
+import 'dotenv/config'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
-import 'dotenv/config'
-
-const E2E_EMAIL = 'test@example.com'
+/**
+ * Default E2E test user email. Override via TEST_EMAIL env var.
+ */
+const E2E_EMAIL = process.env.TEST_EMAIL ?? 'test@example.com'
 const E2E_TEMPLATE_PREFIX = 'E2E '
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL })

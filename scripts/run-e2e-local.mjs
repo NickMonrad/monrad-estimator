@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 /**
  * Local E2E runner.
+ *   - Loads server/.env and merges with shell env (shell wins).
+ *   - Runs e2e-cleanup before seed so repeated runs start clean.
+ *   - Starts API and Vite on dynamic ports, runs Playwright tests.
+ *   - Cleans up child processes on exit.
  *
- * Starts isolated API + Vite dev servers, validates that the API is actually
- * Monrad Estimator (not another service on the same port), then runs Playwright.
+ * Usage:
+ *   cd <repo-root>
+ *   npm run test:e2e:local
+ *
+ *   # Pass extra args to Playwright:
+ *   npm run test:e2e:local -- --grep "auth"
  */
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
 import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 
@@ -14,6 +23,53 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const serverDir = fileURLToPath(new URL('../server/', import.meta.url))
 const clientDir = fileURLToPath(new URL('../client/', import.meta.url))
 const e2eDir = fileURLToPath(new URL('../e2e/', import.meta.url))
+
+// ── Environment loading ──────────────────────────────────────────────────────
+
+/** Read and parse server/.env, return a plain object. */
+function loadDotEnv() {
+  const envPath = fileURLToPath(new URL('server/.env', root))
+  let raw
+  try {
+    raw = fs.readFileSync(envPath, 'utf8')
+  } catch {
+    // server/.env missing — that's fine, use process.env only
+    return {}
+  }
+
+  const parsed = {}
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    // Strip optional `export ` prefix
+    const cleaned = trimmed.startsWith('export ') ? trimmed.slice(7).trimStart() : trimmed
+
+    const sepIdx = cleaned.indexOf('=')
+    if (sepIdx <= 0) continue
+
+    const key = cleaned.slice(0, sepIdx).trim()
+    if (!key) continue
+
+    let value = cleaned.slice(sepIdx + 1).trim()
+
+    // Unwrap matching quotes (single or double)
+    if ((value.startsWith("'") && value.endsWith("'")) ||
+        (value.startsWith('"') && value.endsWith('"'))) {
+      value = value.slice(1, -1)
+    }
+
+    parsed[key] = value
+  }
+
+  return parsed
+}
+
+/** Merged env: file values first, shell env wins. */
+const fileEnv = loadDotEnv()
+const resolvedEnv = { ...fileEnv, ...process.env }
+
+// ── Port discovery ──────────────────────────────────────────────────────────
 
 const host = process.env.E2E_HOST ?? '127.0.0.1'
 const preferredApiPort = Number(process.env.E2E_API_PORT ?? process.env.PORT ?? 3001)
@@ -28,13 +84,21 @@ console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (
 console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
 
 try {
-  await run('npx', ['prisma', 'migrate', 'deploy'], { cwd: serverDir })
-  await run('npx', ['prisma', 'generate'], { cwd: serverDir })
-  await run('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir })
+  // ── Prisma ──────────────────────────────────────────────────────────────
+  await run('npx', ['prisma', 'migrate', 'deploy'], { cwd: serverDir, env: resolvedEnv })
+  await run('npx', ['prisma', 'generate'], { cwd: serverDir, env: resolvedEnv })
 
+  // ── Cleanup before seed ─────────────────────────────────────────────────
+  await run('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: resolvedEnv })
+
+  // ── Seed ────────────────────────────────────────────────────────────────
+  await run('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: resolvedEnv })
+
+  // ── Start API ───────────────────────────────────────────────────────────
   const api = start('npx', ['tsx', 'src/index.ts'], {
     cwd: serverDir,
-    env: {
+    env: resolvedEnv,
+    extraEnv: {
       NODE_ENV: 'test',
       PORT: String(apiPort),
       CLIENT_URL: baseUrl,
@@ -43,22 +107,27 @@ try {
   })
   children.push(api)
 
+  // ── Start Vite ──────────────────────────────────────────────────────────
   const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
     cwd: clientDir,
-    env: {
+    env: resolvedEnv,
+    extraEnv: {
       VITE_API_URL: apiUrl,
     },
     label: 'vite',
   })
   children.push(client)
 
+  // ── Wait for services ───────────────────────────────────────────────────
   await waitForMonradApi(apiUrl)
   await waitForClient(baseUrl)
   await waitForProxy(baseUrl)
 
+  // ── Playwright ──────────────────────────────────────────────────────────
   await run('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
     cwd: e2eDir,
-    env: {
+    env: resolvedEnv,
+    extraEnv: {
       BASE_URL: baseUrl,
       API_URL: apiUrl,
       NODE_ENV: 'test',
@@ -69,39 +138,41 @@ try {
   await stopChildren()
 }
 
-function start(command, args, options) {
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function start(command, args, { cwd, env, extraEnv = {}, label }) {
   const spec = resolveCommand(command, args)
   const child = spawn(spec.command, spec.args, {
-    cwd: options.cwd,
-    env: { ...process.env, ...options.env },
+    cwd,
+    env: { ...env, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
-  child.stdout.on('data', data => process.stdout.write(`[${options.label}] ${data}`))
-  child.stderr.on('data', data => process.stderr.write(`[${options.label}] ${data}`))
+  child.stdout.on('data', data => process.stdout.write(`[${label}] ${data}`))
+  child.stderr.on('data', data => process.stderr.write(`[${label}] ${data}`))
   child.on('error', error => {
-    console.error(`[${options.label}] failed to start: ${error.message}`)
+    console.error(`[${label}] failed to start: ${error.message}`)
   })
   child.on('exit', code => {
     if (code !== null && code !== 0) {
-      console.error(`[${options.label}] exited with code ${code}`)
+      console.error(`[${label}] exited with code ${code}`)
     }
   })
 
   return child
 }
 
-function run(command, args, options = {}) {
+function run(command, args, { cwd, env, extraEnv = {}, inherit, allowFailure } = {}) {
   return new Promise((resolve, reject) => {
     const spec = resolveCommand(command, args)
     const child = spawn(spec.command, spec.args, {
-      cwd: options.cwd,
-      env: { ...process.env, ...options.env },
-      stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+      cwd,
+      env: { ...env, ...extraEnv },
+      stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     })
 
     let output = ''
-    if (!options.inherit) {
+    if (!inherit) {
       child.stdout.on('data', data => {
         output += data.toString()
         process.stdout.write(data)
@@ -114,7 +185,7 @@ function run(command, args, options = {}) {
     child.on('error', reject)
 
     child.on('exit', code => {
-      if (code === 0 || options.allowFailure) resolve(output)
+      if (code === 0 || allowFailure) resolve(output)
       else reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}`))
     })
   })
