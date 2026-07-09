@@ -203,4 +203,41 @@ describe('projectCapacityProfileToLegacyAllocation', () => {
     expect(result!.allocationPercent).toBe(100)
     expect(result!.lossy).toBe(false)
   })
+
+  it('projects availabilityWindow without explicit segments using startWeek/endWeek from profile', () => {
+    const result = projectCapacityProfileToLegacyAllocation(
+      profile({
+        planningBasis: 'availabilityWindow',
+        source: 'availabilityWindow',
+        defaultPercent: 75,
+        startWeek: 2,
+        endWeek: 10,
+      }),
+    )
+
+    expect(result!.allocationMode).toBe('TIMELINE')
+    expect(result!.allocationPercent).toBe(75)
+    expect(result!.allocationStartWeek).toBe(2)
+    expect(result!.allocationEndWeek).toBe(10)
+    expect(result!.lossy).toBe(false)
+  })
+
+  it('projects demandFollowing with explicit startWeek/endWeek as TIMELINE', () => {
+    // When a demand-following profile has start/end week set, it behaves
+    // like an availability window — project to TIMELINE with the window.
+    const result = projectCapacityProfileToLegacyAllocation(
+      profile({
+        planningBasis: 'demandFollowing',
+        source: 'fixed',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 13,
+      }),
+    )
+
+    expect(result!.allocationMode).toBe('TIMELINE')
+    expect(result!.allocationStartWeek).toBe(0)
+    expect(result!.allocationEndWeek).toBe(13)
+    expect(result!.lossy).toBe(false)
+  })
 })

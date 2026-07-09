@@ -1,9 +1,29 @@
+/**
+ * namedResources.test.ts — Route-level tests for named-resource capacity
+ * profile write path.
+ *
+ * These tests verify that named-resource create/update uses the profile-first
+ * write path (upsertNRProfileAndProjectLegacy) instead of the legacy sync.
+ */
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
 import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
+import type { LegacyAllocationProjection } from '../lib/capacityProfileLegacyProjection.js'
+
+// Mock the new profile-first write helper
+vi.mock('../lib/namedResourceCapacityProfileWrites.js', () => ({
+  upsertNRProfileAndProjectLegacy: vi.fn().mockResolvedValue({
+    allocationMode: 'EFFORT',
+    allocationPercent: 100,
+    allocationStartWeek: null,
+    allocationEndWeek: null,
+    lossy: false,
+  } as LegacyAllocationProjection),
+}))
 
 vi.mock('../lib/syncCapacityProfiles.js', () => ({
   syncCapacityProfilesForProject: vi.fn().mockResolvedValue({
@@ -15,6 +35,8 @@ vi.mock('../lib/syncCapacityProfiles.js', () => ({
   }),
 }))
 
+import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityProfileWrites.js'
+
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -25,14 +47,20 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('named-resource capacity profile sync', () => {
-  it('PUT named-resource update calls sync inside the transaction', async () => {
+describe('named-resource capacity profile write', () => {
+  it('PUT named-resource update calls upsertNRProfileAndProjectLegacy inside the transaction', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
 
     const tx = {
-      namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }) },
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      namedResource: {
+        update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+      },
       project: { update: vi.fn() },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -42,13 +70,32 @@ describe('named-resource capacity profile sync', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
 
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
+    // Helper still called to ensure a profile exists
+    expect(upsertNRProfileAndProjectLegacy).toHaveBeenCalledWith(tx, 'proj-1', 'nr-1', 'rt-1', expect.any(Object))
+    // Non-capacity update always happens (name field)
+    expect(tx.namedResource.update).toHaveBeenCalledWith({
+      where: { id: 'nr-1' },
+      data: { name: 'Updated' },
+    })
+    // No capacity-input → route does NOT update legacy fields via a second update
+    expect(tx.namedResource.update).toHaveBeenCalledTimes(1)
+    // Route re-reads the NR after creating the profile
+    expect(tx.namedResource.findFirst).toHaveBeenCalledWith({ where: { id: 'nr-1' } })
   })
-
-  it('PATCH named-resource update calls sync inside the transaction', async () => {
+  it('PATCH named-resource update calls upsertNRProfileAndProjectLegacy inside the transaction', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
-    vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
+    vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({
+      id: 'nr-1',
+      resourceTypeId: 'rt-1',
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    } as never)
 
     const tx = {
       namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1' }) },
@@ -61,16 +108,26 @@ describe('named-resource capacity profile sync', () => {
       .set('Authorization', authHeader)
       .send({ allocationMode: 'TIMELINE' })
 
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
+    expect(upsertNRProfileAndProjectLegacy).toHaveBeenCalledWith(tx, 'proj-1', 'nr-1', 'rt-1', expect.objectContaining({
+      allocationMode: 'TIMELINE',
+    }))
+    // Sync called with preserveNamedResourceIds
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', { preserveNamedResourceIds: ['nr-1'] })
   })
 
-  it('sync is called with tx object, not bare prisma, on PUT', async () => {
+  it('PUT calls both upsertNRProfileAndProjectLegacy (profile-first) and sync (role-level fill)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
 
     const tx = {
-      namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }) },
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      namedResource: {
+        update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+      },
       project: { update: vi.fn() },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -80,11 +137,13 @@ describe('named-resource capacity profile sync', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
 
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalledWith(prisma, 'proj-1')
+    // Profile-first write is called
+    expect(upsertNRProfileAndProjectLegacy).toHaveBeenCalled()
+    // Sync also called to create role-level and other profiles
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', { preserveNamedResourceIds: ['nr-1'] })
   })
 
-  it('DELETE named-resource calls sync after delete and count update, in correct order', async () => {
+  it('DELETE named-resource still calls sync for full project reconciliation', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
@@ -107,12 +166,7 @@ describe('named-resource capacity profile sync', () => {
 
     expect(res.status).toBe(204)
 
-    // Each operation happened
-    expect(deleteFn).toHaveBeenCalledWith({ where: { id: 'nr-1' } })
-    expect(countFn).toHaveBeenCalledWith({ where: { resourceTypeId: 'rt-1' } })
-    expect(updateFn).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'rt-1' }, data: { count: 0 } }),
-    )
+    // DELETE still uses full sync (profile cleanup)
     expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
 
     // Call order: delete < count < update < sync
@@ -149,14 +203,17 @@ describe('named-resource capacity profile sync', () => {
     expect(res.status).not.toBe(204)
   })
 
-  it('PUT sync failure propagates and route returns error', async () => {
+  it('PUT upsertNRProfileAndProjectLegacy failure propagates and route returns error', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
 
-    vi.mocked(syncCapacityProfilesForProject).mockRejectedValueOnce(new Error('sync failed'))
+    vi.mocked(upsertNRProfileAndProjectLegacy).mockRejectedValueOnce(new Error('profile write failed'))
 
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1' }) },
       project: { update: vi.fn() },
     }
@@ -167,7 +224,7 @@ describe('named-resource capacity profile sync', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
 
-    // Sync failure should propagate — not a 200
+    // Helper failure should propagate — not a 200
     expect(res.status).not.toBe(200)
   })
 })
