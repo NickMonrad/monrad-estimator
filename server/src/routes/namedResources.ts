@@ -250,6 +250,33 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       : has('endWeek') ? endWeek : existing.endWeek,
   }
 
+/**
+ * Build a capacity payload for the missing-profile case in non-capacity PUT.
+ *
+ * When no CapacityProfile exists and the PUT only changes non-capacity fields
+ * (name/pricingModel), create a profile from existing legacy fields.
+ * - TIMELINE mode preserves existing window fields (allocationStartWeek > startWeek)
+ * - Non-window modes (EFFORT, FULL_PROJECT, CAPACITY_PLAN) suppress window fields
+ */
+function buildMissingProfilePayload(existing: any): NamedResourceCapacityPayload {
+  const isTimeline = existing.allocationMode === 'TIMELINE'
+  const startWeek = isTimeline
+    ? (existing.allocationStartWeek ?? existing.startWeek ?? null)
+    : null
+  const endWeek = isTimeline
+    ? (existing.allocationEndWeek ?? existing.endWeek ?? null)
+    : null
+  return {
+    allocationMode: existing.allocationMode,
+    allocationPercent: existing.allocationPercent,
+    allocationPct: existing.allocationPct,
+    allocationStartWeek: startWeek,
+    allocationEndWeek: endWeek,
+    startWeek,
+    endWeek,
+  }
+}
+
   const resource = await prisma.$transaction(async tx => {
     // Write non-capacity fields first
     await tx.namedResource.update({ where: { id }, data: nrData })
@@ -270,6 +297,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           endWeek: projection.allocationEndWeek,
         },
       })
+
     } else {
       // No capacity changes — preserve existing profile row identity if present.
       // Only create a profile if one does not already exist.
@@ -279,15 +307,9 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
       if (existingProfiles.length === 0) {
         // Create a profile from existing legacy fields
-        await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, {
-          allocationMode: existing.allocationMode,
-          allocationPercent: existing.allocationPercent,
-          allocationPct: existing.allocationPct,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
-        })
+        // For TIMELINE mode, preserve existing window fields.
+        // For non-window modes, suppress stale windows.
+        await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, buildMissingProfilePayload(existing))
       }
       // Don't touch legacy fields — existing values remain intact
       updated = await tx.namedResource.findFirst({ where: { id } })
