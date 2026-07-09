@@ -193,10 +193,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     if (nrData[key] === undefined) delete nrData[key]
   })
 
-  // Capacity payload: distinguish explicit capacity input from non-capacity-only changes.
-  // When no capacity fields are provided, preserve existing capacity state.
-  // When capacity fields are provided but allocationMode is omitted, pass undefined
-  // so the helper can infer TIMELINE from explicit startWeek/endWeek presence.
   const has = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
   const hasCapacityInput =
     has('allocationMode') ||
@@ -206,6 +202,10 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     has('allocationEndWeek') ||
     has('startWeek') ||
     has('endWeek')
+
+  /** Non-window allocation modes — when explicitly set, stale window fields must be suppressed. */
+  const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
+  const isExplicitNonWindow = has('allocationMode') && allocationMode !== undefined && allocationMode !== null && NON_WINDOW_MODES.has(allocationMode)
 
   const capacityPayload: NamedResourceCapacityPayload = {
     allocationMode: has('allocationMode')
@@ -222,20 +222,32 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
     allocationPct: has('allocationPct') ? allocationPct : existing.allocationPct,
 
-    allocationStartWeek: has('allocationStartWeek')
-      ? allocationStartWeek
-      : has('startWeek')
-        ? undefined
-        : existing.allocationStartWeek,
+    // When allocationMode is explicitly a non-window mode (EFFORT, FULL_PROJECT, CAPACITY_PLAN),
+    // suppress stale window fields regardless of what the NR previously had.
+    // This prevents the projection from misinterpreting historical windows as TIMELINE intent.
+    allocationStartWeek: isExplicitNonWindow
+      ? null
+      : has('allocationStartWeek')
+        ? allocationStartWeek
+        : has('startWeek')
+          ? undefined
+          : existing.allocationStartWeek,
 
-    allocationEndWeek: has('allocationEndWeek')
-      ? allocationEndWeek
-      : has('endWeek')
-        ? undefined
-        : existing.allocationEndWeek,
+    allocationEndWeek: isExplicitNonWindow
+      ? null
+      : has('allocationEndWeek')
+        ? allocationEndWeek
+        : has('endWeek')
+          ? undefined
+          : existing.allocationEndWeek,
 
-    startWeek: has('startWeek') ? startWeek : existing.startWeek,
-    endWeek: has('endWeek') ? endWeek : existing.endWeek,
+    startWeek: isExplicitNonWindow
+      ? null
+      : has('startWeek') ? startWeek : existing.startWeek,
+
+    endWeek: isExplicitNonWindow
+      ? null
+      : has('endWeek') ? endWeek : existing.endWeek,
   }
 
   const resource = await prisma.$transaction(async tx => {
@@ -259,18 +271,24 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         },
       })
     } else {
-      // No capacity changes — ensure a profile exists without changing legacy fields.
-      // Suppress window fields so an EFFORT-mode NR with historical window values
-      // does not have its projection silently changed to TIMELINE.
-      await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, {
-        allocationMode: existing.allocationMode,
-        allocationPercent: existing.allocationPercent,
-        allocationPct: existing.allocationPct,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        startWeek: null,
-        endWeek: null,
+      // No capacity changes — preserve existing profile row identity if present.
+      // Only create a profile if one does not already exist.
+      const existingProfiles = await tx.capacityProfile.findMany({
+        where: { namedResourceId: id, projectId },
+        select: { id: true },
       })
+      if (existingProfiles.length === 0) {
+        // Create a profile from existing legacy fields
+        await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, {
+          allocationMode: existing.allocationMode,
+          allocationPercent: existing.allocationPercent,
+          allocationPct: existing.allocationPct,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
+        })
+      }
       // Don't touch legacy fields — existing values remain intact
       updated = await tx.namedResource.findFirst({ where: { id } })
       if (!updated) throw new Error('NamedResource not found after update')
@@ -297,12 +315,30 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
   const { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
 
+  const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
+  const hasPatch = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
+  const isExplicitNonWindowPatch = hasPatch('allocationMode') && allocationMode !== undefined && allocationMode !== null && NON_WINDOW_MODES.has(allocationMode)
+
   const capacityPayload: NamedResourceCapacityPayload = {
-    allocationMode: allocationMode ?? existing.allocationMode,
-    allocationPercent: allocationPercent ?? existing.allocationPercent,
-    allocationStartWeek: allocationStartWeek ?? existing.allocationStartWeek,
-    allocationEndWeek: allocationEndWeek ?? existing.allocationEndWeek,
+    allocationMode: hasPatch('allocationMode') ? allocationMode : existing.allocationMode,
+
+    allocationPercent: hasPatch('allocationPercent') ? allocationPercent : existing.allocationPercent,
+
     allocationPct: existing.allocationPct,
+
+    // Non-window mode suppresses stale window fields
+    allocationStartWeek: isExplicitNonWindowPatch
+      ? null
+      : hasPatch('allocationStartWeek')
+        ? allocationStartWeek
+        : existing.allocationStartWeek,
+
+    allocationEndWeek: isExplicitNonWindowPatch
+      ? null
+      : hasPatch('allocationEndWeek')
+        ? allocationEndWeek
+        : existing.allocationEndWeek,
+
     startWeek: existing.startWeek,
     endWeek: existing.endWeek,
   }

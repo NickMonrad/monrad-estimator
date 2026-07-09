@@ -75,8 +75,8 @@ export async function upsertNRProfileAndProjectLegacy(
   options: NRProfileWriteOptions = {},
 ): Promise<LegacyAllocationProjection> {
   // ── 1. Normalise incoming fields ───────────────────────────────────────
-  const allocationStartWeek = payload.allocationStartWeek ?? payload.startWeek ?? null
-  const allocationEndWeek = payload.allocationEndWeek ?? payload.endWeek ?? null
+  let allocationStartWeek = payload.allocationStartWeek !== undefined ? payload.allocationStartWeek : payload.startWeek ?? null
+  let allocationEndWeek = payload.allocationEndWeek !== undefined ? payload.allocationEndWeek : payload.endWeek ?? null
 
   // Normalise mode: explicit allocationMode wins; if window fields are present, infer TIMELINE
   let mode: string | null | undefined = payload.allocationMode
@@ -84,6 +84,12 @@ export async function upsertNRProfileAndProjectLegacy(
   const hasWindow = allocationStartWeek != null || allocationEndWeek != null
   if (!hasAllocationMode) {
     mode = hasWindow ? 'TIMELINE' : 'EFFORT'
+  } else if (mode === 'EFFORT' || mode === 'FULL_PROJECT' || mode === 'CAPACITY_PLAN') {
+    // Non-window mode explicitly set — suppress window fields to prevent
+    // the projection helper from returning TIMELINE due to stale window values.
+    // This ensures explicit non-window mode always projects back correctly.
+    allocationStartWeek = null
+    allocationEndWeek = null
   }
   const percent = payload.allocationPercent ?? payload.allocationPct ?? 100
 
