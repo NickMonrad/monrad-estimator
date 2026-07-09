@@ -682,7 +682,11 @@ describe('capacity profile sync integration', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
 
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(
+      tx,
+      'proj-1',
+      expect.objectContaining({ preserveNamedResourceIds: [], preserveResourceTypeIds: ['rt-1'] }),
+    )
   })
 
   it('PATCH count increase calls sync after NR creation and count update', async () => {
@@ -707,7 +711,6 @@ describe('capacity profile sync integration', () => {
     expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 2 } }))
     expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
   })
-
   it('DELETE calls sync inside transaction after scoped delete', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     const tx = {
@@ -725,6 +728,12 @@ describe('capacity profile sync integration', () => {
     expect(tx.resourceType.deleteMany).toHaveBeenCalledWith({
       where: { id: 'rt-1', projectId: 'proj-1' },
     })
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
+  })
+
+  it('sync is called with tx object, not bare prisma', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     const tx = {
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([]),
@@ -744,7 +753,12 @@ describe('capacity profile sync integration', () => {
       .send({ name: 'Updated' })
 
     // Must be called with the transaction object, not bare prisma
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(
+      tx,
+      'proj-1',
+      expect.objectContaining({ preserveNamedResourceIds: [], preserveResourceTypeIds: ['rt-1'] }),
+    )
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalledWith(prisma, 'proj-1', expect.anything())
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalledWith(prisma, 'proj-1')
   })
 })
