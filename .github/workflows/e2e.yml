@@ -52,6 +52,9 @@ jobs:
       - name: Install all dependencies
         run: npm ci
 
+      # ── Validate local E2E runner ─────────────────────────────────
+      - name: Validate local E2E runner loads env correctly
+        run: node scripts/run-e2e-local.mjs --validate
       # ── TypeScript type-checking ──────────────────────────────────
       - name: TypeScript check (client)
         working-directory: client

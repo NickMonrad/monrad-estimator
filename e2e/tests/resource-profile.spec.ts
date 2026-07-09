@@ -325,11 +325,12 @@ test.describe('Resource Profile — cache invalidation from Timeline', () => {
 
     // Manual override: move feature to week 8 (extends one RT's cache horizon)
     await page.locator('[title="Core API"]').first().click()
-    await expect(page.getByText('Start week:').first()).toBeVisible({ timeout: 8_000 })
-    await page.locator('input[min="0"]:not([id])').first().fill('8')
-    await page.getByRole('button', { name: /^save$/i }).click()
+    const featureEditPanel = page.locator('.sticky').filter({ hasText: 'Core API' }).last()
+    await expect(featureEditPanel.getByText('Start week:')).toBeVisible({ timeout: 8_000 })
+    await featureEditPanel.locator('input[type="number"]').first().fill('8')
+    await featureEditPanel.getByRole('button', { name: /^save$/i }).click()
     await expect(
-      page.getByRole('button', { name: /reset to auto/i })
+      featureEditPanel.getByRole('button', { name: /reset to auto/i })
     ).toBeVisible({ timeout: 10_000 })
 
     // ── Navigate to Resource Profile ──
