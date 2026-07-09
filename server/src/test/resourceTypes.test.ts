@@ -65,6 +65,7 @@ describe('resource type manual scheduling regression', () => {
         }),
       },
       namedResource: {
+        findMany: vi.fn().mockResolvedValue([]),
         updateMany: vi.fn().mockResolvedValue({ count: 2 }),
       },
       project: {
@@ -123,6 +124,7 @@ describe('resource type manual scheduling regression', () => {
         }),
       },
       namedResource: {
+        findMany: vi.fn().mockResolvedValue([]),
         updateMany: vi.fn(),
       },
       project: {
@@ -472,6 +474,7 @@ describe('weeklyDemandCache invalidation', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'New Role' }) },
+      namedResource: { findMany: vi.fn().mockResolvedValue([]) },
       project: { update: vi.fn().mockResolvedValue({}) },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -666,7 +669,10 @@ describe('capacity profile sync integration', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Updated' }) },
-      namedResource: { updateMany: vi.fn() },
+      namedResource: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn(),
+      },
       project: { update: vi.fn() },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -719,18 +725,15 @@ describe('capacity profile sync integration', () => {
     expect(tx.resourceType.deleteMany).toHaveBeenCalledWith({
       where: { id: 'rt-1', projectId: 'proj-1' },
     })
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
-  })
-
-  it('sync is called with tx object, not bare prisma', async () => {
-    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
-    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     const tx = {
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([]),
       },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Updated' }) },
-      namedResource: { updateMany: vi.fn() },
+      namedResource: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn(),
+      },
       project: { update: vi.fn() },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))

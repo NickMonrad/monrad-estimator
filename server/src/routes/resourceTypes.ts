@@ -91,12 +91,39 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     allocationPercent !== undefined ||
     'allocationStartWeek' in req.body ||
     'allocationEndWeek' in req.body
-
   // Non-capacity-only fields
   const data: Record<string, unknown> = { name, category, count, proposedName, hoursPerDay, dayRate }
   Object.keys(data).forEach(key => {
     if (data[key] === undefined) delete data[key]
   })
+  // ── Build capacity payload with hasOwnProperty semantics ────────────
+  const capacityPayload: Record<string, unknown> = {}
+  if ('allocationMode' in req.body) {
+    capacityPayload.allocationMode = allocationMode
+  }
+  if ('allocationPercent' in req.body) {
+    capacityPayload.allocationPercent = allocationPercent
+  }
+  if ('allocationStartWeek' in req.body) {
+    capacityPayload.allocationStartWeek = allocationStartWeek ?? null
+  }
+  if ('allocationEndWeek' in req.body) {
+    capacityPayload.allocationEndWeek = allocationEndWeek ?? null
+  }
+
+  // Fill omitted capacity fields from existing record
+  if (capacityPayload.allocationMode === undefined) {
+    capacityPayload.allocationMode = existing.allocationMode
+  }
+  if (capacityPayload.allocationPercent === undefined) {
+    capacityPayload.allocationPercent = existing.allocationPercent
+  }
+  if (capacityPayload.allocationStartWeek === undefined) {
+    capacityPayload.allocationStartWeek = existing.allocationStartWeek
+  }
+  if (capacityPayload.allocationEndWeek === undefined) {
+    capacityPayload.allocationEndWeek = existing.allocationEndWeek
+  }
 
   const shouldExitCapacityPlan =
     existing.allocationMode === 'CAPACITY_PLAN' &&
@@ -106,15 +133,20 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rt = await prisma.$transaction(async tx => {
     let updated
 
+    // Override mode to CAPACITY_PLAN if we are exiting — the sync needs to see
+    // the current CAPACITY_PLAN state to clean up plan slots before we transition.
+    // The projection returned will reflect the new mode after we tell the helper
+    // the real target mode via the payload (the helper handles non-window suppression).
+    const helperPayload = shouldExitCapacityPlan
+      ? { ...capacityPayload, allocationMode: existing.allocationMode }
+      : capacityPayload
+
     if (hasCapacityInput) {
       // Capacity fields provided — profile-first write + project back to legacy
-      const projection = await upsertRTProfileAndProjectLegacy(tx, req.params.projectId as string, req.params.id as string, {
-        allocationMode,
-        allocationPercent,
-        allocationStartWeek: 'allocationStartWeek' in req.body ? (allocationStartWeek ?? null) : undefined,
-        allocationEndWeek: 'allocationEndWeek' in req.body ? (allocationEndWeek ?? null) : undefined,
-      })
-
+      const projection = await upsertRTProfileAndProjectLegacy(
+        tx, req.params.projectId as string, req.params.id as string,
+        helperPayload,
+      )
       // Write projected legacy fields + non-capacity fields
       updated = await tx.resourceType.update({
         where: { id: req.params.id as string },
@@ -127,10 +159,9 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         },
       })
 
-      // Handle CAPACITY_PLAN exit if applicable (count change triggered it)
+      // Handle CAPACITY_PLAN exit if applicable
       if (shouldExitCapacityPlan) {
         await exitCapacityPlanForManualScheduling(existing.id, tx)
-        // Update NRs that were in CAPACITY_PLAN mode
         await tx.namedResource.updateMany({
           where: { resourceTypeId: existing.id, allocationMode: 'CAPACITY_PLAN' },
           data: {
@@ -146,20 +177,15 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       }
     } else {
       // No capacity changes — preserve existing role-level profile if present.
-      // Only create a profile if one does not already exist.
       const existingProfiles = await tx.capacityProfile.findMany({
         where: { resourceTypeId: req.params.id as string, namedResourceId: null, projectId: req.params.projectId as string },
         select: { id: true },
       })
       if (existingProfiles.length === 0) {
-        // Create a profile from existing legacy fields
-        // For TIMELINE mode, preserve existing window fields.
-        // For non-window modes, suppress stale windows.
         await upsertRTProfileAndProjectLegacy(tx, req.params.projectId as string, req.params.id as string,
           buildMissingRTProfilePayload(existing))
       }
 
-      // Update non-capacity fields only — legacy allocation fields stay unchanged
       updated = await tx.resourceType.update({
         where: { id: req.params.id as string },
         data,
@@ -186,9 +212,19 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         })
       }
     }
+    // 3. Fetch existing named-resource IDs for this RT so profile-first rows
+    //    are preserved during the global sync.
+    const existingNRs = await tx.namedResource.findMany({
+      where: { resourceTypeId: req.params.id as string },
+      select: { id: true },
+    })
+    const preserveNRIds = existingNRs.map((nr: { id: string }) => nr.id)
 
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
-    await syncCapacityProfilesForProject(tx, req.params.projectId as string)
+    await syncCapacityProfilesForProject(tx, req.params.projectId as string, {
+      preserveNamedResourceIds: preserveNRIds,
+      ...(hasCapacityInput ? {} : { preserveResourceTypeIds: [req.params.id as string] }),
+    })
 
     return updated
   })

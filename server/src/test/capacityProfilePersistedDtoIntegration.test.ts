@@ -2148,5 +2148,238 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(nrProfile!.endWeek).toBe(5)
       expect(nrProfile!.ownerKind).toBe('NAMED_PERSON')
     })
+
+    // ── Blocker 1: capacity PUT preserves omitted fields ───────────────
+
+    it('existing TIMELINE + allocationPercent-only update preserves mode and windows', async () => {
+      const rtId = 'rt-b1-1'
+      addResourceType(rtId, 'B1 Role', 1, { allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 3, allocationEndWeek: 9 })
+      // Pre-create a matching role profile so non-capacity path uses it
+      addPersistedProfile('cp-b1-1', {
+        resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75, startWeek: 3, endWeek: 9,
+      })
+
+      // PUT with allocationPercent only — mode and windows must be preserved
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 60 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationPercent).toBe(60)
+      expect(res.body.allocationStartWeek).toBe(3)
+      expect(res.body.allocationEndWeek).toBe(9)
+    })
+
+    it('existing TIMELINE + explicit null windows clears windows', async () => {
+      const rtId = 'rt-b1-2'
+      addResourceType(rtId, 'B1 Role 2', 1, { allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 3, allocationEndWeek: 9 })
+      addPersistedProfile('cp-b1-2', {
+        resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75, startWeek: 3, endWeek: 9,
+      })
+
+      // Explicit null windows — mode stays TIMELINE but windows are cleared
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationStartWeek: null, allocationEndWeek: null })
+
+      expect(res.status).toBe(200)
+      // TIMELINE is preserved (explicit null windows don't change the mode inference)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationStartWeek).toBeNull()
+      expect(res.body.allocationEndWeek).toBeNull()
+    })
+
+    it('existing EFFORT with stale windows + explicit EFFORT suppresses windows', async () => {
+      const rtId = 'rt-b1-3'
+      addResourceType(rtId, 'B1 Role 3', 1, { allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: 2, allocationEndWeek: 6 })
+      addPersistedProfile('cp-b1-3', {
+        resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'DEMAND_FOLLOWING',
+        defaultPercent: 100, startWeek: 2, endWeek: 6,
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'EFFORT' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('EFFORT')
+      expect(res.body.allocationPercent).toBe(100)
+      expect(res.body.allocationStartWeek).toBeNull()
+      expect(res.body.allocationEndWeek).toBeNull()
+    })
+
+    it('existing FULL_PROJECT with stale windows + explicit FULL_PROJECT suppresses windows', async () => {
+      const rtId = 'rt-b1-4'
+      addResourceType(rtId, 'B1 Role 4', 1, { allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 12 })
+      addPersistedProfile('cp-b1-4', {
+        resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'WHOLE_PROJECT_ALLOCATION',
+        defaultPercent: 100, startWeek: 1, endWeek: 12,
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'FULL_PROJECT' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('FULL_PROJECT')
+      expect(res.body.allocationPercent).toBe(100)
+      expect(res.body.allocationStartWeek).toBeNull()
+      expect(res.body.allocationEndWeek).toBeNull()
+    })
+
+    // ── Blocker 2: non-capacity PUT preserves role profile with segments ──
+
+    it('non-capacity PUT preserves existing role-owned profile with segments', async () => {
+      const rtId = 'rt-b2-1'
+      addResourceType(rtId, 'B2 Role', 1, { allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 8 })
+      // Create a pre-existing role profile with segments that intentionally
+      // differ from the legacy fields (to prove preservation, not rewrite).
+      addPersistedProfile('cp-b2-1', {
+        resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        defaultPercent: 90, startWeek: null, endWeek: null,
+      })
+      // Manually add segments (addPersistedProfile doesn't create segments)
+      const now = new Date()
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-b2-1a', capacityProfileId: 'cp-b2-1', startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+        { id: 'seg-b2-1b', capacityProfileId: 'cp-b2-1', startWeek: 5, endWeek: 8, capacityPercent: 80, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+      )
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'B2 Renamed' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.name).toBe('B2 Renamed')
+
+      // Profile row identity unchanged
+      const profile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-b2-1')
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('CAPACITY_PROFILE')
+      expect(profile!.defaultPercent).toBe(90)
+      expect(profile!.startWeek).toBeNull()
+      expect(profile!.endWeek).toBeNull()
+
+      // All segment rows preserved
+      const segments = storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === 'cp-b2-1')
+      expect(segments).toHaveLength(2)
+      expect(segments[0].startWeek).toBe(2)
+      expect(segments[0].endWeek).toBe(4)
+      expect(segments[1].startWeek).toBe(5)
+      expect(segments[1].endWeek).toBe(8)
+
+      // Legacy allocation fields are NOT rewritten from profile
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationPercent).toBe(80)
+      expect(res.body.allocationStartWeek).toBe(2)
+      expect(res.body.allocationEndWeek).toBe(8)
+    })
+
+    // ── Blocker 3: named-resource profile rows preserved during RT updates ──
+
+    it('capacity PUT preserves named-resource profile-first rows', async () => {
+      const rtId = 'rt-b3-1'
+      addResourceType(rtId, 'B3 Role', 1, { allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 1, allocationEndWeek: 5 })
+      // Named resource with a multi-segment capacity profile that differs from legacy
+      addNamedResource('nr-b3-1', 'B3 Person', rtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 50,
+        allocationStartWeek: 2,
+        allocationEndWeek: 4,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-nr-b3-1', {
+        resourceTypeId: null, namedResourceId: 'nr-b3-1', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        defaultPercent: 60, startWeek: null, endWeek: null,
+      })
+      const now = new Date()
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-b3-1a', capacityProfileId: 'cp-nr-b3-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+        { id: 'seg-b3-1b', capacityProfileId: 'cp-nr-b3-1', startWeek: 4, endWeek: 4, capacityPercent: 50, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+      )
+
+      // Capacity PUT on the RT
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 70, allocationMode: 'TIMELINE', allocationStartWeek: 1, allocationEndWeek: 5 })
+
+      expect(res.status).toBe(200)
+
+      // Named-resource profile unchanged
+      const nrProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-nr-b3-1')
+      expect(nrProfile).toBeDefined()
+      expect(nrProfile!.planningBasis).toBe('CAPACITY_PROFILE')
+      expect(nrProfile!.defaultPercent).toBe(60)
+      expect(nrProfile!.ownerKind).toBe('NAMED_PERSON')
+
+      // Named-resource segments unchanged
+      const nrSegments = storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === 'cp-nr-b3-1')
+      expect(nrSegments).toHaveLength(2)
+
+      // No duplicate NR profiles created
+      const nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-b3-1')
+      expect(nrProfiles).toHaveLength(1)
+    })
+
+    it('non-capacity PUT preserves named-resource profile-first rows', async () => {
+      const rtId = 'rt-b3-2'
+      addResourceType(rtId, 'B3 Role 2', 1, { allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 1, allocationEndWeek: 5 })
+      // Named resource with a capacity profile
+      addNamedResource('nr-b3-2', 'B3 Person 2', rtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 50,
+        allocationStartWeek: 2,
+        allocationEndWeek: 4,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-nr-b3-2', {
+        resourceTypeId: null, namedResourceId: 'nr-b3-2', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        defaultPercent: 60, startWeek: null, endWeek: null,
+      })
+      const now2 = new Date()
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-b3-2a', capacityProfileId: 'cp-nr-b3-2', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now2, updatedAt: now2 },
+      )
+
+      // Non-capacity PUT on the RT
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'B3 Renamed' })
+
+      expect(res.status).toBe(200)
+
+      // Named-resource profile unchanged
+      const nrProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-nr-b3-2')
+      expect(nrProfile).toBeDefined()
+      expect(nrProfile!.planningBasis).toBe('CAPACITY_PROFILE')
+      expect(nrProfile!.defaultPercent).toBe(60)
+      expect(nrProfile!.ownerKind).toBe('NAMED_PERSON')
+
+      // Named-resource segment unchanged
+      const nrSegments = storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === 'cp-nr-b3-2')
+      expect(nrSegments).toHaveLength(1)
+      expect(nrSegments[0].startWeek).toBe(2)
+
+      // No duplicate NR profiles created
+      const nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-b3-2')
+      expect(nrProfiles).toHaveLength(1)
+    })
   })
  })
