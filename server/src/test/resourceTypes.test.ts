@@ -548,14 +548,30 @@ describe('named-resource auto-name race safety', () => {
       count: 0,
     } as never)
     vi.mocked(prisma.namedResource.count).mockResolvedValue(0)
+    let createdName = 'Unknown'
+    const mockCreate = vi.fn().mockImplementation(async ({ data }: any) => {
+      createdName = data.name
+      return { id: 'nr-new', name: data.name, ...data }
+    })
+    const mockUpdate = vi.fn().mockImplementation(async ({ data }: any) => ({ id: 'nr-new', name: createdName, ...data }))
+
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) =>
       fn({
         namedResource: {
           count: vi.fn().mockResolvedValue(1),
-          create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: 'nr-new', ...data })),
+          create: mockCreate,
+          update: mockUpdate,
         },
         resourceType: { update: vi.fn().mockResolvedValue({}) },
         project: { update: vi.fn().mockResolvedValue({}) },
+        capacityProfile: {
+          findMany: vi.fn().mockResolvedValue([]),
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+          create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
+        },
+        capacitySegment: {
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
       }),
     )
   })
