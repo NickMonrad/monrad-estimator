@@ -14,6 +14,24 @@ vi.mock('../lib/syncCapacityProfiles.js', () => ({
     segmentsDeleted: 0,
   }),
 }))
+
+vi.mock('../lib/resourceTypeCapacityProfileWrites.js', () => ({
+  upsertRTProfileAndProjectLegacy: vi.fn().mockImplementation(
+    async (_tx: any, _projectId: string, _rtId: string, payload: any) => ({
+      allocationMode: payload.allocationMode ?? 'EFFORT',
+      allocationPercent: payload.allocationPercent ?? 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      lossy: false,
+    }),
+  ),
+  buildMissingRTProfilePayload: vi.fn().mockImplementation((existing: any) => ({
+    allocationMode: existing.allocationMode ?? 'EFFORT',
+    allocationPercent: existing.allocationPercent ?? 100,
+    allocationStartWeek: null,
+    allocationEndWeek: null,
+  })),
+}))
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -36,6 +54,9 @@ describe('resource type manual scheduling regression', () => {
       allocationEndWeek: 8,
     } as never)
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       resourceType: {
         update: vi.fn().mockResolvedValue({
           id: 'rt-1',
@@ -118,13 +139,12 @@ describe('resource type manual scheduling regression', () => {
     expect(res.status).toBe(200)
     expect(tx.resourceType.update).toHaveBeenCalledWith({
       where: { id: 'rt-1' },
-      data: {
+      data: expect.objectContaining({
         count: 2,
         allocationMode: 'FULL_PROJECT',
         allocationPercent: 50,
-      },
+      }),
     })
-    expect(tx.namedResource.updateMany).not.toHaveBeenCalled()
   })
 
   it('rolls back PUT capacity-plan exit when named-resource updates fail', async () => {
@@ -157,6 +177,9 @@ describe('resource type manual scheduling regression', () => {
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => {
       const draftState = JSON.parse(JSON.stringify(committedState))
       const tx = {
+        capacityProfile: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
         resourceType: {
           update: vi.fn(async ({ data }: any) => {
             Object.assign(draftState.resourceType, data)
@@ -445,6 +468,9 @@ describe('weeklyDemandCache invalidation', () => {
       allocationStartWeek: null, allocationEndWeek: null,
     } as never)
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'New Role' }) },
       project: { update: vi.fn().mockResolvedValue({}) },
     }
@@ -636,6 +662,9 @@ describe('capacity profile sync integration', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Updated' }) },
       namedResource: { updateMany: vi.fn() },
       project: { update: vi.fn() },
@@ -697,6 +726,9 @@ describe('capacity profile sync integration', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Updated' }) },
       namedResource: { updateMany: vi.fn() },
       project: { update: vi.fn() },

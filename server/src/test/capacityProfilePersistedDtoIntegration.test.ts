@@ -1972,4 +1972,181 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(profile!.defaultPercent).toBe(100)
     })
   })
+
+  describe('9. ResourceType profile-first write integration', () => {
+    it('updates role-owned profile on capacity PUT', async () => {
+      const rtId = 'rt-role-1'
+      addResourceType(rtId, 'Role RT', 1)
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 2, allocationEndWeek: 10 })
+
+      expect(res.status).toBe(200)
+
+      // Role-owned profile created
+      const profiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(profiles).toHaveLength(1)
+      expect(profiles[0].ownerKind).toBe('ROLE')
+      expect(profiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(profiles[0].source).toBe('AVAILABILITY_WINDOW')
+      expect(profiles[0].defaultPercent).toBe(75)
+      expect(profiles[0].startWeek).toBe(2)
+      expect(profiles[0].endWeek).toBe(10)
+
+      // Legacy fields updated as compatibility projection
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationPercent).toBe(75)
+      expect(res.body.allocationStartWeek).toBe(2)
+      expect(res.body.allocationEndWeek).toBe(10)
+    })
+
+    it('explicit non-window mode suppresses stale windows on RT', async () => {
+      const rtId = 'rt-role-2'
+      addResourceType(rtId, 'Role RT 2', 1, { allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 2, allocationEndWeek: 10 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'EFFORT', allocationPercent: 100 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('EFFORT')
+      expect(res.body.allocationPercent).toBe(100)
+      expect(res.body.allocationStartWeek).toBeNull()
+      expect(res.body.allocationEndWeek).toBeNull()
+
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(profile!.startWeek).toBeNull()
+      expect(profile!.endWeek).toBeNull()
+    })
+
+    it('non-capacity RT update preserves existing role profile', async () => {
+      const rtId = 'rt-role-3'
+      addResourceType(rtId, 'Role RT 3', 1, { allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 3, allocationEndWeek: 9 })
+      // Pre-create a role-owned profile
+      addPersistedProfile('cp-role-3', {
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 3,
+        endWeek: 9,
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Role' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.name).toBe('Renamed Role')
+
+      // Same profile row identity preserved
+      const profile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-role-3')
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(profile!.startWeek).toBe(3)
+      expect(profile!.endWeek).toBe(9)
+
+      // Legacy allocation fields not rewritten
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationPercent).toBe(75)
+      expect(res.body.allocationStartWeek).toBe(3)
+      expect(res.body.allocationEndWeek).toBe(9)
+    })
+
+    it('non-capacity RT update creates TIMELINE profile when missing', async () => {
+      const rtId = 'rt-role-4'
+      addResourceType(rtId, 'Role RT 4', 1, { allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 4, allocationEndWeek: 8 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Role' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.name).toBe('Renamed Role')
+      expect(res.body.allocationMode).toBe('TIMELINE')
+
+      // Profile-first write creates AVAILABILITY_WINDOW with preserved window
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(profile!.startWeek).toBe(4)
+      expect(profile!.endWeek).toBe(8)
+    })
+
+    it('non-capacity RT update creates EFFORT profile when missing', async () => {
+      const rtId = 'rt-role-5'
+      addResourceType(rtId, 'Role RT 5', 1, { allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: 2, allocationEndWeek: 6 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Role' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.name).toBe('Renamed Role')
+      expect(res.body.allocationMode).toBe('EFFORT')
+
+      // Profile-first write creates DEMAND_FOLLOWING profile.
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      // defaultPercent comes from RT legacy (sync reconciles after write)
+      expect(profile!.defaultPercent).toBe(100)
+    })
+
+    it('named-resource rows are not corrupted by RT update', async () => {
+      const rtId = 'rt-role-6'
+      addResourceType(rtId, 'Role RT 6', 1)
+      // Add a named resource with its own profile
+      addNamedResource('nr-role-6', 'Role NR', rtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 80,
+        allocationStartWeek: 1,
+        allocationEndWeek: 5,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-nr-role-6', {
+        resourceTypeId: null,
+        namedResourceId: 'nr-role-6',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 80,
+        startWeek: 1,
+        endWeek: 5,
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed RT' })
+
+      expect(res.status).toBe(200)
+
+      // Named-resource profile unchanged
+      const nrProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-nr-role-6')
+      expect(nrProfile).toBeDefined()
+      expect(nrProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(nrProfile!.startWeek).toBe(1)
+      expect(nrProfile!.endWeek).toBe(5)
+      expect(nrProfile!.ownerKind).toBe('NAMED_PERSON')
+    })
+  })
  })

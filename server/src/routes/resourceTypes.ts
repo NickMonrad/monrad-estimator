@@ -5,6 +5,7 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
 import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
+import { upsertRTProfileAndProjectLegacy, buildMissingRTProfilePayload } from '../lib/resourceTypeCapacityProfileWrites.js'
 
 
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
@@ -84,50 +85,106 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'allocationPercent must be 1–100' }); return
   }
 
+  // ── Detect whether capacity fields are being changed ────────────────
+  const hasCapacityInput =
+    allocationMode !== undefined ||
+    allocationPercent !== undefined ||
+    'allocationStartWeek' in req.body ||
+    'allocationEndWeek' in req.body
+
+  // Non-capacity-only fields
   const data: Record<string, unknown> = { name, category, count, proposedName, hoursPerDay, dayRate }
   Object.keys(data).forEach(key => {
     if (data[key] === undefined) delete data[key]
   })
-  if (allocationMode !== undefined) data.allocationMode = allocationMode
-  if (allocationPercent !== undefined) data.allocationPercent = allocationPercent
-  // Allow explicit null to clear overrides
-  if ('allocationStartWeek' in req.body) data.allocationStartWeek = allocationStartWeek ?? null
-  if ('allocationEndWeek' in req.body) data.allocationEndWeek = allocationEndWeek ?? null
 
   const shouldExitCapacityPlan =
     existing.allocationMode === 'CAPACITY_PLAN' &&
     allocationMode === undefined &&
     count !== undefined
 
-  if (shouldExitCapacityPlan) {
-    data.allocationMode = 'TIMELINE'
-    data.allocationPercent = 100
-    data.allocationStartWeek = null
-    data.allocationEndWeek = null
-  }
-
   const rt = await prisma.$transaction(async tx => {
-    const updated = await tx.resourceType.update({
-      where: { id: req.params.id as string },
-      data,
-    })
+    let updated
 
-    if (shouldExitCapacityPlan) {
-      await tx.namedResource.updateMany({
-        where: {
-          resourceTypeId: existing.id,
-          allocationMode: 'CAPACITY_PLAN',
-        },
+    if (hasCapacityInput) {
+      // Capacity fields provided — profile-first write + project back to legacy
+      const projection = await upsertRTProfileAndProjectLegacy(tx, req.params.projectId as string, req.params.id as string, {
+        allocationMode,
+        allocationPercent,
+        allocationStartWeek: 'allocationStartWeek' in req.body ? (allocationStartWeek ?? null) : undefined,
+        allocationEndWeek: 'allocationEndWeek' in req.body ? (allocationEndWeek ?? null) : undefined,
+      })
+
+      // Write projected legacy fields + non-capacity fields
+      updated = await tx.resourceType.update({
+        where: { id: req.params.id as string },
         data: {
-          allocationMode: 'TIMELINE',
-          allocationPercent: 100,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          allocationPct: 100,
-          startWeek: null,
-          endWeek: null,
+          ...data,
+          allocationMode: projection.allocationMode,
+          allocationPercent: projection.allocationPercent ?? 100,
+          allocationStartWeek: projection.allocationStartWeek,
+          allocationEndWeek: projection.allocationEndWeek,
         },
       })
+
+      // Handle CAPACITY_PLAN exit if applicable (count change triggered it)
+      if (shouldExitCapacityPlan) {
+        await exitCapacityPlanForManualScheduling(existing.id, tx)
+        // Update NRs that were in CAPACITY_PLAN mode
+        await tx.namedResource.updateMany({
+          where: { resourceTypeId: existing.id, allocationMode: 'CAPACITY_PLAN' },
+          data: {
+            allocationMode: projection.allocationMode,
+            allocationPercent: projection.allocationPercent ?? 100,
+            allocationStartWeek: projection.allocationStartWeek,
+            allocationEndWeek: projection.allocationEndWeek,
+            allocationPct: projection.allocationPercent ?? 100,
+            startWeek: projection.allocationStartWeek,
+            endWeek: projection.allocationEndWeek,
+          },
+        })
+      }
+    } else {
+      // No capacity changes — preserve existing role-level profile if present.
+      // Only create a profile if one does not already exist.
+      const existingProfiles = await tx.capacityProfile.findMany({
+        where: { resourceTypeId: req.params.id as string, namedResourceId: null, projectId: req.params.projectId as string },
+        select: { id: true },
+      })
+      if (existingProfiles.length === 0) {
+        // Create a profile from existing legacy fields
+        // For TIMELINE mode, preserve existing window fields.
+        // For non-window modes, suppress stale windows.
+        await upsertRTProfileAndProjectLegacy(tx, req.params.projectId as string, req.params.id as string,
+          buildMissingRTProfilePayload(existing))
+      }
+
+      // Update non-capacity fields only — legacy allocation fields stay unchanged
+      updated = await tx.resourceType.update({
+        where: { id: req.params.id as string },
+        data,
+      })
+
+      if (shouldExitCapacityPlan) {
+        data.allocationMode = 'TIMELINE'
+        data.allocationPercent = 100
+        data.allocationStartWeek = null
+        data.allocationEndWeek = null
+        await exitCapacityPlanForManualScheduling(existing.id, tx)
+        updated = await tx.resourceType.update({ where: { id: req.params.id as string }, data })
+        await tx.namedResource.updateMany({
+          where: { resourceTypeId: existing.id, allocationMode: 'CAPACITY_PLAN' },
+          data: {
+            allocationMode: 'TIMELINE',
+            allocationPercent: 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            allocationPct: 100,
+            startWeek: null,
+            endWeek: null,
+          },
+        })
+      }
     }
 
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
