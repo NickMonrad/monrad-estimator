@@ -82,6 +82,8 @@ cp server/.env.example server/.env
 
 `server/.env.example` contains sensible defaults for local development. Edit it if your PostgreSQL credentials differ from the Docker command above.
 
+> **JWT_SECRET:** The example file includes a dev-only secret (`local-dev-jwt-secret-at-least-32-chars!!`) that works for local development. **Replace it with a secure random string in production** (e.g. `openssl rand -hex 32`). The server rejects values shorter than 32 characters or the placeholder `change-me-in-production`.
+
 #### Email / SMTP (optional)
 
 Email is used for password reset links and org invite emails. Without SMTP configured, both flows still work — the email content and link are printed to the server console instead.
