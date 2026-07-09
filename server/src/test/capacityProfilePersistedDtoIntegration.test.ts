@@ -1654,5 +1654,246 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(profilesAfter).toHaveLength(1)
       expect(profilesAfter[0].planningBasis).toBe('DEMAND_FOLLOWING')
     })
+
+    it('explicit EFFORT suppresses stale window fields', async () => {
+      const effRtId = 'rt-eff-stale'
+      const effNrId = 'nr-eff-stale'
+      addResourceType(effRtId, 'EffStale RT', 1)
+      // NR has stale window values from a previous TIMELINE state
+      addNamedResource(effNrId, 'EffStale Person', effRtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 75,
+        startWeek: 2,
+        endWeek: 10,
+        allocationStartWeek: 2,
+        allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addEpic('epic-eff', 'Eff Epic')
+      addFeature('feat-eff', 'Eff Feature', 'epic-eff')
+      addUserStory('story-eff', 'feat-eff')
+      addTask('task-eff', 'story-eff', effRtId, 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-eff', startWeek: 0, durationWeeks: 4 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${effRtId}/named-resources/${effNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'EFFORT', allocationPercent: 100 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('EFFORT')
+      expect(res.body.allocationPercent).toBe(100)
+      expect(res.body.startWeek).toBeNull()
+      expect(res.body.endWeek).toBeNull()
+      expect(res.body.allocationStartWeek).toBeNull()
+      expect(res.body.allocationEndWeek).toBeNull()
+
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === effNrId,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(profile!.startWeek).toBeNull()
+      expect(profile!.endWeek).toBeNull()
+    })
+
+    it('explicit FULL_PROJECT suppresses stale window fields', async () => {
+      const fpRtId = 'rt-fp-stale'
+      const fpNrId = 'nr-fp-stale'
+      addResourceType(fpRtId, 'FPStale RT', 1)
+      addNamedResource(fpNrId, 'FPStale Person', fpRtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 75,
+        startWeek: 2,
+        endWeek: 10,
+        allocationStartWeek: 2,
+        allocationEndWeek: 10,
+        pricingModel: 'PRO_RATA',
+      })
+      addEpic('epic-fp', 'Fp Epic')
+      addFeature('feat-fp', 'Fp Feature', 'epic-fp')
+      addUserStory('story-fp', 'feat-fp')
+      addTask('task-fp', 'story-fp', fpRtId, 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-fp', startWeek: 0, durationWeeks: 4 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${fpRtId}/named-resources/${fpNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'FULL_PROJECT', allocationPercent: 80 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('FULL_PROJECT')
+      expect(res.body.allocationPercent).toBe(80)
+      expect(res.body.startWeek).toBeNull()
+      expect(res.body.endWeek).toBeNull()
+
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === fpNrId,
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('WHOLE_PROJECT_ALLOCATION')
+      expect(profile!.startWeek).toBeNull()
+      expect(profile!.endWeek).toBeNull()
+    })
+
+    it('explicit TIMELINE preserves window fields', async () => {
+      const tlRtId = 'rt-tl-window'
+      const tlNrId = 'nr-tl-window'
+      addResourceType(tlRtId, 'TLWindow RT', 1)
+      addNamedResource(tlNrId, 'TLWindow Person', tlRtId, {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addEpic('epic-tl', 'TL Epic')
+      addFeature('feat-tl', 'TL Feature', 'epic-tl')
+      addUserStory('story-tl', 'feat-tl')
+      addTask('task-tl', 'story-tl', tlRtId, 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-tl', startWeek: 0, durationWeeks: 4 })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${tlRtId}/named-resources/${tlNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 50, startWeek: 3, endWeek: 8 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationPercent).toBe(50)
+      expect(res.body.startWeek).toBe(3)
+      expect(res.body.endWeek).toBe(8)
+    })
+
+    it('rename-only PUT preserves existing multi-segment profile identity', async () => {
+      const segRtId = 'rt-rename-seg'
+      const segNrId = 'nr-rename-seg'
+      addResourceType(segRtId, 'RenameSeg RT', 1)
+      addNamedResource(segNrId, 'RenameSeg Person', segRtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 75,
+        allocationStartWeek: 2,
+        allocationEndWeek: 10,
+        startWeek: 2,
+        endWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addEpic('epic-rs', 'RenameSeg Epic')
+      addFeature('feat-rs', 'RenameSeg Feature', 'epic-rs')
+      addUserStory('story-rs', 'feat-rs')
+      addTask('task-rs', 'story-rs', segRtId, 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-rs', startWeek: 0, durationWeeks: 4 })
+
+      // Pre-create a multi-segment CapacityProfile
+      addPersistedProfile('cp-rename-seg', {
+        resourceTypeId: null,
+        namedResourceId: segNrId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 2,
+        endWeek: 10,
+      })
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-rs-1', capacityProfileId: 'cp-rename-seg', startWeek: 2, endWeek: 5, capacityPercent: 75, source: 'AVAILABILITY_WINDOW', createdAt: new Date(), updatedAt: new Date() },
+        { id: 'seg-rs-2', capacityProfileId: 'cp-rename-seg', startWeek: 6, endWeek: 10, capacityPercent: 75, source: 'AVAILABILITY_WINDOW', createdAt: new Date(), updatedAt: new Date() },
+      )
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${segRtId}/named-resources/${segNrId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Person' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.name).toBe('Renamed Person')
+      expect(res.body.allocationMode).toBe('TIMELINE')
+
+      // Same profile row identity preserved
+      const profile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.id === 'cp-rename-seg',
+      )
+      expect(profile).toBeDefined()
+      expect(profile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+
+      // All segments still exist
+      const remainingSegments = storeRef.current.capacitySegments.filter(
+        (s: any) => s.capacityProfileId === 'cp-rename-seg',
+      )
+      expect(remainingSegments).toHaveLength(2)
+
+      // Legacy fields not rewritten
+      expect(res.body.allocationStartWeek).toBe(2)
+      expect(res.body.allocationEndWeek).toBe(10)
+      expect(res.body.startWeek).toBe(2)
+      expect(res.body.endWeek).toBe(10)
+    })
+
+    it('PATCH null clears allocationStartWeek/allocationEndWeek', async () => {
+      const pcRtId = 'rt-patch-clear'
+      const pcNrId = 'nr-patch-clear'
+      addResourceType(pcRtId, 'PatchClear RT', 1)
+      addNamedResource(pcNrId, 'PatchClear Person', pcRtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 50,
+        allocationStartWeek: 3,
+        allocationEndWeek: 9,
+        startWeek: 3,
+        endWeek: 9,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addEpic('epic-pc', 'PatchClear Epic')
+      addFeature('feat-pc', 'PatchClear Feature', 'epic-pc')
+      addUserStory('story-pc', 'feat-pc')
+      addTask('task-pc', 'story-pc', pcRtId, 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-pc', startWeek: 0, durationWeeks: 4 })
+
+      const res = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${pcRtId}/named-resources/${pcNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationStartWeek: null, allocationEndWeek: null })
+
+      expect(res.status).toBe(200)
+      // allocationStartWeek/allocationEndWeek cleared
+      expect(res.body.allocationStartWeek).toBeNull()
+      expect(res.body.allocationEndWeek).toBeNull()
+      // allocationMode stays TIMELINE (mode was explicitly set, not inferred from window)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      // startWeek/endWeek are projected from the profile — null since window cleared
+      expect(res.body.startWeek).toBeNull()
+      expect(res.body.endWeek).toBeNull()
+    })
+
+    it('PATCH omission preserves existing allocationStartWeek/allocationEndWeek', async () => {
+      const poRtId = 'rt-patch-omit'
+      const poNrId = 'nr-patch-omit'
+      addResourceType(poRtId, 'PatchOmit RT', 1)
+      addNamedResource(poNrId, 'PatchOmit Person', poRtId, {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 50,
+        allocationStartWeek: 4,
+        allocationEndWeek: 8,
+        startWeek: 4,
+        endWeek: 8,
+        pricingModel: 'PRO_RATA',
+      })
+      addEpic('epic-po', 'PatchOmit Epic')
+      addFeature('feat-po', 'PatchOmit Feature', 'epic-po')
+      addUserStory('story-po', 'feat-po')
+      addTask('task-po', 'story-po', poRtId, 80)
+      storeRef.current.timelineEntries.push({ featureId: 'feat-po', startWeek: 0, durationWeeks: 4 })
+
+      const res = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${poRtId}/named-resources/${poNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 60 })
+
+      expect(res.status).toBe(200)
+      // allocationStartWeek/allocationEndWeek preserved from existing
+      expect(res.body.allocationMode).toBe('TIMELINE')
+      expect(res.body.allocationPercent).toBe(60)
+      expect(res.body.allocationStartWeek).toBe(4)
+      expect(res.body.allocationEndWeek).toBe(8)
+    })
   })
  })

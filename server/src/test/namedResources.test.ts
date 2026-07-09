@@ -54,6 +54,9 @@ describe('named-resource capacity profile write', () => {
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
 
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       namedResource: {
         update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
         findFirst: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
@@ -118,6 +121,9 @@ describe('named-resource capacity profile write', () => {
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', resourceTypeId: 'rt-1' } as never)
 
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       namedResource: {
         update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
         findFirst: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
@@ -205,6 +211,9 @@ describe('named-resource capacity profile write', () => {
     vi.mocked(upsertNRProfileAndProjectLegacy).mockRejectedValueOnce(new Error('profile write failed'))
 
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1' }) },
       project: { update: vi.fn() },
     }
