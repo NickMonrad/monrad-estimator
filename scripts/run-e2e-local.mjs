@@ -77,9 +77,27 @@ if (process.argv.includes('--validate')) {
   const keys = Object.keys(fileEnv).sort()
   console.log(`[e2e-local] server/.env loaded: ${keys.length} var(s)`)
   console.log(`[e2e-local] DATABASE_URL: ${resolvedEnv.DATABASE_URL ? 'set' : 'unset'}`)
+  // Also validate JWT_SECRET — catches stale .env files with old placeholder
+  const js = resolvedEnv.JWT_SECRET ?? ''
+  if (!js || js === 'change-me-in-production' || js.length < 32) {
+    console.error('[e2e-local] JWT_SECRET: INVALID (missing, too short, or placeholder)')
+    process.exit(1)
+  }
   console.log('[e2e-local] Validation OK')
   process.exit(0)
 }
+
+// ── Preflight checks ─────────────────────────────────────────────────────────
+// Must have a valid JWT_SECRET — the API rejects the old placeholder at startup.
+const jwtSecret = resolvedEnv.JWT_SECRET ?? ''
+if (!jwtSecret || jwtSecret === 'change-me-in-production' || jwtSecret.length < 32) {
+  console.error('[e2e-local] ERROR: JWT_SECRET is missing, too short, or still set to "change-me-in-production".')
+  console.error('[e2e-local] The example env uses "local-dev-jwt-secret-at-least-32-chars!!" — copy it:')
+  console.error('[e2e-local]   cp server/.env.example server/.env')
+  console.error('[e2e-local] Or set a custom value of 32+ characters.')
+  process.exit(1)
+}
+
 // ── Port discovery ──────────────────────────────────────────────────────────
 
 const host = process.env.E2E_HOST ?? '127.0.0.1'
