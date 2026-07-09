@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
 // https://vite.dev/config/
+const apiTarget = process.env.VITE_API_URL ?? process.env.API_URL ?? 'http://localhost:3001'
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -13,12 +15,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:3001',
+      '/api': apiTarget,
     },
   },
   preview: {
     proxy: {
-      '/api': 'http://localhost:3001',
+      '/api': apiTarget,
     },
   },
 })

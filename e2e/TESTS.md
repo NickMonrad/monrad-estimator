@@ -8,6 +8,8 @@
 # From repo root
 npm run test:e2e              # headless (use for CI / pre-PR check)
 npm run test:e2e:headed       # with browser visible (debugging)
+# Local Windows/dev runner starts isolated API/Vite servers and chooses free ports
+npm run test:e2e:local
 npm run test:e2e:report       # open last HTML report
 
 # From /e2e directory
@@ -17,9 +19,9 @@ npx playwright test --grep "CSV import"    # filter by name
 npx playwright test --ui                   # interactive UI mode
 ```
 
-**Prerequisites:** Both dev servers must be running:
-- API: `node dist/index.js` on `:3001`
-- Client: `npx vite` on `:5173`
+**Prerequisites:**
+- `npm run test:e2e:local` starts isolated API/Vite servers itself, chooses free ports, and is preferred for local Windows/dev validation.
+- `npm run test:e2e`, `npm run test:e2e:headed`, and direct `npx playwright test` expect the app/dev servers to already be running, unless CI/workflow automation starts them separately.
 
 **Credentials:** `TEST_EMAIL` / `TEST_PASSWORD` env vars (default: `test@example.com` / `password123`)
 
