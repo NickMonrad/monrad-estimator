@@ -14,6 +14,7 @@
     "lint": "npm run lint --workspace=client && npm run lint --workspace=server",
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
     "test:e2e": "npm run test --workspace=e2e",
+    "test:e2e:local": "node scripts/run-e2e-local.mjs",
     "test:e2e:headed": "npm run test:headed --workspace=e2e",
     "test:e2e:report": "npm run report --workspace=e2e",
     "screenshots": "npm run screenshots --workspace=e2e",

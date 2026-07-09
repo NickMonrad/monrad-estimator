@@ -12,11 +12,13 @@ test.describe('Template Library', () => {
   })
 
   test('can create a new template', async ({ page }) => {
+    const templateName = `E2E Template ${Date.now()}`
+
     await page.goto('/templates')
     await page.getByRole('button', { name: /new template/i }).click()
-    await page.getByPlaceholder(/template name/i).fill('E2E Template')
-    await page.getByRole('button', { name: /save/i }).click()
-    await expect(page.getByText('E2E Template').first()).toBeVisible()
+    await page.getByPlaceholder(/template name/i).fill(templateName)
+    await page.getByRole('button', { name: /^save template$/i }).click()
+    await expect(page.getByText(templateName).first()).toBeVisible({ timeout: 10_000 })
   })
 
   test('Export CSV button is visible', async ({ page }) => {
@@ -25,12 +27,15 @@ test.describe('Template Library', () => {
   })
 
   test('can create a template task with XS complexity hours', async ({ page }) => {
+    const templateName = `E2E XS Template ${Date.now()}`
+
     await page.goto('/templates')
     // Create a template first
     await page.getByRole('button', { name: /new template/i }).click()
-    await page.getByPlaceholder(/template name/i).fill('E2E XS Template')
-    await page.getByRole('button', { name: /save/i }).click()
-    await page.getByText('E2E XS Template').first().click()
+    await page.getByPlaceholder(/template name/i).fill(templateName)
+    await page.getByRole('button', { name: /^save template$/i }).click()
+    await expect(page.getByText(templateName).first()).toBeVisible({ timeout: 10_000 })
+    await page.getByText(templateName).first().click()
 
     // Add a task
     await page.getByRole('button', { name: /add task/i }).click()

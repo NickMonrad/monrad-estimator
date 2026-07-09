@@ -50,7 +50,7 @@ app.use(pinoHttp({ logger }))
 app.use(cors({ origin: process.env.CLIENT_URL ?? 'http://localhost:5173' }))
 app.use(express.json({ limit: '10mb' }))
 
-app.get('/health', (_req, res) => res.json({ status: 'ok' }))
+app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'monrad-estimator' }))
 app.use('/api/bootstrap', bootstrapRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/projects', projectRoutes)
