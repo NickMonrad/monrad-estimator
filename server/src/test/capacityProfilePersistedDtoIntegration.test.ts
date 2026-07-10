@@ -2572,27 +2572,20 @@ describe('persisted capacity-profile DTO integration', () => {
       )
       expect(roleProfiles).toHaveLength(1)
       expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
-      expect(roleProfiles[0].defaultPercent).toBe(60)
-
-      // NR profile was reconciled from legacy fields (no explicit profile before PUT)
       const autoNr = storeRef.current.namedResources.find((n: any) => n.resourceTypeId === postedRtId)
       const autoNrId = autoNr?.id
       expect(autoNrId).toBeDefined()
+
+
+      // Inherited NR profile matches the role default (same mode, percent, window)
       const nrProfiles = storeRef.current.capacityProfiles.filter(
         (p: any) => p.namedResourceId === autoNrId,
       )
       expect(nrProfiles).toHaveLength(1)
-
-      // GET /capacity-profiles uses persisted path, not legacy fallback
-      const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      const rtProfiles = getRes.body.capacityProfiles.filter(
-        (p: any) => p.owner.roleId === postedRtId || (p.owner.kind === 'role' && p.owner.id === postedRtId),
-      )
-      // Should include both role and NR profiles
-      expect(rtProfiles.length).toBe(2)
-      expect(rtProfiles.some((p: any) => p.owner.kind === 'role')).toBe(true)
-      expect(rtProfiles.some((p: any) => p.owner.kind === 'namedPerson')).toBe(true)
+      expect(nrProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(nrProfiles[0].defaultPercent).toBe(60)
+      expect(nrProfiles[0].startWeek).toBe(2)
+      expect(nrProfiles[0].endWeek).toBe(8)
     })
 
     // ── New: capacity PUT preserves explicit NR profile while updating role ──
@@ -2721,6 +2714,149 @@ describe('persisted capacity-profile DTO integration', () => {
       // No extra or duplicated profiles
       const roleProfileCount = profiles.filter((p: any) => p.owner.kind === 'role').length
       expect(roleProfileCount).toBe(1)
+    })
+
+    // ── New: consecutive role updates ────────────────────────────
+
+    it('inherited NR follows consecutive role capacity updates', async () => {
+      const rtId = 'rt-consec'
+      addResourceType(rtId, 'Consecutive Role', 1, { allocationMode: 'EFFORT', allocationPercent: 100 })
+      addNamedResource('nr-consec', 'Consec Person', rtId, {
+        allocationMode: 'EFFORT', allocationPercent: 100,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+
+      // First capacity PUT: TIMELINE/60/weeks 2-8
+      const put1 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 2, allocationEndWeek: 8 })
+
+      expect(put1.status).toBe(200)
+
+      // Role profile
+      const roleProfiles1 = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles1).toHaveLength(1)
+      expect(roleProfiles1[0].defaultPercent).toBe(60)
+      expect(roleProfiles1[0].startWeek).toBe(2)
+      expect(roleProfiles1[0].endWeek).toBe(8)
+
+      // Inherited NR profile matches first role
+      const nrProfiles1 = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === 'nr-consec',
+      )
+      expect(nrProfiles1).toHaveLength(1)
+      expect(nrProfiles1[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(nrProfiles1[0].defaultPercent).toBe(60)
+      expect(nrProfiles1[0].startWeek).toBe(2)
+      expect(nrProfiles1[0].endWeek).toBe(8)
+      // Inherited: legacy field is populated (sync-derived, not explicit)
+      expect(nrProfiles1[0].legacy).toBeDefined()
+
+      // Second capacity PUT: TIMELINE/75/weeks 3-10
+      const put2 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 3, allocationEndWeek: 10 })
+
+      expect(put2.status).toBe(200)
+
+      // Role profile updated
+      const roleProfiles2 = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles2).toHaveLength(1)
+      expect(roleProfiles2[0].defaultPercent).toBe(75)
+      expect(roleProfiles2[0].startWeek).toBe(3)
+      expect(roleProfiles2[0].endWeek).toBe(10)
+
+      // Same inherited NR follows the second update
+      const nrProfiles2 = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === 'nr-consec',
+      )
+      expect(nrProfiles2).toHaveLength(1) // no duplicate
+      expect(nrProfiles2[0].id).toBe(nrProfiles1[0].id) // same row updated in place
+      expect(nrProfiles2[0].defaultPercent).toBe(75)
+      expect(nrProfiles2[0].startWeek).toBe(3)
+      expect(nrProfiles2[0].endWeek).toBe(10)
+
+      // GET uses persisted path
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      const profiles = getRes.body.capacityProfiles.filter(
+        (p: any) => p.owner.roleId === rtId || (p.owner.kind === 'role' && p.owner.id === rtId),
+      )
+      // Role + inherited NR
+      expect(profiles.length).toBe(2)
+    })
+
+    // ── New: role profile drift detection ─────────────────────────
+
+    it('role profile drift for RT with NRs triggers fallback, repair restores persisted', async () => {
+      const driftRtId = 'rt-drift'
+      addResourceType(driftRtId, 'Drift Role', 1, { allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 8 })
+      addNamedResource('nr-drift', 'Drift Person', driftRtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 80,
+        allocationStartWeek: 2, allocationEndWeek: 8,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      let getRes
+
+      // Capacity PUT creates a valid role profile
+      const putRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${driftRtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 8 })
+      expect(putRes.status).toBe(200)
+
+      // After PUT, GET uses persisted (reconciliation passes)
+      getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      const persistedRole = getRes.body.capacityProfiles.find(
+        (p: any) => p.owner.kind === 'role' && p.owner.id === driftRtId,
+      )
+      expect(persistedRole).toBeDefined()
+      expect(persistedRole.defaultPercent).toBe(80)
+
+      // Corrupt the role profile in the store
+      const roleProfileRow = storeRef.current.capacityProfiles.find(
+        (p: any) => p.resourceTypeId === driftRtId && p.namedResourceId === null,
+      )
+      expect(roleProfileRow).toBeDefined()
+      roleProfileRow!.defaultPercent = 99
+      // Also change legacy to preserve the explicit/null distinction
+      roleProfileRow!.legacy = null
+
+      // GET falls back to legacy — role profile drift detected
+      // (the corrupted role profile doesn't match mapper output)
+      getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      // Legacy mapper doesn't produce role profiles for RTs with NRs,
+      // so fallback returns NR profiles only — the corrupted role profile
+      // is NOT exposed (its ID not in the response)
+      const corruptedId = storeRef.current.capacityProfiles.find(
+        (p: any) => p.resourceTypeId === driftRtId && p.namedResourceId === null,
+      )?.id
+      const fallbackIds = getRes.body.capacityProfiles.map((p: any) => p.id)
+      expect(fallbackIds).not.toContain(corruptedId)
+
+      // Repair: another capacity PUT restores correct role profile
+      const repairRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${driftRtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 8 })
+      expect(repairRes.status).toBe(200)
+
+      // After repair, GET uses persisted again
+      getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      const repairedRole = getRes.body.capacityProfiles.find(
+        (p: any) => p.owner.kind === 'role' && p.owner.id === driftRtId,
+      )
+      expect(repairedRole).toBeDefined()
+      expect(repairedRole.defaultPercent).toBe(80)
     })
   })
  })

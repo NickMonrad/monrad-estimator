@@ -133,6 +133,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const rt = await prisma.$transaction(async tx => {
     let updated
+    let projection: any
 
     if (shouldExitCapacityPlan) {
       // Exit always produces TIMELINE/100/null/null — request-provided
@@ -145,7 +146,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         allocationEndWeek: null,
       }
 
-      const projection = await upsertRTProfileAndProjectLegacy(
+      projection = await upsertRTProfileAndProjectLegacy(
         tx, req.params.projectId as string, req.params.id as string,
         exitPayload,
       )
@@ -177,7 +178,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         },
       })
     } else if (hasCapacityInput) {
-      const projection = await upsertRTProfileAndProjectLegacy(
+      projection = await upsertRTProfileAndProjectLegacy(
         tx, req.params.projectId as string, req.params.id as string,
         capacityPayload,
       )
@@ -206,22 +207,47 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
     }
 
-    // Determine which NRs to preserve during sync:
-    // - Capacity update: only preserve NRs with explicit profile-first profiles
-    // - Non-capacity update: preserve all NRs (keep existing state unchanged)
+    // ── Determine NR preservation and update inherited NRs ────────────────
+    // Rule: explicit NR profiles (written by profile-first route) have
+    // legacy === null. Sync-derived/inherited profiles have legacy populated.
+    // Inherited NRs must have their legacy fields updated to match the role
+    // default so sync derives correct profiles.
     let preserveNRIds: string[]
     if (hasCapacityInput || shouldExitCapacityPlan) {
-      // NR profiles have resourceTypeId: null, so query by NR IDs, not RT ID.
       const nrIdsForRt = (await tx.namedResource.findMany({
         where: { resourceTypeId: req.params.id as string },
         select: { id: true },
       })).map((nr: { id: string }) => nr.id)
+
       const nrProfileRows = await tx.capacityProfile.findMany({
         where: { namedResourceId: { in: nrIdsForRt } },
-        select: { namedResourceId: true },
+        select: { namedResourceId: true, legacy: true },
       })
-      preserveNRIds = nrProfileRows.map((nr: { namedResourceId: string | null }) => nr.namedResourceId).filter((id: string | null): id is string => id !== null)
+
+      // Explicit NRs: profile-first written (legacy is null/undefined)
+      preserveNRIds = nrProfileRows
+        .filter((p: { legacy: any }) => p.legacy === null || p.legacy === undefined)
+        .map((p: { namedResourceId: string | null }) => p.namedResourceId)
+        .filter((id: string | null): id is string => id !== null)
+
+      // Update inherited NRs to inherit from the role projection
+      const inheritedNRIds = nrIdsForRt.filter((id: string) => !preserveNRIds.includes(id))
+      if (inheritedNRIds.length > 0) {
+        await tx.namedResource.updateMany({
+          where: { id: { in: inheritedNRIds } },
+          data: {
+            allocationMode: projection.allocationMode,
+            allocationPercent: projection.allocationPercent ?? 100,
+            allocationStartWeek: projection.allocationStartWeek,
+            allocationEndWeek: projection.allocationEndWeek,
+            allocationPct: projection.allocationPercent ?? 100,
+            startWeek: projection.allocationStartWeek,
+            endWeek: projection.allocationEndWeek,
+          },
+        })
+      }
     } else {
+      // Non-capacity: preserve all NRs (keep existing state unchanged)
       const allNRs = await tx.namedResource.findMany({
         where: { resourceTypeId: req.params.id as string },
         select: { id: true },
