@@ -4,7 +4,7 @@ import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
 import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
-import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
+import { exitCapacityPlanForManualScheduling, exitCapacityPlanRoleOnly } from '../lib/capacityPlanExit.js'
 import { upsertRTProfileAndProjectLegacy, buildMissingRTProfilePayload } from '../lib/resourceTypeCapacityProfileWrites.js'
 import { classifyNRsForRoleUpdate } from '../lib/classifyNRsForRoleUpdate.js'
 import type { NRToClassify, OldRoleDefault } from '../lib/classifyNRsForRoleUpdate.js'
@@ -87,7 +87,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     allocationStartWeek: existing.allocationStartWeek,
     allocationEndWeek: existing.allocationEndWeek,
   }
-  if (!existing) { res.status(404).json({ error: 'Resource type not found' }); return }
 
   // Validate new allocation fields
   if (allocationMode !== undefined && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode)) {
@@ -146,25 +145,41 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rt = await prisma.$transaction(async tx => {
     let updated
     let projection: any
+    let preserveNRIds: string[]
 
     if (shouldExitCapacityPlan) {
-      // Exit always produces TIMELINE/100/null/null — request-provided
-      // allocationPercent is ignored because exitCapacityPlanForManualScheduling
-      // hardcodes 100 for the RT legacy fields. Keep profile and RT consistent.
+      // 1. Read pre-exit NR state and profiles BEFORE any mutation
+      const allNRs = await tx.namedResource.findMany({
+        where: { resourceTypeId: req.params.id as string },
+      })
+      const nrProfileRows = await tx.capacityProfile.findMany({
+        where: { namedResourceId: { in: allNRs.map((nr: any) => nr.id) } },
+        include: { segments: true },
+      })
+
+      // 2. Classify using old role default (captured before transaction started)
+      const { inheritedNRIds, explicitNRIds } = classifyNRsForRoleUpdate(
+        allNRs as NRToClassify[],
+        nrProfileRows,
+        oldRoleDefault,
+      )
+
+      // 3. Create role profile (TIMELINE/100/null/null)
       const exitPayload = {
         allocationMode: 'TIMELINE',
         allocationPercent: 100,
         allocationStartWeek: null,
         allocationEndWeek: null,
       }
-
       projection = await upsertRTProfileAndProjectLegacy(
         tx, req.params.projectId as string, req.params.id as string,
         exitPayload,
       )
 
-      await exitCapacityPlanForManualScheduling(existing.id, tx)
+      // 4. Role-only exit — does NOT mutate named resources
+      await exitCapacityPlanRoleOnly(existing.id, tx)
 
+      // 5. Update RT legacy fields
       const exitData = {
         ...data,
         allocationMode: projection.allocationMode,
@@ -177,18 +192,22 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         data: exitData,
       })
 
-      await tx.namedResource.updateMany({
-        where: { resourceTypeId: existing.id, allocationMode: 'CAPACITY_PLAN' },
-        data: {
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 100,
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
-          allocationPct: projection.allocationPercent ?? 100,
-          startWeek: projection.allocationStartWeek,
-          endWeek: projection.allocationEndWeek,
-        },
-      })
+      // 6. Update only inherited NRs (explicit/custom/planned NRs preserved)
+      if (inheritedNRIds.length > 0) {
+        await tx.namedResource.updateMany({
+          where: { id: { in: inheritedNRIds } },
+          data: {
+            allocationMode: projection.allocationMode,
+            allocationPercent: projection.allocationPercent ?? 100,
+            allocationStartWeek: projection.allocationStartWeek,
+            allocationEndWeek: projection.allocationEndWeek,
+            allocationPct: projection.allocationPercent ?? 100,
+            startWeek: projection.allocationStartWeek,
+            endWeek: projection.allocationEndWeek,
+          },
+        })
+      }
+      preserveNRIds = explicitNRIds
     } else if (hasCapacityInput) {
       projection = await upsertRTProfileAndProjectLegacy(
         tx, req.params.projectId as string, req.params.id as string,
@@ -204,36 +223,15 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           allocationEndWeek: projection.allocationEndWeek,
         },
       })
-    } else {
-      const existingProfiles = await tx.capacityProfile.findMany({
-        where: { resourceTypeId: req.params.id as string, namedResourceId: null, projectId: req.params.projectId as string },
-        select: { id: true },
-      })
-      if (existingProfiles.length === 0) {
-        await upsertRTProfileAndProjectLegacy(tx, req.params.projectId as string, req.params.id as string,
-          buildMissingRTProfilePayload(existing))
-      }
-      updated = await tx.resourceType.update({
-        where: { id: req.params.id as string },
-        data,
-      })
-    }
 
-    // ── Classify NRs and update inherited ones ──────────────────────────
-    // Use semantic classification comparing each NR's effective pre-update
-    // allocation against the old role default. This correctly distinguishes
-    // inherited NRs from backfilled-custom or explicitly overridden ones.
-    let preserveNRIds: string[]
-    if (hasCapacityInput || shouldExitCapacityPlan) {
+      // Classify NRs and separate inherited from explicit/custom
       const allNRs = await tx.namedResource.findMany({
         where: { resourceTypeId: req.params.id as string },
       })
-
       const nrProfileRows = await tx.capacityProfile.findMany({
         where: { namedResourceId: { in: allNRs.map((nr: any) => nr.id) } },
-        select: { namedResourceId: true, legacy: true, ownerKind: true },
+        include: { segments: true },
       })
-
       const { inheritedNRIds, explicitNRIds } = classifyNRsForRoleUpdate(
         allNRs as NRToClassify[],
         nrProfileRows,
@@ -258,13 +256,26 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         })
       }
     } else {
-      // Non-capacity: preserve all NRs (keep existing state unchanged)
+      const existingProfiles = await tx.capacityProfile.findMany({
+        where: { resourceTypeId: req.params.id as string, namedResourceId: null, projectId: req.params.projectId as string },
+        select: { id: true },
+      })
+      if (existingProfiles.length === 0) {
+        await upsertRTProfileAndProjectLegacy(tx, req.params.projectId as string, req.params.id as string,
+          buildMissingRTProfilePayload(existing))
+      }
+      updated = await tx.resourceType.update({
+        where: { id: req.params.id as string },
+        data,
+      })
+      // Non-capacity: preserve all NRs
       const allNRs = await tx.namedResource.findMany({
         where: { resourceTypeId: req.params.id as string },
         select: { id: true },
       })
       preserveNRIds = allNRs.map((nr: { id: string }) => nr.id)
     }
+
 
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
     await syncCapacityProfilesForProject(tx, req.params.projectId as string, {

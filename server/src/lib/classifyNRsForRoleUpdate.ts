@@ -51,8 +51,19 @@ function effectiveMode(
   return nr.allocationMode ?? oldRole.allocationMode ?? null
 }
 
+/** Epsilon for floating-point percent comparison — preserves Prisma/API JSON precision. */
+const PCT_EPSILON = 1e-9
+
 function effectivePercent(nr: NRToClassify): number {
-  return Math.round(nr.allocationPercent ?? nr.allocationPct ?? 100)
+  return nr.allocationPercent ?? nr.allocationPct ?? 100
+}
+
+function oldRolePercent(oldRole: OldRoleDefault): number {
+  return oldRole.allocationPercent ?? 100
+}
+
+function percentsEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < PCT_EPSILON
 }
 
 function effectiveStartWeek(nr: NRToClassify): number | null {
@@ -63,16 +74,12 @@ function effectiveEndWeek(nr: NRToClassify): number | null {
   return nr.allocationEndWeek ?? nr.endWeek ?? null
 }
 
-function oldRolePercent(oldRole: OldRoleDefault): number {
-  return Math.round(oldRole.allocationPercent ?? 100)
-}
-
 function nrMatchesOldRoleDefault(
   nr: NRToClassify,
   oldRole: OldRoleDefault,
 ): boolean {
   const modeMatches = effectiveMode(nr, oldRole) === oldRole.allocationMode
-  const pctMatches = effectivePercent(nr) === oldRolePercent(oldRole)
+  const pctMatches = percentsEqual(effectivePercent(nr), oldRolePercent(oldRole))
 
   const nrStart = effectiveStartWeek(nr)
   const nrEnd = effectiveEndWeek(nr)
@@ -87,35 +94,38 @@ function nrMatchesOldRoleDefault(
 /**
  * Classify named resources as inherited or explicit/custom for a role update.
  *
- * Rules:
+ * Priority order (first match wins):
  *
- * 1. NRs WITHOUT any persisted profile are always **inherited** — they are
- *    fresh/auto-created (e.g. from POST) and have never been through capacity
- *    sync. Their values are Prisma defaults or route-set, not user customisation.
+ * 1. Persisted profile with `ownerKind === 'PLANNED_RESOURCE'` → **explicit**
+ *    Synthetic/planned resources must not retroactively inherit role default changes.
  *
- * 2. NRs WITH a persisted profile where `legacy === null | undefined` are
- *    **explicit** — the profile was created by a profile-first write route
- *    (`upsertNRProfileAndProjectLegacy`), which never sets `legacy`.
+ * 2. Persisted profile with non-empty `segments` → **explicit**
+ *    Segments are always explicit profile state, regardless of `legacy` value.
  *
- * 3. NRs WITH a persisted profile where `ownerKind === 'PLANNED_RESOURCE'` are
- *    **explicit** — synthetic/planned resources must not retroactively inherit
- *    role default changes.
+ * 3. Persisted profile with `legacy === null | undefined` → **explicit**
+ *    Profile was created by a profile-first write (`upsertNRProfileAndProjectLegacy`),
+ *    which never sets `legacy`. (Backfilled/sync-derived profiles always have `legacy`.)
  *
- * 4. NRs WITH a persisted profile that has populated `legacy` (sync-derived)
- *    are classified by comparing their effective pre-update allocation against
- *    the old role default:
- *      - Effective allocation matches old role default → **inherited**
- *      - Effective allocation differs → **explicit/custom**
+ * 4. Persisted profile with populated `legacy` (sync-derived):
+ *    - Effective allocation matches old role default → **inherited**
+ *    - Effective allocation differs → **explicit/custom**
  *
- *    Effective allocation uses the same resolution as `capacityProfileMapping.ts`:
- *      - Mode: `nr.allocationMode ?? oldRole.allocationMode ?? null`
- *      - Percent: `nr.allocationPercent ?? nr.allocationPct ?? 100`
- *      - Start: `nr.allocationStartWeek ?? nr.startWeek ?? null`
- *      - End: `nr.allocationEndWeek ?? nr.endWeek ?? null`
+ * 5. **No persisted profile** (fresh or partially migrated NR):
+ *    - All allocation fields at NamedResource Prisma defaults → **inherited**
+ *      (fresh/auto-created NR, never explicitly configured)
+ *    - Otherwise, effective allocation matches old role default → **inherited**
+ *    - Otherwise → **explicit/custom** (preserve potentially intentional data)
  *
- * This ensures that backfilled NR profiles (populated `legacy` from sync) are
- * correctly distinguished: those whose allocation matched the original role
- * default are inherited; those whose allocation differed are preserved.
+ * Effective allocation uses the same resolution as `capacityProfileMapping.ts`:
+ *   - Mode: `nr.allocationMode ?? oldRole.allocationMode ?? null`
+ *   - Percent: `nr.allocationPercent ?? nr.allocationPct ?? 100` (epsilon comparison)
+ *   - Start: `nr.allocationStartWeek ?? nr.startWeek ?? null`
+ *   - End: `nr.allocationEndWeek ?? nr.endWeek ?? null`
+ *
+ * Percentages are compared with `Math.abs(a - b) < 1e-9` to preserve floating-point
+ * precision from Prisma/API JSON without collapsing distinct values via rounding.
+ *
+ * When provenance is uncertain, the classifier prefers to preserve NR data.
  */
 export function classifyNRsForRoleUpdate(
   nrs: NRToClassify[],
@@ -125,7 +135,6 @@ export function classifyNRsForRoleUpdate(
   const profileByNRId = new Map<string, NRProfileState>()
   for (const p of nrProfiles) {
     if (p.namedResourceId) {
-      // Only keep the first profile per NR (there should be exactly one)
       if (!profileByNRId.has(p.namedResourceId)) {
         profileByNRId.set(p.namedResourceId, p)
       }
@@ -138,29 +147,53 @@ export function classifyNRsForRoleUpdate(
   for (const nr of nrs) {
     const profile = profileByNRId.get(nr.id)
 
-    // No profile at all → fresh/auto-created NR, never sync'd → inherited
-    if (!profile) {
-      inheritedNRIds.push(nr.id)
-      continue
-    }
+    if (profile) {
+      // 1. Planned-resource owner → explicit
+      if (profile.ownerKind === 'PLANNED_RESOURCE') {
+        explicitNRIds.push(nr.id)
+        continue
+      }
 
-    // Profile-first explicit profile (legacy === null/undefined) → explicit
-    if (profile.legacy === null || profile.legacy === undefined) {
-      explicitNRIds.push(nr.id)
-      continue
-    }
+      // 2. Non-empty segments → explicit (segments are always explicit profile state)
+      if (profile.segments && profile.segments.length > 0) {
+        explicitNRIds.push(nr.id)
+        continue
+      }
 
-    // Planned resource → explicit
-    if (profile.ownerKind === 'PLANNED_RESOURCE') {
-      explicitNRIds.push(nr.id)
-      continue
-    }
+      // 3. Profile-first explicit (legacy === null/undefined) → explicit
+      if (profile.legacy === null || profile.legacy === undefined) {
+        explicitNRIds.push(nr.id)
+        continue
+      }
 
-    // Sync-derived profile: compare effective allocation with old role default
-    if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
-      inheritedNRIds.push(nr.id)
+      // 4. Sync-derived (populated legacy): compare effective allocation with old role default
+      if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
+        inheritedNRIds.push(nr.id)
+      } else {
+        explicitNRIds.push(nr.id)
+      }
     } else {
-      explicitNRIds.push(nr.id)
+      // No persisted profile: check whether all allocation fields are at NamedResource
+      // Prisma defaults. If so, this is a fresh/auto-created NR (e.g. from POST) that
+      // was never explicitly configured — treat as inherited.
+      const isFreshNR =
+        (nr.allocationMode === null || nr.allocationMode === undefined || nr.allocationMode === 'EFFORT') &&
+        (nr.allocationPercent === null || nr.allocationPercent === undefined || nr.allocationPercent === 100) &&
+        (nr.allocationStartWeek === null || nr.allocationStartWeek === undefined) &&
+        (nr.allocationEndWeek === null || nr.allocationEndWeek === undefined) &&
+        (nr.allocationPct === null || nr.allocationPct === undefined || nr.allocationPct === 100) &&
+        (nr.startWeek === null || nr.startWeek === undefined) &&
+        (nr.endWeek === null || nr.endWeek === undefined)
+
+      if (isFreshNR) {
+        inheritedNRIds.push(nr.id)
+      } else if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
+        // Non-default NR that happens to match the old role → inherited
+        inheritedNRIds.push(nr.id)
+      } else {
+        // Non-default NR with allocation differing from old role → explicit/custom
+        explicitNRIds.push(nr.id)
+      }
     }
   }
 
