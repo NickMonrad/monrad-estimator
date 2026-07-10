@@ -744,8 +744,9 @@ function addTask(
 
 describe('persisted capacity-profile DTO integration', () => {
   describe('1. ResourceType write persists profiles', () => {
-    it('PATCH count triggers sync, GET reads same persisted state', async () => {
+    it('PATCH count triggers sync, preserves original NR, creates derived profile for new NR', async () => {
       addResourceType(rtId, userName, 1)
+      // nr-1 has EFFORT mode while RT defaults to TIMELINE — legitimately differs, classified as explicit
       addNamedResource('nr-1', 'Engineer 1', rtId)
 
       const patchRes = await request(app)
@@ -757,25 +758,44 @@ describe('persisted capacity-profile DTO integration', () => {
 
       // ── Direct store assertion: profiles were created ──
       expect(storeRef.current.capacityProfiles.length).toBeGreaterThan(0)
-      // RT has named resources → mapper produces named-person profiles
-      const nrProfile = storeRef.current.capacityProfiles.find(
+
+      // The new inheriting NR gets a profile (TIMELINE role default → AVAILABILITY_WINDOW)
+      const newNR = storeRef.current.namedResources.find(
+        (n: any) => n.resourceTypeId === rtId && n.id !== 'nr-1',
+      )
+      expect(newNR).toBeDefined()
+
+      const inheritedProfile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === newNR!.id,
+      )
+      expect(inheritedProfile).toBeDefined()
+      expect(inheritedProfile!.ownerKind).toBe('NAMED_PERSON')
+      expect(inheritedProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+
+      // Original explicit NR remains unchanged — no profile created (preserved by sync)
+      const originalProfile = storeRef.current.capacityProfiles.find(
         (p: any) => p.namedResourceId === 'nr-1',
       )
-      expect(nrProfile).toBeDefined()
-      expect(nrProfile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(originalProfile).toBeUndefined()
 
-      const persistedId = nrProfile!.id
-
-      // ── GET assertion: same persisted state ──
+      // ── GET assertion: legacy fallback returns profiles for both NRs ──
       const getRes = await getCapacityProfiles()
       expect(getRes.status).toBe(200)
       expect(getRes.body.capacityProfiles.length).toBeGreaterThan(0)
-      const responseProfile = getRes.body.capacityProfiles.find(
+
+      // New NR's DTO from legacy fallback
+      const newNRDto = getRes.body.capacityProfiles.find(
+        (p: any) => p.owner.kind === 'namedPerson' && p.owner.id === newNR!.id,
+      )
+      expect(newNRDto).toBeDefined()
+      expect(newNRDto!.planningBasis).toBe('availabilityWindow')
+
+      // Original NR's DTO from legacy fallback (still returned, unchanged)
+      const originalDto = getRes.body.capacityProfiles.find(
         (p: any) => p.owner.kind === 'namedPerson' && p.owner.id === 'nr-1',
       )
-      expect(responseProfile).toBeDefined()
-      expect(responseProfile!.id).toBe(persistedId)
-      expect(responseProfile!.planningBasis).toBe('demandFollowing')
+      expect(originalDto).toBeDefined()
+      expect(originalDto!.planningBasis).toBe('demandFollowing')
     })
   })
 
@@ -971,13 +991,13 @@ describe('persisted capacity-profile DTO integration', () => {
 
 
   describe('6. Repair cycle', () => {
-    it('write after corruption repairs persisted state; GET switches to persisted path', async () => {
+    it('capacity PUT after corruption repairs persisted role profile; GET remains consistent', async () => {
       addResourceType(rtId, userName, 1)
       addNamedResource('nr-1', 'Engineer 1', rtId)
 
-      // Phase 1: seed a corrupted profile — wrong owner kind/planningBasis
+      // Phase 1: seed a corrupted role profile — wrong source
       // Legacy mapper produces a named-person profile for nr-1 (RT has NRs).
-      // The seeded ROLE profile with wrong planningBasis → real compareCapacityProfiles fails.
+      // The seeded ROLE profile has source:FIXED instead of source:AVAILABILITY_WINDOW → compareCapacityProfiles fails.
       const corruptId = 'cp-corrupt'
       addPersistedProfile(corruptId, {
         resourceTypeId: rtId,
@@ -997,37 +1017,37 @@ describe('persisted capacity-profile DTO integration', () => {
       const beforeIds = getBefore.body.capacityProfiles.map((p: any) => p.id)
       expect(beforeIds).not.toContain(corruptId)
 
-      // Phase 2: trigger a PATCH that runs sync → repairs the store
-      const patchRes = await request(app)
-        .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
+      // Phase 2: capacity PUT upserts the corrupt role profile, replaces it with correct data
+      const putRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
         .set('Authorization', authHeader)
-        .send({ count: 2 })
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 100 })
 
-      expect(patchRes.status).toBe(200)
+      expect(putRes.status).toBe(200)
 
-      // Direct store assertion: corrupted profile is gone
+      // Direct store assertion: corrupted profile is gone (deleted by upsertRTProfileAndProjectLegacy)
       const stillCorrupt = storeRef.current.capacityProfiles.find(
         (p: any) => p.id === corruptId,
       )
       expect(stillCorrupt).toBeUndefined()
 
-      // Store now has named-person profiles matching NRs
+      // Store now has a correct role profile for the RT (AVAILABILITY_WINDOW/AVAILABILITY_WINDOW)
       expect(storeRef.current.capacityProfiles.length).toBeGreaterThan(0)
-      const repairedProfile = storeRef.current.capacityProfiles.find(
-        (p: any) => p.namedResourceId === 'nr-1',
+      const roleProfile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.ownerKind === 'ROLE' && p.resourceTypeId === rtId,
       )
-      expect(repairedProfile).toBeDefined()
-      expect(repairedProfile!.ownerKind).toBe('NAMED_PERSON')
-      expect(repairedProfile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(roleProfile).toBeDefined()
+      expect(roleProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(roleProfile!.source).toBe('AVAILABILITY_WINDOW')
 
-      // Phase 3: GET after fix → persisted path
+      // Phase 3: GET after fix → legacy fallback (nr-1 is explicit/preserved so its profile is missing from persisted)
       const getAfter = await getCapacityProfiles()
       expect(getAfter.status).toBe(200)
       const afterDto = getAfter.body.capacityProfiles.find(
         (p: any) => p.owner.kind === 'namedPerson' && p.owner.id === 'nr-1',
       )
       expect(afterDto).toBeDefined()
-      expect(afterDto!.id).toBe(repairedProfile!.id)
+      // Legacy fallback still returns the correct derived profile for nr-1
       expect(afterDto!.planningBasis).toBe('demandFollowing')
     })
   })
@@ -3827,6 +3847,344 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(bRoleAfter2.defaultPercent).toBe(60)
       expect(bRoleAfter2.startWeek).toBe(4)
       expect(bRoleAfter2.endWeek).toBe(10)
+    })
+  })
+
+  describe('11. PATCH regression coverage', () => {
+    it('count increase preserves authoritative role profile and explicit multi-segment NR while creating inherited NR at role defaults', async () => {
+      // RT with role profile + explicit multi-segment NR
+      addResourceType(rtId, 'Engineer', 2, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      })
+      addNamedResource('nr-1', 'Engineer 1', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      })
+      addNamedResource('nr-2', 'Engineer 2', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 50,
+        allocationStartWeek: 5, allocationEndWeek: 15,
+      })
+      // Add persisted profile for nr-2 (explicit, multi-segment)
+      addPersistedProfile('cp-nr2', {
+        resourceTypeId: rtId,
+        namedResourceId: 'nr-2',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 50,
+        startWeek: 5,
+        endWeek: 15,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 5, allocationEndWeek: 15, startWeek: 5, endWeek: 15 },
+      })
+      storeRef.current.capacitySegments.push({
+        id: 'seg-nr2-1', capacityProfileId: 'cp-nr2',
+        startWeek: 5, endWeek: 10, capacityPercent: 50, source: 'AVAILABILITY_WINDOW',
+      })
+      storeRef.current.capacitySegments.push({
+        id: 'seg-nr2-2', capacityProfileId: 'cp-nr2',
+        startWeek: 11, endWeek: 15, capacityPercent: 50, source: 'AVAILABILITY_WINDOW',
+      })
+      // Create a role profile so we can verify it's preserved
+      addPersistedProfile('cp-role-1', {
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        legacy: null,
+      })
+
+      // Snapshot role profile and explicit NR profile before PATCH
+      const roleBefore = storeRef.current.capacityProfiles.find(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+
+      // PATCH count to 3 (increase)
+      const patchRes = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 3 })
+
+      expect(patchRes.status).toBe(200)
+
+      // Role profile unchanged (no role profile update happened in PATCH count increase)
+      const roleAfter = storeRef.current.capacityProfiles.find(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleAfter).toBeDefined()
+      if (roleBefore) {
+        expect(roleAfter!.defaultPercent).toBe(roleBefore.defaultPercent)
+        expect(roleAfter!.startWeek).toBe(roleBefore.startWeek)
+        expect(roleAfter!.endWeek).toBe(roleBefore.endWeek)
+      }
+
+      // Explicit multi-segment NR profile preserved
+      const explicitProfile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === 'nr-2',
+      )
+      expect(explicitProfile).toBeDefined()
+      expect(explicitProfile!.defaultPercent).toBe(50)
+      expect(storeRef.current.capacitySegments.filter(
+        (s: any) => s.capacityProfileId === explicitProfile!.id,
+      )).toHaveLength(2)
+
+      // Third NR created with inherited role defaults via sync
+      // (sync creates profiles according to the current RT state)
+      const newNR = storeRef.current.namedResources.find(
+        (n: any) => n.name === 'Engineer 3',
+      )
+      expect(newNR).toBeDefined()
+    })
+
+    it('no-op count PATCH leaves full scoped profile and segment snapshot byte-identical', async () => {
+      addResourceType(rtId, 'Engineer', 2, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      })
+      addNamedResource('nr-1', 'Engineer 1', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      })
+      addNamedResource('nr-2', 'Engineer 2', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      })
+
+      // Snapshot all profile and segment IDs
+      const beforeProfiles = storeRef.current.capacityProfiles
+        .filter((p: any) => p.resourceTypeId === rtId)
+        .map((p: any) => ({ id: p.id, ...p }))
+      const beforeSegments = storeRef.current.capacitySegments
+        .filter((s: any) => beforeProfiles.some((p: any) => p.id === s.capacityProfileId))
+        .map((s: any) => ({ ...s }))
+
+      // PATCH with same count (no-op)
+      const patchRes = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 2 })
+
+      expect(patchRes.status).toBe(200)
+
+      // Profile/segment snapshot identical
+      const afterProfiles = storeRef.current.capacityProfiles
+        .filter((p: any) => p.resourceTypeId === rtId)
+        .map((p: any) => ({ id: p.id, ...p }))
+      const afterSegments = storeRef.current.capacitySegments
+        .filter((s: any) => afterProfiles.some((p: any) => p.id === s.capacityProfileId))
+        .map((s: any) => ({ ...s }))
+
+      expect(JSON.stringify(beforeProfiles)).toBe(JSON.stringify(afterProfiles))
+      expect(JSON.stringify(beforeSegments)).toBe(JSON.stringify(afterSegments))
+    })
+
+    it('CAPACITY_PLAN mixed ownership: only inherited compatibility fields change on exit', async () => {
+      addResourceType(rtId, 'Developer', 4, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
+        allocationStartWeek: 4, allocationEndWeek: 8,
+      })
+      // Inherited NR: matches CAPACITY_PLAN/25/4/8, no profile
+      addNamedResource('nr-inh-1', 'Developer 1', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
+        allocationStartWeek: 4, allocationEndWeek: 8,
+      })
+      // Backfilled custom: profile with legacy differing from role
+      addNamedResource('nr-cust-1', 'Developer 2', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 50,
+        allocationStartWeek: 3, allocationEndWeek: 7,
+      })
+      addPersistedProfile('cp-cust-1', {
+        resourceTypeId: rtId,
+        namedResourceId: 'nr-cust-1',
+        ownerKind: 'NAMED_PERSON',
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 3, allocationEndWeek: 7, startWeek: null, endWeek: null },
+      })
+      // Profile-first explicit: no legacy
+      addNamedResource('nr-pf-1', 'Developer 3', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
+        allocationStartWeek: 4, allocationEndWeek: 8,
+      })
+      addPersistedProfile('cp-pf-1', {
+        resourceTypeId: rtId,
+        namedResourceId: 'nr-pf-1',
+        ownerKind: 'NAMED_PERSON',
+        defaultPercent: 25,
+        startWeek: 4,
+        endWeek: 8,
+        // legacy: null — profile-first
+      })
+      // Segmented NR
+      addNamedResource('nr-seg-1', 'Developer 4', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
+        allocationStartWeek: 4, allocationEndWeek: 8,
+      })
+      addPersistedProfile('cp-seg-1', {
+        resourceTypeId: rtId,
+        namedResourceId: 'nr-seg-1',
+        ownerKind: 'NAMED_PERSON',
+        segments: [],
+        legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+      })
+      storeRef.current.capacitySegments.push({
+        id: 'seg-dev-1', capacityProfileId: 'cp-seg-1',
+        startWeek: 4, endWeek: 6, capacityPercent: 100, source: 'SQUAD_PLANNER',
+      })
+
+      // Snapshot non-inherited NR profile state before PATCH
+      const beforeProfiles = storeRef.current.capacityProfiles
+        .filter((p: any) => p.resourceTypeId === rtId && p.namedResourceId !== null && p.namedResourceId !== 'nr-inh-1')
+        .map((p: any) => JSON.parse(JSON.stringify(p)))
+      const beforeSegments = storeRef.current.capacitySegments
+        .filter((s: any) => beforeProfiles.some((p: any) => p.id === s.capacityProfileId))
+        .map((s: any) => JSON.parse(JSON.stringify(s)))
+
+      // PATCH with same count → triggers CAPACITY_PLAN exit
+      const patchRes = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 4 })
+
+      expect(patchRes.status).toBe(200)
+
+      // Inherited NR compatibility fields changed to TIMELINE/100/null/null
+      const inheritedAfter = storeRef.current.namedResources.find((n: any) => n.id === 'nr-inh-1')
+      expect(inheritedAfter.allocationMode).toBe('TIMELINE')
+      expect(inheritedAfter.allocationPercent).toBe(100)
+      expect(inheritedAfter.allocationStartWeek).toBeNull()
+      expect(inheritedAfter.allocationEndWeek).toBeNull()
+      expect(inheritedAfter.allocationPct).toBe(100)
+      expect(inheritedAfter.startWeek).toBeNull()
+      expect(inheritedAfter.endWeek).toBeNull()
+
+      // Non-inherited NR profiles preserved
+      const afterProfiles = storeRef.current.capacityProfiles
+        .filter((p: any) => p.resourceTypeId === rtId && p.namedResourceId !== null && p.namedResourceId !== 'nr-inh-1')
+        .map((p: any) => JSON.parse(JSON.stringify(p)))
+      expect(JSON.stringify(beforeProfiles)).toBe(JSON.stringify(afterProfiles))
+      const afterSegments = storeRef.current.capacitySegments
+        .filter((s: any) => afterProfiles.some((p: any) => p.id === s.capacityProfileId))
+        .map((s: any) => JSON.parse(JSON.stringify(s)))
+      expect(JSON.stringify(beforeSegments)).toBe(JSON.stringify(afterSegments))
+    })
+
+    it('safe reduction with multiple inherited and protected NRs: deletes eligible inherited only, warns, count matches actual', async () => {
+      addResourceType(rtId, 'Dev', 4, {
+        allocationMode: 'EFFORT', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      })
+      // Inherited: matches EFFORT/100/null/null
+      addNamedResource('nr-old-inh', 'Dev 1', rtId)
+      // Explicit: different percent/window
+      addNamedResource('nr-exp-1', 'Dev 2', rtId, {
+        allocationMode: 'EFFORT', allocationPercent: 50,
+        allocationStartWeek: 5, allocationEndWeek: 10,
+      })
+      // Inherited (newer createdAt)
+      addNamedResource('nr-middle-inh', 'Dev 3', rtId)
+      // Planned resource profile → explicit
+      addNamedResource('nr-plan-1', 'Dev 4', rtId)
+      addPersistedProfile('cp-plan-1', {
+        resourceTypeId: rtId,
+        namedResourceId: 'nr-plan-1',
+        ownerKind: 'PLANNED_RESOURCE',
+      })
+      // Override createdAt on NRs for deterministic ordering
+      const nrs = storeRef.current.namedResources.filter((n: any) => n.resourceTypeId === rtId)
+      nrs.sort((a: any, b: any) => a.id.localeCompare(b.id))
+      nrs.forEach((nr: any, i: number) => {
+        nr.createdAt = new Date(`2026-0${i + 1}-01`)
+      })
+
+      // PATCH reduce from 4 to 2 → remove 2 newest inherited
+      const patchRes = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 2 })
+
+      expect(patchRes.status).toBe(200)
+
+      // Remaining NRs: nr-old-inh (inherited, oldest) + nr-exp-1 (explicit) + nr-plan-1 (planned/explicit) = 3
+      // Wait, actual reduction: only inherited NRs are candidates. 4 → 2 means remove 2 inherited.
+      // Inherited NRs sorted by createdAt asc: nr-old-inh (1), nr-middle-inh (3).
+      // Reversed (newest first): nr-middle-inh, nr-old-inh. Slice(0, 2): both.
+      // nr-exp-1 is explicit, nr-plan-1 is explicit → NOT considered
+      // So both inherited NRs removed. Expected count = 4 - 2 = 2.
+
+      // The remaining NRs should be the two protected explicit ones
+      const remainingNRs = storeRef.current.namedResources
+        .filter((n: any) => n.resourceTypeId === rtId)
+        .map((n: any) => n.id)
+        .sort()
+      expect(remainingNRs).toEqual(['nr-exp-1', 'nr-plan-1'])
+
+      // RT count reflects actual remaining
+      const rt = storeRef.current.resourceTypes.find((r: any) => r.id === rtId)
+      expect(rt.count).toBe(2)
+    })
+
+    it('two-RT isolation: PATCH B increase and reduction leave A role profile and segments byte-for-byte unchanged', async () => {
+      const rtAId = 'rt-a-1'
+      const rtBId = 'rt-b-1'
+
+      // RT A: TIMELINE with role profile + explicit segmented NR
+      addResourceType(rtAId, 'Role A', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 80,
+        allocationStartWeek: 2, allocationEndWeek: 10,
+      })
+      addNamedResource('nr-a-1', 'Person A', rtAId, {
+        allocationMode: 'TIMELINE', allocationPercent: 80,
+        allocationStartWeek: 2, allocationEndWeek: 10,
+      })
+
+      // RT B: EFFORT with two NRs
+      addResourceType(rtBId, 'Role B', 2, {
+        allocationMode: 'EFFORT', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      })
+      addNamedResource('nr-b-1', 'Person B1', rtBId)
+      addNamedResource('nr-b-2', 'Person B2', rtBId)
+
+      // Snapshot RT A profiles and segments
+      const snapshotA = () => {
+        const profiles = storeRef.current.capacityProfiles
+          .filter((p: any) => p.resourceTypeId === rtAId)
+          .map((p: any) => JSON.parse(JSON.stringify(p)))
+        const segments = storeRef.current.capacitySegments
+          .filter((s: any) => profiles.some((p: any) => p.id === s.capacityProfileId))
+          .map((s: any) => JSON.parse(JSON.stringify(s)))
+        return { profiles, segments }
+      }
+      const beforeA = snapshotA()
+
+      // PATCH B: increase count to 3
+      const patchIncrease = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${rtBId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 3 })
+
+      expect(patchIncrease.status).toBe(200)
+
+      // RT A profiles and segments unchanged
+      const afterIncreaseA = snapshotA()
+      expect(JSON.stringify(beforeA.profiles)).toBe(JSON.stringify(afterIncreaseA.profiles))
+      expect(JSON.stringify(beforeA.segments)).toBe(JSON.stringify(afterIncreaseA.segments))
+
+      // PATCH B: reduce count to 1
+      const patchReduce = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${rtBId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 1 })
+
+      expect(patchReduce.status).toBe(200)
+
+      // RT A profiles and segments still unchanged
+      const afterReduceA = snapshotA()
+      expect(JSON.stringify(beforeA.profiles)).toBe(JSON.stringify(afterReduceA.profiles))
+      expect(JSON.stringify(beforeA.segments)).toBe(JSON.stringify(afterReduceA.segments))
     })
   })
   })

@@ -134,11 +134,14 @@ export function classifyNRsForRoleUpdate(
   nrProfiles: NRProfileState[],
   oldRoleDefault: OldRoleDefault,
 ): ClassificationResult {
-  const profileByNRId = new Map<string, NRProfileState>()
+  const profilesByNRId = new Map<string, NRProfileState[]>()
   for (const p of nrProfiles) {
     if (p.namedResourceId) {
-      if (!profileByNRId.has(p.namedResourceId)) {
-        profileByNRId.set(p.namedResourceId, p)
+      const list = profilesByNRId.get(p.namedResourceId)
+      if (list) {
+        list.push(p)
+      } else {
+        profilesByNRId.set(p.namedResourceId, [p])
       }
     }
   }
@@ -147,36 +150,31 @@ export function classifyNRsForRoleUpdate(
   const explicitNRIds: string[] = []
 
   for (const nr of nrs) {
-    const profile = profileByNRId.get(nr.id)
+    const profiles = profilesByNRId.get(nr.id) ?? []
 
-    if (profile) {
-      // 1. Planned-resource owner → explicit
-      if (profile.ownerKind === 'PLANNED_RESOURCE') {
-        explicitNRIds.push(nr.id)
-        continue
+    if (profiles.length > 0) {
+      let isExplicit = false
+      for (const p of profiles) {
+        // 1. Planned-resource owner → explicit
+        if (p.ownerKind === 'PLANNED_RESOURCE') { isExplicit = true; break }
+        // 2. Non-empty segments → explicit (segments are always explicit profile state)
+        if (p.segments && p.segments.length > 0) { isExplicit = true; break }
+        // 3. Profile-first explicit (legacy === null/undefined) → explicit
+        if (p.legacy === null || p.legacy === undefined) { isExplicit = true; break }
       }
 
-      // 2. Non-empty segments → explicit (segments are always explicit profile state)
-      if (profile.segments && profile.segments.length > 0) {
+      if (isExplicit) {
         explicitNRIds.push(nr.id)
-        continue
-      }
-
-      // 3. Profile-first explicit (legacy === null/undefined) → explicit
-      if (profile.legacy === null || profile.legacy === undefined) {
-        explicitNRIds.push(nr.id)
-        continue
-      }
-
-      // 4. Sync-derived (populated legacy): compare effective allocation with old role default
-      if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
-        inheritedNRIds.push(nr.id)
       } else {
-        explicitNRIds.push(nr.id)
+        // 4. All profiles are sync-derived (populated legacy): compare once
+        if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
+          inheritedNRIds.push(nr.id)
+        } else {
+          explicitNRIds.push(nr.id)
+        }
       }
     } else {
       // No persisted profile: classify solely by semantic equality against old role default.
-      // No value-pattern provenance inference — only nrMatchesOldRoleDefault decides.
       if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
         inheritedNRIds.push(nr.id)
       } else {
@@ -186,4 +184,91 @@ export function classifyNRsForRoleUpdate(
   }
 
   return { inheritedNRIds, explicitNRIds }
+}
+// ─── Legacy Int projection ──────────────────────────────────────────────
+
+/** Round a Float allocationPercent to the legacy Int allocationPct field.
+ *  Never write a Float directly to the Int allocationPct column. */
+export function toLegacyAllocationPct(pct: number | null | undefined): number | null | undefined {
+  if (pct === null || pct === undefined) return pct
+  return Math.round(pct)
+}
+
+// ─── Pre-mutation state loader ──────────────────────────────────────────
+
+export interface PreMutationRTState {
+  /** NamedResource records ordered by createdAt asc. */
+  allNRs: Array<{ id: string; name: string }>
+  /** CapacityProfile records (with segments) for the NRs above. */
+  nrProfiles: Array<NRProfileState>
+  /** Pre-update role default, null-normalised. */
+  oldRoleDefault: OldRoleDefault
+  /** Classification result: which NRs are inherited vs explicit. */
+  classification: ClassificationResult
+}
+
+interface RTStateTxClient {
+  namedResource: {
+    findMany(args: {
+      where: { resourceTypeId: string };
+      orderBy: { createdAt: 'asc' };
+    }): Promise<Array<{ id: string; name: string }>>;
+  };
+  capacityProfile: {
+    findMany(args: {
+      where: { namedResourceId: { in: string[] } };
+      include: { segments: true };
+    }): Promise<Array<NRProfileState>>;
+  };
+}
+
+/**
+ * Load all named resources with their capacity profiles, compute the
+ * pre-update OldRoleDefault, and classify NRs as inherited/explicit.
+ *
+ * Call this ONCE before any mutations to get a stable snapshot of the
+ * pre-mutation state.  Both PUT and PATCH use this to avoid duplicating
+ * the query + classify logic.
+ *
+ * @param tx  Prisma transaction client (or compatible mock)
+ * @param resourceTypeId  The ResourceType whose NRs to load
+ * @param existingRT  Pre-update ResourceType row (allocation fields)
+ */
+export async function loadAndClassifyRTState(
+  tx: RTStateTxClient,
+  resourceTypeId: string,
+  existingRT: {
+    allocationMode: string | null
+    allocationPercent: number | null
+    allocationStartWeek: number | null
+    allocationEndWeek: number | null
+  },
+): Promise<PreMutationRTState> {
+  const oldRoleDefault: OldRoleDefault = {
+    allocationMode: existingRT.allocationMode,
+    allocationPercent: existingRT.allocationPercent ?? null,
+    allocationStartWeek: existingRT.allocationStartWeek ?? null,
+    allocationEndWeek: existingRT.allocationEndWeek ?? null,
+  }
+
+  const allNRs = await tx.namedResource.findMany({
+    where: { resourceTypeId },
+    orderBy: { createdAt: 'asc' },
+  })
+
+  const nrIds: string[] = allNRs.map((nr: { id: string }) => nr.id)
+  const nrProfiles = nrIds.length > 0
+    ? await tx.capacityProfile.findMany({
+        where: { namedResourceId: { in: nrIds } },
+        include: { segments: true },
+      })
+    : []
+
+  const classification = classifyNRsForRoleUpdate(
+    allNRs as unknown as NRToClassify[],
+    nrProfiles,
+    oldRoleDefault,
+  )
+
+  return { allNRs, nrProfiles, oldRoleDefault, classification }
 }
