@@ -78,10 +78,25 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // If persisted profiles exist, check whether they are fully reconciled
   if (project.capacityProfiles && project.capacityProfiles.length > 0) {
+    // Build set of RT IDs that have named resources — the legacy mapper does not
+    // produce role profiles for these RTs, but profile-first writes do.
+    const rtIdsWithNRs = new Set<string>(
+      project.resourceTypes
+        .filter((rt: { namedResources: any[] }) => rt.namedResources && rt.namedResources.length > 0)
+        .map((rt: { id: string }) => rt.id),
+    )
+
+    // Filter out role profiles for RTs with named resources from the comparison,
+    // since the legacy mapper won't produce equivalent role profiles for them.
+    const comparisonProfiles = project.capacityProfiles.filter(
+      (pp: { resourceTypeId: string | null; ownerKind: string }) =>
+        !(pp.resourceTypeId && pp.ownerKind === 'ROLE' && rtIdsWithNRs.has(pp.resourceTypeId)),
+    )
+
     const comparison = compareCapacityProfiles(
       projectId,
       legacyProfiles,
-      project.capacityProfiles,
+      comparisonProfiles,
     )
 
     if (comparison.mismatches.length === 0) {

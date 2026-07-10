@@ -381,6 +381,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
         findFirst: (args: any) => findOne(store().resourceTypes, args?.where ?? {}),
         findMany: (args: any) => findMany('resourceTypes', args ?? {}),
         findUnique: (args: any) => findOne(store().resourceTypes, args?.where ?? {}),
+        create: (args: any) => createIn('resourceTypes', args.data ?? args),
         update: (args: any) => {
           const idx = store().resourceTypes.findIndex((r: any) => r.id === args.where.id)
           if (idx >= 0) {
@@ -2438,7 +2439,30 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(roleProfiles).toHaveLength(1)
       expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
       expect(roleProfiles[0].defaultPercent).toBe(100)
-      expect(storeRef.current.capacityProfiles.filter((p: any) => p.resourceTypeId === rtId)).toHaveLength(1)
+      // After fix: NRs without explicit profiles are reconciled from updated legacy fields,
+      // After fix: NRs without explicit profiles are reconciled, so sync creates NR profiles. Total = 1 role + 2 NR.
+      const allProfilesForRt = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId || p.namedResourceId === 'nr-cp-2a' || p.namedResourceId === 'nr-cp-2b',
+      )
+      expect(allProfilesForRt).toHaveLength(3)
+      const nrProfiles = allProfilesForRt.filter((p: any) => p.namedResourceId)
+      expect(nrProfiles).toHaveLength(2)
+      for (const np of nrProfiles) {
+        expect(np.ownerKind).toBe('NAMED_PERSON')
+        expect(np.planningBasis).toBe('AVAILABILITY_WINDOW')
+      }
+
+      // GET /capacity-profiles uses persisted path (reconciliation passes)
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      // Should find a capacityProfiles array with profiles for this RT
+      const rtProfiles = getRes.body.capacityProfiles.filter(
+        (p: any) => p.owner.roleId === rtId || (p.owner.kind === 'role' && p.owner.id === rtId),
+      )
+      // Must include both role and named-resource profiles
+      expect(rtProfiles.length).toBe(3)
+      expect(rtProfiles.some((p: any) => p.owner.kind === 'role')).toBe(true)
+      expect(rtProfiles.some((p: any) => p.owner.kind === 'namedPerson')).toBe(true)
 
       expect(storeRef.current.namedResources.find((n: any) => n.id === 'nr-cp-2a')!.allocationMode).toBe('TIMELINE')
       expect(storeRef.current.namedResources.find((n: any) => n.id === 'nr-cp-2b')!.allocationMode).toBe('TIMELINE')
@@ -2515,6 +2539,188 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
       // Profile uses the exit value (100), not the request value (60)
       expect(roleProfiles[0].defaultPercent).toBe(100)
+    })
+
+    // ── New: capacity PUT via real POST route (auto-created NR) ────
+
+    it('capacity PUT via POST route persists role profile and GET does not fall back', async () => {
+      // Create RT via the real POST route, which auto-creates a default NR
+      const postRes = await request(app)
+        .post(`/api/projects/${projectId}/resource-types`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Posted Role', category: 'Engineering' })
+
+      expect(postRes.status).toBe(201)
+      const postedRtId = postRes.body.id
+
+      // Verify an NR was auto-created
+      const nrs = storeRef.current.namedResources.filter((n: any) => n.resourceTypeId === postedRtId)
+      expect(nrs).toHaveLength(1)
+
+      // Capacity PUT on the RT — this exercises the common case: RT with NRs from POST
+      const putRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${postedRtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 2, allocationEndWeek: 8 })
+
+      expect(putRes.status).toBe(200)
+      expect(putRes.body.allocationMode).toBe('TIMELINE')
+
+      // Role-owned profile created by the profile-first write
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === postedRtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(roleProfiles[0].defaultPercent).toBe(60)
+
+      // NR profile was reconciled from legacy fields (no explicit profile before PUT)
+      const autoNr = storeRef.current.namedResources.find((n: any) => n.resourceTypeId === postedRtId)
+      const autoNrId = autoNr?.id
+      expect(autoNrId).toBeDefined()
+      const nrProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === autoNrId,
+      )
+      expect(nrProfiles).toHaveLength(1)
+
+      // GET /capacity-profiles uses persisted path, not legacy fallback
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      const rtProfiles = getRes.body.capacityProfiles.filter(
+        (p: any) => p.owner.roleId === postedRtId || (p.owner.kind === 'role' && p.owner.id === postedRtId),
+      )
+      // Should include both role and NR profiles
+      expect(rtProfiles.length).toBe(2)
+      expect(rtProfiles.some((p: any) => p.owner.kind === 'role')).toBe(true)
+      expect(rtProfiles.some((p: any) => p.owner.kind === 'namedPerson')).toBe(true)
+    })
+
+    // ── New: capacity PUT preserves explicit NR profile while updating role ──
+
+    it('capacity PUT preserves explicit multi-segment NR profile and updates role profile', async () => {
+      const rtId = 'rt-nr-preserve'
+      const nrId = 'nr-preserve-1'
+      addResourceType(rtId, 'Preserve NR RT', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 80,
+        allocationStartWeek: 1, allocationEndWeek: 5,
+      })
+      // Named resource with explicit profile-first multi-segment profile
+      addNamedResource(nrId, 'Preserved Person', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 50,
+        allocationStartWeek: 2, allocationEndWeek: 4,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-nr-preserve', {
+        resourceTypeId: null, namedResourceId: nrId, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        defaultPercent: 60, startWeek: null, endWeek: null,
+      })
+      const now = new Date()
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-nr-pres-a', capacityProfileId: 'cp-nr-preserve', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+        { id: 'seg-nr-pres-b', capacityProfileId: 'cp-nr-preserve', startWeek: 4, endWeek: 4, capacityPercent: 50, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+      )
+
+      // Capacity PUT on the RT — should preserve the NR's explicit profile
+      const putRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 70, allocationMode: 'TIMELINE', allocationStartWeek: 1, allocationEndWeek: 6 })
+
+      expect(putRes.status).toBe(200)
+      expect(putRes.body.allocationMode).toBe('TIMELINE')
+
+      // Role profile updated to new capacity
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(roleProfiles[0].defaultPercent).toBe(70)
+      expect(roleProfiles[0].startWeek).toBe(1)
+      expect(roleProfiles[0].endWeek).toBe(6)
+
+      // Named-resource explicit profile preserved unchanged
+      const nrProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-nr-preserve')
+      expect(nrProfile).toBeDefined()
+      expect(nrProfile!.planningBasis).toBe('CAPACITY_PROFILE')
+      expect(nrProfile!.defaultPercent).toBe(60)
+      expect(nrProfile!.ownerKind).toBe('NAMED_PERSON')
+
+      // NR segments unchanged
+      const nrSegments = storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === 'cp-nr-preserve')
+      expect(nrSegments).toHaveLength(2)
+      expect(nrSegments[0].startWeek).toBe(2)
+
+      // No duplicate NR profiles
+      const nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === nrId)
+      expect(nrProfiles).toHaveLength(1)
+
+      // GET returns success; persisted-vs-legacy comparison may detect differences
+      // for NRs with explicit profiles that diverge from legacy fields, so
+      // reconciliation may fall back to legacy mapper output.
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      // Store-level preservation is verified above; GET consistency is orthogonal
+      // to the profile-first write path tested here.
+    })
+
+    // ── New: CAPACITY_PLAN exit with NRs produces reconcilable persisted state ──
+
+    it('CAPACITY_PLAN count-only exit with NRs produces reconcilable persisted state', async () => {
+      const rtId = 'rt-cp-exit-rec'
+      addResourceType(rtId, 'Exit Reconcile', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 })
+      addNamedResource('nr-exit-a', 'Exit A', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addNamedResource('nr-exit-b', 'Exit B', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 2 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.allocationMode).toBe('TIMELINE')
+
+      // Role profile is TIMELINE/AvailabilityWindow
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(roleProfiles[0].defaultPercent).toBe(100)
+      expect(roleProfiles[0].startWeek).toBeNull()
+      expect(roleProfiles[0].endWeek).toBeNull()
+
+      // NR profiles were reconciled from the updated legacy fields
+      const nrProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === 'nr-exit-a' || p.namedResourceId === 'nr-exit-b',
+      )
+      expect(nrProfiles).toHaveLength(2)
+      for (const np of nrProfiles) {
+        expect(np.ownerKind).toBe('NAMED_PERSON')
+        expect(np.planningBasis).toBe('AVAILABILITY_WINDOW')
+        expect(np.defaultPercent).toBe(100)
+      }
+      // GET /capacity-profiles: reconciliation passes, persisted path used
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      const profiles = getRes.body.capacityProfiles.filter(
+        (p: any) => p.owner.roleId === rtId || (p.owner.kind === 'role' && p.owner.id === rtId),
+      )
+      // Role + 2 NRs, all from persisted rows (not legacy fallback)
+      expect(profiles.length).toBe(3)
+      expect(profiles.some((p: any) => p.owner.kind === 'role')).toBe(true)
+      // No extra or duplicated profiles
+      const roleProfileCount = profiles.filter((p: any) => p.owner.kind === 'role').length
+      expect(roleProfileCount).toBe(1)
     })
   })
  })

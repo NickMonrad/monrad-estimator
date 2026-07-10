@@ -130,7 +130,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     allocationMode === undefined &&
     count !== undefined
 
-  const shouldPreserveRTOwnedProfile = !hasCapacityInput || shouldExitCapacityPlan
 
   const rt = await prisma.$transaction(async tx => {
     let updated
@@ -207,18 +206,34 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
     }
 
-    const existingNRs = await tx.namedResource.findMany({
-      where: { resourceTypeId: req.params.id as string },
-      select: { id: true },
-    })
-    const preserveNRIds = existingNRs.map((nr: { id: string }) => nr.id)
+    // Determine which NRs to preserve during sync:
+    // - Capacity update: only preserve NRs with explicit profile-first profiles
+    // - Non-capacity update: preserve all NRs (keep existing state unchanged)
+    let preserveNRIds: string[]
+    if (hasCapacityInput || shouldExitCapacityPlan) {
+      // NR profiles have resourceTypeId: null, so query by NR IDs, not RT ID.
+      const nrIdsForRt = (await tx.namedResource.findMany({
+        where: { resourceTypeId: req.params.id as string },
+        select: { id: true },
+      })).map((nr: { id: string }) => nr.id)
+      const nrProfileRows = await tx.capacityProfile.findMany({
+        where: { namedResourceId: { in: nrIdsForRt } },
+        select: { namedResourceId: true },
+      })
+      preserveNRIds = nrProfileRows.map((nr: { namedResourceId: string | null }) => nr.namedResourceId).filter((id: string | null): id is string => id !== null)
+    } else {
+      const allNRs = await tx.namedResource.findMany({
+        where: { resourceTypeId: req.params.id as string },
+        select: { id: true },
+      })
+      preserveNRIds = allNRs.map((nr: { id: string }) => nr.id)
+    }
 
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
-    const syncOptions: Record<string, unknown> = { preserveNamedResourceIds: preserveNRIds }
-    if (shouldPreserveRTOwnedProfile) {
-      syncOptions.preserveResourceTypeIds = [req.params.id as string]
-    }
-    await syncCapacityProfilesForProject(tx, req.params.projectId as string, syncOptions)
+    await syncCapacityProfilesForProject(tx, req.params.projectId as string, {
+      preserveNamedResourceIds: preserveNRIds,
+      preserveResourceTypeIds: [req.params.id as string],
+    })
 
     return updated
   })
