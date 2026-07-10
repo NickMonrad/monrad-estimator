@@ -44,7 +44,31 @@ describe('resource type manual scheduling regression', () => {
         }),
       },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: vi.fn().mockImplementation((args: { where?: { namedResourceId?: { in?: string[] } } }) => {
+          // NR profile classification: return 3 provenance rows (custom, segmented, planned)
+          if (args?.where?.namedResourceId?.in) {
+            return Promise.resolve([
+              {
+                id: 'cp-cust-1', namedResourceId: 'nr-cust-1',
+                ownerKind: 'NAMED_PERSON', segments: [],
+                legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 3, allocationEndWeek: 7, startWeek: null, endWeek: null },
+              } as never,
+              {
+                id: 'cp-seg-1', namedResourceId: 'nr-seg-1',
+                ownerKind: 'NAMED_PERSON',
+                segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN' }],
+                legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+              } as never,
+              {
+                id: 'cp-plan-1', namedResourceId: 'nr-plan-1',
+                ownerKind: 'PLANNED_RESOURCE', segments: [],
+                legacy: null,
+              } as never,
+            ])
+          }
+          // Role-profile upsert lookup: empty
+          return Promise.resolve([])
+        }),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
       },
@@ -52,8 +76,17 @@ describe('resource type manual scheduling regression', () => {
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
       namedResource: {
-        findMany: vi.fn().mockResolvedValue([]),
-        updateMany: vi.fn().mockResolvedValue({ count: 2 }),
+        findMany: vi.fn().mockResolvedValue([
+          // NR 1: inherited — matches role CAPACITY_PLAN/25/4/8, no persisted profile
+          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+          // NR 2: custom legacy — TIMELINE/50/W3-7, differs from role
+          { id: 'nr-cust-1', allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 3, allocationEndWeek: 7, startWeek: null, endWeek: null },
+          // NR 3: scalar match — matches role defaults, but has segmented profile
+          { id: 'nr-seg-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+          // NR 4: scalar match — matches role defaults, but has PLANNED_RESOURCE profile
+          { id: 'nr-plan-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+        ]),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       project: {
         update: vi.fn().mockResolvedValue({}),
@@ -77,11 +110,9 @@ describe('resource type manual scheduling regression', () => {
         allocationEndWeek: null,
       },
     })
+    // Only inherited NR updated — explicit/custom/planned NRs preserved
     expect(tx.namedResource.updateMany).toHaveBeenCalledWith({
-      where: {
-        resourceTypeId: 'rt-1',
-        allocationMode: 'CAPACITY_PLAN',
-      },
+      where: { id: { in: ['nr-inh-1'] } },
       data: {
         allocationMode: 'TIMELINE',
         allocationPercent: 100,
@@ -92,8 +123,23 @@ describe('resource type manual scheduling regression', () => {
         endWeek: null,
       },
     })
+    // Sync called with preserveNamedResourceIds for the three explicit NRs
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(
+      tx, 'proj-1',
+      {
+        preserveNamedResourceIds: ['nr-cust-1', 'nr-seg-1', 'nr-plan-1'],
+        preserveResourceTypeIds: ['rt-1'],
+        scopeResourceTypeId: 'rt-1',
+      },
+    )
   })
   it('preserves explicit allocationMode edits on the resource type route', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: 'rt-1', projectId: 'proj-1',
+      allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
+      allocationStartWeek: 4, allocationEndWeek: 8,
+    } as never)
     const tx = {
       resourceType: {
         update: vi.fn().mockResolvedValue({
@@ -138,6 +184,10 @@ describe('resource type manual scheduling regression', () => {
       },
     })
     expect(tx.namedResource.updateMany).not.toHaveBeenCalled()
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(
+      tx, 'proj-1',
+      expect.objectContaining({ scopeResourceTypeId: 'rt-1' }),
+    )
   })
 
   it('rolls back PUT capacity-plan exit when named-resource updates fail', async () => {
@@ -162,8 +212,16 @@ describe('resource type manual scheduling regression', () => {
       namedResources: [
         {
           id: 'nr-1',
+          name: 'NR 1',
+          resourceTypeId: 'rt-1',
           allocationMode: 'CAPACITY_PLAN',
           allocationPercent: 25,
+          allocationPct: 25,
+          allocationStartWeek: 4,
+          allocationEndWeek: 8,
+          startWeek: null,
+          endWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
         },
       ],
     }
@@ -176,10 +234,25 @@ describe('resource type manual scheduling regression', () => {
             return draftState.resourceType
           }),
         },
+        capacityProfile: {
+          findMany: vi.fn().mockResolvedValue([]),
+          create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        capacitySegment: {
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
         namedResource: {
+          findMany: vi.fn(async () => {
+            // Ensure classifier sees current draft state
+            return draftState.namedResources.map((nr: { id: string }) => ({ ...nr }))
+          }),
           updateMany: vi.fn(async () => {
             throw new Error('named-resource update failed')
           }),
+        },
+        project: {
+          update: vi.fn().mockResolvedValue({}),
         },
       }
 
@@ -668,7 +741,7 @@ describe('capacity profile sync integration', () => {
       .put('/api/projects/proj-1/resource-types/rt-1')
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({ preserveResourceTypeIds: ['rt-1'] }))
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({ scopeResourceTypeId: 'rt-1' }))
   })
 
   it('PATCH count increase calls sync after NR creation and count update', async () => {
@@ -691,7 +764,7 @@ describe('capacity profile sync integration', () => {
 
     expect(tx.namedResource.create).toHaveBeenCalled()
     expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 2 } }))
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({ scopeResourceTypeId: 'rt-1' }))
   })
 
   it('DELETE calls sync inside transaction after scoped delete', async () => {
@@ -735,7 +808,7 @@ describe('capacity profile sync integration', () => {
       .send({ name: 'Updated' })
 
     // Must be called with the transaction object, not bare prisma
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({ preserveResourceTypeIds: ['rt-1'] }))
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({ scopeResourceTypeId: 'rt-1' }))
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalledWith(prisma, 'proj-1', expect.anything())
   })
 })

@@ -110,11 +110,13 @@ function nrMatchesOldRoleDefault(
  *    - Effective allocation matches old role default → **inherited**
  *    - Effective allocation differs → **explicit/custom**
  *
- * 5. **No persisted profile** (fresh or partially migrated NR):
- *    - All allocation fields at NamedResource Prisma defaults → **inherited**
- *      (fresh/auto-created NR, never explicitly configured)
- *    - Otherwise, effective allocation matches old role default → **inherited**
- *    - Otherwise → **explicit/custom** (preserve potentially intentional data)
+ * 5. **No persisted profile**: classification is based solely on semantic equality
+ *    of the effective allocation against the old role default:
+ *    - Effective allocation matches old role default → **inherited**
+ *    - Effective allocation differs → **explicit/custom**
+ *
+ *    There is no value-pattern provenance inference (`isFreshNR`). The NR is never
+ *    treated as "fresh by default shape" — only `nrMatchesOldRoleDefault` decides.
  *
  * Effective allocation uses the same resolution as `capacityProfileMapping.ts`:
  *   - Mode: `nr.allocationMode ?? oldRole.allocationMode ?? null`
@@ -173,25 +175,11 @@ export function classifyNRsForRoleUpdate(
         explicitNRIds.push(nr.id)
       }
     } else {
-      // No persisted profile: check whether all allocation fields are at NamedResource
-      // Prisma defaults. If so, this is a fresh/auto-created NR (e.g. from POST) that
-      // was never explicitly configured — treat as inherited.
-      const isFreshNR =
-        (nr.allocationMode === null || nr.allocationMode === undefined || nr.allocationMode === 'EFFORT') &&
-        (nr.allocationPercent === null || nr.allocationPercent === undefined || nr.allocationPercent === 100) &&
-        (nr.allocationStartWeek === null || nr.allocationStartWeek === undefined) &&
-        (nr.allocationEndWeek === null || nr.allocationEndWeek === undefined) &&
-        (nr.allocationPct === null || nr.allocationPct === undefined || nr.allocationPct === 100) &&
-        (nr.startWeek === null || nr.startWeek === undefined) &&
-        (nr.endWeek === null || nr.endWeek === undefined)
-
-      if (isFreshNR) {
-        inheritedNRIds.push(nr.id)
-      } else if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
-        // Non-default NR that happens to match the old role → inherited
+      // No persisted profile: classify solely by semantic equality against old role default.
+      // No value-pattern provenance inference — only nrMatchesOldRoleDefault decides.
+      if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
         inheritedNRIds.push(nr.id)
       } else {
-        // Non-default NR with allocation differing from old role → explicit/custom
         explicitNRIds.push(nr.id)
       }
     }

@@ -91,6 +91,11 @@ export interface SyncOptions {
   preserveNamedResourceIds?: string[]
   /** ResourceType (role) IDs whose capacity profiles should not be overwritten by the legacy-derived sync. */
   preserveResourceTypeIds?: string[]
+  /**
+   * Restrict the sync to only profiles for this ResourceType and its named resources.
+   * When set, profiles for all other ResourceTypes are never created, updated, or deleted.
+   */
+  scopeResourceTypeId?: string
 }
 
 // ─── Validation ────────────────────────────────────────────────────────────
@@ -210,14 +215,32 @@ export async function syncCapacityProfilesForProject(
     )
   }
 
-  // 4. Derive expected capacity profile DTOs using the existing mapper
-  const expectedProfiles = mapProjectToCapacityProfiles({
+  // 4a. Derive expected capacity profile DTOs using the existing mapper
+  let expectedProfiles = mapProjectToCapacityProfiles({
     projectId: project.id,
     resourceTypes:
       project.resourceTypes as unknown as CapacityProfileResourceTypeLike[],
     namedResourcesByResourceTypeId,
     capacityPlanSlotsByResourceTypeId,
   })
+
+  // 4b. Scope filtering — when scopeResourceTypeId is set, keep only profiles
+  // for that ResourceType and its named resources. This guarantees profiles
+  // for other RTs are never created, updated, or deleted.
+  const scopeRT = options?.scopeResourceTypeId
+  const scopeNRIds = new Set<string>()
+  if (scopeRT) {
+    const scopedRT = project.resourceTypes.find((rt: { id: string; namedResources?: { id: string }[] }) => rt.id === scopeRT)
+    if (scopedRT?.namedResources) {
+      for (const nr of scopedRT.namedResources) {
+        scopeNRIds.add(nr.id)
+      }
+    }
+    expectedProfiles = expectedProfiles.filter((p: { owner: { kind: string; id: string } }) => {
+      if (p.owner.kind === 'role') return p.owner.id === scopeRT
+      return scopeNRIds.has(p.owner.id)
+    })
+  }
 
   // 5. Fetch existing persisted profiles for this project
   const existingPersistedProfiles = await (
@@ -227,9 +250,19 @@ export async function syncCapacityProfilesForProject(
     include: { segments: true },
   })
 
-  // Build lookup map of persisted profiles by owner key
+  // 5b. Scope filtering for persisted profiles
+  let scopedPersistedProfiles = existingPersistedProfiles
+  if (scopeRT) {
+    scopedPersistedProfiles = existingPersistedProfiles.filter((pp: { resourceTypeId: string | null; namedResourceId: string | null }) => {
+      if (pp.resourceTypeId === scopeRT && pp.namedResourceId === null) return true
+      if (pp.namedResourceId && scopeNRIds.has(pp.namedResourceId)) return true
+      return false
+    })
+  }
+
+  // Build lookup map of persisted profiles by owner key (scoped)
   const persistedByKey = new Map<string, any>()
-  for (const pp of existingPersistedProfiles) {
+  for (const pp of scopedPersistedProfiles) {
     const ownerKind = prismaOwnerKindToDtoKind(pp.ownerKind)
     const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
     const key = `${projectId}::${ownerKind}::${ownerId}`
@@ -237,6 +270,7 @@ export async function syncCapacityProfilesForProject(
       persistedByKey.set(key, pp)
     }
   }
+
 
   // Remove preserved NR/RT profiles from persistedByKey so sync won't touch them
   const preserveIds = new Set(options?.preserveNamedResourceIds ?? [])
@@ -360,6 +394,16 @@ export async function syncCapacityProfilesForProject(
     },
   })
 
+  // Scope filtering for verification
+  let afterSyncScoped = afterSyncPersisted
+  if (scopeRT) {
+    afterSyncScoped = afterSyncPersisted.filter((pp: { resourceTypeId: string | null; namedResourceId: string | null }) => {
+      if (pp.resourceTypeId === scopeRT && pp.namedResourceId === null) return true
+      if (pp.namedResourceId && scopeNRIds.has(pp.namedResourceId)) return true
+      return false
+    })
+  }
+
   const filterPreserved = (p: any) => {
     if (preserveRTIds.size > 0 && p.resourceTypeId && p.ownerKind === 'ROLE' && preserveRTIds.has(p.resourceTypeId)) {
       return false
@@ -380,7 +424,7 @@ export async function syncCapacityProfilesForProject(
       return true
     },
   )
-  const filteredPersisted = afterSyncPersisted.filter(filterPreserved)
+  const filteredPersisted = afterSyncScoped.filter(filterPreserved)
 
   const comparison = compareCapacityProfiles(
     projectId,

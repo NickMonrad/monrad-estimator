@@ -55,8 +55,19 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       },
     })
     // Auto-create a default named resource so the resource profile has a person ready to configure
+    // Initialize allocation fields from the RT so the NR matches the role default for first PUT.
     await tx.namedResource.create({
-      data: { name: `${name} 1`, resourceTypeId: created.id },
+      data: {
+        name: `${name} 1`,
+        resourceTypeId: created.id,
+        allocationMode: created.allocationMode ?? 'EFFORT',
+        allocationPercent: created.allocationPercent ?? null,
+        allocationPct: created.allocationPercent ?? 100,
+        allocationStartWeek: created.allocationStartWeek ?? null,
+        allocationEndWeek: created.allocationEndWeek ?? null,
+        startWeek: created.allocationStartWeek ?? null,
+        endWeek: created.allocationEndWeek ?? null,
+      },
     })
     await tx.resourceType.update({ where: { id: created.id }, data: { count: 1 } })
     await clearWeeklyDemandCache(project.id, tx)
@@ -84,8 +95,8 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const oldRoleDefault: OldRoleDefault = {
     allocationMode: existing.allocationMode,
     allocationPercent: existing.allocationPercent,
-    allocationStartWeek: existing.allocationStartWeek,
-    allocationEndWeek: existing.allocationEndWeek,
+    allocationStartWeek: existing.allocationStartWeek ?? null,
+    allocationEndWeek: existing.allocationEndWeek ?? null,
   }
 
   // Validate new allocation fields
@@ -281,6 +292,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     await syncCapacityProfilesForProject(tx, req.params.projectId as string, {
       preserveNamedResourceIds: preserveNRIds,
       preserveResourceTypeIds: [req.params.id as string],
+      scopeResourceTypeId: req.params.id as string,
     })
 
     return updated
@@ -366,9 +378,8 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         warnings: nextWarnings,
       }
     }
-
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
-    await syncCapacityProfilesForProject(tx, req.params.projectId as string)
+    await syncCapacityProfilesForProject(tx, req.params.projectId as string, { scopeResourceTypeId: req.params.id as string })
     return result
   })
   res.json({ ...updated, warnings: warnings.length > 0 ? warnings : undefined })

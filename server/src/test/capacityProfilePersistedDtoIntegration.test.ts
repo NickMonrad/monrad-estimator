@@ -381,7 +381,13 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
         findFirst: (args: any) => findOne(store().resourceTypes, args?.where ?? {}),
         findMany: (args: any) => findMany('resourceTypes', args ?? {}),
         findUnique: (args: any) => findOne(store().resourceTypes, args?.where ?? {}),
-        create: (args: any) => createIn('resourceTypes', args.data ?? args),
+        create: (args: any) => {
+          const data = { ...(args.data ?? args) }
+          // Apply Prisma defaults for ResourceType
+          if (data.allocationMode === undefined) data.allocationMode = 'TIMELINE'
+          if (data.allocationPercent === undefined) data.allocationPercent = 100
+          return createIn('resourceTypes', data)
+        },
         update: (args: any) => {
           const idx = store().resourceTypes.findIndex((r: any) => r.id === args.where.id)
           if (idx >= 0) {
@@ -573,8 +579,8 @@ function addResourceType(
     name,
     count,
     projectId,
-    allocationMode: 'EFFORT',
-    allocationPercent: null,
+    allocationMode: 'TIMELINE',
+    allocationPercent: 100,
     allocationStartWeek: null,
     allocationEndWeek: null,
     hoursPerDay: 8,
@@ -3218,16 +3224,23 @@ describe('persisted capacity-profile DTO integration', () => {
 
     // ── New: POST→PUT consecutive update ───────────────────────────
 
-    it('POST-created RT: auto-created NR follows consecutive capacity PUTs', async () => {
+    it('POST-created RT: auto-created NR follows consecutive capacity PUTs, survives profile-first write and third role PUT', async () => {
       const postRes = await request(app)
         .post(`/api/projects/${projectId}/resource-types`)
         .set('Authorization', authHeader)
         .send({ name: 'Post Consec RT', category: 'Engineering' })
       expect(postRes.status).toBe(201)
       const postedRtId = postRes.body.id
+
+      // Initial parity: auto-created NR matches RT defaults
+      const postedRt = storeRef.current.resourceTypes.find((r: any) => r.id === postedRtId)
+      expect(postedRt).toBeDefined()
       const nrs = storeRef.current.namedResources.filter((n: any) => n.resourceTypeId === postedRtId)
       expect(nrs).toHaveLength(1)
       const autoNrId = nrs[0].id
+      const autoNr = nrs[0]
+      expect(autoNr.allocationMode).toBe(postedRt!.allocationMode)
+      expect(autoNr.allocationPercent).toBe(postedRt!.allocationPercent)
 
       // First capacity PUT: TIMELINE/60/weeks 2-8
       const put1 = await request(app)
@@ -3236,12 +3249,18 @@ describe('persisted capacity-profile DTO integration', () => {
         .send({ allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 2, allocationEndWeek: 8 })
       expect(put1.status).toBe(200)
 
-      // After first PUT: NR inherits, sync creates profile
+      // After first PUT: NR inherits, sync creates profile — compatibility fields updated
       let nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === autoNrId)
       expect(nrProfiles).toHaveLength(1)
       expect(nrProfiles[0].defaultPercent).toBe(60)
       expect(nrProfiles[0].startWeek).toBe(2)
       expect(nrProfiles[0].endWeek).toBe(8)
+      const profileIdAfterPut1 = nrProfiles[0].id
+      const nrAfterPut1 = storeRef.current.namedResources.find((n: any) => n.id === autoNrId)
+      expect(nrAfterPut1!.allocationMode).toBe('TIMELINE')
+      expect(nrAfterPut1!.allocationPercent).toBe(60)
+      expect(nrAfterPut1!.allocationStartWeek).toBe(2)
+      expect(nrAfterPut1!.allocationEndWeek).toBe(8)
 
       // Second capacity PUT: TIMELINE/75/weeks 3-10
       const put2 = await request(app)
@@ -3250,12 +3269,63 @@ describe('persisted capacity-profile DTO integration', () => {
         .send({ allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 3, allocationEndWeek: 10 })
       expect(put2.status).toBe(200)
 
-      // NR follows the second update
+      // NR follows the second update — profile ID stable
       nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === autoNrId)
       expect(nrProfiles).toHaveLength(1)
+      expect(nrProfiles[0].id).toBe(profileIdAfterPut1)
       expect(nrProfiles[0].defaultPercent).toBe(75)
       expect(nrProfiles[0].startWeek).toBe(3)
       expect(nrProfiles[0].endWeek).toBe(10)
+
+      // Make NR explicit via profile-first write endpoint
+      const profileWriteRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${postedRtId}/named-resources/${autoNrId}`)
+        .set('Authorization', authHeader)
+        .send({
+          name: 'Explicit Person',
+          allocationMode: 'TIMELINE',
+          allocationPercent: 80,
+          allocationStartWeek: 4,
+          allocationEndWeek: 12,
+        })
+      expect(profileWriteRes.status).toBe(200)
+
+      // Profile-first write creates explicit profile
+      let explicitProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === autoNrId)
+      expect(explicitProfiles).toHaveLength(1)
+      expect(explicitProfiles[0].defaultPercent).toBe(80)
+      expect(explicitProfiles[0].startWeek).toBe(4)
+      expect(explicitProfiles[0].endWeek).toBe(12)
+      const explicitProfileId = explicitProfiles[0].id
+
+      // NR compatibility fields updated by profile-first write
+      const nrBeforeThirdPut = storeRef.current.namedResources.find((n: any) => n.id === autoNrId)
+      expect(nrBeforeThirdPut!.allocationMode).toBe('TIMELINE')
+      expect(nrBeforeThirdPut!.allocationPercent).toBe(80)
+      expect(nrBeforeThirdPut!.allocationStartWeek).toBe(4)
+      expect(nrBeforeThirdPut!.allocationEndWeek).toBe(12)
+
+      // Third role PUT: TIMELINE/90/weeks 5-14
+      const put3 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${postedRtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 90, allocationStartWeek: 5, allocationEndWeek: 14 })
+      expect(put3.status).toBe(200)
+
+      // Explicit NR preserved unchanged by third role PUT
+      const nrAfterThirdPut = storeRef.current.namedResources.find((n: any) => n.id === autoNrId)
+      expect(nrAfterThirdPut!.allocationMode).toBe('TIMELINE')
+      expect(nrAfterThirdPut!.allocationPercent).toBe(80)
+      expect(nrAfterThirdPut!.allocationStartWeek).toBe(4)
+      expect(nrAfterThirdPut!.allocationEndWeek).toBe(12)
+
+      // Explicit profile unchanged — same ID, same values
+      explicitProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === autoNrId)
+      expect(explicitProfiles).toHaveLength(1)
+      expect(explicitProfiles[0].id).toBe(explicitProfileId)
+      expect(explicitProfiles[0].defaultPercent).toBe(80)
+      expect(explicitProfiles[0].startWeek).toBe(4)
+      expect(explicitProfiles[0].endWeek).toBe(12)
     })
 
     // ── CAPACITY_PLAN exit with mixed NR types ──────────────────────
@@ -3369,14 +3439,31 @@ describe('persisted capacity-profile DTO integration', () => {
       // No duplicate profiles
       expect(storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-cpm-inh')).toHaveLength(1)
       expect(storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-cpm-cust')).toHaveLength(1)
-      // GET reconciliation may fall back to legacy mapper if persisted profiles
-      // differ from legion-mapper output (e.g. planned-resource ownerKind mismatch).
-      // Store-level preservation is verified above; GET structure is orthogonal.
+      // GET falls back to legacy mapper: persisted profiles have mismatches
+      // (CAPACITY_PROFILE vs availabilityWindow for seg NR, PLANNED_RESOURCE vs
+      // namedPerson for planned NR). No role DTO, 4 named person DTOs, segmented
+      // NR represented by legacy availability-window fields with empty segments.
       const getRes = await getCapacityProfiles()
       expect(getRes.status).toBe(200)
-      // Role profile is present if GET used persisted path; may be absent if
-      // fallback occurred. At minimum the response has profiles and no error.
-      expect(getRes.body.capacityProfiles.length).toBeGreaterThan(0)
+      const rtProfiles = getRes.body.capacityProfiles.filter(
+        (p: { owner: { roleId: string } }) => p.owner.roleId === rtId,
+      )
+      // No role DTO (legacy mapper skips role profiles when RT has NRs)
+      expect(rtProfiles.some((p: { owner: { kind: string } }) => p.owner.kind === 'role')).toBe(false)
+      // Four named resource DTOs
+      expect(rtProfiles).toHaveLength(4)
+      expect(rtProfiles.every((p: { owner: { kind: string } }) => p.owner.kind === 'namedPerson')).toBe(true)
+      // All four NRs present
+      const nrIds = ['nr-cpm-inh', 'nr-cpm-cust', 'nr-cpm-seg', 'nr-cpm-plan']
+      for (const nrId of nrIds) {
+        expect(rtProfiles.some((p: { owner: { id: string } }) => p.owner.id === nrId)).toBe(true)
+      }
+      // Segmented NR uses legacy availability-window fields with empty segments
+      const segDto = rtProfiles.find((p: { owner: { id: string } }) => p.owner.id === 'nr-cpm-seg')
+      expect(segDto.defaultPercent).toBe(40)
+      expect(segDto.startWeek).toBe(2)
+      expect(segDto.endWeek).toBe(4)
+      expect(segDto.segments).toHaveLength(0)
     })
 
     it('no-profile custom NR is preserved when allocation differs from old role default', async () => {
@@ -3385,10 +3472,12 @@ describe('persisted capacity-profile DTO integration', () => {
         allocationMode: 'TIMELINE', allocationPercent: 100,
         allocationStartWeek: 1, allocationEndWeek: 10,
       })
-      // NR with custom allocation: TIMELINE/50/weeks 3-7 — NO persisted profile
+      // NR with deliberate no-profile EFFORT — all null windows, allocationPct 100
       addNamedResource('nr-nopro-cust', 'NoPro Custom', rtId, {
-        allocationMode: 'TIMELINE', allocationPercent: 50,
-        allocationStartWeek: 3, allocationEndWeek: 7,
+        allocationMode: 'EFFORT', allocationPercent: 100,
+        allocationPct: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+        startWeek: null, endWeek: null,
         pricingModel: 'ACTUAL_DAYS',
       })
 
@@ -3398,13 +3487,17 @@ describe('persisted capacity-profile DTO integration', () => {
         .send({ allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 12 })
       expect(putRes.status).toBe(200)
 
-      // Custom NR preserved: allocationPercent unchanged
+      // Custom NR preserved: every compatibility field unchanged
       const nrRecord = storeRef.current.namedResources.find((n: any) => n.id === 'nr-nopro-cust')
-      expect(nrRecord!.allocationPercent).toBe(50)
-      expect(nrRecord!.allocationStartWeek).toBe(3)
-      expect(nrRecord!.allocationEndWeek).toBe(7)
+      expect(nrRecord!.allocationMode).toBe('EFFORT')
+      expect(nrRecord!.allocationPercent).toBe(100)
+      expect(nrRecord!.allocationPct).toBe(100)
+      expect(nrRecord!.allocationStartWeek).toBeNull()
+      expect(nrRecord!.allocationEndWeek).toBeNull()
+      expect(nrRecord!.startWeek).toBeNull()
+      expect(nrRecord!.endWeek).toBeNull()
 
-      // No profile created for the custom NR (since it was preserved, not updated)
+      // No profile created for the custom NR (preserved, not updated)
       const nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-nopro-cust')
       expect(nrProfiles).toHaveLength(0)
     })
@@ -3576,5 +3669,165 @@ describe('persisted capacity-profile DTO integration', () => {
       // No duplicate
       expect(storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-leg-seg')).toHaveLength(1)
     })
+
+  describe('10. Two-RT cross-contamination regression', () => {
+    it('capacity and non-capacity PUT on RT B leaves RT A profiles and segments unchanged', async () => {
+      // ── Setup ────────────────────────────────────────────────────────
+      const rtAId = 'rt-a-1'
+      const nrAId = 'nr-a-1'
+      const rtBId = 'rt-b-1'
+      const nrBId = 'nr-b-1'
+
+      // RT A: role-owned capacity profile with non-legacy scalar values + 2 segments
+      addResourceType(rtAId, 'Role A', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 80,
+        allocationStartWeek: 2, allocationEndWeek: 8,
+      })
+      addNamedResource(nrAId, 'Person A', rtAId, {
+        allocationMode: 'TIMELINE', allocationPercent: 50,
+        allocationStartWeek: 3, allocationEndWeek: 7,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      // Role-owned profile: CAPACITY_PROFILE, not legacy-derived
+      addPersistedProfile('cp-a-role', {
+        resourceTypeId: rtAId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        defaultPercent: 90, startWeek: null, endWeek: null,
+      })
+      const now = new Date()
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-a-role-1', capacityProfileId: 'cp-a-role', startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+        { id: 'seg-a-role-2', capacityProfileId: 'cp-a-role', startWeek: 5, endWeek: 8, capacityPercent: 80, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+      )
+      // Explicit NR capacity profile with null/undefined legacy + 2 segments
+      addPersistedProfile('cp-a-nr', {
+        resourceTypeId: null, namedResourceId: nrAId, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        defaultPercent: 60, startWeek: null, endWeek: null,
+        // legacy omitted → null/undefined
+      })
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-a-nr-1', capacityProfileId: 'cp-a-nr', startWeek: 3, endWeek: 4, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+        { id: 'seg-a-nr-2', capacityProfileId: 'cp-a-nr', startWeek: 5, endWeek: 7, capacityPercent: 50, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+      )
+
+      // RT B: TIMELINE with a role profile (pre-created)
+      addResourceType(rtBId, 'Role B', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 80,
+        allocationStartWeek: 2, allocationEndWeek: 8,
+      })
+      addNamedResource(nrBId, 'Person B', rtBId, {
+        allocationMode: 'TIMELINE', allocationPercent: 80,
+        allocationStartWeek: 2, allocationEndWeek: 8,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-b-role', {
+        resourceTypeId: rtBId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 80, startWeek: 2, endWeek: 8,
+      })
+
+      // ── Snapshot A's complete profile rows and ordered segment rows ──
+      interface SnapshotProfile {
+        id: string
+        resourceTypeId: string | null
+        namedResourceId: string | null
+        ownerKind: string
+        planningBasis: string
+        source: string
+        defaultPercent: number | null
+        startWeek: number | null
+        endWeek: number | null
+        projectId: string
+        createdAt: Date
+        updatedAt: Date
+        legacy: unknown
+      }
+      interface SnapshotSegment {
+        id: string
+        capacityProfileId: string
+        startWeek: number
+        endWeek: number
+        capacityPercent: number
+        source: string
+        createdAt: Date
+        updatedAt: Date
+      }
+
+      const snapshotA = (): { profiles: SnapshotProfile[]; segments: SnapshotSegment[] } => {
+        const aProfileIds = new Set<string>()
+        const profiles: SnapshotProfile[] = []
+        for (const p of storeRef.current.capacityProfiles) {
+          if (p.resourceTypeId === rtAId || p.namedResourceId === nrAId) {
+            profiles.push({ ...p })
+            aProfileIds.add(p.id)
+          }
+        }
+        profiles.sort((a, b) => a.id.localeCompare(b.id))
+
+        const segments: SnapshotSegment[] = []
+        for (const s of storeRef.current.capacitySegments) {
+          if (aProfileIds.has(s.capacityProfileId)) {
+            segments.push({ ...s })
+          }
+        }
+        segments.sort((a, b) => a.id.localeCompare(b.id))
+
+        return { profiles, segments }
+      }
+
+      const before = snapshotA()
+
+      // ── Phase 1: capacity PUT on RT B ──────────────────────────────
+      const put1 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtBId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 4, allocationEndWeek: 10 })
+      expect(put1.status).toBe(200)
+      expect(put1.body.allocationPercent).toBe(60)
+      expect(put1.body.allocationStartWeek).toBe(4)
+      expect(put1.body.allocationEndWeek).toBe(10)
+
+      // Deep-assert A's state byte-for-byte unchanged
+      expect(snapshotA().profiles).toEqual(before.profiles)
+      expect(snapshotA().segments).toEqual(before.segments)
+      // Same ID set (no deletions, no duplicates)
+      expect(snapshotA().profiles.map(p => p.id).sort()).toEqual(before.profiles.map(p => p.id).sort())
+      expect(snapshotA().segments.map(s => s.id).sort()).toEqual(before.segments.map(s => s.id).sort())
+
+      // Verify B changed as expected
+      const bRoleAfter1 = storeRef.current.capacityProfiles.find(
+        (p: { resourceTypeId: string; namedResourceId: null }) => p.resourceTypeId === rtBId && p.namedResourceId === null,
+      )
+      expect(bRoleAfter1).toBeDefined()
+      expect(bRoleAfter1.defaultPercent).toBe(60)
+      expect(bRoleAfter1.startWeek).toBe(4)
+      expect(bRoleAfter1.endWeek).toBe(10)
+
+      // ── Phase 2: non-capacity PUT on RT B (name only) ────────────────
+      const put2 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtBId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed B' })
+      expect(put2.status).toBe(200)
+      expect(put2.body.name).toBe('Renamed B')
+
+      // Deep-assert A's state byte-for-byte unchanged (again)
+      expect(snapshotA().profiles).toEqual(before.profiles)
+      expect(snapshotA().segments).toEqual(before.segments)
+      // Same ID set (no deletions, no duplicates)
+      expect(snapshotA().profiles.map(p => p.id).sort()).toEqual(before.profiles.map(p => p.id).sort())
+      expect(snapshotA().segments.map(s => s.id).sort()).toEqual(before.segments.map(s => s.id).sort())
+
+      // Verify B's role profile preserved from last capacity update
+      const bRoleAfter2 = storeRef.current.capacityProfiles.find(
+        (p: { resourceTypeId: string; namedResourceId: null }) => p.resourceTypeId === rtBId && p.namedResourceId === null,
+      )
+      expect(bRoleAfter2).toBeDefined()
+      expect(bRoleAfter2.defaultPercent).toBe(60)
+      expect(bRoleAfter2.startWeek).toBe(4)
+      expect(bRoleAfter2.endWeek).toBe(10)
+    })
+  })
   })
  })
