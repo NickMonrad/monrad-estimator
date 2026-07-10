@@ -6,6 +6,8 @@ import { ownedProject } from '../lib/ownership.js'
 import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 import { upsertRTProfileAndProjectLegacy, buildMissingRTProfilePayload } from '../lib/resourceTypeCapacityProfileWrites.js'
+import { classifyNRsForRoleUpdate } from '../lib/classifyNRsForRoleUpdate.js'
+import type { NRToClassify, OldRoleDefault } from '../lib/classifyNRsForRoleUpdate.js'
 
 
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
@@ -75,6 +77,16 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       projectId: req.params.projectId as string,
     },
   })
+  if (!existing) { res.status(404).json({ error: 'Resource type not found' }); return }
+
+  // Capture the old role default BEFORE any writes — classification compares
+  // NR effective allocation against the pre-update role state.
+  const oldRoleDefault: OldRoleDefault = {
+    allocationMode: existing.allocationMode,
+    allocationPercent: existing.allocationPercent,
+    allocationStartWeek: existing.allocationStartWeek,
+    allocationEndWeek: existing.allocationEndWeek,
+  }
   if (!existing) { res.status(404).json({ error: 'Resource type not found' }); return }
 
   // Validate new allocation fields
@@ -207,31 +219,30 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
     }
 
-    // ── Determine NR preservation and update inherited NRs ────────────────
-    // Rule: explicit NR profiles (written by profile-first route) have
-    // legacy === null. Sync-derived/inherited profiles have legacy populated.
-    // Inherited NRs must have their legacy fields updated to match the role
-    // default so sync derives correct profiles.
+    // ── Classify NRs and update inherited ones ──────────────────────────
+    // Use semantic classification comparing each NR's effective pre-update
+    // allocation against the old role default. This correctly distinguishes
+    // inherited NRs from backfilled-custom or explicitly overridden ones.
     let preserveNRIds: string[]
     if (hasCapacityInput || shouldExitCapacityPlan) {
-      const nrIdsForRt = (await tx.namedResource.findMany({
+      const allNRs = await tx.namedResource.findMany({
         where: { resourceTypeId: req.params.id as string },
-        select: { id: true },
-      })).map((nr: { id: string }) => nr.id)
-
-      const nrProfileRows = await tx.capacityProfile.findMany({
-        where: { namedResourceId: { in: nrIdsForRt } },
-        select: { namedResourceId: true, legacy: true },
       })
 
-      // Explicit NRs: profile-first written (legacy is null/undefined)
-      preserveNRIds = nrProfileRows
-        .filter((p: { legacy: any }) => p.legacy === null || p.legacy === undefined)
-        .map((p: { namedResourceId: string | null }) => p.namedResourceId)
-        .filter((id: string | null): id is string => id !== null)
+      const nrProfileRows = await tx.capacityProfile.findMany({
+        where: { namedResourceId: { in: allNRs.map((nr: any) => nr.id) } },
+        select: { namedResourceId: true, legacy: true, ownerKind: true },
+      })
 
-      // Update inherited NRs to inherit from the role projection
-      const inheritedNRIds = nrIdsForRt.filter((id: string) => !preserveNRIds.includes(id))
+      const { inheritedNRIds, explicitNRIds } = classifyNRsForRoleUpdate(
+        allNRs as NRToClassify[],
+        nrProfileRows,
+        oldRoleDefault,
+      )
+
+      preserveNRIds = explicitNRIds
+
+      // Update inherited NRs with the new role projection
       if (inheritedNRIds.length > 0) {
         await tx.namedResource.updateMany({
           where: { id: { in: inheritedNRIds } },

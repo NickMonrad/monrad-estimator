@@ -2858,5 +2858,404 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(repairedRole).toBeDefined()
       expect(repairedRole.defaultPercent).toBe(80)
     })
+
+    // ── New: backfilled custom NR preserved ──────────────────────
+
+    it('backfilled custom NR is preserved when allocation differs from old role default', async () => {
+      const rtId = 'rt-bf-custom'
+      // Old role: TIMELINE/100/weeks 1-10
+      addResourceType(rtId, 'BF Custom RT', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+      })
+      // NR with custom allocation: TIMELINE/50/weeks 3-7
+      addNamedResource('nr-bf-custom', 'Custom Person', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 50,
+        allocationStartWeek: 3, allocationEndWeek: 7,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      // Persisted profile with populated legacy (as if backfilled/synced)
+      addPersistedProfile('cp-bf-custom', {
+        namedResourceId: 'nr-bf-custom', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 50, startWeek: 3, endWeek: 7,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 3, allocationEndWeek: 7, startWeek: null, endWeek: null },
+      })
+
+      // Update role to TIMELINE/80/weeks 2-12
+      const putRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 12 })
+      expect(putRes.status).toBe(200)
+
+      // Role profile updated
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].defaultPercent).toBe(80)
+      expect(roleProfiles[0].startWeek).toBe(2)
+      expect(roleProfiles[0].endWeek).toBe(12)
+
+      // Custom NR preserved: legacy fields still 50/weeks 3-7
+      const nrRecord = storeRef.current.namedResources.find((n: any) => n.id === 'nr-bf-custom')
+      expect(nrRecord).toBeDefined()
+      expect(nrRecord!.allocationPercent).toBe(50)
+      expect(nrRecord!.allocationStartWeek).toBe(3)
+      expect(nrRecord!.allocationEndWeek).toBe(7)
+
+      // NR persisted profile unchanged
+      const nrProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-bf-custom')
+      expect(nrProfile).toBeDefined()
+      expect(nrProfile!.defaultPercent).toBe(50)
+      expect(nrProfile!.startWeek).toBe(3)
+      expect(nrProfile!.endWeek).toBe(7)
+      expect(nrProfile!.legacy).toBeDefined()
+      expect(nrProfile!.legacy.allocationPercent).toBe(50)
+
+      // No duplicate NR profile created
+      const nrProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === 'nr-bf-custom',
+      )
+      expect(nrProfiles).toHaveLength(1)
+    })
+
+    // ── New: backfilled inherited NR follows role ──────────────────
+
+    it('backfilled inherited NR follows the role when allocation matches old role default', async () => {
+      const rtId = 'rt-bf-inherit'
+      // Old role: TIMELINE/100/weeks 1-10
+      addResourceType(rtId, 'BF Inherit RT', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+      })
+      // NR with same allocation as old role
+      addNamedResource('nr-bf-inherit', 'Inherit Person', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      // Persisted profile with populated legacy (as if backfilled/synced)
+      addPersistedProfile('cp-bf-inherit', {
+        namedResourceId: 'nr-bf-inherit', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100, startWeek: 1, endWeek: 10,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: 1, allocationEndWeek: 10, startWeek: null, endWeek: null },
+      })
+
+      // First role update: TIMELINE/80/weeks 2-12
+      const put1 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 12 })
+      expect(put1.status).toBe(200)
+
+      // NR legacy fields updated to match new role
+      let nrRecord = storeRef.current.namedResources.find((n: any) => n.id === 'nr-bf-inherit')
+      expect(nrRecord).toBeDefined()
+      expect(nrRecord!.allocationPercent).toBe(80)
+      expect(nrRecord!.allocationStartWeek).toBe(2)
+      expect(nrRecord!.allocationEndWeek).toBe(12)
+
+      // NR profile reconciled (sync updates existing row in place)
+      let nrProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-bf-inherit')
+      expect(nrProfile).toBeDefined()
+      expect(nrProfile!.defaultPercent).toBe(80)
+      expect(nrProfile!.startWeek).toBe(2)
+      expect(nrProfile!.endWeek).toBe(12)
+
+      // No duplicate NR profiles
+      let nrProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === 'nr-bf-inherit',
+      )
+      expect(nrProfiles).toHaveLength(1)
+
+      // Second role update: TIMELINE/60/weeks 3-9 — inherited should follow again
+      const put2 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 3, allocationEndWeek: 9 })
+      expect(put2.status).toBe(200)
+
+      nrRecord = storeRef.current.namedResources.find((n: any) => n.id === 'nr-bf-inherit')
+      expect(nrRecord!.allocationPercent).toBe(60)
+      expect(nrRecord!.allocationStartWeek).toBe(3)
+      expect(nrRecord!.allocationEndWeek).toBe(9)
+
+      // Same profile row updated in place
+      nrProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-bf-inherit')
+      expect(nrProfile!.defaultPercent).toBe(60)
+      expect(nrProfile!.startWeek).toBe(3)
+      expect(nrProfile!.endWeek).toBe(9)
+
+      nrProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.namedResourceId === 'nr-bf-inherit',
+      )
+      expect(nrProfiles).toHaveLength(1)
+    })
+
+    // ── New: mixed ownership under one role ────────────────────────
+
+    it('mixed inheritance, backfilled custom, and explicit multi-segment under one role', async () => {
+      const rtId = 'rt-mixed'
+      // Old role: TIMELINE/100/weeks 1-10
+      addResourceType(rtId, 'Mixed RT', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+      })
+      // NR 1: Inherited (matches old role, profile with populated legacy)
+      addNamedResource('nr-mix-inh', 'Inherited', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-mix-inh', {
+        namedResourceId: 'nr-mix-inh', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100, startWeek: 1, endWeek: 10,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: 1, allocationEndWeek: 10, startWeek: null, endWeek: null },
+      })
+
+      // NR 2: Backfilled custom (differs from old role, profile with populated legacy)
+      addNamedResource('nr-mix-cust', 'Custom', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 50,
+        allocationStartWeek: 3, allocationEndWeek: 7,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-mix-cust', {
+        namedResourceId: 'nr-mix-cust', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 50, startWeek: 3, endWeek: 7,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 3, allocationEndWeek: 7, startWeek: null, endWeek: null },
+      })
+
+      // NR 3: Explicit multi-segment (legacy null)
+      addNamedResource('nr-mix-exp', 'Explicit Person', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 40,
+        allocationStartWeek: 2, allocationEndWeek: 4,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-mix-exp', {
+        namedResourceId: 'nr-mix-exp', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        defaultPercent: 40, startWeek: null, endWeek: null,
+      })
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-mix-a', capacityProfileId: 'cp-mix-exp', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: new Date(), updatedAt: new Date() },
+        { id: 'seg-mix-b', capacityProfileId: 'cp-mix-exp', startWeek: 4, endWeek: 4, capacityPercent: 50, source: 'CAPACITY_PLAN', createdAt: new Date(), updatedAt: new Date() },
+      )
+
+      // Update role to TIMELINE/80/weeks 2-12
+      const putRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 12 })
+      expect(putRes.status).toBe(200)
+
+      // 1. Inherited NR follows the role
+      const inheritedNr = storeRef.current.namedResources.find((n: any) => n.id === 'nr-mix-inh')
+      expect(inheritedNr!.allocationPercent).toBe(80)
+      expect(inheritedNr!.allocationStartWeek).toBe(2)
+      expect(inheritedNr!.allocationEndWeek).toBe(12)
+
+      // 2. Backfilled custom NR preserved
+      const customNr = storeRef.current.namedResources.find((n: any) => n.id === 'nr-mix-cust')
+      expect(customNr!.allocationPercent).toBe(50)
+      expect(customNr!.allocationStartWeek).toBe(3)
+      expect(customNr!.allocationEndWeek).toBe(7)
+
+      // 3. Explicit multi-segment NR preserved
+      const explicitNr = storeRef.current.namedResources.find((n: any) => n.id === 'nr-mix-exp')
+      expect(explicitNr!.allocationPercent).toBe(40)
+      expect(explicitNr!.allocationStartWeek).toBe(2)
+      expect(explicitNr!.allocationEndWeek).toBe(4)
+
+      // Explicit profile and segments unchanged
+      const explicitProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-mix-exp')
+      expect(explicitProfile).toBeDefined()
+      expect(explicitProfile!.planningBasis).toBe('CAPACITY_PROFILE')
+      const segments = storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === 'cp-mix-exp')
+      expect(segments).toHaveLength(2)
+
+      // No duplicate profiles
+      expect(storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-mix-inh')).toHaveLength(1)
+      expect(storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-mix-cust')).toHaveLength(1)
+      expect(storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-mix-exp')).toHaveLength(1)
+
+      // Role profile updated
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].defaultPercent).toBe(80)
+    })
+
+    // ── New: planned/synthetic resource protection ─────────────────
+
+    it('planned resource with backfilled-style profile is preserved during role update', async () => {
+      const rtId = 'rt-planned'
+      // Old role: TIMELINE/100/weeks 1-10
+      addResourceType(rtId, 'Planned RT', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+      })
+      // Planned resource (synthetic concept via profile ownerKind)
+      addNamedResource('nr-planned', 'Planned Person', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 1, allocationEndWeek: 10,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      // Persisted profile as PLANNED_RESOURCE with populated legacy
+      addPersistedProfile('cp-planned', {
+        namedResourceId: 'nr-planned', ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100, startWeek: 1, endWeek: 10,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: 1, allocationEndWeek: 10, startWeek: null, endWeek: null },
+      })
+
+      // Update role to TIMELINE/80/weeks 2-12
+      const putRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 80, allocationStartWeek: 2, allocationEndWeek: 12 })
+      expect(putRes.status).toBe(200)
+
+      // Planned resource preserved (not retroactively changed)
+      const nrRecord = storeRef.current.namedResources.find((n: any) => n.id === 'nr-planned')
+      expect(nrRecord!.allocationPercent).toBe(100)
+      expect(nrRecord!.allocationStartWeek).toBe(1)
+      expect(nrRecord!.allocationEndWeek).toBe(10)
+
+      // Profile preserved
+      const nrProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-planned')
+      expect(nrProfile).toBeDefined()
+      expect(nrProfile!.defaultPercent).toBe(100)
+
+      // No duplicate
+      expect(storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === 'nr-planned')).toHaveLength(1)
+
+      // Role profile updated
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles).toHaveLength(1)
+      expect(roleProfiles[0].defaultPercent).toBe(80)
+    })
+
+    // ── New: explicit-null and fallback semantics ───────────────────
+
+    it('explicit-null and fallback field resolution for inheritance classification', async () => {
+      const rtId = 'rt-fallback'
+      // Old role: TIMELINE/100/null/null (no windows)
+      addResourceType(rtId, 'Fallback RT', 1, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      })
+      // NR with null windows — matches old role (both null)
+      addNamedResource('nr-fb-matchnull', 'Match Null', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-fb-matchnull', {
+        namedResourceId: 'nr-fb-matchnull', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+        defaultPercent: 100, startWeek: null, endWeek: null,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+      })
+
+      // NR that differs via allocationPct fallback (same percent but via legacy field)
+      addNamedResource('nr-fb-pct', 'Fallback Pct', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: null,
+        allocationPct: 100, // matches role percent via fallback resolution
+        allocationStartWeek: null, allocationEndWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-fb-pct', {
+        namedResourceId: 'nr-fb-pct', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+        defaultPercent: 100, startWeek: null, endWeek: null,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: null, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+      })
+
+      // NR with explicit custom start via startWeek fallback
+      addNamedResource('nr-fb-start', 'Fallback Start', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: null, startWeek: 5, // differs from old role
+        allocationEndWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+      })
+      addPersistedProfile('cp-fb-start', {
+        namedResourceId: 'nr-fb-start', ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100, startWeek: 5, endWeek: null,
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: 5, endWeek: null },
+      })
+
+      // Update role to TIMELINE/60/weeks 2-8
+      const putRes = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 2, allocationEndWeek: 8 })
+      expect(putRes.status).toBe(200)
+
+      // match-null NR: inherited (null windows match old role null windows)
+      const matchNull = storeRef.current.namedResources.find((n: any) => n.id === 'nr-fb-matchnull')
+      expect(matchNull!.allocationPercent).toBe(60)
+      expect(matchNull!.allocationStartWeek).toBe(2)
+      expect(matchNull!.allocationEndWeek).toBe(8)
+
+      // fallback-pct NR: inherited (allocationPct: 100 resolves to 100, which matches old role percent)
+      const fbPct = storeRef.current.namedResources.find((n: any) => n.id === 'nr-fb-pct')
+      expect(fbPct!.allocationPercent).toBe(60)
+
+      // fallback-start NR: explicit (startWeek: 5 differs from old role null start week)
+      const fbStart = storeRef.current.namedResources.find((n: any) => n.id === 'nr-fb-start')
+      expect(fbStart!.allocationPercent).toBe(100) // preserved
+      expect(fbStart!.startWeek).toBe(5) // preserved
+    })
+
+    // ── New: POST→PUT consecutive update ───────────────────────────
+
+    it('POST-created RT: auto-created NR follows consecutive capacity PUTs', async () => {
+      const postRes = await request(app)
+        .post(`/api/projects/${projectId}/resource-types`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Post Consec RT', category: 'Engineering' })
+      expect(postRes.status).toBe(201)
+      const postedRtId = postRes.body.id
+      const nrs = storeRef.current.namedResources.filter((n: any) => n.resourceTypeId === postedRtId)
+      expect(nrs).toHaveLength(1)
+      const autoNrId = nrs[0].id
+
+      // First capacity PUT: TIMELINE/60/weeks 2-8
+      const put1 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${postedRtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 2, allocationEndWeek: 8 })
+      expect(put1.status).toBe(200)
+
+      // After first PUT: NR inherits, sync creates profile
+      let nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === autoNrId)
+      expect(nrProfiles).toHaveLength(1)
+      expect(nrProfiles[0].defaultPercent).toBe(60)
+      expect(nrProfiles[0].startWeek).toBe(2)
+      expect(nrProfiles[0].endWeek).toBe(8)
+
+      // Second capacity PUT: TIMELINE/75/weeks 3-10
+      const put2 = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${postedRtId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 3, allocationEndWeek: 10 })
+      expect(put2.status).toBe(200)
+
+      // NR follows the second update
+      nrProfiles = storeRef.current.capacityProfiles.filter((p: any) => p.namedResourceId === autoNrId)
+      expect(nrProfiles).toHaveLength(1)
+      expect(nrProfiles[0].defaultPercent).toBe(75)
+      expect(nrProfiles[0].startWeek).toBe(3)
+      expect(nrProfiles[0].endWeek).toBe(10)
+    })
   })
  })
