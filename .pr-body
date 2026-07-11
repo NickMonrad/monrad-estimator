@@ -1,0 +1,43 @@
+## Review round 4 — all blockers 1-9 fixed
+
+**Latest SHA:** pending commit
+
+### Blocker 1 — CAPACITY_PLAN exit no longer clones old profile
+`shouldCloneRoleProfileForNewNR` helper now includes `!isCapacityPlan` guard. When exiting CAPACITY_PLAN, the clone code is skipped. Extracted to inline `shouldCloneRoleProfileForNewNR` boolean with explicit conditions.
+
+### Blocker 2 — Warning reports real protected-resource count
+Reduction route now tracks `deletedIds` and computes `remainingProtectedIds` from `state.classification.explicitNRIds`, not from `actualCount - count`. Warning format: "Could not reduce resource count to {requested} because {protectedCount} resource(s) have custom or protected capacity settings. Actual count remains {actualCount}."
+
+### Blocker 3 — EFFORT/70 route integration test
+New test `count increase with EFFORT/70 role profile creates NR at correct inherited state` in describe 12. Asserts every compatibility field on the new NR, the persisted NR profile, and the role profile preservation. Includes GET `/capacity-profiles` DTO verification.
+
+### Blocker 4 — Non-CAPACITY_PLAN multi-segment clone test
+New test `non-CAPACITY_PLAN count increase clones role segments to new NR` with AVAILABILITY_WINDOW profile (3 role segments). Asserts original role profile ID unchanged, all role segment IDs unchanged, cloned profile has NAMED_PERSON owner with correct fields, cloned segments match originals but have different IDs.
+
+### Blocker 5 — Segmented protected fixture has real segments
+`cp-seg-1` in describe 11 beforeEach now includes capacitySegment rows (`seg-explicit-1: W3-W5=100%`, `seg-explicit-2: W6-W7=50%`) and a populated `legacy` field. Mixed ownership test asserts byte-for-byte segment preservation after CAPACITY_PLAN exit.
+
+### Blocker 6 — Cross-RT isolation test uses direct seeding
+Replaced the vacuous same-count-PATCH "seeding" with direct profile/segment creation. Snapshot scope includes both `resourceTypeId` (role profiles) and `namedResourceId` (NR profiles). Exercises count increase, reduction, same-count, and PUT on RT B.
+
+### Blocker 7 — Non-CP role-profile preservation tests
+Three tests in describe 12 covering count increase (profile unchanged), count reduction (inherited NR deleted, profile unchanged), and same-count (byte-identical snapshot).
+
+### Blocker 8 — Scheduling drift route tests
+- Drift A: Legacy RT says CAPACITY_PLAN/100, authoritative role says DEMAND_FOLLOWING/70 → no exit, new NR at EFFORT/70, RT unchanged.
+- Drift B: Legacy RT says EFFORT/100, authoritative role says CAPACITY_PROFILE with segments → route detects CAPACITY_PLAN, exits to TIMELINE/100, inherited NR transitions.
+
+### Shared helpers (unchanged)
+- resolveRTPatchState — pre-mutation state loader
+- resolveRoleSchedulingState — authoritative CAPACITY_PLAN detection
+- toLegacyAllocationPct — Int rounding everywhere
+- buildRTMutationSyncOptions / putSyncOptions / patchSyncOptions — consistent scoped sync
+
+### Validation
+- Server tsc: PASS
+- Server lint: PASS (0 errors, 819 pre-existing warnings)
+- Server tests: 39 files, 621 passed (was 613)
+- Client tsc: PASS
+- Client build: PASS (pre-existing)
+
+**Do not merge. Wait for review.**

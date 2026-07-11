@@ -309,9 +309,10 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
     // ── Count increase ─────────────────────────────────────────
     if (count > currentCount) {
-      const hasMultiSegmentRoleProfile =
+      const shouldCloneRoleProfileForNewNR =
+        !isCapacityPlan &&
         state.roleDefault.source === 'PROFILE' &&
-        state.roleProfileRows.length > 0 &&
+        state.roleProfileRows.length === 1 &&
         state.roleProfileRows[0].segments.length > 0
 
       for (let n = currentCount + 1; n <= count; n++) {
@@ -320,7 +321,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         })
 
         // Multi-segment role profile: clone segments to new NR
-        if (hasMultiSegmentRoleProfile) {
+        if (shouldCloneRoleProfileForNewNR) {
           const roleProfile = state.roleProfileRows[0]
           await tx.capacityProfile.create({
             data: {
@@ -359,12 +360,14 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       const reversed = [...state.namedResources].reverse()
       let removed = 0
       const targetRemove = currentCount - count
+      const deletedIds = new Set<string>()
 
       for (const nr of reversed) {
         if (removed >= targetRemove) break
         if (inheritedIds.has(nr.id)) {
           await tx.capacityProfile.deleteMany({ where: { namedResourceId: nr.id } })
           await tx.namedResource.delete({ where: { id: nr.id } })
+          deletedIds.add(nr.id)
           removed++
         }
       }
@@ -375,10 +378,16 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       // Warn ONLY if the target count could not be reached
       if (actualCount > count) {
-        const protectedCount = actualCount - count
+        // Compute the actual number of protected resources remaining.
+        // Classification tracks which NRs are explicit (custom/segmented/planned);
+        // only inherited NRs are eligible for deletion, so explicit NRs survive.
+        const remainingProtectedIds = state.classification.explicitNRIds.filter(
+          (id: string) => !deletedIds.has(id),
+        )
+        const protectedCount = remainingProtectedIds.length
         nextWarnings.push(
-          `Could not reduce to ${count} — ${protectedCount} resource(s) have custom or protected settings. ` +
-          `Actual count is ${actualCount}.`,
+          `Could not reduce resource count to ${count} because ${protectedCount} ` +
+          `resource(s) have custom or protected capacity settings. Actual count remains ${actualCount}.`,
         )
       }
 
