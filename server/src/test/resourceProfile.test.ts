@@ -5,9 +5,17 @@ import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
 import * as capacityProfileAdapter from '../lib/capacityProfileResourceAdapter.js'
 
+// ─── Hoisted: shared context for adapter real-fn reference ─────────────────
+const testCtx = vi.hoisted(() => {
+  const shared: { realBuildFn?: (...args: unknown[]) => unknown } = {}
+  return shared
+})
+
 // Mock the adapter to return empty maps by default (existing tests don't assert on capacityProfile)
 vi.mock('../lib/capacityProfileResourceAdapter.js', async (importOriginal) => {
   const actual: Record<string, unknown> = await importOriginal()
+  // Store reference so integration tests can exercise the real implementation
+  testCtx.realBuildFn = actual.buildResourceCapacityProfileMap as (...args: unknown[]) => unknown
   return {
     ...actual,
     buildResourceCapacityProfileMap: vi.fn(() => new Map()),
@@ -1877,7 +1885,11 @@ describe('capacity profile enrichment in resource profile', () => {
       [nrId, {
         planningBasis: 'availabilityWindow',
         source: 'availabilityWindow',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 4,
         segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
+        resolutionSource: 'PROFILE',
       }],
     ]))
 
@@ -1924,7 +1936,6 @@ describe('capacity profile enrichment in resource profile', () => {
     expect(nr.allocationPercent).toBe(100)
     expect(nr.pricingModel).toBe('ACTUAL_DAYS')
   })
-
   it('includes capacityProfile on role-level row', async () => {
     const rtId = 'rt-role-cap'
     const nrId = 'nr-role-1'
@@ -1932,12 +1943,20 @@ describe('capacity profile enrichment in resource profile', () => {
       [nrId, {
         planningBasis: 'availabilityWindow',
         source: 'availabilityWindow',
+        defaultPercent: 75,
+        startWeek: 0,
+        endWeek: 8,
         segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+        resolutionSource: 'LEGACY',
       }],
       [rtId, {
         planningBasis: 'availabilityWindow',
         source: 'legacy',
+        defaultPercent: 75,
+        startWeek: 0,
+        endWeek: 8,
         segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+        resolutionSource: 'LEGACY',
       }],
     ]))
 
@@ -1986,10 +2005,14 @@ describe('capacity profile enrichment in resource profile', () => {
       [nrId, {
         planningBasis: 'capacityProfile',
         source: 'squadPlanner',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 8,
         segments: [
           { startWeek: 0, endWeek: 4, capacityPercent: 50 },
           { startWeek: 4, endWeek: 8, capacityPercent: 100 },
         ],
+        resolutionSource: 'PROFILE',
       }],
     ]))
 
@@ -2028,13 +2051,10 @@ describe('capacity profile enrichment in resource profile', () => {
     const nr = row.namedResources[0]
     expect(nr.id).toBe(nrId)
     expect(nr.capacityProfile).toBeDefined()
-    expect(nr.capacityProfile.segments).toHaveLength(2)
-    expect(nr.capacityProfile.segments[0].capacityPercent).toBe(50)
-    expect(nr.capacityProfile.segments[1].capacityPercent).toBe(100)
-
-    // Legacy fields remain separate from capacity profile
-    expect(nr.allocationMode).toBe('EFFORT')
-    expect(nr.allocationPercent).toBe(100)
+    // Display fields projected from profile
+    expect(nr.allocationMode).toBe('CAPACITY_PLAN')
+    expect(nr.allocationPercent).toBe(75)
+    // Billing basis is independent metadata
     expect(nr.pricingModel).toBe('PRO_RATA')
   })
 
@@ -2091,7 +2111,11 @@ describe('capacity profile enrichment in resource profile', () => {
       [nrId, {
         planningBasis: 'capacityProfile',
         source: 'availabilityWindow',
+        defaultPercent: 75,
+        startWeek: 0,
+        endWeek: 8,
         segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+        resolutionSource: 'PROFILE',
       }],
     ]))
 

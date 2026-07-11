@@ -1,14 +1,27 @@
 # Capacity Profile — Source-of-Truth Migration Plan
 
 **Epic:** #340  
-**Status:** Plan / audit only — not yet implemented  
-**PR:** #344
+**Status:** Phase 1 (Read-side contracts) — PR #341 shipped  
+**PR:** #344 (plan document), #341 (read adoption)
 
 ## Overview
 
-Issues #326, #336, #337, #338, #339, and #341 delivered `CapacityProfile` / `CapacitySegment` as an **additive derived read model**. Legacy `ResourceType`, `NamedResource`, and `CapacityPlan` fields remain authoritative. The adapter in `capacityProfileResourceAdapter.ts` reads profiles and falls back to legacy-derived values when persisted data does not match.
+Issues #326, #336, #337, #338, #339, and #341 delivered `CapacityProfile` / `CapacitySegment` as an **additive derived read model** with progressive adoption.
 
-Issue #340 is the larger migration where capacity profiles become the **actual source of truth** for allocation data.
+PR #336 added the persisted-read endpoint (`GET /capacity-profiles`) with a reconciliation
+gate — persisted profiles were used only when they matched legacy-derived expectations.
+
+PR #341 (profile-first read adoption) removed the reconciliation gate for the Resource
+Profile route. The adapter now uses profile-first precedence: if a `CapacityProfile`
+exists for the owner (role or named resource), it is used directly with
+`resolutionSource: 'PROFILE'`. Legacy-derived fallback (`resolutionSource: 'LEGACY'`)
+applies only when no persisted profile exists. The `resolutionSource` field and a
+`projectCapacityProfileToLegacyAllocation` helper in `capacityProfileLegacyProjection.ts`
+were introduced to support display-field projection from profile data.
+
+Legacy `ResourceType`, `NamedResource`, and `CapacityPlan` fields remain authoritative
+for write paths. Issue #340 is the larger migration where capacity profiles become
+the **actual source of truth** for allocation data.
 
 ## Principles
 
@@ -17,7 +30,7 @@ Issue #340 is the larger migration where capacity profiles become the **actual s
 3. **Keep legacy fields as compatibility projections** until all consumers have migrated. Do not remove them until #342.
 4. **Commercial remains billing-only.** Capacity profiles describe availability, not billing.
 5. **Reconcile after each migrated write path.** `compareCapacityProfiles` validates that persisted profiles match expected state. Once writes are flipped, reconciliation direction must invert.
-6. **Keep rollback possible** while legacy projections remain current. The fallback in `capacityProfileResourceAdapter.ts` is the safety net.
+6. **Keep rollback possible** while legacy projections remain current. The fallback in `capacityProfileResourceAdapter.ts` (legacy-derived data when no persisted profile exists) is the safety net.
 
 ## Audit
 
@@ -72,23 +85,13 @@ This means:
 6. **`shouldFallbackToActiveCapacityPlan` logic is scattered.** The function lives in `mappers.ts` but similar fallback logic exists in `resourceProfile.ts`, `timeline.ts`, and `projectPlanningModel.ts`. These must converge before or during migration.
 7. **`phantomSlots` in scheduler.** `scheduler.ts` computes `phantomSlots = resourceType.count - namedResources.length`, implicitly depending on `ResourceType.count`. This ties role-level count to scheduling behaviour independently of capacity profiles.
 
-### Files audited
-
-**Server routes:**
-- `server/src/routes/resourceProfile.ts` — reads all legacy allocation fields, produces DTO with optional `capacityProfile`
-- `server/src/routes/resourceTypes.ts` — CRUD on `ResourceType.allocationMode/Percent/StartWeek/EndWeek`, triggers sync
-- `server/src/routes/namedResources.ts` — CRUD on `NamedResource.allocationMode/Percent(Pct)/StartWeek/EndWeek/StartWeek/EndWeek/PricingModel/Synthetic`, triggers sync
-- `server/src/routes/capacityProfiles.ts` — GET persisted profiles (read-side endpoint)
-- `server/src/routes/squadPlan.ts` — generates plans, applies with sync
-- `server/src/routes/projects.ts` — POST creates project with initial RTs, triggers sync
-- `server/src/routes/timeline.ts` — reads RT/NR allocation for scheduling, consumes `shouldFallbackToActiveCapacityPlan`
-
 **Server lib:**
 - `server/src/lib/capacityProfileMapping.ts` — core mapper: `mapProjectToCapacityProfiles` derives profiles from legacy fields
 - `server/src/lib/syncCapacityProfiles.ts` — `syncCapacityProfilesForProject` upserts/deletes segments to match mapped profiles
 - `server/src/lib/reconcileCapacityProfiles.ts` — `compareCapacityProfiles` compares mapped vs persisted
 - `server/src/lib/backfillCapacityProfiles.ts` — iterates projects calling sync
-- `server/src/lib/capacityProfileResourceAdapter.ts` — new adapter for #341, reads persisted or falls back to legacy
+- `server/src/lib/capacityProfileResourceAdapter.ts` — #341 adapter with profile-first precedence; `buildResourceCapacityProfileMap` returns map keyed by owner id with `resolutionSource`
+- `server/src/lib/capacityProfileLegacyProjection.ts` — #341 helper: `projectCapacityProfileToLegacyAllocation` projects profile data into legacy display field shape
 - `server/src/lib/projectPlanningModel.ts` — reads RT/NR allocation fields for resource-demand calculation
 - `server/src/lib/namedResourceAssignments.ts` — reads NR allocation fields for assignment logic
 - `server/src/lib/scheduler.ts` — consumes allocation fields, `phantomSlots` uses `count`
@@ -97,10 +100,11 @@ This means:
 - `server/src/lib/capacity-planning/` — Squad Planner helpers
 
 **Client:**
-- `client/src/components/resource-profile/ResourceProfileTab.tsx` — displays resource rows, reads `capacityProfile` if present
+- `client/src/components/resource-profile/ResourceProfileTab.tsx` — displays resource rows, reads `capacityProfile` if present, shows profile source tag and segments when authoritative
 - `client/src/components/resource-profile/CommercialTab.tsx` — billing UI, consumes `pricingModel`, `allocationPercent`, etc.
-- `client/src/hooks/useResourceProfileExport.ts` — CSV export, consumes `capacityProfile`, legacy fields
+- `client/src/hooks/useResourceProfileExport.ts` — CSV export, consumes `capacityProfile`, legacy fields; includes Planning basis, Profile source, Default capacity %, Profile start/end columns
 - `client/src/pages/TimelinePage.tsx` — timeline UI, reads allocation fields via DTO
+- `client/src/types/backlog.ts` — `ResourceProfileRow.capacityProfile` now has `defaultPercent`, `startWeek`, `endWeek`, `resolutionSource`
 
 ## Phase plan
 
@@ -116,41 +120,56 @@ The audit above classifies all fields. Remaining decisions:
 | Multi-segment backward projection | (a) truncate to first/last segment start/end; (b) leave empty; (c) emit contiguous merged range | **(c)** — merged range is safest for backward compat but semantically lossy — document limitation |
 | `allocationPct` removal | (a) keep both forever; (b) normalise to `allocationPercent` only in migration | **(b)** — source-of-truth migration is the right moment |
 
-### Phase 1 — Harden read-side contracts
+### Phase 1 — Harden read-side contracts ✅ (PR #341 shipped)
 
-Before flipping writes, add or identify tests proving:
+PR #341 implements profile-first read adoption in the Resource Profile route and export
+hook. The adapter (`capacityProfileResourceAdapter.ts`) uses profile-first precedence
+(no reconciliation gate), adds `resolutionSource`, `defaultPercent`, `startWeek`,
+`endWeek` to the output, and the legacy projection helper
+(`capacityProfileLegacyProjection.ts`) projects profile data into display fields.
 
-- **Resource Profile** can read capacity-profile DTOs safely (existing: `capacityProfileResourceAdapter.test.ts`).
-- **Exports** keep capacity profile, assigned work, and billing basis separate (existing: `useResourceProfile.test.ts`).
-- **One named person with multiple segments** remains one row (existing adapter tests).
-- **One planned resource with multiple segments** remains one row (existing adapter tests).
-- **Commercial totals** remain unchanged (check: `CommercialTab.tsx`, server commercial tests).
-- **Legacy fallback** still works when persisted profiles are empty or mismatched (existing: `capacityProfilePersistedDtoIntegration.test.ts`).
+**Evidence from #341:**
 
-Gap: No test explicitly verifies that multi-segment profiles roundtrip through export CSV → parsed spreadsheet columns. Consider adding if CSV parser roundtrip is a requirement.
+- **Resource Profile** reads capacity-profile DTOs safely via `buildResourceCapacityProfileMap`
+  (tested: `capacityProfileResourceAdapter.test.ts` — 7 tests covering profile-first,
+  legacy fallback, multi-segment, planned resource).
+- **Exports** keep capacity profile, assigned work, and billing basis separate
+  (tested: `useResourceProfile.test.ts`).
+- **One named person with multiple segments** remains one row (tested: adapter tests).
+- **One planned resource with multiple segments** remains one row (tested: adapter tests).
+- **Commercial totals** remain unchanged.
+- **Legacy fallback** works when no persisted profile exists for an owner
+  (tested: `capacityProfilePersistedDtoIntegration.test.ts`).
 
-### Phase 2 — Compatibility projection helpers
+**Gap for #341:** No test explicitly verifies that multi-segment profiles roundtrip
+through export CSV → parsed spreadsheet columns. Consider adding if CSV parser
+roundtrip is a requirement.
 
-Add pure helpers that project `CapacityProfile` state back into legacy field shapes *without* writing to legacy tables. These are the inverse of `mapProjectToCapacityProfiles`.
+### Phase 2 — Compatibility projection helpers ✅ (partially shipped in #341)
 
-```typescript
-// Project a CapacityProfile into legacy ResourceType/NamedResource allocation shape
-function projectProfileToLegacyAllocation(profile: CapacityProfileDTO): {
-  allocationMode: string;
-  allocationPercent: number | null;
-  allocationStartWeek: number | null;
-  allocationEndWeek: number | null;
-} { /* ... */ }
-```
+`projectCapacityProfileToLegacyAllocation` in `capacityProfileLegacyProjection.ts` was
+introduced in PR #341. It is a pure, lossy-aware projection helper that converts
+a `CapacityProfile` back into legacy allocation field shapes (`allocationMode`,
+`allocationPercent`, `allocationStartWeek`, `allocationEndWeek`) without writing
+to the database. The Resource Profile route uses it to project profile data into
+display fields when `resolutionSource` is `PROFILE`.
 
-**Lossy cases (documented):**
+**Remaining for Phase 2:** The projection helper exists and is used for read-side
+display. A future write-side incarnation (`projectProfileToLegacyAllocation` writing
+to legacy fields in the same transaction) is deferred until Phase 3 (first
+profile-authoritative write path).
+
+**Lossy cases (documented in helper):**
 
 | Profile shape | Legacy projection |
 |---|---|
 | Fixed FTE (single percent, no segments) | `allocationPercent = percent`, `startWeek/endWeek = null` |
 | Availability window (single segment) | `allocationPercent = seg.capacityPercent`, `startWeek = seg.startWeek`, `endWeek = seg.endWeek` |
-| Multi-segment | Cannot be losslessly represented. Project as merged range `(min(startWeek), max(endWeek))` with overall average percent. **Semantic loss warning.** |
+| Multi-segment | Cannot be losslessly represented. Project as merged range `(min(startWeek), max(endWeek))` with duration-weighted average percent. **lossy: true** |
 | CAPACITY_PLAN derived | Remains special: legacy fields stay as-is (or become explicit profile ref) |
+
+The helper returns `lossy: true` for multi-segment profiles, with a `lossReason`
+string describing the limitation.
 
 ### Phase 3 — First source-of-truth write path: NamedResource capacity/profile editing
 
@@ -184,8 +203,8 @@ $transaction([
 #### Rollback safety
 
 - Legacy compatibility fields are written in the same transaction. If the transaction fails, nothing changes.
-- If only profile is correct and legacy projection is wrong (bug in helper), the mismatch is detected by the existing reconciliation report.
-- `capacityProfileResourceAdapter.ts` falls back to legacy fields when reconciliation mismatch is detected. So even a buggy projection keeps existing reads working via fallback.
+- If only profile is correct and legacy projection is wrong (bug in helper), the mismatch is detected by the existing reconciliation report. Read paths are unaffected because the adapter uses profile data directly (`resolutionSource: 'PROFILE'`), not the legacy projection.
+- `capacityProfileResourceAdapter.ts` uses profile-first precedence: it reads persisted profile data directly without comparing against legacy-derived expectations. A buggy legacy projection is therefore invisible to the adapter — it always prefers the source-of-truth profile.
 
 #### Non-goal
 
@@ -335,3 +354,63 @@ Tracked separately by #342.
 | Phase 3 implementation | NamedResource capacity/profile editing as source of truth |
 | Phase 4 implementation | ResourceType capacity writes as source of truth |
 | Phase 5 implementation | Squad Planner apply as source of truth |
+
+## Remaining work for #342 — Legacy-field consumers
+
+The following consumers still read legacy allocation fields (`allocationMode`,
+`allocationPercent`, `allocationStartWeek`, `allocationEndWeek`) directly.
+They must be migrated to consume profile DTO data before legacy fields can be
+removed or made computed/generated columns.
+
+### scheduler.ts
+
+**Uses:** `ResourceType.count` for `phantomSlots = count - namedResources.length`
+(line ~180). Also reads NR allocation fields for scheduling effective capacity.
+
+**Status:** Legacy — `phantomSlots` depends on `count` (role metadata, not profile data).
+Allocation fields for scheduling are read from `ResourceType`/`NamedResource` directly,
+not from the profile DTO. Profile-capacity segments are not yet consumed for
+per-week capacity constraints.
+
+### timeline.ts
+
+**Uses:** Reads `ResourceType`/`NamedResource` allocation fields for scheduling and
+week-based capacity assignment. Consumes `shouldFallbackToActiveCapacityPlan` logic.
+
+**Status:** Legacy — allocation mode, percent, and window fields read from route-level
+DTO fields, not from profile segments. The route has not been migrated to profile-first
+read adoption.
+
+### projectPlanningModel.ts
+
+**Uses:** Reads `ResourceType.allocationMode`, `allocationPercent`,
+`allocationStartWeek`, `allocationEndWeek` for capacity-demand calculation
+(`buildFallbackWeeklyDemand`). Similar fallback logic to `shouldFallbackToActiveCapacityPlan`.
+
+**Status:** Legacy — demand calculation uses legacy fields directly. Must be updated
+to consume profile DTO when available for accurate per-week capacity.
+
+### leveller.ts
+
+**Uses:** Reads resource availability for resource-levelling calculations. Consumes
+allocation fields and capacity constraints from `ResourceType`/`NamedResource` data.
+
+**Status:** Legacy — reads resource availability via legacy fields, not from profile
+segments. Multi-segment profiles are not yet consumed for per-week capacity constraints.
+
+### Summary
+
+| Consumer | Legacy fields read | Profile DTO ready? | Blocked on |
+|---|---|---|---|
+| `scheduler.ts` | `count`, NR allocation fields | No | #342 — migrate to consume profile segments |
+| `timeline.ts` | RT/NR allocation fields | No | #342 — migrate route to profile-first read |
+| `projectPlanningModel.ts` | RT allocation fields | No | #342 — consume profile DTO for demand calc |
+| `leveller.ts` | RT/NR capacity constraints | No | #342 — consume profile segments for levelling |
+| `resourceProfile.ts` | RT/NR allocation fields (display) | Yes (#341) | Already projects from profile when available |
+| `useResourceProfileExport.ts` | NR legacy fields (backup) | Yes (#341) | Already prefers profile columns |
+
+**Next step for #342:** Migrate each consumer above to read profile DTO data when
+available, starting with those that already have profile-aware infrastructure
+(the route and export hook in `resourceProfile.ts` and `useResourceProfileExport.ts`
+are already done — focus on `scheduler.ts`, `timeline.ts`, `projectPlanningModel.ts`,
+and `leveller.ts`).

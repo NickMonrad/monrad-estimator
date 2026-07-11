@@ -64,13 +64,39 @@ function formatCapacityProfileSegments(
     .join('; ')
 }
 
+/** Format planning basis as plain English. */
+function formatPlanningBasis(
+  capacityProfile: { planningBasis: string; resolutionSource: string } | undefined,
+  allocationMode: string,
+): string {
+  if (!capacityProfile) {
+    // Legacy fallback
+    switch (allocationMode) {
+      case 'EFFORT': return 'Demand-following'
+      case 'TIMELINE': return 'Availability window'
+      case 'FULL_PROJECT': return 'Whole-project allocation'
+      case 'CAPACITY_PLAN': return 'Capacity profile'
+      default: return allocationMode
+    }
+  }
+  switch (capacityProfile.planningBasis) {
+    case 'demandFollowing': return 'Demand-following'
+    case 'availabilityWindow': return 'Availability window'
+    case 'wholeProjectAllocation': return 'Whole-project allocation'
+    case 'capacityProfile': return 'Capacity profile'
+    default: return capacityProfile.planningBasis
+  }
+}
+
 export const buildProfileCsv = (profileData: ResourceProfile) => {
   const rows: string[][] = [
     [
       'Section', 'Role', 'Resource name', 'Resource identity', 'Category',
       'Resource count', 'Hours per day', 'Effort days', 'Assigned days', 'Billable days',
-      'Day rate', 'Subtotal', 'Availability window start', 'Availability window end',
-      'Assigned start', 'Assigned end', 'Capacity profile', 'Assignment segments', 'Assigned weeks',
+      'Day rate', 'Subtotal',
+      'Planning basis', 'Profile source', 'Default capacity %', 'Profile start', 'Profile end',
+      'Availability window start', 'Availability window end',
+      'Assigned start', 'Assigned end', 'Capacity profile segments', 'Assignment segments', 'Assigned weeks',
       'Billing basis', 'Handover notes',
     ],
   ]
@@ -78,17 +104,32 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
   profileData.resourceRows.forEach(row => {
     if (row.namedResources && row.namedResources.length > 0) {
       row.namedResources.forEach(nr => {
+        const capProfile = nr.capacityProfile
+        const profileStart = capProfile?.startWeek != null ? formatWeekLabel(capProfile.startWeek) : ''
+        const profileEnd = capProfile?.endWeek != null ? formatWeekLabel(capProfile.endWeek) : ''
+        // Use profile window for availability window when available
+        const availStart = capProfile?.startWeek != null
+          ? formatWeekLabel(capProfile.startWeek)
+          : (nr.startWeek != null ? formatWeekLabel(nr.startWeek) : '')
+        const availEnd = capProfile?.endWeek != null
+          ? formatWeekLabel(capProfile.endWeek)
+          : (nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '')
         rows.push([
           'Resource', row.name, nr.name, nr.synthetic ? 'Planned resource' : 'Named person',
           row.category, String(row.count), String(row.hoursPerDay),
           String(row.effortDays), String(nr.allocatedDays), String(nr.actualAllocatedDays),
           row.dayRate != null ? String(row.dayRate) : '',
           row.dayRate != null ? (nr.actualAllocatedDays * row.dayRate).toFixed(2) : '',
-          nr.startWeek != null ? formatWeekLabel(nr.startWeek) : '',
-          nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '',
+          formatPlanningBasis(capProfile, nr.allocationMode),
+          capProfile?.source ?? '',
+          capProfile?.defaultPercent != null ? String(capProfile.defaultPercent) : '',
+          profileStart,
+          profileEnd,
+          availStart,
+          availEnd,
           nr.actualAllocationStartWeek != null ? formatWeekLabel(nr.actualAllocationStartWeek) : '',
           nr.actualAllocationEndWeek != null ? formatWeekLabel(nr.actualAllocationEndWeek) : '',
-          formatCapacityProfileSegments(nr.capacityProfile),
+          formatCapacityProfileSegments(capProfile),
           formatNamedResourceSegments(nr),
           formatNamedResourceWeeks(nr),
           nr.pricingModel === 'PRO_RATA' ? 'Bill planned allocation' : 'Bill actual scheduled days',
@@ -97,17 +138,25 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       })
       return
     }
+    const capProfile = row.capacityProfile
+    const profileStart = capProfile?.startWeek != null ? formatWeekLabel(capProfile.startWeek) : ''
+    const profileEnd = capProfile?.endWeek != null ? formatWeekLabel(capProfile.endWeek) : ''
     rows.push([
       'Resource', row.name, '', 'Role-level capacity', row.category,
       String(row.count), String(row.hoursPerDay), String(row.effortDays),
       String(row.totalDays), '',
       row.dayRate != null ? String(row.dayRate) : '',
       row.dayRate != null && row.totalDays != null ? (row.totalDays * row.dayRate).toFixed(2) : '',
+      formatPlanningBasis(capProfile, row.allocationMode),
+      capProfile?.source ?? '',
+      capProfile?.defaultPercent != null ? String(capProfile.defaultPercent) : '',
+      profileStart,
+      profileEnd,
       '',   // Availability window start
       '',   // Availability window end
       '',   // Assigned start
       '',   // Assigned end
-      formatCapacityProfileSegments(row.capacityProfile), // Capacity profile
+      formatCapacityProfileSegments(capProfile), // Capacity profile segments
       '',   // Assignment segments
       '',   // Assigned weeks
       '',   // Billing basis
@@ -120,11 +169,16 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       'Overhead', row.name, '', '', '',
       '', '', '', String(row.computedDays), '',
       '', row.estimatedCost != null ? String(row.estimatedCost) : '',
+      '',   // Planning basis
+      '',   // Profile source
+      '',   // Default capacity %
+      '',   // Profile start
+      '',   // Profile end
       '',   // Availability window start
       '',   // Availability window end
       '',   // Assigned start
       '',   // Assigned end
-      '',   // Capacity profile
+      '',   // Capacity profile segments
       '',   // Assignment segments
       '',   // Assigned weeks
       '',   // Billing basis

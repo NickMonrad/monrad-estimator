@@ -197,6 +197,15 @@ Resource Profile should explain staffing and assignment:
 
 Use plain labels such as **Capacity profile**, **Reserved capacity**, **Assigned work**, **Assigned days**, **Named person**, and **Planned resource**.
 
+**Current implementation status (#341):** Resource Profile now displays capacity-profile
+data from persisted `CapacityProfile`/`CapacitySegment` rows when they exist, using
+profile-first read precedence. The route projects profile fields into legacy display
+fields via `projectCapacityProfileToLegacyAllocation` (`capacityProfileLegacyProjection.ts`),
+falling back to legacy fields when no profile exists. The CSV export includes **Capacity
+profile segments**, **Planning basis**, **Profile source**, **Default capacity %**,
+**Profile start**, and **Profile end** columns. Commercial calculations remain unchanged.
+See the [Resource Profile and Export Adoption](#resource-profile-and-export-adoption) section.
+
 ### Commercial
 
 Commercial should explain pricing:
@@ -238,6 +247,38 @@ Billing basis: Bill actual scheduled days
 Billable days: 52.8
 ```
 
+### Current implementation (#341)
+
+The CSV export in `useResourceProfileExport.ts` now implements the following columns
+that align with the design above:
+
+| Column | Source | Notes |
+|--------|--------|-------|
+| **Planning basis** | Profile `planningBasis` mapped via `formatPlanningBasis` | Shows plain-English basis |
+| **Profile source** | Profile `source` field | e.g. `fixed`, `availabilityWindow`, `squadPlanner` |
+| **Default capacity %** | Profile `defaultPercent` | Profile-level default |
+| **Profile start / Profile end** | Profile `startWeek` / `endWeek` | Week labels |
+| **Capacity profile segments** | Profile segments via `formatCapacityProfileSegments` | `W1-W4 50%; W5-W10 100%` |
+| **Availability window start/end** | Profile window or legacy NR fields | Profile-first precedence |
+| **Assigned days / Billable days** | Legacy NR allocation fields | Unchanged by #341 |
+| **Billing basis** | NR `pricingModel` mapped to plain English | `Bill planned allocation` / `Bill actual scheduled days` |
+
+**Capacity vs assignment separation:** The `Capacity profile segments` column is
+structurally separate from the `Assignment segments` column. The former shows what
+capacity exists *(planned availability)*; the latter shows what the scheduler actually
+assigned *(consumed demand)*. Billing basis is a third independent column.
+
+**Single entity with multiple segments:** Both role-level rows and named-resource rows
+remain a single row in the CSV regardless of how many segments the capacity profile
+contains. The segments are serialised into the `Capacity profile segments` cell as a
+semicolon-delimited string (e.g. `W1-W4 50%; W5-W10 100%`). Entity identity is
+preserved in the adapter by keying the profile map by owner id.
+
+**Profile-first precedence in export:** When a named resource has a persisted profile,
+the export reads `defaultPercent`, `startWeek`, and `endWeek` from the profile for
+the corresponding columns. Availability window start/end fields also prefer the profile
+window over legacy NR fields. When no profile exists, legacy fields are used.
+
 If the plan reserves capacity that is not fully consumed by assigned work, the export should show that separately:
 
 ```text
@@ -255,7 +296,10 @@ Billable days: based on reserved/planned capacity
 4. **Resource Counts cleanup** — address #311 and split simple capacity from detailed profile editing.
 5. **Export cleanup** — redesign Resource Profile export around plain-English handover sections.
 6. **First-class capacity profiles** — add segmented capacity profile model and editor.
-7. **Squad Planner alignment** — make Squad Planner generate editable capacity profiles.
+7. **Resource Profile and Export Adoption (#341)** — adopt profile-first reads in Resource
+   Profile route and export hook; add adapter, legacy projection helper, resolutionSource;
+   add Planning basis, Profile source, Default capacity %, Profile start/end CSV columns.
+8. **Squad Planner alignment** — make Squad Planner generate editable capacity profiles.
 
 ## Open decisions
 
@@ -436,65 +480,130 @@ Tests use the real `syncCapacityProfilesForProject` helper (not mocked). See `se
 
 ### Adapter
 
-`server/src/lib/capacityProfileResourceAdapter.ts` provides a narrow adapter
+`server/src/lib/capacityProfileResourceAdapter.ts` provides the adapter
 `buildResourceCapacityProfileMap` that takes the same project query shape as the
 Resource Profile route and returns a `Map<string, CapacityProfileResourceData>`
 keyed by resource-type id (role profiles) or named-resource id (named person /
 planned resource).
 
-The adapter uses the same persisted-read vs fallback decision as the
-`GET /capacity-profiles` endpoint:
+**Precedence (profile-first, no reconciliation gate):**
 
-1. Derive legacy profiles via `mapProjectToCapacityProfiles`.
-2. If persisted `CapacityProfile` rows exist, compare via `compareCapacityProfiles`.
-3. If zero mismatches → map persisted rows to DTOs and use them.
-4. Otherwise → fall back to legacy-derived profiles.
+1. If a persisted `CapacityProfile` exists for the owner (role or named resource),
+   map its data directly to `CapacityProfileResourceData` with `resolutionSource: 'PROFILE'`.
+2. Otherwise, fall back to legacy-derived data via `mapProjectToCapacityProfiles`
+   with `resolutionSource: 'LEGACY'`.
+3. Active Capacity Plan materialisation applies only where existing fallback rules
+   already require it (e.g. `CAPACITY_PLAN` mode).
+
+The adapter does **not** run `compareCapacityProfiles` or any reconciliation check.
+It uses persisted data directly when the owner-specific profile exists, without
+comparing against legacy-derived expectations. This differs from the
+`GET /capacity-profiles` endpoint (which still uses a reconciliation gate).
+
+**Resolution source semantics:**
+
+| `resolutionSource` | Meaning |
+|---|---|
+| `PROFILE` | Data came from a persisted `CapacityProfile`/`CapacitySegment` |
+| `LEGACY` | Data derived from legacy `ResourceType`/`NamedResource` fields |
+| `ACTIVE_CAPACITY_PLAN` | Data materialised from active `CapacityPlan` periods (rare) |
+
+**Output shape (`CapacityProfileResourceData`):**
+
+- `planningBasis` — resolved planning basis string
+- `source` — profile source (e.g. `fixed`, `availabilityWindow`, `squadPlanner`)
+- `defaultPercent` — profile-level default capacity percentage
+- `startWeek` / `endWeek` — profile-level window
+- `segments` — array of `{ startWeek, endWeek, capacityPercent }` describing availability over time
+- `resolutionSource` — how the data was resolved (see above)
+
+**Returns:** empty Map when no profiles could be derived.
 
 ### Resource Profile route
 
-`GET /api/projects/:projectId/resource-profile` now includes `capacityProfiles`
-with `segments` in its Prisma query and calls `buildResourceCapacityProfileMap`.
+`GET /api/projects/:projectId/resource-profile` includes `capacityProfiles` with
+`segments` in its Prisma query and calls `buildResourceCapacityProfileMap`.
 
-Each named-resource entry in the response gains an optional `capacityProfile`
-field containing `{ planningBasis, source, segments }`. Role-level rows without
-named resources get a `capacityProfile` field at the row level.
+The route uses `projectCapacityProfileToLegacyAllocation` (from
+`capacityProfileLegacyProjection.ts`) to project profile data into legacy display
+fields when a profile exists:
+
+```typescript
+// Display fields: project from profile when available, fall back to legacy
+allocationMode: profileProjection?.allocationMode ?? mode,
+allocationPercent: profileProjection?.allocationPercent ?? percent,
+allocationStartWeek: profileProjection?.allocationStartWeek ?? legacy.startWeek,
+allocationEndWeek: profileProjection?.allocationEndWeek ?? legacy.endWeek,
+```
+
+Each named-resource entry gains an optional `capacityProfile` field containing
+`{ planningBasis, source, defaultPercent, startWeek, endWeek, segments, resolutionSource }`.
+Role-level rows without named resources get a `capacityProfile` field at the row level.
+
+**Commercial calculations (allocatedDays, actualAllocatedDays, totalDays, estimatedCost)
+are not affected** — they continue to use legacy fields directly.
 
 ### Client types
 
 `client/src/types/backlog.ts` — `ResourceProfileRow` gains an optional
-`capacityProfile` field (row level and per named-resource entry) with
-`{ planningBasis, source, segments }`.
+`capacityProfile` field with:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `planningBasis` | `string` | Planning basis from the capacity profile |
+| `source` | `string` | Source of the profile |
+| `defaultPercent` | `number \| null` | Profile-level default capacity percentage |
+| `startWeek` | `number \| null` | Profile-level start week |
+| `endWeek` | `number \| null` | Profile-level end week |
+| `segments` | `Array<{ startWeek; endWeek; capacityPercent }>` | Capacity segments |
+| `resolutionSource` | `string` | How the data was resolved (`PROFILE`, `LEGACY`, or `ACTIVE_CAPACITY_PLAN`) |
 
 ### Export CSV
 
-`client/src/hooks/useResourceProfileExport.ts` — the profile CSV now includes a
-`Capacity profile` column showing segments in a human-readable format
-(e.g. `W1-W4 50%; W5-W10 100%`), distinct from the existing `Assignment segments`
-column (which reflects actual scheduled assignment).
+`client/src/hooks/useResourceProfileExport.ts` now includes five profile-related
+columns after the **Subtotal** column:
+
+| Column | Description |
+|--------|-------------|
+| **Planning basis** | Plain-English planning basis name (via `formatPlanningBasis`) |
+| **Profile source** | Source identifier (e.g. `fixed`, `availabilityWindow`, `squadPlanner`) |
+| **Default capacity %** | Profile-level default capacity percentage |
+| **Profile start** | Profile-level start week (e.g. `W1`) |
+| **Profile end** | Profile-level end week (e.g. `W14`) |
+
+The existing **Capacity profile segments** column shows segments in human-readable
+format (e.g. `W1-W4 50%; W5-W10 100%`), structurally distinct from the existing
+**Assignment segments** column.
 
 ### Behavioural invariants
 
-- **Legacy fields remain authoritative.** The adapter is additive enrichment.
-  If capacity-profile data is unreconciled or unavailable, the route behaves
-  exactly as before (no enrichment emitted).
-- **CapacityProfile is still a derived read model.** Source-of-truth migration
-  is tracked separately in #340.
+- **Profile-first read precedence.** The adapter uses persisted `CapacityProfile`
+  data directly when the owner-specific profile exists (`resolutionSource: 'PROFILE'`).
+  No reconciliation gate is used — the old behaviour of falling back on mismatch
+  was replaced by direct persisted-profile usage in #341.
+- **Legacy fallback.** When no persisted profile exists for an owner, data is derived
+  from legacy `ResourceType`/`NamedResource` fields (`resolutionSource: 'LEGACY'`).
 - **Commercial calculations are unchanged.** The `capacityProfile` field is
   presentation-only in Resource Profile; Commercial billing formulas, billable
   days, discounts, tax, and totals are unaffected.
 - **Entity identity preserved.** One named person or planned resource with
-  multiple capacity segments is still one row/entity. The adapter keyed the map
+  multiple capacity segments is still one row/entity. The adapter keys the map
   by owner id, so duplicate entries never result from segment data.
+- **Capacity vs assignment vs billing separation.** The capacity profile describes
+  *planned availability*, the assignment segments describe *consumed demand*, and
+  the billing basis describes *how Commercial charges*. These are structurally
+  independent columns in the export.
 
 ### File changes
 
 | File | Change |
 |---|---|
-| `server/src/lib/capacityProfileResourceAdapter.ts` | New adapter — `buildResourceCapacityProfileMap` |
-| `server/src/routes/resourceProfile.ts` | Added `capacityProfiles` include, adapter call, `capacityProfile` in response |
-| `client/src/types/backlog.ts` | Added optional `capacityProfile` to `ResourceProfileRow` |
-| `client/src/hooks/useResourceProfileExport.ts` | Added `Capacity profile` column to CSV export |
-| `server/src/test/capacityProfileResourceAdapter.test.ts` | 7 unit tests for adapter |
+| `server/src/lib/capacityProfileResourceAdapter.ts` | New adapter — `buildResourceCapacityProfileMap` with profile-first precedence |
+| `server/src/lib/capacityProfileLegacyProjection.ts` | New helper — `projectCapacityProfileToLegacyAllocation` for display-field projection |
+| `server/src/routes/resourceProfile.ts` | Added `capacityProfiles` include, adapter call, `capacityProfile` in response, legacy projection for display fields |
+| `client/src/types/backlog.ts` | Added `capacityProfile` with `defaultPercent`, `startWeek`, `endWeek`, `resolutionSource` |
+| `client/src/hooks/useResourceProfileExport.ts` | Added Planning basis, Profile source, Default capacity %, Profile start/end columns |
+| `server/src/test/capacityProfileResourceAdapter.test.ts` | 7 unit tests covering profile-first, legacy fallback, multi-segment, planned resource |
 | `docs/domain/capacity-profile-design.md` | This section |
 | `docs/domain/planning-resource-commercial-boundaries.md` | Updated |
 
@@ -506,3 +615,4 @@ column (which reflects actual scheduled assignment).
 ### Source-of-truth migration plan
 
 See the separate [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md) for the staged migration plan, field audit, regression matrix, and open decisions.
+

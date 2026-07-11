@@ -301,13 +301,21 @@ export interface ResourceProfileRow {
     capacityProfile?: {
       planningBasis: string
       source: string
+      defaultPercent: number | null
+      startWeek: number | null
+      endWeek: number | null
       segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+      resolutionSource: string
     }
   }>
   capacityProfile?: {
     planningBasis: string
     source: string
+    defaultPercent: number | null
+    startWeek: number | null
+    endWeek: number | null
     segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    resolutionSource: string
   }
 }
 

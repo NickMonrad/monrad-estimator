@@ -155,7 +155,20 @@ export default function ResourceProfileTab({
                         if (row.namedResources && row.namedResources.length > 0) {
                           return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Named resources: mixed modes</span>
                         }
-                        const mode = row.allocationMode ?? 'EFFORT'
+                        const profile = row.capacityProfile
+                        const isProfileAuthoritative = profile?.resolutionSource === 'PROFILE'
+                        const mapPlanningBasis = (basis: string | undefined): string => {
+                          switch (basis) {
+                            case 'demandFollowing': return 'EFFORT'
+                            case 'availabilityWindow': return 'TIMELINE'
+                            case 'wholeProjectAllocation': return 'FULL_PROJECT'
+                            case 'capacityProfile': return 'CAPACITY_PLAN'
+                            default: return ''
+                          }
+                        }
+                        const mode = isProfileAuthoritative && profile?.planningBasis
+                          ? (mapPlanningBasis(profile.planningBasis) || row.allocationMode || 'EFFORT')
+                          : (row.allocationMode ?? 'EFFORT')
                         const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
                         const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
                         const badge = (() => {
@@ -183,12 +196,27 @@ export default function ResourceProfileTab({
                                 }
                               }}
                               className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color} hover:opacity-80 transition-opacity`}
-                              title="Click to edit allocation"
+                              title={isProfileAuthoritative ? `Profile source: ${profile!.source}` : 'Click to edit allocation'}
                             >
                               {badge.label}
                             </button>
+                            {isProfileAuthoritative && profile && (
+                              <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 uppercase tracking-wide" title={`Resolution source: ${profile.resolutionSource}`}>
+                                {profile.source === 'squadPlanner' ? 'Squad Planner' : profile.source === 'fixed' ? 'Fixed' : profile.source === 'manual' ? 'Manual' : profile.source}
+                              </span>
+                            )}
                             {mode === 'TIMELINE' && effectiveStart != null && effectiveEnd != null && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.floor(effectiveStart)} → Wk {Math.floor(effectiveEnd)}</div>
+                            )}
+                            {profile && profile.segments.length > 0 && (
+                              <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                                {profile.segments.map((seg, i) => (
+                                  <span key={i}>
+                                    {i > 0 && <span className="mx-1">·</span>}
+                                    W{seg.startWeek + 1}-W{seg.endWeek + 1}: {seg.capacityPercent}%
+                                  </span>
+                                ))}
+                              </div>
                             )}
                           </div>
                         )

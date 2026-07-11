@@ -137,9 +137,9 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(data!.segments).toHaveLength(0)
   })
 
-  it('falls back to legacy when persisted profiles do not reconcile', () => {
-    // EFFORT → planningBasis: demandFollowing, source: fixed
-    // Persisted CAPACITY_PROFILE/SQUAD_PLANNER → mismatch
+  it('returns persisted profile data even when legacy fields differ (profile-first)', () => {
+    // EFFORT → legacy: planningBasis: demandFollowing, source: fixed
+    // Persisted CAPACITY_PROFILE/SQUAD_PLANNER → authoritative
     const project = makeProject({
       resourceTypes: [
         makeResourceType({
@@ -177,9 +177,12 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(result.size).toBe(1)
     const data = result.get('rt-1')
     expect(data).toBeDefined()
-    // Falls back to legacy
-    expect(data!.planningBasis).toBe('demandFollowing')
-    expect(data!.source).toBe('fixed')
+    // Profile-first: returns persisted profile, not legacy
+    expect(data!.planningBasis).toBe('capacityProfile')
+    expect(data!.source).toBe('squadPlanner')
+    expect(data!.resolutionSource).toBe('PROFILE')
+    expect(data!.segments).toHaveLength(1)
+    expect(data!.segments[0].capacityPercent).toBe(50)
   })
 
   it('named person with multiple capacity segments remains one entry', () => {
@@ -222,7 +225,6 @@ describe('buildResourceCapacityProfileMap', () => {
         },
       ],
     })
-
     const result = buildResourceCapacityProfileMap(project)
     // Single entry keyed by nrId
     expect(result.size).toBe(1)
@@ -231,10 +233,11 @@ describe('buildResourceCapacityProfileMap', () => {
 
     const data = result.get(nrId)!
     expect(data.planningBasis).toBe('availabilityWindow')
-    // Legacy TIMELINE mapper produces 0 segments; persisted has 2 segments but
-    // compareCapacityProfiles detects the mismatch and falls back to legacy.
-    // The contract tested here is single-entry identity, not segment population.
-    expect(data.segments).toHaveLength(0)
+    // Profile-first: persisted has 2 segments, now authoritative
+    expect(data.segments).toHaveLength(2)
+    expect(data.segments[0].capacityPercent).toBe(50)
+    expect(data.segments[1].capacityPercent).toBe(100)
+    expect(data.resolutionSource).toBe('PROFILE')
   })
 
   it('handles planned resource (synthetic) profile', () => {

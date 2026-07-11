@@ -11,6 +11,7 @@ import {
 import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
 import { buildFallbackWeeklyDemand, mergeWeeklyDemand, computePlanningWindow, convertWeeklyDemandCache } from '../lib/projectPlanningModel.js'
 import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceAdapter.js'
+import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
@@ -450,16 +451,28 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             // FULL_PROJECT
             nrAllocatedDays = round2(projectDurationWeeks * 5 * (nrPercent / 100))
           }
+          const nrProfileData = capacityProfileMap.get(nr.id) ?? undefined
+          const nrProfileProjection = nrProfileData
+            ? projectCapacityProfileToLegacyAllocation({
+                planningBasis: nrProfileData.planningBasis,
+                source: nrProfileData.source,
+                defaultPercent: nrProfileData.defaultPercent,
+                startWeek: nrProfileData.startWeek,
+                endWeek: nrProfileData.endWeek,
+                segments: nrProfileData.segments,
+              })
+            : null
           return {
             id: nr.id,
             name: nr.name,
-            allocationMode: nrMode,
-            allocationPercent: nrPercent,
-            allocationStartWeek: nr.allocationStartWeek ?? null,
-            allocationEndWeek: nr.allocationEndWeek ?? null,
+            // Display fields: project from profile when available, fall back to legacy
+            allocationMode: nrProfileProjection?.allocationMode ?? nrMode,
+            allocationPercent: nrProfileProjection?.allocationPercent ?? nrPercent,
+            allocationStartWeek: nrProfileProjection?.allocationStartWeek ?? nr.allocationStartWeek ?? null,
+            allocationEndWeek: nrProfileProjection?.allocationEndWeek ?? nr.allocationEndWeek ?? null,
             pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-            startWeek: nr.startWeek ?? null,
-            endWeek: nr.endWeek ?? null,
+            startWeek: nrProfileProjection?.allocationStartWeek ?? nr.startWeek ?? null,
+            endWeek: nrProfileProjection?.allocationEndWeek ?? nr.endWeek ?? null,
             allocatedDays: nrAllocatedDays,
             derivedStartWeek,
             derivedEndWeek,
@@ -469,33 +482,62 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             actualAllocatedWeeks: actualNamedResource?.actualAllocatedWeeks ?? [],
             actualAllocationSegments: actualNamedResource?.actualAllocationSegments ?? [],
             synthetic: actualNamedResource?.synthetic ?? false,
-            capacityProfile: capacityProfileMap.get(nr.id) ?? undefined,
+            capacityProfile: nrProfileData ? {
+              planningBasis: nrProfileData.planningBasis,
+              source: nrProfileData.source,
+              defaultPercent: nrProfileData.defaultPercent,
+              startWeek: nrProfileData.startWeek,
+              endWeek: nrProfileData.endWeek,
+              segments: nrProfileData.segments,
+              resolutionSource: nrProfileData.resolutionSource,
+            } : (capacityProfileMap.get(nr.id) ?? undefined),
           }
         })
         const existingIds = new Set(namedResourcesOutput.map(nr => nr.id))
         const syntheticAssignments = actualNamedResourcesForType
           .filter(actual => !existingIds.has(actual.id))
-        namedResourcesOutput.push(...syntheticAssignments.map(actual => ({
-          id: actual.id,
-          name: actual.name,
-          allocationMode: actual.allocationMode,
-          allocationPercent: actual.allocationPercent,
-          allocationStartWeek: actual.allocationStartWeek,
-          allocationEndWeek: actual.allocationEndWeek,
-          pricingModel: actual.pricingModel,
-          startWeek: actual.startWeek,
-          endWeek: actual.endWeek,
-          allocatedDays: actual.actualAllocatedDays,
-          derivedStartWeek,
-          derivedEndWeek,
-          actualAllocatedDays: actual.actualAllocatedDays,
-          actualAllocationStartWeek: actual.actualAllocationStartWeek,
-          actualAllocationEndWeek: actual.actualAllocationEndWeek,
-          actualAllocatedWeeks: actual.actualAllocatedWeeks,
-          actualAllocationSegments: actual.actualAllocationSegments,
-          synthetic: actual.synthetic,
-          capacityProfile: capacityProfileMap.get(actual.id) ?? undefined,
-        })))
+        namedResourcesOutput.push(...syntheticAssignments.map(actual => {
+          const synthNrProfileData = capacityProfileMap.get(actual.id) ?? undefined
+          const synthNrProfileProjection = synthNrProfileData
+            ? projectCapacityProfileToLegacyAllocation({
+                planningBasis: synthNrProfileData.planningBasis,
+                source: synthNrProfileData.source,
+                defaultPercent: synthNrProfileData.defaultPercent,
+                startWeek: synthNrProfileData.startWeek,
+                endWeek: synthNrProfileData.endWeek,
+                segments: synthNrProfileData.segments,
+              })
+            : null
+          return {
+            id: actual.id,
+            name: actual.name,
+            allocationMode: synthNrProfileProjection?.allocationMode ?? actual.allocationMode,
+            allocationPercent: synthNrProfileProjection?.allocationPercent ?? actual.allocationPercent,
+            allocationStartWeek: synthNrProfileProjection?.allocationStartWeek ?? actual.allocationStartWeek,
+            allocationEndWeek: synthNrProfileProjection?.allocationEndWeek ?? actual.allocationEndWeek,
+            pricingModel: actual.pricingModel,
+            startWeek: synthNrProfileProjection?.allocationStartWeek ?? actual.startWeek,
+            endWeek: synthNrProfileProjection?.allocationEndWeek ?? actual.endWeek,
+            allocatedDays: actual.actualAllocatedDays,
+            derivedStartWeek,
+            derivedEndWeek,
+            actualAllocatedDays: actual.actualAllocatedDays,
+            actualAllocationStartWeek: actual.actualAllocationStartWeek,
+            actualAllocationEndWeek: actual.actualAllocationEndWeek,
+            actualAllocatedWeeks: actual.actualAllocatedWeeks,
+            actualAllocationSegments: actual.actualAllocationSegments,
+            synthetic: actual.synthetic,
+            capacityProfile: synthNrProfileData ? {
+              planningBasis: synthNrProfileData.planningBasis,
+              source: synthNrProfileData.source,
+              defaultPercent: synthNrProfileData.defaultPercent,
+              startWeek: synthNrProfileData.startWeek,
+              endWeek: synthNrProfileData.endWeek,
+              segments: synthNrProfileData.segments,
+              resolutionSource: synthNrProfileData.resolutionSource,
+            } : (capacityProfileMap.get(actual.id) ?? undefined),
+          }
+        }))
         const plannedAllocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
         const actualAllocatedDays = round2(actualNamedResourceAssignment?.actualAllocatedDays ?? 0)
         const shouldUseActualAssignmentWindow =
@@ -534,6 +576,19 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       const allocatedCost = dayRate != null ? round2(allocatedDays * dayRate) : null
       const estimatedCost = allocatedCost
 
+      // Profile-first: project display fields from profile when authoritative
+      const capacityProfileData = capacityProfileMap.get(resourceType.id) ?? undefined
+      const profileProjection = capacityProfileData
+        ? projectCapacityProfileToLegacyAllocation({
+            planningBasis: capacityProfileData.planningBasis,
+            source: capacityProfileData.source,
+            defaultPercent: capacityProfileData.defaultPercent,
+            startWeek: capacityProfileData.startWeek,
+            endWeek: capacityProfileData.endWeek,
+            segments: capacityProfileData.segments,
+          })
+        : null
+
       return {
         resourceTypeId: resourceType.id,
         name: resourceType.name,
@@ -545,16 +600,25 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         effortDays: totalDays,
         totalDays: allocatedDays,   // keep totalDays = allocatedDays so existing UI subtotal works
         allocatedDays,
-        allocationMode: mode,
-        allocationPercent: percent,
-        allocationStartWeek: resourceType.allocationStartWeek ?? null,
-        allocationEndWeek: resourceType.allocationEndWeek ?? null,
+        // Display fields: project from profile when available, fall back to legacy
+        allocationMode: profileProjection?.allocationMode ?? mode,
+        allocationPercent: profileProjection?.allocationPercent ?? percent,
+        allocationStartWeek: profileProjection?.allocationStartWeek ?? resourceType.allocationStartWeek ?? null,
+        allocationEndWeek: profileProjection?.allocationEndWeek ?? resourceType.allocationEndWeek ?? null,
         derivedStartWeek: rowDerivedStartWeek,
         derivedEndWeek: rowDerivedEndWeek,
         estimatedCost,
         epics,
         namedResources: namedResourcesOutput,
-        capacityProfile: capacityProfileMap.get(resourceType.id) ?? undefined,
+        capacityProfile: capacityProfileData ? {
+          planningBasis: capacityProfileData.planningBasis,
+          source: capacityProfileData.source,
+          defaultPercent: capacityProfileData.defaultPercent,
+          startWeek: capacityProfileData.startWeek,
+          endWeek: capacityProfileData.endWeek,
+          segments: capacityProfileData.segments,
+          resolutionSource: capacityProfileData.resolutionSource,
+        } : undefined,
       }
     })
     .sort((a, b) => {
