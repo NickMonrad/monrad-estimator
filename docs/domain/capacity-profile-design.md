@@ -197,13 +197,16 @@ Resource Profile should explain staffing and assignment:
 
 Use plain labels such as **Capacity profile**, **Reserved capacity**, **Assigned work**, **Assigned days**, **Named person**, and **Planned resource**.
 
-**Current implementation status (#341):** Resource Profile now displays capacity-profile
-data from persisted `CapacityProfile`/`CapacitySegment` rows when they exist, using
-profile-first read precedence. The route projects profile fields into legacy display
-fields via `projectCapacityProfileToLegacyAllocation` (`capacityProfileLegacyProjection.ts`),
-falling back to legacy fields when no profile exists. The CSV export includes **Capacity
-profile segments**, **Planning basis**, **Profile source**, **Default capacity %**,
-**Profile start**, and **Profile end** columns. Commercial calculations remain unchanged.
+**Current implementation status (PR #356, pending merge):** The Resource Profile route
+and CSV export adopt profile-first read precedence from persisted
+`CapacityProfile`/`CapacitySegment` rows when they exist. The route projects profile
+fields into legacy display fields via `projectCapacityProfileToLegacyAllocation`
+(`capacityProfileLegacyProjection.ts`), falling back to legacy fields when no profile
+exists. The CSV export includes **Capacity profile segments**, **Planning basis**,
+**Profile source**, **Default capacity %**, **Profile start**, and **Profile end**
+columns. Commercial calculations remain unchanged. Scheduler, leveller, Timeline,
+Squad Planner, and Commercial calculations are unchanged — they continue to read
+legacy allocation fields directly.
 See the [Resource Profile and Export Adoption](#resource-profile-and-export-adoption) section.
 
 ### Commercial
@@ -247,10 +250,10 @@ Billing basis: Bill actual scheduled days
 Billable days: 52.8
 ```
 
-### Current implementation (#341)
+### Pending implementation (PR #356, open)
 
-The CSV export in `useResourceProfileExport.ts` now implements the following columns
-that align with the design above:
+On merge, the CSV export in `useResourceProfileExport.ts` will implement the following
+columns, aligned with the design above:
 
 | Column | Source | Notes |
 |--------|--------|-------|
@@ -260,7 +263,7 @@ that align with the design above:
 | **Profile start / Profile end** | Profile `startWeek` / `endWeek` | Week labels |
 | **Capacity profile segments** | Profile segments via `formatCapacityProfileSegments` | `W1-W4 50%; W5-W10 100%` |
 | **Availability window start/end** | Profile window or legacy NR fields | Profile-first precedence |
-| **Assigned days / Billable days** | Legacy NR allocation fields | Unchanged by #341 |
+| **Assigned days / Billable days** | Legacy NR allocation fields | Unchanged by PR #356 |
 | **Billing basis** | NR `pricingModel` mapped to plain English | `Bill planned allocation` / `Bill actual scheduled days` |
 
 **Capacity vs assignment separation:** The `Capacity profile segments` column is
@@ -296,10 +299,10 @@ Billable days: based on reserved/planned capacity
 4. **Resource Counts cleanup** — address #311 and split simple capacity from detailed profile editing.
 5. **Export cleanup** — redesign Resource Profile export around plain-English handover sections.
 6. **First-class capacity profiles** — add segmented capacity profile model and editor.
-7. **Resource Profile and Export Adoption (#341)** — adopt profile-first reads in Resource
-   Profile route and export hook; add adapter, legacy projection helper, resolutionSource;
-   add Planning basis, Profile source, Default capacity %, Profile start/end CSV columns.
-8. **Squad Planner alignment** — make Squad Planner generate editable capacity profiles.
+7. **Resource Profile and Export Adoption (PR #356, pending merge)** — adopt profile-first
+   reads in Resource Profile route and export hook; add adapter, legacy projection helper,
+   resolutionSource; add Planning basis, Profile source, Default capacity %, Profile
+   start/end CSV columns.
 
 ## Open decisions
 
@@ -351,8 +354,14 @@ It produces a structured report with:
 
 ### Important notes
 
-- **Legacy fields remain authoritative** until a later runtime-adoption PR.
-- **No existing routes consume CapacityProfile** yet. This is additive only.
+- **Legacy fields remain authoritative** for scheduler, leveller, Timeline, Squad Planner,
+  and Commercial calculations. PR #355 established profile-first writes for ResourceType
+  and NamedResource write paths; legacy fields are compatibility projections for unmigrated
+  data.
+- **After PR #355**, write-path routes (`PUT/PATCH/DELETE` resource-types and
+  named-resources) use `syncCapacityProfilesForProject` to keep the additive read model
+  in sync. PR #356 (pending merge) extends read adoption to the Resource Profile route
+  and export hook.
 - **No schema or migration changes** are required for the backfill/reconciliation.
 - The backfill is idempotent — running it multiple times is safe.
 - The `--dry-run` flag currently implements reconcile-only mode. True dry-run (showing what would be written without writing) is deferred for a future PR if needed.
@@ -478,6 +487,11 @@ Tests use the real `syncCapacityProfilesForProject` helper (not mocked). See `se
 
 ## Resource Profile and Export Adoption
 
+> **Pending merge:** This section describes changes introduced by PR #356, which is
+> currently open and awaiting review (branch `feature/capacity-profile-resource-profile-reads`).
+> The adapter, route projection, client types, and CSV export changes described below
+> will become authoritative when PR #356 merges to `main`.
+
 ### Adapter
 
 `server/src/lib/capacityProfileResourceAdapter.ts` provides the adapter
@@ -580,7 +594,7 @@ format (e.g. `W1-W4 50%; W5-W10 100%`), structurally distinct from the existing
 - **Profile-first read precedence.** The adapter uses persisted `CapacityProfile`
   data directly when the owner-specific profile exists (`resolutionSource: 'PROFILE'`).
   No reconciliation gate is used — the old behaviour of falling back on mismatch
-  was replaced by direct persisted-profile usage in #341.
+  was replaced by direct persisted-profile usage (PR #356, pending merge).
 - **Legacy fallback.** When no persisted profile exists for an owner, data is derived
   from legacy `ResourceType`/`NamedResource` fields (`resolutionSource: 'LEGACY'`).
 - **Commercial calculations are unchanged.** The `capacityProfile` field is

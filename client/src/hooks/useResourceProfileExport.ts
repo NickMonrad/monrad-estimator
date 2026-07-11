@@ -1,6 +1,10 @@
 import { api } from '../lib/api'
 import type { ResourceProfile, Project } from '../types/backlog'
 import JSZip from 'jszip'
+import {
+  formatPlanningBasis as fmtPlanningBasis,
+  formatCapacityProfileSource as fmtCapSource,
+} from '../lib/capacityProfileFormatting'
 
 /**
  * CSV export helpers and handlers for the Resource Profile domain.
@@ -64,27 +68,19 @@ function formatCapacityProfileSegments(
     .join('; ')
 }
 
-/** Format planning basis as plain English. */
+/** Format a profile basis when available; otherwise map the legacy allocation mode. */
 function formatPlanningBasis(
-  capacityProfile: { planningBasis: string; resolutionSource: string } | undefined,
+  capacityProfile: NonNullable<ResourceProfile['resourceRows'][number]['capacityProfile']> | undefined,
   allocationMode: string,
 ): string {
-  if (!capacityProfile) {
-    // Legacy fallback
-    switch (allocationMode) {
-      case 'EFFORT': return 'Demand-following'
-      case 'TIMELINE': return 'Availability window'
-      case 'FULL_PROJECT': return 'Whole-project allocation'
-      case 'CAPACITY_PLAN': return 'Capacity profile'
-      default: return allocationMode
-    }
-  }
-  switch (capacityProfile.planningBasis) {
-    case 'demandFollowing': return 'Demand-following'
-    case 'availabilityWindow': return 'Availability window'
-    case 'wholeProjectAllocation': return 'Whole-project allocation'
-    case 'capacityProfile': return 'Capacity profile'
-    default: return capacityProfile.planningBasis
+  if (capacityProfile) return fmtPlanningBasis(capacityProfile.planningBasis)
+  // Legacy fallback — map allocationMode to display label
+  switch (allocationMode) {
+    case 'EFFORT': return 'Demand-following'
+    case 'TIMELINE': return 'Availability window'
+    case 'FULL_PROJECT': return 'Whole-project allocation'
+    case 'CAPACITY_PLAN': return 'Capacity profile'
+    default: return allocationMode
   }
 }
 
@@ -107,12 +103,12 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
         const capProfile = nr.capacityProfile
         const profileStart = capProfile?.startWeek != null ? formatWeekLabel(capProfile.startWeek) : ''
         const profileEnd = capProfile?.endWeek != null ? formatWeekLabel(capProfile.endWeek) : ''
-        // Use profile window for availability window when available
-        const availStart = capProfile?.startWeek != null
-          ? formatWeekLabel(capProfile.startWeek)
+        // A resolved profile owns its window even when the authoritative value is null.
+        const availStart = capProfile
+          ? (capProfile.startWeek != null ? formatWeekLabel(capProfile.startWeek) : '')
           : (nr.startWeek != null ? formatWeekLabel(nr.startWeek) : '')
-        const availEnd = capProfile?.endWeek != null
-          ? formatWeekLabel(capProfile.endWeek)
+        const availEnd = capProfile
+          ? (capProfile.endWeek != null ? formatWeekLabel(capProfile.endWeek) : '')
           : (nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '')
         rows.push([
           'Resource', row.name, nr.name, nr.synthetic ? 'Planned resource' : 'Named person',
@@ -121,7 +117,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
           row.dayRate != null ? String(row.dayRate) : '',
           row.dayRate != null ? (nr.actualAllocatedDays * row.dayRate).toFixed(2) : '',
           formatPlanningBasis(capProfile, nr.allocationMode),
-          capProfile?.source ?? '',
+          capProfile?.source ? fmtCapSource(capProfile.source) : '',
           capProfile?.defaultPercent != null ? String(capProfile.defaultPercent) : '',
           profileStart,
           profileEnd,
@@ -148,7 +144,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       row.dayRate != null ? String(row.dayRate) : '',
       row.dayRate != null && row.totalDays != null ? (row.totalDays * row.dayRate).toFixed(2) : '',
       formatPlanningBasis(capProfile, row.allocationMode),
-      capProfile?.source ?? '',
+      capProfile?.source ? fmtCapSource(capProfile.source) : '',
       capProfile?.defaultPercent != null ? String(capProfile.defaultPercent) : '',
       profileStart,
       profileEnd,

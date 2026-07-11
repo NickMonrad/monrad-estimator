@@ -1,3 +1,22 @@
+// ─── Capacity Profile type unions (mirrors server CapacityProfileMapping) ──
+
+export type CapacityProfilePlanningBasis =
+  | 'demandFollowing'
+  | 'availabilityWindow'
+  | 'wholeProjectAllocation'
+  | 'capacityProfile'
+
+export type CapacityProfileSource =
+  | 'fixed'
+  | 'manual'
+  | 'availabilityWindow'
+  | 'squadPlanner'
+  | 'imported'
+  | 'derived'
+  | 'legacy'
+
+export type CapacityProfileResolutionSource = 'PROFILE' | 'LEGACY' | 'ACTIVE_CAPACITY_PLAN'
+
 export interface GlobalResourceType {
   id: string
   name: string
@@ -299,23 +318,23 @@ export interface ResourceProfileRow {
     }>
     synthetic: boolean
     capacityProfile?: {
-      planningBasis: string
-      source: string
+      planningBasis: CapacityProfilePlanningBasis
+      source: CapacityProfileSource
       defaultPercent: number | null
       startWeek: number | null
       endWeek: number | null
       segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
-      resolutionSource: string
+      resolutionSource: CapacityProfileResolutionSource
     }
   }>
   capacityProfile?: {
-    planningBasis: string
-    source: string
+    planningBasis: CapacityProfilePlanningBasis
+    source: CapacityProfileSource
     defaultPercent: number | null
     startWeek: number | null
     endWeek: number | null
     segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
-    resolutionSource: string
+    resolutionSource: CapacityProfileResolutionSource
   }
 }
 

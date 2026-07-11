@@ -149,7 +149,7 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     // 19=Assigned start, 20=Assigned end, 21=Capacity profile segments, 22=Assignment segments,
     // 23=Assigned weeks, 24=Billing basis, 25=Handover notes
     expect(row[12]).toBe('Availability window')  // Planning basis
-    expect(row[13]).toBe('fixed')                 // Profile source
+    expect(row[13]).toBe('Fixed')                 // Profile source
     expect(row[14]).toBe('100')                   // Default capacity %
     expect(row[15]).toBe('W3')                    // Profile start (0-indexed → W3)
     expect(row[16]).toBe('W10')                   // Profile end (0-indexed → W10)
@@ -197,6 +197,81 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     expect(row[15]).toBe('')                      // Profile start empty
     expect(row[16]).toBe('')                      // Profile end empty
     // Availability window columns empty for role-level (no startWeek/endWeek on row directly)
+    expect(row[17]).toBe('')
+    expect(row[18]).toBe('')
+  })
+
+  it('authoritative no-window profile produces empty profile and availability-window CSV fields despite stale legacy windows', () => {
+    const profile = makeProfile({
+      resourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 800,
+          totalHours: 80,
+          totalDays: 10,
+          effortDays: 10,
+          allocatedDays: 10,
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationStartWeek: 2,
+          allocationEndWeek: 9,
+          derivedStartWeek: 0,
+          derivedEndWeek: 10,
+          estimatedCost: null,
+          epics: [],
+          namedResources: [
+            {
+              id: 'nr-dev',
+              name: 'Dev',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: 2,
+              allocationEndWeek: 9,
+              startWeek: 2,
+              endWeek: 9,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              capacityProfile: {
+                planningBasis: 'demandFollowing',
+                source: 'squadPlanner',
+                defaultPercent: null,
+                startWeek: null,
+                endWeek: null,
+                segments: [],
+                resolutionSource: 'PROFILE',
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    const csv = buildProfileCsv(profile)
+    const { rows } = parseCsv(csv)
+
+    expect(rows.length).toBe(1)
+    const row = rows[0]
+    // Planning basis from profile
+    expect(row[12]).toBe('Demand-following')
+    // Profile source from profile (formatted)
+    expect(row[13]).toBe('Squad Planner')
+    // Default capacity % is null in profile
+    expect(row[14]).toBe('')
+    // Profile start/end are null → empty
+    expect(row[15]).toBe('')
+    expect(row[16]).toBe('')
+    // Availability window columns empty — profile has no window, legacy fields ignored
     expect(row[17]).toBe('')
     expect(row[18]).toBe('')
   })

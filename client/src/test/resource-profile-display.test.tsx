@@ -116,8 +116,14 @@ describe('Capacity Profile Display', () => {
 
     // Badge should show 'Demand-following' from profile, not 'Availability window' from stale allocationMode
     expect(screen.getByText(/Demand-following/i)).toBeInTheDocument()
-    // Source tag should indicate Squad Planner
+    // Button title is the stable action label
+    const button = screen.getByTitle('Click to edit allocation')
+    expect(button).toBeInTheDocument()
+    // Source tag should indicate Squad Planner (formatted via shared helper)
     expect(screen.getByText('Squad Planner')).toBeInTheDocument()
+    // SR-only metadata present with formatted source and resolution
+    expect(screen.getByText(/Profile source:/)).toBeInTheDocument()
+    expect(screen.getByText(/Resolution source:/)).toBeInTheDocument()
   })
 
   it('renders profile source tag when resolutionSource is PROFILE', () => {
@@ -151,11 +157,16 @@ describe('Capacity Profile Display', () => {
       />,
     )
 
-    // The source tag badge shows 'Squad Planner'
+    // The source tag badge shows 'Squad Planner' (formatted via shared helper)
     expect(screen.getByText('Squad Planner')).toBeInTheDocument()
-    // The resolution source tooltip is on the tag
-    const sourceTag = screen.getByTitle('Resolution source: PROFILE')
-    expect(sourceTag).toBeInTheDocument()
+    // The source tag uses aria-describedby for screen-reader metadata
+    const sourceTag = screen.getByText('Squad Planner')
+    expect(sourceTag).toHaveAttribute('aria-describedby')
+    expect(sourceTag.closest('span')).toHaveClass('uppercase')
+    // SR-only span contains formatted resolution source
+    expect(screen.getByText(/Resolution source: Profile/)).toBeInTheDocument()
+    // Button has stable title
+    expect(screen.getByTitle('Click to edit allocation')).toBeInTheDocument()
   })
 
   it('renders capacity segments correctly', () => {

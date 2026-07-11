@@ -2255,10 +2255,9 @@ describe('profile-first read adoption integration', () => {
       // Profile-first display fields: demandFollowing → EFFORT, 70%
       expect(row.allocationMode).toBe('EFFORT')
       expect(row.allocationPercent).toBe(70)
-      // Profile projection returns null for window, but route falls through to legacy RT fields (0, 8)
-      // because ?? treats null as "not set"
-      expect(row.allocationStartWeek).toBe(0)
-      expect(row.allocationEndWeek).toBe(8)
+      // Profile projection returns null for window, route now respects profile null as authoritative
+      expect(row.allocationStartWeek).toBeNull()
+      expect(row.allocationEndWeek).toBeNull()
 
       // Capacity profile enrichment
       expect(row.capacityProfile).toBeDefined()
@@ -2723,9 +2722,9 @@ describe('profile-first read adoption integration', () => {
 
       const row = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
       expect(row).toBeDefined()
-      // RT has named resources, so the adapter creates per-NR legacy entries
-      // (no role-level entry in the map) → row.capacityProfile is undefined
-      expect(row.capacityProfile).toBeUndefined()
+      // RT with named resources now also gets a role-level legacy entry (independent enumeration)
+      expect(row.capacityProfile).toBeDefined()
+      expect(row.capacityProfile.resolutionSource).toBe('LEGACY')
 
       // Display fields come from legacy RT fields
       expect(row.allocationMode).toBe('TIMELINE')
