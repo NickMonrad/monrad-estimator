@@ -89,6 +89,13 @@ export interface SyncResult {
 export interface SyncOptions {
   /** Named resource IDs whose capacity profiles should not be overwritten by the legacy-derived sync. */
   preserveNamedResourceIds?: string[]
+  /** ResourceType (role) IDs whose capacity profiles should not be overwritten by the legacy-derived sync. */
+  preserveResourceTypeIds?: string[]
+  /**
+   * Restrict the sync to only profiles for this ResourceType and its named resources.
+   * When set, profiles for all other ResourceTypes are never created, updated, or deleted.
+   */
+  scopeResourceTypeId?: string
 }
 
 // ─── Validation ────────────────────────────────────────────────────────────
@@ -208,14 +215,32 @@ export async function syncCapacityProfilesForProject(
     )
   }
 
-  // 4. Derive expected capacity profile DTOs using the existing mapper
-  const expectedProfiles = mapProjectToCapacityProfiles({
+  // 4a. Derive expected capacity profile DTOs using the existing mapper
+  let expectedProfiles = mapProjectToCapacityProfiles({
     projectId: project.id,
     resourceTypes:
       project.resourceTypes as unknown as CapacityProfileResourceTypeLike[],
     namedResourcesByResourceTypeId,
     capacityPlanSlotsByResourceTypeId,
   })
+
+  // 4b. Scope filtering — when scopeResourceTypeId is set, keep only profiles
+  // for that ResourceType and its named resources. This guarantees profiles
+  // for other RTs are never created, updated, or deleted.
+  const scopeRT = options?.scopeResourceTypeId
+  const scopeNRIds = new Set<string>()
+  if (scopeRT) {
+    const scopedRT = project.resourceTypes.find((rt: { id: string; namedResources?: { id: string }[] }) => rt.id === scopeRT)
+    if (scopedRT?.namedResources) {
+      for (const nr of scopedRT.namedResources) {
+        scopeNRIds.add(nr.id)
+      }
+    }
+    expectedProfiles = expectedProfiles.filter((p: { owner: { kind: string; id: string } }) => {
+      if (p.owner.kind === 'role') return p.owner.id === scopeRT
+      return scopeNRIds.has(p.owner.id)
+    })
+  }
 
   // 5. Fetch existing persisted profiles for this project
   const existingPersistedProfiles = await (
@@ -225,9 +250,19 @@ export async function syncCapacityProfilesForProject(
     include: { segments: true },
   })
 
-  // Build lookup map of persisted profiles by owner key
+  // 5b. Scope filtering for persisted profiles
+  let scopedPersistedProfiles = existingPersistedProfiles
+  if (scopeRT) {
+    scopedPersistedProfiles = existingPersistedProfiles.filter((pp: { resourceTypeId: string | null; namedResourceId: string | null }) => {
+      if (pp.resourceTypeId === scopeRT && pp.namedResourceId === null) return true
+      if (pp.namedResourceId && scopeNRIds.has(pp.namedResourceId)) return true
+      return false
+    })
+  }
+
+  // Build lookup map of persisted profiles by owner key (scoped)
   const persistedByKey = new Map<string, any>()
-  for (const pp of existingPersistedProfiles) {
+  for (const pp of scopedPersistedProfiles) {
     const ownerKind = prismaOwnerKindToDtoKind(pp.ownerKind)
     const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
     const key = `${projectId}::${ownerKind}::${ownerId}`
@@ -236,11 +271,14 @@ export async function syncCapacityProfilesForProject(
     }
   }
 
-  // Remove preserved NR profiles from persistedByKey so sync won't touch them
+
+  // Remove preserved NR/RT profiles from persistedByKey so sync won't touch them
   const preserveIds = new Set(options?.preserveNamedResourceIds ?? [])
-  if (preserveIds.size > 0) {
+  const preserveRTIds = new Set(options?.preserveResourceTypeIds ?? [])
+  if (preserveIds.size > 0 || preserveRTIds.size > 0) {
     for (const [key, pp] of persistedByKey) {
-      if (pp.namedResourceId && preserveIds.has(pp.namedResourceId)) {
+      if ((pp.namedResourceId && preserveIds.has(pp.namedResourceId)) ||
+          (pp.resourceTypeId && preserveRTIds.has(pp.resourceTypeId) && pp.ownerKind === 'ROLE')) {
         persistedByKey.delete(key)
       }
     }
@@ -250,10 +288,18 @@ export async function syncCapacityProfilesForProject(
   for (const profile of expectedProfiles) {
     validateOwner(profile)
     // Skip expected profiles for NRs preserved by profile-first writes
-    if (profile.owner.kind !== 'role' && preserveIds.has(profile.owner.id)) {
-      const skipKey = `${project.id}::${profile.owner.kind}::${profile.owner.id}`
-      persistedByKey.delete(skipKey)
-      continue
+    if (profile.owner.kind === 'role') {
+      if (preserveRTIds.has(profile.owner.id)) {
+        const skipKey = `${project.id}::${profile.owner.kind}::${profile.owner.id}`
+        persistedByKey.delete(skipKey)
+        continue
+      }
+    } else {
+      if (preserveIds.has(profile.owner.id)) {
+        const skipKey = `${project.id}::${profile.owner.kind}::${profile.owner.id}`
+        persistedByKey.delete(skipKey)
+        continue
+      }
     }
 
     const key = `${project.id}::${profile.owner.kind}::${profile.owner.id}`
@@ -348,12 +394,37 @@ export async function syncCapacityProfilesForProject(
     },
   })
 
-  const filterPreserved = (p: any) =>
-    preserveIds.size === 0 || !('namedResourceId' in p) || !p.namedResourceId || !preserveIds.has(p.namedResourceId)
+  // Scope filtering for verification
+  let afterSyncScoped = afterSyncPersisted
+  if (scopeRT) {
+    afterSyncScoped = afterSyncPersisted.filter((pp: { resourceTypeId: string | null; namedResourceId: string | null }) => {
+      if (pp.resourceTypeId === scopeRT && pp.namedResourceId === null) return true
+      if (pp.namedResourceId && scopeNRIds.has(pp.namedResourceId)) return true
+      return false
+    })
+  }
+
+  const filterPreserved = (p: any) => {
+    if (preserveRTIds.size > 0 && p.resourceTypeId && p.ownerKind === 'ROLE' && preserveRTIds.has(p.resourceTypeId)) {
+      return false
+    }
+    if (preserveIds.size > 0 && p.namedResourceId && preserveIds.has(p.namedResourceId)) {
+      return false
+    }
+    return true
+  }
   const filteredExpected = expectedProfiles.filter(
-    (p: any) => preserveIds.size === 0 || p.owner.kind === 'role' || !preserveIds.has(p.owner.id),
+    (p: any) => {
+      if (preserveRTIds.size > 0 && p.owner.kind === 'role' && preserveRTIds.has(p.owner.id)) {
+        return false
+      }
+      if (preserveIds.size > 0 && p.owner.kind !== 'role' && preserveIds.has(p.owner.id)) {
+        return false
+      }
+      return true
+    },
   )
-  const filteredPersisted = afterSyncPersisted.filter(filterPreserved)
+  const filteredPersisted = afterSyncScoped.filter(filterPreserved)
 
   const comparison = compareCapacityProfiles(
     projectId,

@@ -30,6 +30,31 @@ async function performCapacityPlanExit(db: CapacityPlanExitClient, resourceTypeI
   })
 }
 
+/**
+ * Exit a ResourceType from CAPACITY_PLAN mode without modifying named resources.
+ *
+ * Unlike `exitCapacityPlanForManualScheduling`, this only updates the role-level
+ * fields — the caller is responsible for updating per-NR fields based on
+ * classification. Use this in the PUT route where NR semantics must be
+ * determined before any NR mutation.
+ *
+ * @see exitCapacityPlanForManualScheduling for the original blanket-NR version.
+ */
+export async function exitCapacityPlanRoleOnly(
+  resourceTypeId: string,
+  db: any,
+) {
+  await db.resourceType.update({
+    where: { id: resourceTypeId },
+    data: {
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    },
+  })
+}
+
 export async function exitCapacityPlanForManualScheduling(
   resourceTypeId: string,
   db?: CapacityPlanExitClient,
