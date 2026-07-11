@@ -3114,6 +3114,38 @@ describe('profile-first read adoption integration', () => {
       const nr = r.namedResources as Array<Record<string, unknown>>
       expect(nr).toHaveLength(1)
       expect(nr[0].allocatedDays).toBe(40)
+
+      // Gap assertions for discontinuous capacity
+      const nrr = nr as Array<Record<string, unknown>>
+      // actualAllocatedWeeks should NOT contain the gap weeks (4,5,6,7)
+      const gapWeeks = [4, 5, 6, 7]
+      const allocWeeks = (nrr[0].actualAllocatedWeeks as Array<{week: number; days: number; capacityDays: number}>)
+      if (allocWeeks) {
+        for (const gw of gapWeeks) {
+          const found = allocWeeks.find((aw: {week: number}) => aw.week === gw)
+          if (found) {
+            expect(found.days).toBe(0)
+            expect(found.capacityDays).toBe(0)
+          } else {
+            expect(allocWeeks.map((aw: {week: number}) => aw.week)).not.toContain(gw)
+          }
+        }
+
+        // actualAllocationSegments should be two separated ranges
+        const allocSegs = nrr[0].actualAllocationSegments as Array<{startWeek: number; endWeek: number; days: number}>
+        if (allocSegs) {
+          expect(allocSegs).toHaveLength(2)
+          expect(allocSegs[0].endWeek).toBeLessThan(4)  // first segment ends before gap
+          expect(allocSegs[1].startWeek).toBeGreaterThanOrEqual(8)  // second segment starts after gap
+        }
+
+        // actualAllocatedDays should not count gap
+        expect(nrr[0].actualAllocatedDays).toBe(26.4)
+
+        // actualAllocationStartWeek/EndWeek should not include gap
+        expect(nrr[0].actualAllocationStartWeek).toBeLessThan(4)
+        expect(nrr[0].actualAllocationEndWeek).toBeGreaterThanOrEqual(8)
+      }
     })
 
     // ─── Fixture 4: 1.5 FTE for 8 weeks (2 trajectories) ──────────────────

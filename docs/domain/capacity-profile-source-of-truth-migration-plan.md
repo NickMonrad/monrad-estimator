@@ -78,8 +78,7 @@ This means:
 | Table | Field | Reason |
 |-------|-------|--------|
 | `ResourceType` | `count` | Role metadata. Affects phantom slot count (`count - namedResources.length`) in scheduler. Stays role-level metadata. |
-| `NamedResource` | `synthetic` | Flags planned resource vs named person. Maps to `ownerKind` in capacity profile. Independent identity metadata. |
-| `NamedResource` | `pricingModel` | Commercial / billing basis. **Not** capacity-profile data. |
+| `NamedResource` (runtime) | `synthetic` | Runtime-computed property (not a Prisma column) flagging planned resource vs named person. Maps to `ownerKind` in capacity profile. Independent identity metadata derived from NR generation context. |
 
 ### Key risks
 
@@ -171,9 +170,18 @@ is a requirement.
 > - **Duplicate owner keys fall through:** If a duplicate owner key appears in the
 >   profile map (defensive guard), the adapter treats it as absent and falls through
 >   to the next precedence tier rather than throwing or blocking.
-> - **Unchanged consumers:** Scheduler, leveller, Timeline, Squad Planner, and
->   Commercial calculations continue reading legacy fields directly — they are not
->   affected by this read-side adoption.
+> - **Persisted profile adoption scope:** The adapter's profile-first resolution
+>   (`PROFILE`) enriches Resource Profile display and export. Separately, the
+>   pre-existing active Capacity Plan fallback (`ACTIVE_CAPACITY_PLAN`) uses
+>   segment-aware trajectory capacity for named-resource assignment and
+>   planned-capacity totals in `namedResourceAssignments.ts` and
+>   `projectPlanningModel.ts` — these paths are independent of PR #356's adapter.
+> - **Algorithms unchanged:** Scheduler and leveller algorithms are not redesigned
+>   by PR #356; the capacity plan materialisation that feeds assignment trajectories
+>   pre-existed this change. Scheduler, leveller, Timeline, and Squad Planner
+>   calculations continue reading legacy allocation fields directly via their
+>   existing paths. Commercial billing formulas, billable days, discounts, tax,
+>   and totals remain unaffected.
 >
 ### Phase 2 — Compatibility projection helpers 🚧 (PR #356 open, pending merge)
 
@@ -299,11 +307,10 @@ Tracked separately by #342.
 5. Remove `capacityProfileResourceAdapter.ts` fallback — no longer needed.
 6. Remove `mapProjectToCapacityProfiles` — no longer needed.
 7. Archive `capacityProfileMapping.ts`.
-
 #### Non-goals for cleanup
 
 - Do not remove `ResourceType.count` — role metadata, not profile data.
-- Do not remove `NamedResource.synthetic` — maps to `ownerKind`, independent identity metadata.
+- Do not remove the runtime `synthetic` property — maps to `ownerKind`, independent identity metadata derived from NR generation context. It is not a Prisma schema column.
 - Do not remove `NamedResource.pricingModel` — Commercial metadata, not profile data.
 
 ## Regression matrix

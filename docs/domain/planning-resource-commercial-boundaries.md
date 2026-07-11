@@ -113,10 +113,16 @@ from the persisted `CapacityProfile`/`CapacitySegment` read model. The adapter i
    `NamedResource` fields with `resolutionSource: 'LEGACY'`. This is owner-specific
    legacy state only, never contaminated by capacity plan materialisation.
 
-**Commercial calculations remain unchanged.** The profile data enriches display and export
-output only. Billing formulas, billable days, discounts, tax, and totals use the same
-inputs as before. Scheduler, leveller, Timeline, Squad Planner, and Commercial
-calculations are all unchanged — they continue to read legacy allocation fields directly.
+**Commercial calculations remain unchanged.** Billing formulas, billable days,
+discounts, tax, and totals use the same inputs as before. The adapter's
+profile-first resolution enriches Resource Profile display and export from
+persisted `CapacityProfile`/`CapacitySegment` data. Separately, the pre-existing
+active Capacity Plan fallback (not introduced by PR #356) uses segment-aware
+trajectory capacity for named-resource assignment and planned-capacity totals in
+`namedResourceAssignments.ts` and `projectPlanningModel.ts`; this pre-dates and is
+independent of PR #356's adapter. Scheduler and leveller algorithms themselves are not
+redesigned by PR #356. Active-plan weekly capacity remains mathematically equivalent
+to existing plan headcount.
 
 **Role aggregate vs per-resource profiles:** Role-level (`ResourceType`) profiles
 represent aggregate capacity across all resources of that type. Each individual

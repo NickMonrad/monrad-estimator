@@ -15,20 +15,18 @@ import {
   mapPersistedProfilesToDTOs,
 } from './capacityProfileMapping.js'
 import {
-  materializeCapacityPlanResources,
   shouldFallbackToActiveCapacityPlan,
+  materializeCapacityPlanResources,
   materializePerResourceSlots,
   computeDefaultPercentForSegments,
+  materializeRoleCapacitySegments,
 } from './capacityPlanMaterialisation.js'
-import type {
-  CapacityPlanResourceTrajectory,
-} from './capacityPlanMaterialisation.js'
+import type { CapacityPlanResourceTrajectory } from './capacityPlanMaterialisation.js'
 import type {
   CapacityProfileResourceTypeLike,
   CapacityProfileNamedResourceLike,
   CapacityPlanSlotInput,
 } from './capacityProfileMapping.js'
-
 // ─── Public types ────────────────────────────────────────────────────────────
 
 export type CapacityProfileResolutionSource = 'PROFILE' | 'LEGACY' | 'ACTIVE_CAPACITY_PLAN'
@@ -191,6 +189,7 @@ function classifyProfiles(
   const first = sorted[0]
 
   const allExact = sorted.every(p =>
+    p.ownerKind === first.ownerKind &&
     p.planningBasis === first.planningBasis &&
     p.source === first.source &&
     p.defaultPercent === first.defaultPercent &&
@@ -212,24 +211,20 @@ function classifyProfiles(
 
 /** Convert a materialized capacity plan resource to ACTIVE_CAPACITY_PLAN profile data (role-level aggregate). */
 function materializedToActivePlanProfile(
-  materialized: { slotWindows: CapacityPlanSlotInput[]; resourceTrajectories: CapacityPlanResourceTrajectory[] },
+  materialized: { slotWindows: CapacityPlanSlotInput[]; resourceTrajectories: CapacityPlanResourceTrajectory[]; weeklyHeadcount: Map<number, number> },
 ): CapacityProfileResourceData {
-  const slotWindows = materialized.slotWindows
-  const trajectories = materialized.resourceTrajectories
-  const defaultPercent =
-    trajectories.length === 1 && trajectories[0].segments.length > 0
-      ? computeDefaultPercentForSegments(trajectories[0].segments)
-      : null
+  const segments = materializeRoleCapacitySegments(materialized.weeklyHeadcount)
+  const defaultPercent = computeDefaultPercentForSegments(segments)
   return {
     planningBasis: 'capacityProfile',
     source: 'squadPlanner',
     defaultPercent,
-    startWeek: null,
-    endWeek: null,
-    segments: slotWindows.map(w => ({
-      startWeek: w.startWeek,
-      endWeek: w.endWeek,
-      capacityPercent: w.allocationPercent,
+    startWeek: segments.length > 0 ? segments[0].startWeek : null,
+    endWeek: segments.length > 0 ? segments[segments.length - 1].endWeek : null,
+    segments: segments.map(s => ({
+      startWeek: s.startWeek,
+      endWeek: s.endWeek,
+      capacityPercent: s.allocationPercent,
     })),
     resolutionSource: 'ACTIVE_CAPACITY_PLAN',
   }
@@ -448,6 +443,7 @@ export function buildResourceCapacityProfileMap(
         roleProfiles.set(rt.id, materializedToActivePlanProfile({
           slotWindows: materialized.slotWindows,
           resourceTrajectories: materialized.resourceTrajectories,
+          weeklyHeadcount: materialized.weeklyHeadcount,
         }))
       }
 

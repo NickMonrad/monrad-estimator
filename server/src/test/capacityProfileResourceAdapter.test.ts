@@ -520,10 +520,13 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(roleData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
     expect(roleData.planningBasis).toBe('capacityProfile')
     expect(roleData.source).toBe('squadPlanner')
-    // Role gets aggregate: both slot windows
+    // Role gets non-overlapping aggregate role capacity: 1.0 FTE (100%) then 0.5 FTE (50%)
     expect(roleData.segments).toHaveLength(2)
-    expect(roleData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 50 })
-    expect(roleData.segments[1]).toMatchObject({ startWeek: 0, endWeek: 7, capacityPercent: 50 })
+    expect(roleData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 100 })
+    expect(roleData.segments[1]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 50 })
+    expect(roleData.defaultPercent).toBeNull()
+    expect(roleData.startWeek).toBe(0)
+    expect(roleData.endWeek).toBe(7)
     // Existing NR gets its trajectory segments (capacity changes from 100% to 50% at week 4)
     const nrData = result.namedResourceProfiles.get(nrId)!
     expect(nrData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
@@ -858,6 +861,211 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(nrData.resolutionSource).toBe('LEGACY')
     // Legacy has demandFollowing from EFFORT mode
     expect(nrData.planningBasis).toBe('demandFollowing')
+  })
+
+  // ─── Owner kind mismatch handling ────────────────────────────────────
+
+  function makeOwnerKindProject(nrId: string, profiles: Record<string, unknown>[]) {
+    return makeProject({
+      resourceTypes: [
+        makeResourceType({
+          id: 'rt-1',
+          name: 'Engineer',
+          namedResources: [
+            makeNamedResource({
+              id: nrId,
+              name: 'OwnerKind NR',
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+            }),
+          ],
+        }),
+      ],
+      capacityProfiles: profiles,
+    })
+  }
+
+  it('ownerKind mismatch between duplicate profiles produces CONFLICT — order A then B', () => {
+    const nrId = 'nr-ok-mismatch'
+    const project = makeOwnerKindProject(nrId, [
+      {
+        id: 'cp-a',
+        ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'MANUAL',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 4,
+        segments: [],
+      },
+      {
+        id: 'cp-b',
+        ownerKind: 'PLANNED_RESOURCE',
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'MANUAL',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 4,
+        segments: [],
+      },
+    ])
+
+    const result = buildResourceCapacityProfileMap(project)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
+    const nrData = result.namedResourceProfiles.get(nrId)!
+    expect(nrData.resolutionSource).toBe('LEGACY')
+    expect(nrData.resourceIdentity).toBe('NAMED_PERSON')
+  })
+
+  it('ownerKind mismatch between duplicate profiles produces CONFLICT — reverse order B then A', () => {
+    const nrId = 'nr-ok-mismatch-rev'
+    const project = makeOwnerKindProject(nrId, [
+      {
+        id: 'cp-b',
+        ownerKind: 'PLANNED_RESOURCE',
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'MANUAL',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 4,
+        segments: [],
+      },
+      {
+        id: 'cp-a',
+        ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'MANUAL',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 4,
+        segments: [],
+      },
+    ])
+
+    const result = buildResourceCapacityProfileMap(project)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
+    const nrData = result.namedResourceProfiles.get(nrId)!
+    expect(nrData.resolutionSource).toBe('LEGACY')
+    expect(nrData.resourceIdentity).toBe('NAMED_PERSON')
+  })
+
+  it('identical duplicates with same ownerKind resolve deterministically (smallest ID wins)', () => {
+    const nrId = 'nr-dup-same-kind'
+    const project = makeProject({
+      resourceTypes: [
+        makeResourceType({
+          id: 'rt-1',
+          name: 'Engineer',
+          namedResources: [
+            makeNamedResource({
+              id: nrId,
+              name: 'Same Kind NR',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              startWeek: 0,
+              endWeek: 4,
+            }),
+          ],
+        }),
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-b',  // larger ID — should lose
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: nrId,
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'MANUAL',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 4,
+          segments: [],
+        },
+        {
+          id: 'cp-a',  // smaller ID — wins
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: nrId,
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'MANUAL',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 4,
+          segments: [],
+        },
+      ],
+    })
+
+    const result = buildResourceCapacityProfileMap(project)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
+    const nrData = result.namedResourceProfiles.get(nrId)!
+    expect(nrData.resolutionSource).toBe('PROFILE')
+    expect(nrData.resourceIdentity).toBe('NAMED_PERSON')
+    // cp-a wins (smaller ID)
+  })
+
+  it('identical duplicates with same ownerKind PLANNED_RESOURCE resolve deterministically', () => {
+    const nrId = 'nr-dup-planned'
+    const project = makeProject({
+      resourceTypes: [
+        makeResourceType({
+          id: 'rt-1',
+          name: 'Engineer',
+          namedResources: [
+            makeNamedResource({
+              id: nrId,
+              name: 'Planned NR',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              startWeek: 0,
+              endWeek: 4,
+              synthetic: true,
+            }),
+          ],
+        }),
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-y',  // larger ID — should lose
+          ownerKind: 'PLANNED_RESOURCE',
+          resourceTypeId: null,
+          namedResourceId: nrId,
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'MANUAL',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 4,
+          segments: [],
+        },
+        {
+          id: 'cp-a',  // smaller ID — wins
+          ownerKind: 'PLANNED_RESOURCE',
+          resourceTypeId: null,
+          namedResourceId: nrId,
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'MANUAL',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 4,
+          segments: [],
+        },
+      ],
+    })
+
+    const result = buildResourceCapacityProfileMap(project)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
+    const nrData = result.namedResourceProfiles.get(nrId)!
+    expect(nrData.resolutionSource).toBe('PROFILE')
+    expect(nrData.resourceIdentity).toBe('PLANNED_RESOURCE')
+    // cp-a wins (smaller ID)
   })
 
   // ─── Key collision detection ──────────────────────────────────────────

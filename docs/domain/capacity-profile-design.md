@@ -72,6 +72,22 @@ A resource row should say whether it represents:
 - **Planned resource** — a placeholder resource not yet mapped to a real person.
 - **Role-level capacity** — capacity is planned at the role level only.
 
+**Identity derivation at the API boundary:**
+
+The client-facing `resourceIdentity` field on a resource row is derived from the resolved
+profile owner kind or the generated-resource state:
+- **Persisted profile with `ownerKind: PLANNED_RESOURCE`** → `resourceIdentity: 'PLANNED_RESOURCE'`  
+  The Prisma `NamedResource` model has no persisted `synthetic` column; `synthetic` is a
+  runtime-computed property. Planned-resource identity comes from the capacity profile's
+  `ownerKind` field.
+- **Persisted profile with `ownerKind: NAMED_PERSON`** → `resourceIdentity: 'NAMED_PERSON'`
+- **Legacy-derived entry** → `resourceIdentity` is derived from the runtime `synthetic`
+  property (`resourceIdentity: 'PLANNED_RESOURCE'` when `synthetic === true`,
+  `'NAMED_PERSON'` otherwise).
+- **`ACTIVE_CAPACITY_PLAN` generated slots** → the slot's `resourceIdentity` is not
+  explicitly set by the adapter; consumer code may infer it from generated-resource state
+  (deterministic generated identity).
+
 ### Capacity profile
 
 A capacity profile describes availability over time.
@@ -200,11 +216,16 @@ Use plain labels such as **Capacity profile**, **Reserved capacity**, **Assigned
 **Current implementation status (PR #356, pending merge):** Resource Profile and CSV
 reads resolve each owner in this order: a valid persisted
 `CapacityProfile`/`CapacitySegment`; active Capacity Plan slot materialisation only when
-`shouldFallbackToActiveCapacityPlan` requires it; then pure legacy fields. The route
-projects the resolved profile into legacy display fields via
+`shouldFallbackToActiveCapacityPlan` requires it; then pure legacy fields.
+Persisted profile adoption drives display and export from `CapacityProfile`/`CapacitySegment`
+data. Separately, the pre-existing active Capacity Plan fallback in
+`namedResourceAssignments.ts` uses segment-aware trajectory capacity for named-resource
+assignment and planned-capacity totals; `projectPlanningModel.ts` uses it for
+capacity-demand calculation. Active-plan weekly capacity remains mathematically equivalent
+to existing plan headcount. Scheduler and leveller algorithms are not redesigned by PR #356.
+The route projects the resolved profile into legacy display fields via
 `projectCapacityProfileToLegacyAllocation` (`capacityProfileLegacyProjection.ts`).
-Generated active-plan slots are presentation-only; Commercial calculations, scheduler,
-leveller, Timeline, and Squad Planner behavior remain unchanged.
+Commercial billing formulas, billable days, discounts, tax, and totals remain unchanged.
 See the [Resource Profile and Export Adoption](#resource-profile-and-export-adoption) section.
 
 ### Commercial
@@ -481,7 +502,7 @@ Runtime persisted DTO integration tests now cover:
 - Legacy fallback — endpoint returns legacy-derived DTOs on reconciliation mismatch
 - Repair cycle — write after corruption restores persisted path
 
-Tests use the real `syncCapacityProfilesForProject` helper (not mocked). See `server/src/test/capacityProfilePersistedDtoIntegration.test.ts` (8 tests).
+Tests use the real `syncCapacityProfilesForProject` helper (not mocked). See `server/src/test/capacityProfilePersistedDtoIntegration.test.ts` (58 tests).
 
 ## Resource Profile and Export Adoption
 
@@ -625,9 +646,25 @@ format (e.g. `W1-W4 50%; W5-W10 100%`), structurally distinct from the existing
   profile describing that specific resource's capacity. These are not interchangeable:
   a role profile with `count: 3` has different semantics than three individual
   per-resource profiles.
-- **Commercial calculations are unchanged.** The `capacityProfile` field is
-  presentation-only in Resource Profile; Commercial billing formulas, billable
-  days, discounts, tax, and totals are unaffected.
+- Slot layers (the per-resource trajectories produced by
+  `materializePerResourceSlots`) are not exposed as generic role
+  `CapacitySegments` — role aggregates and per-resource slot windows are
+  distinct concepts with separate materialisation paths.
+- Role profile segments are non-overlapping (constructed by merging adjacent
+  weeks with the same aggregate FTE) and represent aggregate FTE across all
+  resources of that type; the percentage may exceed 100% when multiple
+  resources contribute in the same week.
+- Per-resource trajectory segments are capped at 100% per person — a single
+  person cannot be more than fully utilised.
+- One named or planned resource may have multiple segments (e.g. 50% then
+  100% then 25%), each being a distinct time window within the same entity.
+- **Commercial calculations are unchanged.** The `capacityProfile` field enriches
+  Resource Profile display and export; Commercial billing formulas, billable
+  days, discounts, tax, and totals use their existing inputs unchanged. The
+  active Capacity Plan fallback (pre-existing, not introduced by PR #356)
+  independently uses segment-aware trajectory capacity for named-resource
+  assignment and planned-capacity totals in `namedResourceAssignments.ts` and
+  `projectPlanningModel.ts`, but billing formulas themselves are unaffected.
 - **Entity identity preserved.** One named person or planned resource with
   multiple capacity segments is still one row/entity. The adapter keys the map
   by owner id, so duplicate entries never result from segment data. Generated
@@ -658,7 +695,7 @@ format (e.g. `W1-W4 50%; W5-W10 100%`), structurally distinct from the existing
 | `server/src/routes/resourceProfile.ts` | Added `capacityProfiles` include, adapter call, `capacityProfile` in response, legacy projection for display fields |
 | `client/src/types/backlog.ts` | Added `capacityProfile` with `defaultPercent`, `startWeek`, `endWeek`, `resolutionSource` |
 | `client/src/hooks/useResourceProfileExport.ts` | Added Planning basis, Profile source, Default capacity %, Profile start/end columns |
-| `server/src/test/capacityProfileResourceAdapter.test.ts` | 7 unit tests covering profile-first, legacy fallback, multi-segment, planned resource |
+| `server/src/test/capacityProfileResourceAdapter.test.ts` | 23 unit tests covering profile-first, legacy fallback, multi-segment, planned resource, duplicate conflict, active-plan fallback |
 | `docs/domain/capacity-profile-design.md` | This section |
 | `docs/domain/planning-resource-commercial-boundaries.md` | Updated |
 

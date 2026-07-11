@@ -233,6 +233,51 @@ export function computeDefaultPercentForSegments(segments: CapacityPlanSlotWindo
   return allSame ? first : null
 }
 
+/**
+ * Build non-overlapping aggregate capacity segments from weekly headcount.
+ * Each week's headcount is converted to a percentage (1.0 FTE = 100%).
+ * Adjacent weeks with the same percentage are merged into one segment.
+ * Zero-capacity weeks and gaps produce no segments (discontinuities preserved).
+ * Percentages may exceed 100% (aggregate role capacity, not per-person).
+ */
+export function materializeRoleCapacitySegments(
+  weeklyHeadcount: Map<number, number>,
+): CapacityPlanSlotWindow[] {
+  if (weeklyHeadcount.size === 0) return []
+
+  const sortedWeeks = [...weeklyHeadcount.keys()].sort((a, b) => a - b)
+  const segments: CapacityPlanSlotWindow[] = []
+  let i = 0
+
+  while (i < sortedWeeks.length) {
+    const startWeek = sortedWeeks[i]
+    const pct = round2((weeklyHeadcount.get(startWeek) ?? 0) * 100)
+
+    if (pct <= FLOAT_EPSILON) { i++; continue }
+
+    let endWeek = startWeek
+    i++
+    while (i < sortedWeeks.length) {
+      const nextWeek = sortedWeeks[i]
+      const nextPct = round2((weeklyHeadcount.get(nextWeek) ?? 0) * 100)
+
+      // Gap in week numbers → segment ends
+      if (nextWeek > endWeek + 1) break
+      // Different percentage → segment ends
+      if (Math.abs(nextPct - pct) > FLOAT_EPSILON) break
+      // Zero capacity → segment ends (shouldn't happen since skipped above, but safety)
+      if (nextPct <= FLOAT_EPSILON) break
+
+      endWeek = nextWeek
+      i++
+    }
+
+    segments.push({ startWeek, endWeek, allocationPercent: pct })
+  }
+
+  return segments
+}
+
 export type MaterializedTrajectorySlot = {
   id: string
   name: string
