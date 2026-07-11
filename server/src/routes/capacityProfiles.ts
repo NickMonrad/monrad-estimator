@@ -6,6 +6,7 @@ import { materializeCapacityPlanResources } from '../lib/capacityPlanMaterialisa
 import {
   mapProjectToCapacityProfiles,
   mapPersistedProfilesToDTOs,
+  mapResourceTypeToCapacityProfile,
 } from '../lib/capacityProfileMapping.js'
 import type {
   CapacityProfileResourceTypeLike,
@@ -78,9 +79,39 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   // If persisted profiles exist, check whether they are fully reconciled
   if (project.capacityProfiles && project.capacityProfiles.length > 0) {
+    // Augment legacy profiles with role-level expected profiles for RTs that
+    // have named resources. The project-level mapper skips role profiles when
+    // NRs exist, but the profile-first write path creates them.
+    // Adding them here ensures reconciliation validates role profiles, so
+    // Augment legacy profiles with role-level expected profiles for RTs that
+    // have named resources AND have a persisted role profile to validate.
+    // If no role profile exists in persisted, there's nothing to validate —
+    // the expected set stays as the mapper produced it.
+    const augmentedLegacyProfiles = [...legacyProfiles]
+    for (const rt of project.resourceTypes as any[]) {
+      if (rt.namedResources && rt.namedResources.length > 0) {
+        const hasPersistedRoleProfile = (project.capacityProfiles as any[]).some(
+          (pp: any) => pp.resourceTypeId === rt.id && pp.ownerKind === 'ROLE',
+        )
+        if (hasPersistedRoleProfile) {
+          const hasExpectedRoleProfile = augmentedLegacyProfiles.some(
+            (p: any) => p.owner?.kind === 'role' && p.owner?.id === rt.id,
+          )
+          if (!hasExpectedRoleProfile) {
+            const roleProfile = mapResourceTypeToCapacityProfile({
+              projectId,
+              resourceType: rt as CapacityProfileResourceTypeLike,
+              capacityPlanSlots: capacityPlanSlotsByResourceTypeId.get(rt.id),
+            })
+            augmentedLegacyProfiles.push(roleProfile)
+          }
+        }
+      }
+    }
+
     const comparison = compareCapacityProfiles(
       projectId,
-      legacyProfiles,
+      augmentedLegacyProfiles,
       project.capacityProfiles,
     )
 
