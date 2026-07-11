@@ -1,82 +1,64 @@
 ---
 name: capture-screenshots
-description: Use this skill when asked to capture, regenerate, or update screenshots of the app UI for the README or documentation.
+description: Capture or regenerate Monrad Estimator UI screenshots for README and documentation using the repository screenshot script.
 ---
 
-## When to Use
-Use when the user asks to:
-- "capture screenshots"
-- "take screenshots"
-- "update the README screenshots"
-- "regenerate screenshots"
-- "run the screenshot tests"
+# Screenshot Capture Skill
 
-## What This Does
-Starts both dev servers (if not running), runs the `@screenshots`-tagged Playwright tests, then commits the resulting PNGs to `docs/screenshots/` so they render in the README.
+Follow `.github/instructions/project.instructions.md` and `.github/instructions/playwright.instructions.md` before running screenshot automation.
 
-## Process
+## When to use
 
-### 1. Check if servers are running
+Use this skill when asked to:
+
+- capture or regenerate application screenshots
+- update README or documentation screenshots
+- validate a material UI layout change visually
+- run the `@screenshots` Playwright spec
+
+## Preconditions
+
+- Use a local development database only.
+- Ensure dependencies and Playwright Chromium are installed.
+- Ensure API and Vite are serving the branch being documented.
+- Do not use Unix-only process commands as the default workflow.
+
+Start the normal watch-mode servers from the repository root when needed:
+
 ```bash
-# Check for API server on port 3001
-lsof -ti:3001
-
-# Check for Vite dev server on port 5173
-lsof -ti:5173
+npm run dev
 ```
 
-### 2. Start servers if not running
+Run this in a dedicated terminal or use the current agent harness's supported detached-process mode. Verify readiness with the application health endpoint and client URL using tools available on the host platform.
+
+## Capture screenshots
+
+From the repository root:
+
 ```bash
-cd monrad-estimator
-
-# Start API server (detached so it survives shell exit)
-nohup npm run dev --workspace=server > logs/server.log 2>&1 &
-SERVER_PID=$!
-disown $SERVER_PID
-
-# Start client dev server (detached)
-nohup npm run dev --workspace=client > logs/client.log 2>&1 &
-CLIENT_PID=$!
-disown $CLIENT_PID
-
-# Wait for both to be ready
-sleep 5
-curl -s http://localhost:3001/health | grep -q ok && echo "API ready"
-curl -s http://localhost:5173 > /dev/null && echo "Client ready"
-```
-
-### 3. Run the screenshot spec
-```bash
-cd monrad-estimator
 npm run screenshots
-# This runs: cd e2e && npx playwright test tests/screenshots.spec.ts --reporter=line
 ```
 
-### 4. Verify PNGs were created
-```bash
-ls -lh monrad-estimator/docs/screenshots/*.png
-```
+This runs the screenshot-specific Playwright spec and writes PNG files under `docs/screenshots/`.
 
-### 5. Commit and push
-```bash
-cd monrad-estimator
-git add docs/screenshots/*.png
-git commit -m "docs: update screenshots"
-git push
-```
+## Verify the result
 
-## Key Files
-| File | Purpose |
-|---|---|
-| `e2e/tests/screenshots.spec.ts` | Playwright spec — 4 tests tagged `@screenshots` |
-| `docs/screenshots/*.png` | Generated PNGs committed to repo |
-| `README.md` | Embeds PNGs in a 2×2 grid table |
+- Confirm the expected PNG files exist and are non-empty.
+- Open and visually inspect every changed image.
+- Check that the branch's current UI is shown, not a stale server process.
+- Check light/dark mode, labels, clipping, empty space, and responsive layout when relevant.
+- Review the Git diff and keep only intentional image changes.
+
+## Documentation update
+
+Update README or other documentation references only when filenames, captions, page coverage, or layout changed.
+
+Do not automatically commit or push screenshots as a side effect of this skill. Stage only the intended files as part of the tracked feature branch and normal pull-request workflow.
 
 ## Notes
-- Screenshot tests are **excluded from CI** (`--grep-invert @screenshots` in `e2e.yml`) — they must be run manually
-- The spec creates test data (projects, epics, templates) via the UI before capturing — expect ~10s total runtime
-- `logs/` directory is gitignored; create it with `mkdir -p logs` if missing
-- If a server is already running on the port (from a previous session), skip starting it
-- Use `bash mode: async, detach: true` when starting servers so they persist after shell exit
-- The spec uses `fileURLToPath(import.meta.url)` to define `__dirname` (ESM module — `__dirname` is not natively available)
-- UI selectors verified against actual app: `+ Add user story` (not `+ Add story`), `Save` button (not `Save task`)
+
+- Screenshot tests are excluded from normal CI and are run intentionally when documentation images need updating.
+- The spec may create local test data; clean it only with the repository's development cleanup tooling and never against a shared or production database.
+- Do not rely on hard-coded screenshot test counts or fixed runtime estimates.
+- Use current semantic selectors from the application and update the spec when the accessible UI contract changes.
+- Report the exact capture command, changed image files, and visual verification performed.
