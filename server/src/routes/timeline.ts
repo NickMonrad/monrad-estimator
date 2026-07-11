@@ -82,21 +82,18 @@ function buildWarningResourceTypes(
 
     return {
       ...rt,
-      namedResources: materialized.slotWindows.map((window, idx) => {
-        const existing = rt.namedResources[idx]
-        return {
-          id: existing?.id ?? `${rt.id}-capacity-plan-${idx + 1}`,
-          name: existing?.name ?? `${rt.name} ${idx + 1}`,
-          startWeek: window.startWeek,
-          endWeek: window.endWeek,
-          allocationPct: window.allocationPercent,
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: window.allocationPercent,
-          pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-        }
-      }),
+      namedResources: (materialized.slotWindows ?? []).map((window, idx) => ({
+        id: `${rt.id}-capacity-plan-${idx + 1}`,
+        name: `${rt.name ?? ''} ${idx + 1}`,
+        endWeek: window.endWeek,
+        allocationMode: 'CAPACITY_PLAN' as const,
+        allocationPercent: window.allocationPercent,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: window.startWeek,
+        allocationPct: window.allocationPercent,
+        pricingModel: undefined,
+      })),
     }
   })
 }

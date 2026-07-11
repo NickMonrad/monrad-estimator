@@ -117,6 +117,8 @@ test.describe('Resource Allocation', () => {
 
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
+    // Regression: button contract must remain "Click to edit allocation"
+    await expect(badge).toHaveAttribute('title', 'Click to edit allocation')
     await badge.click({ force: true })
 
     await expect(page.getByText(/Planning basis/i).first()).toBeVisible({ timeout: 8_000 })

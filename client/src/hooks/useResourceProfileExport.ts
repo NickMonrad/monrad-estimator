@@ -1,6 +1,10 @@
 import { api } from '../lib/api'
 import type { ResourceProfile, Project } from '../types/backlog'
 import JSZip from 'jszip'
+import {
+  formatPlanningBasis as fmtPlanningBasis,
+  formatCapacityProfileSource as fmtCapSource,
+} from '../lib/capacityProfileFormatting'
 
 /**
  * CSV export helpers and handlers for the Resource Profile domain.
@@ -64,13 +68,31 @@ function formatCapacityProfileSegments(
     .join('; ')
 }
 
+/** Format a profile basis when available; otherwise map the legacy allocation mode. */
+function formatPlanningBasis(
+  capacityProfile: NonNullable<ResourceProfile['resourceRows'][number]['capacityProfile']> | undefined,
+  allocationMode: string,
+): string {
+  if (capacityProfile) return fmtPlanningBasis(capacityProfile.planningBasis)
+  // Legacy fallback — map allocationMode to display label
+  switch (allocationMode) {
+    case 'EFFORT': return 'Demand-following'
+    case 'TIMELINE': return 'Availability window'
+    case 'FULL_PROJECT': return 'Whole-project allocation'
+    case 'CAPACITY_PLAN': return 'Capacity profile'
+    default: return allocationMode
+  }
+}
+
 export const buildProfileCsv = (profileData: ResourceProfile) => {
   const rows: string[][] = [
     [
       'Section', 'Role', 'Resource name', 'Resource identity', 'Category',
       'Resource count', 'Hours per day', 'Effort days', 'Assigned days', 'Billable days',
-      'Day rate', 'Subtotal', 'Availability window start', 'Availability window end',
-      'Assigned start', 'Assigned end', 'Capacity profile', 'Assignment segments', 'Assigned weeks',
+      'Day rate', 'Subtotal',
+      'Planning basis', 'Profile source', 'Default capacity %', 'Profile start', 'Profile end',
+      'Availability window start', 'Availability window end',
+      'Assigned start', 'Assigned end', 'Capacity profile segments', 'Assignment segments', 'Assigned weeks',
       'Billing basis', 'Handover notes',
     ],
   ]
@@ -78,17 +100,32 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
   profileData.resourceRows.forEach(row => {
     if (row.namedResources && row.namedResources.length > 0) {
       row.namedResources.forEach(nr => {
+        const capProfile = nr.capacityProfile
+        const profileStart = capProfile?.startWeek != null ? formatWeekLabel(capProfile.startWeek) : ''
+        const profileEnd = capProfile?.endWeek != null ? formatWeekLabel(capProfile.endWeek) : ''
+        // A resolved profile owns its window even when the authoritative value is null.
+        const availStart = capProfile
+          ? (capProfile.startWeek != null ? formatWeekLabel(capProfile.startWeek) : '')
+          : (nr.startWeek != null ? formatWeekLabel(nr.startWeek) : '')
+        const availEnd = capProfile
+          ? (capProfile.endWeek != null ? formatWeekLabel(capProfile.endWeek) : '')
+          : (nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '')
         rows.push([
-          'Resource', row.name, nr.name, nr.synthetic ? 'Planned resource' : 'Named person',
+          'Resource', row.name, nr.name, nr.resourceIdentity === 'PLANNED_RESOURCE' || nr.synthetic ? 'Planned resource' : 'Named person',
           row.category, String(row.count), String(row.hoursPerDay),
           String(row.effortDays), String(nr.allocatedDays), String(nr.actualAllocatedDays),
           row.dayRate != null ? String(row.dayRate) : '',
           row.dayRate != null ? (nr.actualAllocatedDays * row.dayRate).toFixed(2) : '',
-          nr.startWeek != null ? formatWeekLabel(nr.startWeek) : '',
-          nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '',
+          formatPlanningBasis(capProfile, nr.allocationMode),
+          capProfile?.source ? fmtCapSource(capProfile.source) : '',
+          capProfile?.defaultPercent != null ? String(capProfile.defaultPercent) : '',
+          profileStart,
+          profileEnd,
+          availStart,
+          availEnd,
           nr.actualAllocationStartWeek != null ? formatWeekLabel(nr.actualAllocationStartWeek) : '',
           nr.actualAllocationEndWeek != null ? formatWeekLabel(nr.actualAllocationEndWeek) : '',
-          formatCapacityProfileSegments(nr.capacityProfile),
+          formatCapacityProfileSegments(capProfile),
           formatNamedResourceSegments(nr),
           formatNamedResourceWeeks(nr),
           nr.pricingModel === 'PRO_RATA' ? 'Bill planned allocation' : 'Bill actual scheduled days',
@@ -97,17 +134,25 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       })
       return
     }
+    const capProfile = row.capacityProfile
+    const profileStart = capProfile?.startWeek != null ? formatWeekLabel(capProfile.startWeek) : ''
+    const profileEnd = capProfile?.endWeek != null ? formatWeekLabel(capProfile.endWeek) : ''
     rows.push([
       'Resource', row.name, '', 'Role-level capacity', row.category,
       String(row.count), String(row.hoursPerDay), String(row.effortDays),
       String(row.totalDays), '',
       row.dayRate != null ? String(row.dayRate) : '',
       row.dayRate != null && row.totalDays != null ? (row.totalDays * row.dayRate).toFixed(2) : '',
+      formatPlanningBasis(capProfile, row.allocationMode),
+      capProfile?.source ? fmtCapSource(capProfile.source) : '',
+      capProfile?.defaultPercent != null ? String(capProfile.defaultPercent) : '',
+      profileStart,
+      profileEnd,
       '',   // Availability window start
       '',   // Availability window end
       '',   // Assigned start
       '',   // Assigned end
-      formatCapacityProfileSegments(row.capacityProfile), // Capacity profile
+      formatCapacityProfileSegments(capProfile), // Capacity profile segments
       '',   // Assignment segments
       '',   // Assigned weeks
       '',   // Billing basis
@@ -120,11 +165,16 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       'Overhead', row.name, '', '', '',
       '', '', '', String(row.computedDays), '',
       '', row.estimatedCost != null ? String(row.estimatedCost) : '',
+      '',   // Planning basis
+      '',   // Profile source
+      '',   // Default capacity %
+      '',   // Profile start
+      '',   // Profile end
       '',   // Availability window start
       '',   // Availability window end
       '',   // Assigned start
       '',   // Assigned end
-      '',   // Capacity profile
+      '',   // Capacity profile segments
       '',   // Assignment segments
       '',   // Assigned weeks
       '',   // Billing basis

@@ -1,3 +1,4 @@
+import React from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -40,13 +41,17 @@ function renderPanel() {
 
   render(
     <QueryClientProvider client={queryClient}>
-      <NamedResourcesPanel
-        projectId="proj-1"
-        rtId="rt-1"
-        rtCount={2}
-        columnCount={8}
-        allocations={MOCK_ALLOCATIONS}
-      />
+      <table>
+        <tbody>
+          <NamedResourcesPanel
+            projectId="proj-1"
+            rtId="rt-1"
+            rtCount={2}
+            columnCount={8}
+            allocations={MOCK_ALLOCATIONS}
+          />
+        </tbody>
+      </table>
     </QueryClientProvider>,
   )
 
@@ -167,5 +172,342 @@ describe('NamedResourcesPanel billing basis terminology', () => {
     const descriptions = screen.getAllByText('Determines which days are used for commercial billing. Does not affect the planning schedule.')
     expect(descriptions).toHaveLength(2)
     descriptions.forEach(el => expect(el.className).toContain('sr-only'))
+  })
+})
+
+describe('NamedResourcesPanel capacity profile display', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders capacity profile with all fields for a named resource with 3 segments', async () => {
+    const profileAllocations: ResourceProfileRow['namedResources'] = [
+      {
+        id: 'nr-cap-1',
+        name: 'Alice',
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+        allocatedDays: 15,
+        derivedStartWeek: null,
+        derivedEndWeek: null,
+        actualAllocatedDays: 10,
+        actualAllocationStartWeek: 2,
+        actualAllocationEndWeek: 6,
+        actualAllocatedWeeks: [
+          { week: 2, days: 2, capacityDays: 5 },
+          { week: 3, days: 2, capacityDays: 5 },
+          { week: 4, days: 3, capacityDays: 5 },
+          { week: 5, days: 2, capacityDays: 5 },
+          { week: 6, days: 1, capacityDays: 5 },
+        ],
+        actualAllocationSegments: [
+          { startWeek: 2, endWeek: 6, days: 10 },
+        ],
+        synthetic: false,
+        capacityProfile: {
+          planningBasis: 'availabilityWindow',
+          source: 'squadPlanner',
+          defaultPercent: 80,
+          startWeek: 0,
+          endWeek: 11,
+          segments: [
+            { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+            { startWeek: 4, endWeek: 7, capacityPercent: 75 },
+            { startWeek: 8, endWeek: 11, capacityPercent: 100 },
+          ],
+          resolutionSource: 'PROFILE',
+        },
+      },
+    ]
+
+    api.get.mockResolvedValue({
+      data: [{
+        id: 'nr-cap-1', resourceTypeId: 'rt-1', name: 'Alice',
+        startWeek: null, endWeek: null, allocationPct: 100,
+        pricingModel: 'ACTUAL_DAYS', createdAt: '2024-01-01', updatedAt: '2024-01-01',
+      }],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={1}
+              columnCount={8}
+              allocations={profileAllocations}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Alice')).toBeInTheDocument()
+    })
+
+    // Capacity profile: planning basis badge
+    expect(screen.getByText('Availability window')).toBeInTheDocument()
+    // Source badge
+    expect(screen.getByText('Squad Planner')).toBeInTheDocument()
+    // Resolution source indicator
+    expect(screen.getByText(/Resolution: Profile/)).toBeInTheDocument()
+    // Default capacity
+    expect(screen.getByText(/Default: 80%/)).toBeInTheDocument()
+    // Profile window
+    expect(screen.getByText(/Window: W1 → W12/)).toBeInTheDocument()
+    // Each of three segments
+    expect(screen.getByText('W1-W4: 50%')).toBeInTheDocument()
+    expect(screen.getByText('W5-W8: 75%')).toBeInTheDocument()
+    expect(screen.getByText('W9-W12: 100%')).toBeInTheDocument()
+
+    // Billing basis label is separate from capacity profile
+    const billingBasisElements = screen.getAllByText('Billing basis')
+    expect(billingBasisElements.length).toBeGreaterThanOrEqual(1)
+    // Actual assigned summary is present
+    expect(screen.getByText(/W3-W7/)).toBeInTheDocument()
+
+    // No "Planned resource" badge (this is a named person, not synthetic)
+    expect(screen.queryByText('Planned resource')).not.toBeInTheDocument()
+  })
+
+  it('labels synthetic resources as Planned resource with Active capacity plan and disabled controls', async () => {
+    const syntheticAllocations: ResourceProfileRow['namedResources'] = [
+      {
+        id: 'nr-synth-1',
+        name: 'Generated Dev',
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+        allocatedDays: 0,
+        derivedStartWeek: null,
+        derivedEndWeek: null,
+        actualAllocatedDays: 0,
+        actualAllocationStartWeek: null,
+        actualAllocationEndWeek: null,
+        actualAllocatedWeeks: [],
+        actualAllocationSegments: [],
+        synthetic: true,
+        capacityProfile: {
+          planningBasis: 'demandFollowing',
+          source: 'squadPlanner',
+          defaultPercent: null,
+          startWeek: null,
+          endWeek: null,
+          segments: [],
+          resolutionSource: 'ACTIVE_CAPACITY_PLAN',
+        },
+      },
+    ]
+
+    api.get.mockResolvedValue({ data: [] })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={1}
+              columnCount={8}
+              allocations={syntheticAllocations}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Generated Dev')).toBeInTheDocument()
+    })
+
+    // "Planned resource" badge visible
+    expect(screen.getByText('Planned resource')).toBeInTheDocument()
+
+    // Name input disabled (non-persisted)
+    expect(screen.getByDisplayValue('Generated Dev')).toBeDisabled()
+
+    // Resolution: Active capacity plan
+    expect(screen.getByText(/Resolution: Active capacity plan/)).toBeInTheDocument()
+
+    // Source badge visible
+    expect(screen.getByText('Squad Planner')).toBeInTheDocument()
+
+    // Delete button shows planned-resource message and is disabled
+    expect(screen.getByTitle('Planned resources cannot be deleted')).toBeDisabled()
+    expect(screen.queryByTitle('Delete')).not.toBeInTheDocument()
+  })
+})
+
+describe('planned resource UI', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('persisted PLANNED_RESOURCE shows badge and disables all controls', async () => {
+    const plannedAllocation: ResourceProfileRow['namedResources'][number] = {
+      ...MOCK_ALLOCATIONS[0],
+      id: 'nr-planned',
+      name: 'Planned Person',
+      resourceIdentity: 'PLANNED_RESOURCE',
+      synthetic: false,
+    }
+
+    api.get.mockResolvedValue({
+      data: [{ id: 'nr-planned', resourceTypeId: 'rt-1', name: 'Planned Person', startWeek: 0, endWeek: 9, allocationPct: 100, pricingModel: 'ACTUAL_DAYS', createdAt: '', updatedAt: '' }],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={2}
+              columnCount={8}
+              allocations={[plannedAllocation]}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Planned Person')).toBeInTheDocument()
+    })
+
+    // Badge visible
+    expect(screen.getByText('Planned resource')).toBeInTheDocument()
+
+    // Name input disabled
+    const nameInput = screen.getByDisplayValue('Planned Person')
+    expect(nameInput).toBeDisabled()
+
+    // Delete button shows planned-resource tooltip and is disabled
+    const deleteBtn = screen.getByTitle('Planned resources cannot be deleted')
+    expect(deleteBtn).toBeDisabled()
+  })
+
+  it('persisted named person retains enabled controls', async () => {
+    renderPanel()
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Developer 1')).toBeInTheDocument()
+    })
+
+    // No badge
+    expect(screen.queryByText('Planned resource')).not.toBeInTheDocument()
+
+    // Inputs enabled
+    expect(screen.getByDisplayValue('Developer 1')).not.toBeDisabled()
+  })
+
+  it('generated planned resource (synthetic) shows badge and disabled controls', async () => {
+    const synthAllocation: ResourceProfileRow['namedResources'][number] = {
+      ...MOCK_ALLOCATIONS[0],
+      id: 'nr-synth',
+      name: 'Generated',
+      synthetic: true,
+      resourceIdentity: 'PLANNED_RESOURCE',
+    }
+
+    api.get.mockResolvedValue({ data: [] })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={2}
+              columnCount={8}
+              allocations={[synthAllocation]}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Generated')).toBeInTheDocument()
+    })
+
+    // Badge visible
+    expect(screen.getByText('Planned resource')).toBeInTheDocument()
+
+    // Name input disabled
+    expect(screen.getByDisplayValue('Generated')).toBeDisabled()
+
+    // Delete disabled
+    expect(screen.getByTitle('Planned resources cannot be deleted')).toBeDisabled()
+  })
+
+  it('mixed named-person and planned-resource rows do not cross identity', async () => {
+    const personAllocation: ResourceProfileRow['namedResources'][number] = {
+      ...MOCK_ALLOCATIONS[0],
+      id: 'nr-person',
+      name: 'Actual Person',
+      synthetic: false,
+    }
+    const plannedAllocation: ResourceProfileRow['namedResources'][number] = {
+      ...MOCK_ALLOCATIONS[1],
+      id: 'nr-planned-2',
+      name: 'Planned Resource',
+      resourceIdentity: 'PLANNED_RESOURCE',
+      synthetic: false,
+    }
+
+    api.get.mockResolvedValue({
+      data: [
+        { id: 'nr-person', resourceTypeId: 'rt-1', name: 'Actual Person', startWeek: 0, endWeek: 9, allocationPct: 100, pricingModel: 'ACTUAL_DAYS', createdAt: '', updatedAt: '' },
+        { id: 'nr-planned-2', resourceTypeId: 'rt-1', name: 'Planned Resource', startWeek: 0, endWeek: 9, allocationPct: 100, pricingModel: 'ACTUAL_DAYS', createdAt: '', updatedAt: '' },
+      ],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={2}
+              columnCount={8}
+              allocations={[personAllocation, plannedAllocation]}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Actual Person')).toBeInTheDocument()
+    })
+
+    // Planned resource badge IS visible (for the planned row)
+    expect(screen.getByText('Planned resource')).toBeInTheDocument()
+
+    // Planned resource has disabled controls
+    expect(screen.getByDisplayValue('Planned Resource')).toBeDisabled()
+
+    // Named person has enabled controls
+    expect(screen.getByDisplayValue('Actual Person')).not.toBeDisabled()
   })
 })

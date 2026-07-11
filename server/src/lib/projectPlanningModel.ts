@@ -133,6 +133,8 @@ export interface PlanningNamedResource {
   allocationEndWeek: number | null
   pricingModel: string | null
   synthetic: boolean
+  /** Segment-aware capacity data from trajectory materialization (CAPACITY_PLAN only). */
+  capacitySegments?: { startWeek: number; endWeek: number; allocationPercent: number }[]
 }
 
 /** A resolved feature timeline entry with display metadata */
@@ -292,22 +294,30 @@ export function applyCapacityPlanFallback(
 
     return {
       ...rt,
-      namedResources: materialized.slotWindows.map((window, idx) => ({
-        id: `${rt.id}-capacity-plan-${idx + 1}`,
-        name: `${rt.name} ${idx + 1}`,
-        startWeek: window.startWeek,
-        endWeek: window.endWeek,
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: window.allocationPercent,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        pricingModel: 'ACTUAL_DAYS',
-        synthetic: true,
-      })),
+      namedResources: materialized.resourceTrajectories.map((trajectory) => {
+        const firstSeg = trajectory.segments[0]
+        const lastSeg = trajectory.segments.length > 0 ? trajectory.segments[trajectory.segments.length - 1] : null
+        return {
+          id: `${rt.id}-capacity-plan-${trajectory.trajectoryIndex + 1}`,
+          name: `${rt.name} ${trajectory.trajectoryIndex + 1}`,
+          startWeek: firstSeg?.startWeek ?? null,
+          endWeek: lastSeg?.endWeek ?? null,
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: firstSeg?.allocationPercent ?? 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+          synthetic: true,
+          capacitySegments: trajectory.segments.map(s => ({
+            startWeek: s.startWeek,
+            endWeek: s.endWeek,
+            allocationPercent: s.allocationPercent,
+          })),
+        }
+      }),
     }
   })
 }
-
 /**
  * Build fallback weekly demand from timeline entries by uniform spread.
  * Same logic as timeline.ts buildFallbackWeeklyDemand / resourceProfile.ts
@@ -717,6 +727,8 @@ export async function buildProjectPlanningModel(
         allocationPercent: window.allocationPercent,
         allocationStartWeek: null,
         allocationEndWeek: null,
+        startWeek: window.startWeek,
+        allocationPct: window.allocationPercent,
         pricingModel: undefined,
       })),
     }
