@@ -65,6 +65,7 @@ jobs:
       # ── Validate local E2E runner ─────────────────────────────────
       - name: Validate local E2E runner loads env correctly
         run: node scripts/run-e2e-local.mjs --validate
+
       # ── TypeScript type-checking ──────────────────────────────────
       - name: TypeScript check (client)
         working-directory: client
@@ -83,9 +84,13 @@ jobs:
         working-directory: server
         run: npm run lint
 
-      # ── Server unit tests ────────────────────────────────────────
-      - name: Server unit tests
+      # ── Unit and integration tests ───────────────────────────────
+      - name: Server unit and integration tests
         working-directory: server
+        run: npm test
+
+      - name: Client unit tests
+        working-directory: client
         run: npm test
 
       # ── Server ──────────────────────────────────────────────────
