@@ -12,13 +12,13 @@ PR #336 added the persisted-read endpoint (`GET /capacity-profiles`) with a reco
 gate — persisted profiles were used only when they matched legacy-derived expectations.
 
 PR #356 (profile-first read adoption, currently open and pending merge) removes the
-reconciliation gate for the Resource Profile route. The adapter uses profile-first
-precedence: if a `CapacityProfile` exists for the owner (role or named resource),
-it is used directly with `resolutionSource: 'PROFILE'`. Legacy-derived fallback
-(`resolutionSource: 'LEGACY'`) applies only when no persisted profile exists. The
-`resolutionSource` field and a `projectCapacityProfileToLegacyAllocation` helper in
-`capacityProfileLegacyProjection.ts` were introduced to support display-field projection
-from profile data.
+reconciliation gate for the Resource Profile route. Resolution is owner-specific and
+ordered: a valid persisted profile (`resolutionSource: 'PROFILE'`); active Capacity Plan
+materialisation only when `shouldFallbackToActiveCapacityPlan` requires it
+(`'ACTIVE_CAPACITY_PLAN'`); then pure legacy compatibility data (`'LEGACY'`).
+Conflicting duplicate persisted profiles are not valid and therefore proceed through the
+same fallback decision. `projectCapacityProfileToLegacyAllocation` supplies display-field
+projection without changing calculation inputs.
 
 Legacy `ResourceType` and `NamedResource` fields remain authoritative for scheduler,
 leveller, Timeline, Squad Planner, and Commercial calculations. PR #355 (merged)
@@ -154,6 +154,27 @@ is a requirement.
 > **Note:** These changes exist on the `feature/capacity-profile-resource-profile-reads`
 > branch. They will become authoritative when PR #356 merges to `main`.
 
+>
+> **Adoption invariants maintained by PR #356:**
+>
+> - **Fallback precedence:** Persisted owner-specific profile → active Capacity Plan
+>   materialisation (only when `shouldFallbackToActiveCapacityPlan` requires it) →
+>   pure owner-specific legacy compatibility state. `LEGACY` is never produced from
+>   active capacity plan data — the `ACTIVE_CAPACITY_PLAN` resolution source is a
+>   separate tier checked before LEGACY.
+> - **Role aggregate vs per-resource profiles:** Role-level (ResourceType) profiles
+>   represent aggregate capacity across all resources of that type, while each
+>   named-resource profile is specific to one resource slot. These use different
+>   owner kinds and independent key namespaces.
+> - **Independent key spaces:** Role profiles are keyed by `resourceTypeId`;
+>   named-resource profiles by `namedResourceId`. The two key spaces never collide.
+> - **Duplicate owner keys fall through:** If a duplicate owner key appears in the
+>   profile map (defensive guard), the adapter treats it as absent and falls through
+>   to the next precedence tier rather than throwing or blocking.
+> - **Unchanged consumers:** Scheduler, leveller, Timeline, Squad Planner, and
+>   Commercial calculations continue reading legacy fields directly — they are not
+>   affected by this read-side adoption.
+>
 ### Phase 2 — Compatibility projection helpers 🚧 (PR #356 open, pending merge)
 
 `projectCapacityProfileToLegacyAllocation` in `capacityProfileLegacyProjection.ts` is

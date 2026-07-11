@@ -5,7 +5,9 @@
  * Enumerates every ResourceType role owner and every named/planned owner independently.
  * Persisted owner-specific profile wins; otherwise uses per-owner legacy mapper fallback.
  * Active Capacity Plan fallback per shouldFallbackToActiveCapacityPlan.
- * Duplicate profiles are handled deterministically.
+ * Duplicate profiles are handled deterministically — resolved before active-plan eligibility.
+ *
+ * Returns collision-safe separate maps for role-level and named/planned-resource profiles.
  */
 import {
   mapResourceTypeToCapacityProfile,
@@ -14,6 +16,7 @@ import {
 } from './capacityProfileMapping.js'
 import {
   materializeCapacityPlanResources,
+  materializePerResourceSlots,
   shouldFallbackToActiveCapacityPlan,
 } from './capacityPlanMaterialisation.js'
 import type {
@@ -49,9 +52,18 @@ export interface CapacityProfileResourceData {
   resolutionSource: CapacityProfileResolutionSource
 }
 
-// ─── Minimal project-like shape required by the adapter ──────────────────────
+/**
+ * Collision-safe capacity profile lookup result.
+ * Returns separate maps for role-level profiles (keyed by resourceTypeId)
+ * and named/planned-resource profiles (keyed by NR id or generated planned-resource id).
+ */
+export interface CapacityProfileMap {
+  roleProfiles: Map<string, CapacityProfileResourceData>
+  namedResourceProfiles: Map<string, CapacityProfileResourceData>
+}
 
-interface AdapterProject {
+/** Minimal project-like shape required by the adapter. Exported for type-safety at callers. */
+export interface CapacityProfileAdapterInput {
   id: string
   hoursPerDay: number
   resourceTypes: Array<{
@@ -113,6 +125,20 @@ interface AdapterProject {
   }>
 }
 
+// ─── Profile classification types ────────────────────────────────────────────
+
+type PersistedProfile = NonNullable<CapacityProfileAdapterInput['capacityProfiles']>[number]
+
+export type ProfileClassificationKind = 'NONE' | 'VALID' | 'CONFLICT'
+
+export interface ProfileClassification {
+  kind: ProfileClassificationKind
+  /** The resolved profile when VALID. */
+  profile?: PersistedProfile
+  /** The conflicting profile IDs when CONFLICT. */
+  ids?: string[]
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Check whether two segments are semantically equal (ignoring id/capacityProfileId/source metadata). */
@@ -140,14 +166,20 @@ function sortSegments<T extends { startWeek: number; endWeek: number; capacityPe
   return [...segs].sort((a, b) => a.startWeek - b.startWeek || a.endWeek - b.endWeek || a.capacityPercent - b.capacityPercent)
 }
 
-/** Resolve a group of duplicate persisted profiles: if all identical return the one with smallest ID; otherwise null (fall back to legacy). */
-function resolveDuplicateProfiles(
-  profiles: Array<NonNullable<AdapterProject['capacityProfiles']>[number]>,
+/**
+ * Classify a group of persisted profiles for the same owner.
+ *
+ * - NONE: no profiles exist.
+ * - VALID: exactly one profile, or multiple semantically identical ones (smallest ID wins).
+ * - CONFLICT: multiple profiles with conflicting data — warning logged, fallback permitted.
+ */
+function classifyProfiles(
+  profiles: PersistedProfile[],
   ownerLabel: string,
   ownerId: string,
-): NonNullable<AdapterProject['capacityProfiles']>[number] | null {
-  if (profiles.length === 0) return null
-  if (profiles.length === 1) return profiles[0]
+): ProfileClassification {
+  if (profiles.length === 0) return { kind: 'NONE' }
+  if (profiles.length === 1) return { kind: 'VALID', profile: profiles[0] }
 
   const sorted = [...profiles].sort((a, b) => a.id.localeCompare(b.id))
   const first = sorted[0]
@@ -164,16 +196,15 @@ function resolveDuplicateProfiles(
     )
   )
 
-  if (allExact) return first
+  if (allExact) return { kind: 'VALID', profile: first }
 
-  // Conflicting duplicates — log warning, fall back to legacy
   console.warn(
-    `Conflicting duplicate capacity profiles for ${ownerLabel} "${ownerId}": falling back to legacy. IDs: ${sorted.map(p => p.id).join(', ')}`,
+    `Conflicting duplicate capacity profiles for ${ownerLabel} "${ownerId}": falling back. IDs: ${sorted.map(p => p.id).join(', ')}`,
   )
-  return null
+  return { kind: 'CONFLICT', ids: sorted.map(p => p.id) }
 }
 
-/** Convert a materialized capacity plan resource to ACTIVE_CAPACITY_PLAN profile data. */
+/** Convert a materialized capacity plan resource to ACTIVE_CAPACITY_PLAN profile data (role-level aggregate). */
 function materializedToActivePlanProfile(
   materialized: { slotWindows: CapacityPlanSlotInput[] },
 ): CapacityProfileResourceData {
@@ -192,38 +223,74 @@ function materializedToActivePlanProfile(
   }
 }
 
+/** Convert a single slot window to ACTIVE_CAPACITY_PLAN profile data (per-resource). */
+function singleSlotActivePlanProfile(
+  slotWindow: CapacityPlanSlotInput,
+): CapacityProfileResourceData {
+  return {
+    planningBasis: 'capacityProfile',
+    source: 'squadPlanner',
+    defaultPercent: 100,
+    startWeek: slotWindow.startWeek,
+    endWeek: slotWindow.endWeek,
+    segments: [{
+      startWeek: slotWindow.startWeek,
+      endWeek: slotWindow.endWeek,
+      capacityPercent: slotWindow.allocationPercent,
+    }],
+    resolutionSource: 'ACTIVE_CAPACITY_PLAN',
+  }
+}
+
+/** Convert a resolved persisted profile DTO to CapacityProfileResourceData. */
+function profileDtoToData(p: {
+  planningBasis: string
+  source: string
+  defaultPercent?: number | null
+  startWeek?: number | null
+  endWeek?: number | null
+  segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+}): CapacityProfileResourceData {
+  return {
+    planningBasis: p.planningBasis,
+    source: p.source,
+    defaultPercent: p.defaultPercent ?? null,
+    startWeek: p.startWeek ?? null,
+    endWeek: p.endWeek ?? null,
+    segments: p.segments.map(s => ({
+      startWeek: s.startWeek,
+      endWeek: s.endWeek,
+      capacityPercent: s.capacityPercent,
+    })),
+    resolutionSource: 'PROFILE',
+  }
+}
+
 // ─── Main function ───────────────────────────────────────────────────────────
 
 /**
- * Build a capacity-profile enrichment map keyed by owner id.
+ * Build collision-safe capacity-profile enrichment maps.
  *
- * Enumerates every ResourceType role owner and every named/planned owner independently.
- *
- * Precedence:
+ * Precedence (per owner):
  * 1. Persisted owner-specific CapacityProfile (PROFILE) — authoritative.
- * 2. Active Capacity Plan fallback (ACTIVE_CAPACITY_PLAN) — when shouldFallbackToActiveCapacityPlan.
+ * 2. Active Capacity Plan fallback (ACTIVE_CAPACITY_PLAN) — when shouldFallbackToActiveCapacityPlan
+ *    and no VALID persisted profile exists (CONFLICT or NONE).
  * 3. Legacy compatibility from ResourceType/NamedResource fields (LEGACY).
  *
- * Duplicates: exact duplicates are resolved deterministically (smallest persisted ID wins).
- * Conflicting duplicates trigger a console.warn and fall back to legacy.
+ * Duplicates: classified before active-plan eligibility. VALID exact duplicates resolve
+ * deterministically (smallest persisted ID wins). CONFLICT duplicates permit active-plan
+ * fallback when needed or legacy when not.
  *
- * Key collision: role (resourceTypeId) vs named resource (namedResourceId) keys are tracked
- * separately internally; a warning is logged if any overlap exists.
+ * Pure legacy entries are derived WITHOUT active-plan slot windows — the active-plan
+ * materialization only applies in the explicit fallback branch.
  *
- * Returns an empty Map when no profiles could be derived.
+ * Returns separate roleProfiles and namedResourceProfiles maps for collision-safe lookups.
  */
 export function buildResourceCapacityProfileMap(
-  project: AdapterProject,
-): Map<string, CapacityProfileResourceData> {
+  project: CapacityProfileAdapterInput,
+): CapacityProfileMap {
   const activePlan = project.capacityPlans?.[0] ?? null
   const capacityPlanByRt = materializeCapacityPlanResources(activePlan?.periods ?? [])
-
-  const capacityPlanSlotsByResourceTypeId = new Map<string, CapacityPlanSlotInput[]>(
-    Array.from(capacityPlanByRt.entries()).map(([rtId, materialized]) => [
-      rtId,
-      materialized.slotWindows,
-    ]),
-  )
 
   // ── Phase 0: Build lookup maps ────────────────────────────────────────────
 
@@ -236,18 +303,47 @@ export function buildResourceCapacityProfileMap(
     }
   }
 
-  // ── Phase 1: Build legacy profiles per owner independently ────────────────
+  // ── Phase 1: Classify persisted profiles (resolve duplicates before eligibility) ──
 
-  const roleLegacy = new Map<string, CapacityProfileResourceData>()
-  const nrLegacy = new Map<string, CapacityProfileResourceData>()
+  const rtClassifications = new Map<string, ProfileClassification>()
+  const nrClassifications = new Map<string, ProfileClassification>()
+
+  const rawProfiles = project.capacityProfiles
+  if (rawProfiles) {
+    const rawByRT = new Map<string, PersistedProfile[]>()
+    const rawByNR = new Map<string, PersistedProfile[]>()
+    for (const cp of rawProfiles) {
+      if (cp.ownerKind === 'ROLE' && cp.resourceTypeId) {
+        const arr = rawByRT.get(cp.resourceTypeId) ?? []
+        arr.push(cp)
+        rawByRT.set(cp.resourceTypeId, arr)
+      } else if ((cp.ownerKind === 'NAMED_PERSON' || cp.ownerKind === 'PLANNED_RESOURCE') && cp.namedResourceId) {
+        const arr = rawByNR.get(cp.namedResourceId) ?? []
+        arr.push(cp)
+        rawByNR.set(cp.namedResourceId, arr)
+      }
+    }
+
+    for (const [rtId, profiles] of rawByRT) {
+      rtClassifications.set(rtId, classifyProfiles(profiles, 'ROLE', rtId))
+    }
+    for (const [nrId, profiles] of rawByNR) {
+      const label = namedResourceById.get(nrId)?.name ?? nrId
+      nrClassifications.set(nrId, classifyProfiles(profiles, label, nrId))
+    }
+  }
+
+  // ── Phase 2: Build pure legacy profiles (NO active-plan slots) ────────────
+
+  const roleProfiles = new Map<string, CapacityProfileResourceData>()
+  const namedResourceProfiles = new Map<string, CapacityProfileResourceData>()
 
   for (const rt of project.resourceTypes) {
     const roleProfile = mapResourceTypeToCapacityProfile({
       projectId: project.id,
       resourceType: rt as unknown as CapacityProfileResourceTypeLike,
-      capacityPlanSlots: capacityPlanSlotsByResourceTypeId.get(rt.id),
     })
-    roleLegacy.set(rt.id, {
+    roleProfiles.set(rt.id, {
       planningBasis: roleProfile.planningBasis,
       source: roleProfile.source,
       defaultPercent: roleProfile.defaultPercent ?? null,
@@ -266,9 +362,8 @@ export function buildResourceCapacityProfileMap(
         projectId: project.id,
         resourceType: rt as unknown as CapacityProfileResourceTypeLike,
         namedResource: nr as unknown as CapacityProfileNamedResourceLike,
-        capacityPlanSlots: capacityPlanSlotsByResourceTypeId.get(rt.id),
       })
-      nrLegacy.set(nr.id, {
+      namedResourceProfiles.set(nr.id, {
         planningBasis: nrProfile.planningBasis,
         source: nrProfile.source,
         defaultPercent: nrProfile.defaultPercent ?? null,
@@ -284,38 +379,36 @@ export function buildResourceCapacityProfileMap(
     }
   }
 
-  // ── Phase 2: Group persisted profiles, detect duplicates ──────────────────
+  // ── Phase 3: Apply PROFILE overrides for VALID groups ─────────────────────
 
-  const persistedByRTId = new Map<string, Array<NonNullable<AdapterProject['capacityProfiles']>[number]>>()
-  const persistedByNRId = new Map<string, Array<NonNullable<AdapterProject['capacityProfiles']>[number]>>()
-  const persisted = project.capacityProfiles
-  if (persisted) {
-    for (const cp of persisted) {
-      if (cp.ownerKind === 'ROLE' && cp.resourceTypeId) {
-        const arr = persistedByRTId.get(cp.resourceTypeId) ?? []
-        arr.push(cp)
-        persistedByRTId.set(cp.resourceTypeId, arr)
-      } else if ((cp.ownerKind === 'NAMED_PERSON' || cp.ownerKind === 'PLANNED_RESOURCE') && cp.namedResourceId) {
-        const arr = persistedByNRId.get(cp.namedResourceId) ?? []
-        arr.push(cp)
-        persistedByNRId.set(cp.namedResourceId, arr)
+  for (const [rtId, classification] of rtClassifications) {
+    if (classification.kind === 'VALID' && classification.profile) {
+      const dto = mapPersistedProfilesToDTOs(
+        [classification.profile] as unknown as Parameters<typeof mapPersistedProfilesToDTOs>[0],
+        resourceTypeById,
+        namedResourceById,
+      )
+      if (dto[0]) {
+        roleProfiles.set(rtId, profileDtoToData(dto[0]))
       }
     }
   }
 
-  // ── Phase 3: Build result map with precedence ─────────────────────────────
-
-  const result = new Map<string, CapacityProfileResourceData>()
-
-  // Step A: Seed with legacy entries (lowest precedence)
-  for (const [rtId, legacy] of roleLegacy) {
-    result.set(rtId, legacy)
+  for (const [nrId, classification] of nrClassifications) {
+    if (classification.kind === 'VALID' && classification.profile) {
+      const dto = mapPersistedProfilesToDTOs(
+        [classification.profile] as unknown as Parameters<typeof mapPersistedProfilesToDTOs>[0],
+        resourceTypeById,
+        namedResourceById,
+      )
+      if (dto[0]) {
+        namedResourceProfiles.set(nrId, profileDtoToData(dto[0]))
+      }
+    }
   }
-  for (const [nrId, legacy] of nrLegacy) {
-    result.set(nrId, legacy)
-  }
 
-  // Step B: Override with ACTIVE_CAPACITY_PLAN where fallback is needed
+  // ── Phase 4: Active-plan fallback for non-VALID groups ────────────────────
+
   if (activePlan) {
     for (const rt of project.resourceTypes) {
       const materialized = capacityPlanByRt.get(rt.id)
@@ -328,100 +421,29 @@ export function buildResourceCapacityProfileMap(
 
       if (!needsFallback) continue
 
-      // Override role entry (if not persisted)
-      if (!persistedByRTId.has(rt.id)) {
-        result.set(rt.id, materializedToActivePlanProfile(materialized))
+      // Role-level: aggregate slots if not VALID
+      const rtClass = rtClassifications.get(rt.id) ?? { kind: 'NONE' as const }
+      if (rtClass.kind !== 'VALID') {
+        roleProfiles.set(rt.id, materializedToActivePlanProfile(materialized))
       }
 
-      // Override each named resource entry (if not persisted)
-      for (const nr of rt.namedResources) {
-        if (!persistedByNRId.has(nr.id)) {
-          result.set(nr.id, materializedToActivePlanProfile(materialized))
+      // Per-resource slot assignment using shared helper
+      const assignment = materializePerResourceSlots(
+        materialized.slotWindows,
+        rt.id,
+        rt.name,
+        rt.namedResources,
+      )
+
+      for (const slot of assignment.resourceSlots) {
+        const nrClass = nrClassifications.get(slot.id) ?? { kind: 'NONE' as const }
+        if (nrClass.kind !== 'VALID') {
+          const slotWindow = slot.slotWindows[0]
+          namedResourceProfiles.set(slot.id, singleSlotActivePlanProfile(slotWindow))
         }
       }
-
-
     }
   }
 
-  // Step C: Override with persisted profiles (highest precedence)
-  for (const [rtId, profiles] of persistedByRTId) {
-    const resolved = resolveDuplicateProfiles(profiles, 'ROLE', rtId)
-    if (!resolved) {
-      // Conflicting duplicates → keep existing legacy or ACTIVE_CAPACITY_PLAN entry
-      continue
-    }
-    const dto = mapPersistedProfilesToDTOs(
-      [resolved] as unknown as Parameters<typeof mapPersistedProfilesToDTOs>[0],
-      resourceTypeById,
-      namedResourceById,
-    )
-    const p = dto[0]
-    if (p) {
-      result.set(rtId, {
-        planningBasis: p.planningBasis,
-        source: p.source,
-        defaultPercent: p.defaultPercent ?? null,
-        startWeek: p.startWeek ?? null,
-        endWeek: p.endWeek ?? null,
-        segments: p.segments.map(s => ({
-          startWeek: s.startWeek,
-          endWeek: s.endWeek,
-          capacityPercent: s.capacityPercent,
-        })),
-        resolutionSource: 'PROFILE',
-      })
-    }
-  }
-
-  for (const [nrId, profiles] of persistedByNRId) {
-    const resolved = resolveDuplicateProfiles(
-      profiles,
-      namedResourceById.get(nrId)?.name ?? 'NAMED_PERSON',
-      nrId,
-    )
-    if (!resolved) {
-      continue
-    }
-    const dto = mapPersistedProfilesToDTOs(
-      [resolved] as unknown as Parameters<typeof mapPersistedProfilesToDTOs>[0],
-      resourceTypeById,
-      namedResourceById,
-    )
-    const p = dto[0]
-    if (p) {
-      result.set(nrId, {
-        planningBasis: p.planningBasis,
-        source: p.source,
-        defaultPercent: p.defaultPercent ?? null,
-        startWeek: p.startWeek ?? null,
-        endWeek: p.endWeek ?? null,
-        segments: p.segments.map(s => ({
-          startWeek: s.startWeek,
-          endWeek: s.endWeek,
-          capacityPercent: s.capacityPercent,
-        })),
-        resolutionSource: 'PROFILE',
-      })
-    }
-  }
-
-  // ── Phase 4: Collision detection (role ID vs NR ID) ──────────────────────
-
-  const roleIds = new Set(project.resourceTypes.map(rt => rt.id))
-  const nrIds = new Set<string>()
-  for (const rt of project.resourceTypes) {
-    for (const nr of rt.namedResources) {
-      nrIds.add(nr.id)
-    }
-  }
-  const collidingKeys = [...roleIds].filter(id => nrIds.has(id))
-  if (collidingKeys.length > 0) {
-    console.warn(
-      `Key collision between role and named resource profile keys: "${collidingKeys.join(', ')}". Role entry may shadow named resource entry.`,
-    )
-  }
-
-  return result
+  return { roleProfiles, namedResourceProfiles }
 }
-

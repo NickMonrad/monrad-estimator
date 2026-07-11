@@ -158,7 +158,14 @@ export default function ResourceProfileTab({
                     <td className="px-4 py-3">
                       {(() => {
                         if (row.namedResources && row.namedResources.length > 0) {
-                          return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Named resources: mixed modes</span>
+                          const count = row.namedResources.length
+                          const profileCount = row.namedResources.filter(nr => nr.capacityProfile).length
+                          const hint = profileCount > 0 ? `${profileCount} capacity profile${profileCount > 1 ? 's' : ''}` : 'No profiles'
+                          return (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+                              {count} {count === 1 ? 'person' : 'people'} · {hint}
+                            </span>
+                          )
                         }
                         const profile = row.capacityProfile
                         const isProfileAuthoritative = profile?.resolutionSource === 'PROFILE'

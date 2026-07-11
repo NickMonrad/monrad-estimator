@@ -101,17 +101,32 @@ Profile, making it authoritative for displaying and exporting capacity-profile d
 from the persisted `CapacityProfile`/`CapacitySegment` read model. The adapter in
 `capacityProfileResourceAdapter.ts` resolves profiles with profile-first precedence:
 
-1. **Persisted profile** — if a `CapacityProfile` exists for the owner (role or named
-   resource), its data is used with `resolutionSource: 'PROFILE'`.
-2. **Legacy fallback** — if no persisted profile exists, data is derived from legacy
-   `ResourceType`/`NamedResource` fields with `resolutionSource: 'LEGACY'`.
-3. **Active Capacity Plan** — only where existing fallback rules apply (e.g. CAPACITY_PLAN
-   mode), materialised from active `CapacityPlan` periods.
+1. **Persisted owner-specific profile** — if a `CapacityProfile` exists for the
+   owner (role or named resource), its data is used with
+   `resolutionSource: 'PROFILE'`.
+2. **Active Capacity Plan materialisation** — only when the existing
+   `shouldFallbackToActiveCapacityPlan` logic requires it (e.g. `CAPACITY_PLAN`
+   mode with no explicit profile override). Materialised from active `CapacityPlan`
+   periods with `resolutionSource: 'ACTIVE_CAPACITY_PLAN'`. Checked before LEGACY
+   because CAPACITY_PLAN-mode legacy fields are meaningless for display.
+3. **Pure legacy compatibility state** — derived from legacy `ResourceType`/
+   `NamedResource` fields with `resolutionSource: 'LEGACY'`. This is owner-specific
+   legacy state only, never contaminated by capacity plan materialisation.
 
 **Commercial calculations remain unchanged.** The profile data enriches display and export
 output only. Billing formulas, billable days, discounts, tax, and totals use the same
 inputs as before. Scheduler, leveller, Timeline, Squad Planner, and Commercial
 calculations are all unchanged — they continue to read legacy allocation fields directly.
+
+**Role aggregate vs per-resource profiles:** Role-level (`ResourceType`) profiles
+represent aggregate capacity across all resources of that type. Each individual
+named-resource (`NamedResource`) profile is specific to one resource slot. These
+use different owner kinds and are independently keyed by `resourceTypeId` and
+`namedResourceId` respectively — the two key namespaces never collide.
+
+**Duplicate owner keys fall through:** If the adapter encounters a duplicate owner
+key in the profile map (defensive guard), it treats the entry as absent and falls
+through to the next precedence tier rather than throwing or blocking.
 
 ### Commercial owns billing and price presentation
 
@@ -349,12 +364,14 @@ branch and will land when PR #356 merges.
 
 **Key changes:**
 
-- **Adapter (profile-first, no reconciliation gate):**
-  `buildResourceCapacityProfileMap` in `capacityProfileResourceAdapter.ts` prefers
-  persisted profile data when a `CapacityProfile` exists for the owner (role or named
-  resource), setting `resolutionSource: 'PROFILE'`. Falls back to legacy-derived data
-  with `resolutionSource: 'LEGACY'` when no persisted profile exists. No reconciliation
-  comparison is required — the adapter uses persisted data directly.
+- **Adapter (profile-first precedence, exact order):**
+  `buildResourceCapacityProfileMap` in `capacityProfileResourceAdapter.ts` uses
+  three-tier precedence: persisted owner-specific profile (`resolutionSource:
+  'PROFILE'`) → active Capacity Plan materialisation (`resolutionSource:
+  'ACTIVE_CAPACITY_PLAN'`, only when `shouldFallbackToActiveCapacityPlan` requires
+  it) → pure legacy compatibility state (`resolutionSource: 'LEGACY'`). No
+  reconciliation comparison is required — the adapter uses persisted data directly
+  when a profile exists for the owner.
 
 - **Route display-field projection:**
   `GET /api/projects/:projectId/resource-profile` uses
@@ -379,6 +396,13 @@ branch and will land when PR #356 merges.
 - Commercial billing formulas, billable days, discounts, tax, and totals are unchanged.
 - Entity identity is preserved — one named person / planned resource with multiple
   capacity segments is one row, not multiple.
+- Role aggregate vs per-resource profiles — role-level (ResourceType) profiles
+  represent aggregate capacity across all resources of that type; each
+  named-resource profile is specific to one resource slot.
+- Independent key spaces — role profiles keyed by `resourceTypeId`,
+  named-resource profiles by `namedResourceId`; the two namespaces never collide.
+- Duplicate owner keys in the profile map fall through to the next precedence
+  tier rather than blocking.
 
 **New files introduced:**
 

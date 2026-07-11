@@ -400,3 +400,138 @@ describe('Capacity Profile Display', () => {
     expect(costCells.length).toBeGreaterThanOrEqual(2)
   })
 })
+
+describe('Named resource aggregate hint', () => {
+  it('shows count and capacity profile count in planning basis column when named resources exist', () => {
+    const row = {
+      resourceTypeId: 'rt-dev',
+      name: 'Developer',
+      category: 'ENGINEERING',
+      count: 2,
+      hoursPerDay: 8,
+      dayRate: 800,
+      totalHours: 80,
+      totalDays: 10,
+      effortDays: 10,
+      allocatedDays: 5,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      derivedStartWeek: null,
+      derivedEndWeek: null,
+      estimatedCost: null,
+      epics: [],
+      namedResources: [
+        {
+          id: 'nr-1', name: 'Alice',
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null,
+          allocatedDays: 3, derivedStartWeek: null, derivedEndWeek: null,
+          actualAllocatedDays: 1.5, actualAllocationStartWeek: 2, actualAllocationEndWeek: 3,
+          actualAllocatedWeeks: [{ week: 2, days: 1.5, capacityDays: 5 }],
+          actualAllocationSegments: [{ startWeek: 2, endWeek: 3, days: 1.5 }],
+          synthetic: false,
+          capacityProfile: {
+            planningBasis: 'demandFollowing', source: 'squadPlanner',
+            defaultPercent: null, startWeek: null, endWeek: null,
+            segments: [], resolutionSource: 'PROFILE',
+          },
+        },
+        {
+          id: 'nr-2', name: 'Bob',
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null,
+          allocatedDays: 2, derivedStartWeek: null, derivedEndWeek: null,
+          actualAllocatedDays: 1, actualAllocationStartWeek: 4, actualAllocationEndWeek: 4,
+          actualAllocatedWeeks: [{ week: 4, days: 1, capacityDays: 5 }],
+          actualAllocationSegments: [{ startWeek: 4, endWeek: 4, days: 1 }],
+          synthetic: true,
+          capacityProfile: {
+            planningBasis: 'availabilityWindow', source: 'fixed',
+            defaultPercent: 50, startWeek: 0, endWeek: 11,
+            segments: [{ startWeek: 0, endWeek: 5, capacityPercent: 50 }, { startWeek: 6, endWeek: 11, capacityPercent: 100 }],
+            resolutionSource: 'ACTIVE_CAPACITY_PLAN',
+          },
+        },
+      ],
+    }
+    render(
+      <ResourceProfileTab
+        {...createProps({
+          profile: {
+            projectId: 'project-1', hoursPerDay: 8, projectDurationWeeks: 12,
+            bufferWeeks: 0, onboardingWeeks: 0,
+            resourceRows: [row],
+            overheadRows: [],
+            summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
+          },
+          filteredResourceRows: [row],
+        })}
+      />,
+    )
+
+    // Aggregate hint shows count and profile count
+    const hintSpan = screen.getByText(/2 people · 2 capacity profiles/)
+    expect(hintSpan).toBeInTheDocument()
+    // Role identity label acknowledges mixed person/planned
+    expect(screen.getByText(/Mixed \(named person \+ planned resource\)/)).toBeInTheDocument()
+  })
+
+  it('shows "person" in aggregate hint for single named resource without capacity profile', () => {
+    const row = {
+      resourceTypeId: 'rt-dev',
+      name: 'Developer',
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 800,
+      totalHours: 80,
+      totalDays: 10,
+      effortDays: 10,
+      allocatedDays: 3,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      derivedStartWeek: null,
+      derivedEndWeek: null,
+      estimatedCost: null,
+      epics: [],
+      namedResources: [
+        {
+          id: 'nr-1', name: 'Carol',
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          startWeek: null, endWeek: null,
+          allocatedDays: 0, derivedStartWeek: null, derivedEndWeek: null,
+          actualAllocatedDays: 0, actualAllocationStartWeek: null, actualAllocationEndWeek: null,
+          actualAllocatedWeeks: [],
+          actualAllocationSegments: [],
+          synthetic: false,
+        },
+      ],
+    }
+    render(
+      <ResourceProfileTab
+        {...createProps({
+          profile: {
+            projectId: 'project-1', hoursPerDay: 8, projectDurationWeeks: 12,
+            bufferWeeks: 0, onboardingWeeks: 0,
+            resourceRows: [row],
+            overheadRows: [],
+            summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
+          },
+          filteredResourceRows: [row],
+        })}
+      />,
+    )
+
+    // Aggregate hint: single person, no capacity profiles
+    expect(screen.getByText(/1 person · No profiles/)).toBeInTheDocument()
+    // Role identity label
+    expect(screen.getByText('Named person')).toBeInTheDocument()
+  })
+})

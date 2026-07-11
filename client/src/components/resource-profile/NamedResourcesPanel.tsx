@@ -2,6 +2,12 @@ import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type { ResourceProfileRow } from '../../types/backlog'
+import {
+  formatPlanningBasis,
+  formatCapacityProfileSource,
+  formatResolutionSource,
+} from '../../lib/capacityProfileFormatting'
+
 
 type PricingModel = 'ACTUAL_DAYS' | 'PRO_RATA'
 
@@ -159,23 +165,28 @@ export default function NamedResourcesPanel({
                 <span />
               </div>
               {mergedResources.map((resource) => (
-                <div
-                  key={resource.id}
-                  className="grid grid-cols-[1fr_110px_110px_80px_150px_minmax(180px,1fr)_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-                >
-                  <input
-                    type="text"
-                    defaultValue={resource.name}
-                    onBlur={(e) => {
-                      if (!resource.persisted) return
-                      const value = e.target.value.trim()
-                      if (value && value !== resource.name) {
-                        updateResource.mutate({ id: resource.id, name: value })
-                      }
-                    }}
-                    disabled={!resource.persisted}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
-                  />
+                <div key={resource.id}>
+                  <div className="grid grid-cols-[1fr_110px_110px_80px_150px_minmax(180px,1fr)_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="text"
+                      defaultValue={resource.name}
+                      onBlur={(e) => {
+                        if (!resource.persisted) return
+                        const value = e.target.value.trim()
+                        if (value && value !== resource.name) {
+                          updateResource.mutate({ id: resource.id, name: value })
+                        }
+                      }}
+                      disabled={!resource.persisted}
+                      className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
+                    />
+                    {!resource.persisted && (
+                      <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 uppercase tracking-wide">
+                        Planned resource
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="number"
                     defaultValue={resource.startWeek ?? ''}
@@ -265,6 +276,40 @@ export default function NamedResourcesPanel({
                   >
                     x
                   </button>
+                  </div>
+                  {resource.allocation?.capacityProfile && (
+                    <div className="px-2 py-1 ml-2 mt-0.5 text-xs space-y-0.5 border-l-2 border-blue-200 dark:border-blue-700 bg-blue-50/50 dark:bg-blue-950/20 rounded-r">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+                          {formatPlanningBasis(resource.allocation.capacityProfile.planningBasis)}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                          {formatCapacityProfileSource(resource.allocation.capacityProfile.source)}
+                        </span>
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                          Resolution: {formatResolutionSource(resource.allocation.capacityProfile.resolutionSource)}
+                        </span>
+                        {resource.allocation.capacityProfile.defaultPercent != null && (
+                          <span className="text-[10px] text-gray-500 dark:text-gray-400">
+                            Default: {resource.allocation.capacityProfile.defaultPercent}%
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-gray-400 dark:text-gray-500">
+                        Window: W{resource.allocation.capacityProfile.startWeek != null ? resource.allocation.capacityProfile.startWeek + 1 : '?'} → W{resource.allocation.capacityProfile.endWeek != null ? resource.allocation.capacityProfile.endWeek + 1 : '?'}
+                      </div>
+                      {resource.allocation.capacityProfile.segments.length > 0 && (
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400">
+                          Profile: {resource.allocation.capacityProfile.segments.map((seg, i) => (
+                            <span key={i}>
+                              {i > 0 && <span className="mx-1">·</span>}
+                              W{seg.startWeek + 1}-W{seg.endWeek + 1}: {seg.capacityPercent}%
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

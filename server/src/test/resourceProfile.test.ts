@@ -18,7 +18,7 @@ vi.mock('../lib/capacityProfileResourceAdapter.js', async (importOriginal) => {
   testCtx.realBuildFn = actual.buildResourceCapacityProfileMap as (...args: unknown[]) => unknown
   return {
     ...actual,
-    buildResourceCapacityProfileMap: vi.fn(() => new Map()),
+    buildResourceCapacityProfileMap: vi.fn(() => ({ roleProfiles: new Map(), namedResourceProfiles: new Map() })),
   }
 })
 
@@ -1854,7 +1854,7 @@ describe('capacity profile enrichment in resource profile', () => {
   const mockAdapterMap = vi.mocked(capacityProfileAdapter.buildResourceCapacityProfileMap)
 
   afterEach(() => {
-    mockAdapterMap.mockImplementation(() => new Map())
+    mockAdapterMap.mockImplementation(() => ({ roleProfiles: new Map(), namedResourceProfiles: new Map() }))
   })
 
   const BASE_PROJECT = {
@@ -1881,17 +1881,21 @@ describe('capacity profile enrichment in resource profile', () => {
   it('returns capacityProfile on named-resource row when adapter provides enrichment', async () => {
     const rtId = 'rt-cap-test'
     const nrId = 'nr-cap-1'
-    mockAdapterMap.mockReturnValue(new Map([
-      [nrId, {
-        planningBasis: 'availabilityWindow',
-        source: 'availabilityWindow',
-        defaultPercent: 100,
-        startWeek: 0,
-        endWeek: 4,
-        segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
-        resolutionSource: 'PROFILE',
-      }],
-    ]))
+    mockAdapterMap.mockReturnValue({
+      roleProfiles: new Map(),
+      namedResourceProfiles: new Map([
+        [nrId, {
+          planningBasis: 'availabilityWindow',
+          source: 'availabilityWindow',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 4,
+          segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
+          resolutionSource: 'PROFILE',
+        }],
+      ]),
+    })
+
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...BASE_PROJECT,
@@ -1936,29 +1940,34 @@ describe('capacity profile enrichment in resource profile', () => {
     expect(nr.allocationPercent).toBe(100)
     expect(nr.pricingModel).toBe('ACTUAL_DAYS')
   })
+
   it('includes capacityProfile on role-level row', async () => {
     const rtId = 'rt-role-cap'
     const nrId = 'nr-role-1'
-    mockAdapterMap.mockReturnValue(new Map([
-      [nrId, {
-        planningBasis: 'availabilityWindow',
-        source: 'availabilityWindow',
-        defaultPercent: 75,
-        startWeek: 0,
-        endWeek: 8,
-        segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
-        resolutionSource: 'LEGACY',
-      }],
-      [rtId, {
-        planningBasis: 'availabilityWindow',
-        source: 'legacy',
-        defaultPercent: 75,
-        startWeek: 0,
-        endWeek: 8,
-        segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
-        resolutionSource: 'LEGACY',
-      }],
-    ]))
+    mockAdapterMap.mockReturnValue({
+      roleProfiles: new Map([
+        [rtId, {
+          planningBasis: 'availabilityWindow',
+          source: 'legacy',
+          defaultPercent: 75,
+          startWeek: 0,
+          endWeek: 8,
+          segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+          resolutionSource: 'LEGACY',
+        }],
+      ]),
+      namedResourceProfiles: new Map([
+        [nrId, {
+          planningBasis: 'availabilityWindow',
+          source: 'availabilityWindow',
+          defaultPercent: 75,
+          startWeek: 0,
+          endWeek: 8,
+          segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+          resolutionSource: 'LEGACY',
+        }],
+      ]),
+    })
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...BASE_PROJECT,
@@ -1988,12 +1997,9 @@ describe('capacity profile enrichment in resource profile', () => {
     expect(res.status).toBe(200)
     const row = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
     expect(row).toBeDefined()
-
     expect(row.capacityProfile).toBeDefined()
     expect(row.capacityProfile.planningBasis).toBe('availabilityWindow')
     expect(row.capacityProfile.segments).toHaveLength(1)
-
-    // Named resource also has its own capacityProfile
     expect(row.namedResources[0].capacityProfile).toBeDefined()
     expect(row.namedResources[0].capacityProfile.planningBasis).toBe('availabilityWindow')
   })
@@ -2001,20 +2007,24 @@ describe('capacity profile enrichment in resource profile', () => {
   it('multi-segment named person remains one entity in resource profile', async () => {
     const rtId = 'rt-multi'
     const nrId = 'nr-multi-1'
-    mockAdapterMap.mockReturnValue(new Map([
-      [nrId, {
-        planningBasis: 'capacityProfile',
-        source: 'squadPlanner',
-        defaultPercent: 100,
-        startWeek: 0,
-        endWeek: 8,
-        segments: [
-          { startWeek: 0, endWeek: 4, capacityPercent: 50 },
-          { startWeek: 4, endWeek: 8, capacityPercent: 100 },
-        ],
-        resolutionSource: 'PROFILE',
-      }],
-    ]))
+    mockAdapterMap.mockReturnValue({
+      roleProfiles: new Map(),
+      namedResourceProfiles: new Map([
+        [nrId, {
+          planningBasis: 'capacityProfile',
+          source: 'squadPlanner',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 8,
+          segments: [
+            { startWeek: 0, endWeek: 4, capacityPercent: 50 },
+            { startWeek: 4, endWeek: 8, capacityPercent: 100 },
+          ],
+          resolutionSource: 'PROFILE',
+        }],
+      ]),
+    })
+
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...BASE_PROJECT,
@@ -2107,17 +2117,20 @@ describe('capacity profile enrichment in resource profile', () => {
   it('capacity profile, assigned work, and billing basis remain separate', async () => {
     const rtId = 'rt-sep'
     const nrId = 'nr-sep-1'
-    mockAdapterMap.mockReturnValue(new Map([
-      [nrId, {
-        planningBasis: 'capacityProfile',
-        source: 'availabilityWindow',
-        defaultPercent: 75,
-        startWeek: 0,
-        endWeek: 8,
-        segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
-        resolutionSource: 'PROFILE',
-      }],
-    ]))
+    mockAdapterMap.mockReturnValue({
+      roleProfiles: new Map(),
+      namedResourceProfiles: new Map([
+        [nrId, {
+          planningBasis: 'capacityProfile',
+          source: 'availabilityWindow',
+          defaultPercent: 75,
+          startWeek: 0,
+          endWeek: 8,
+          segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
+          resolutionSource: 'PROFILE',
+        }],
+      ]),
+    })
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...BASE_PROJECT,
@@ -2147,19 +2160,12 @@ describe('capacity profile enrichment in resource profile', () => {
     expect(res.status).toBe(200)
     const row = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
     expect(row).toBeDefined()
-
     const nr = row.namedResources[0]
-
-    // 1. Capacity profile is available as enrichment
     expect(nr.capacityProfile).toBeDefined()
     expect(nr.capacityProfile.planningBasis).toBe('capacityProfile')
-
-    // 2. Assigned work is separate (derived from allocation mode + hours)
     expect(nr.allocatedDays).toBeDefined()
     expect(nr.derivedStartWeek).toBeDefined()
     expect(nr.derivedEndWeek).toBeDefined()
-
-    // 3. Billing basis is separate
     expect(nr.pricingModel).toBe('ACTUAL_DAYS')
   })
 })
@@ -2173,7 +2179,7 @@ describe('profile-first read adoption integration', () => {
   /** Restore adapter to empty-map default so existing tests are unaffected. */
   afterEach(() => {
     vi.mocked(capacityProfileAdapter.buildResourceCapacityProfileMap)
-      .mockImplementation(() => new Map())
+      .mockImplementation(() => ({ roleProfiles: new Map(), namedResourceProfiles: new Map() }))
   })
 
   /** Configure the adapter mock to call through to the real implementation. */

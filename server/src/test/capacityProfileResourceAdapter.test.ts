@@ -50,7 +50,7 @@ function makeNamedResource(overrides?: Record<string, unknown>) {
 describe('buildResourceCapacityProfileMap', () => {
   it('returns empty map for project with no resource types', () => {
     const result = buildResourceCapacityProfileMap(makeProject())
-    expect(result.size).toBe(0)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(0)
   })
 
   it('returns legacy-derived data for a role-level resource type (no persisted)', () => {
@@ -65,8 +65,8 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
     const result = buildResourceCapacityProfileMap(project)
-    expect(result.size).toBe(1)
-    const data = result.get('rt-1')
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
+    const data = result.roleProfiles.get('rt-1')
     expect(data).toBeDefined()
     // EFFORT → planningBasis: demandFollowing, source: fixed
     expect(data!.planningBasis).toBe('demandFollowing')
@@ -95,16 +95,16 @@ describe('buildResourceCapacityProfileMap', () => {
     })
     const result = buildResourceCapacityProfileMap(project)
     // New behavior: produces BOTH role entry keyed by rt-1 AND NR entry keyed by nr-1
-    expect(result.size).toBe(2)
-    expect(result.has('rt-1')).toBe(true)
-    expect(result.has('nr-1')).toBe(true)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
+    expect(result.roleProfiles.has('rt-1')).toBe(true)
+    expect(result.namedResourceProfiles.has('nr-1')).toBe(true)
 
-    const roleData = result.get('rt-1')!
+    const roleData = result.roleProfiles.get('rt-1')!
     expect(roleData.planningBasis).toBe('demandFollowing')
     expect(roleData.source).toBe('fixed')
     expect(roleData.resolutionSource).toBe('LEGACY')
 
-    const nrData = result.get('nr-1')!
+    const nrData = result.namedResourceProfiles.get('nr-1')!
     expect(nrData.planningBasis).toBe('demandFollowing')
     expect(nrData.source).toBe('fixed')
     expect(nrData.resolutionSource).toBe('LEGACY')
@@ -141,8 +141,8 @@ describe('buildResourceCapacityProfileMap', () => {
     })
     const result = buildResourceCapacityProfileMap(project)
     // Only role entry — no named resources
-    expect(result.size).toBe(1)
-    const data = result.get('rt-1')
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
+    const data = result.roleProfiles.get('rt-1')
     expect(data).toBeDefined()
     expect(data!.planningBasis).toBe('availabilityWindow')
     expect(data!.source).toBe('availabilityWindow')
@@ -186,8 +186,8 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
     const result = buildResourceCapacityProfileMap(project)
-    expect(result.size).toBe(1)
-    const data = result.get('rt-1')
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
+    const data = result.roleProfiles.get('rt-1')
     expect(data).toBeDefined()
     // Profile-first: returns persisted profile, not legacy
     expect(data!.planningBasis).toBe('capacityProfile')
@@ -239,16 +239,16 @@ describe('buildResourceCapacityProfileMap', () => {
     })
     const result = buildResourceCapacityProfileMap(project)
     // Now includes BOTH role entry and NR entry
-    expect(result.size).toBe(2)
-    expect(result.has(nrId)).toBe(true)
-    expect(result.has('rt-1')).toBe(true)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
+    expect(result.namedResourceProfiles.has(nrId)).toBe(true)
+    expect(result.roleProfiles.has('rt-1')).toBe(true)
 
     // Role entry is legacy-derived
-    const roleData = result.get('rt-1')!
+    const roleData = result.roleProfiles.get('rt-1')!
     expect(roleData.resolutionSource).toBe('LEGACY')
 
     // NR entry is profile-first
-    const data = result.get(nrId)!
+    const data = result.namedResourceProfiles.get(nrId)!
     expect(data.planningBasis).toBe('availabilityWindow')
     expect(data.segments).toHaveLength(2)
     expect(data.segments[0].capacityPercent).toBe(50)
@@ -312,11 +312,11 @@ describe('buildResourceCapacityProfileMap', () => {
 
     const result = buildResourceCapacityProfileMap(project)
     // Now includes BOTH role and NR entry
-    expect(result.size).toBe(2)
-    expect(result.has(nrId)).toBe(true)
-    expect(result.has('rt-1')).toBe(true)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
+    expect(result.namedResourceProfiles.has(nrId)).toBe(true)
+    expect(result.roleProfiles.has('rt-1')).toBe(true)
 
-    const data = result.get(nrId)!
+    const data = result.namedResourceProfiles.get(nrId)!
     expect(data.planningBasis).toBe('capacityProfile')
     expect(data.source).toBe('squadPlanner')
     expect(data.segments).toHaveLength(1)
@@ -337,7 +337,7 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
     const result = buildResourceCapacityProfileMap(project)
-    const data = result.get('rt-1')!
+    const data = result.roleProfiles.get('rt-1')!
     // Demand-following: startWeek and endWeek should be null
     expect(data.planningBasis).toBe('demandFollowing')
     expect(data.startWeek).toBeNull()
@@ -366,7 +366,7 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
     const result = buildResourceCapacityProfileMap(project)
-    const nrData = result.get('nr-1')!
+    const nrData = result.namedResourceProfiles.get('nr-1')!
     // Demand-following from EFFORT mode → null windows
     expect(nrData.planningBasis).toBe('demandFollowing')
     expect(nrData.startWeek).toBeNull()
@@ -439,22 +439,22 @@ describe('buildResourceCapacityProfileMap', () => {
     })
 
     const result = buildResourceCapacityProfileMap(project)
-    expect(result.size).toBe(3)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(3)
 
-    const roleData = result.get(rtId)!
+    const roleData = result.roleProfiles.get(rtId)!
     expect(roleData.resolutionSource).toBe('PROFILE')
     expect(roleData.segments).toEqual([
       { startWeek: 0, endWeek: 3, capacityPercent: 50 },
       { startWeek: 6, endWeek: 9, capacityPercent: 100 },
     ])
 
-    const inheritedData = result.get(nrInherited)!
+    const inheritedData = result.namedResourceProfiles.get(nrInherited)!
     expect(inheritedData.resolutionSource).toBe('LEGACY')
     expect(inheritedData.planningBasis).toBe('capacityProfile')
     expect(inheritedData.defaultPercent).toBe(70)
     expect(inheritedData.segments).toEqual([])
 
-    const explicitData = result.get(nrExplicit)!
+    const explicitData = result.namedResourceProfiles.get(nrExplicit)!
     expect(explicitData.resolutionSource).toBe('PROFILE')
     expect(explicitData.defaultPercent).toBe(75)
     expect(explicitData.segments).toEqual([
@@ -511,25 +511,32 @@ describe('buildResourceCapacityProfileMap', () => {
         },
       ],
     })
-
     const result = buildResourceCapacityProfileMap(project)
     // RT has stale windows → shouldFallbackToActiveCapacityPlan returns true
-    expect(result.size).toBe(2)
+    // Entries: role aggregate + 1 existing NR (slot 0) + 1 generated planned resource (slot 1)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(3)
 
-    const roleData = result.get(rtId)!
+    const roleData = result.roleProfiles.get(rtId)!
     expect(roleData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
     expect(roleData.planningBasis).toBe('capacityProfile')
     expect(roleData.source).toBe('squadPlanner')
-    // deriveSlotWindows merges adjacent periods per quantum unit
-    // Units 1-2 (50%): weeks 0-7 continuous; Units 3-4 (50%): weeks 0-3
-    // Grouped by startWeek:endWeek → (0,7,50), (0,3,50) sorted by endWeek asc
+    // Role gets aggregate: both slot windows
     expect(roleData.segments).toHaveLength(2)
     expect(roleData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 50 })
     expect(roleData.segments[1]).toMatchObject({ startWeek: 0, endWeek: 7, capacityPercent: 50 })
 
-    const nrData = result.get(nrId)!
+    // Existing NR gets only its own slot (slot index 0 = window [0,3,50%])
+    const nrData = result.namedResourceProfiles.get(nrId)!
     expect(nrData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
-    expect(nrData.segments).toHaveLength(2)
+    expect(nrData.segments).toHaveLength(1)
+    expect(nrData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 50 })
+
+    // Generated planned resource gets remaining slot (slot index 1 = window [0,7,50%])
+    const genId = `${rtId}-capacity-plan-2`
+    const genData = result.namedResourceProfiles.get(genId)!
+    expect(genData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
+    expect(genData.segments).toHaveLength(1)
+    expect(genData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 7, capacityPercent: 50 })
   })
 
   it('active capacity plan fallback: preserves persisted profile when present', () => {
@@ -590,12 +597,12 @@ describe('buildResourceCapacityProfileMap', () => {
 
     const result = buildResourceCapacityProfileMap(project)
     // Role entry gets ACTIVE_CAPACITY_PLAN (stale), NR gets PROFILE (persisted wins)
-    expect(result.size).toBe(2)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
 
-    const roleData = result.get(rtId)!
+    const roleData = result.roleProfiles.get(rtId)!
     expect(roleData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
 
-    const nrData = result.get(nrId)!
+    const nrData = result.namedResourceProfiles.get(nrId)!
     expect(nrData.resolutionSource).toBe('PROFILE')
     expect(nrData.planningBasis).toBe('availabilityWindow')
     expect(nrData.source).toBe('manual')
@@ -647,9 +654,9 @@ describe('buildResourceCapacityProfileMap', () => {
     const result = buildResourceCapacityProfileMap(project)
     // shouldFallbackToActiveCapacityPlan returns false (NR windows match plan)
     // Entries remain LEGACY (not overridden by ACTIVE_CAPACITY_PLAN)
-    expect(result.size).toBe(2)
-    expect(result.get(rtId)!.resolutionSource).toBe('LEGACY')
-    expect(result.get(nrId)!.resolutionSource).toBe('LEGACY')
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
+    expect(result.roleProfiles.get(rtId)!.resolutionSource).toBe('LEGACY')
+    expect(result.namedResourceProfiles.get(nrId)!.resolutionSource).toBe('LEGACY')
   })
 
   // ─── Duplicate handling ───────────────────────────────────────────────
@@ -695,8 +702,8 @@ describe('buildResourceCapacityProfileMap', () => {
     })
 
     const result = buildResourceCapacityProfileMap(project)
-    expect(result.size).toBe(1)
-    const data = result.get('rt-dup')!
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
+    const data = result.roleProfiles.get('rt-dup')!
     // Both are exact duplicates → smallest ID (cp-a) wins
     expect(data.resolutionSource).toBe('PROFILE')
     expect(data.defaultPercent).toBe(75)
@@ -743,8 +750,8 @@ describe('buildResourceCapacityProfileMap', () => {
     })
 
     const result = buildResourceCapacityProfileMap(project)
-    expect(result.size).toBe(1)
-    const data = result.get('rt-conflict')!
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
+    const data = result.roleProfiles.get('rt-conflict')!
     // Conflict → fallback to legacy
     expect(data.resolutionSource).toBe('LEGACY')
     // Legacy has TIMELINE/100%/0-10
@@ -800,8 +807,8 @@ describe('buildResourceCapacityProfileMap', () => {
     })
 
     const result = buildResourceCapacityProfileMap(project)
-    expect(result.size).toBe(2) // role + NR
-    const nrData = result.get(nrId)!
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
+    const nrData = result.namedResourceProfiles.get(nrId)!
     expect(nrData.resolutionSource).toBe('PROFILE')
     // cp-nr-a wins (smaller ID)
   })
@@ -852,16 +859,15 @@ describe('buildResourceCapacityProfileMap', () => {
     })
 
     const result = buildResourceCapacityProfileMap(project)
-    expect(result.size).toBe(2) // role + NR
-    const nrData = result.get(nrId)!
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
+    const nrData = result.namedResourceProfiles.get(nrId)!
     expect(nrData.resolutionSource).toBe('LEGACY')
     // Legacy has demandFollowing from EFFORT mode
     expect(nrData.planningBasis).toBe('demandFollowing')
   })
 
   // ─── Key collision detection ──────────────────────────────────────────
-
-  it('logs warning when resourceTypeId and namedResourceId collide', () => {
+  it('separate maps prevent resourceTypeId and namedResourceId collisions', () => {
     const collidingId = 'same-id-1'
     const warnings: string[] = []
     const origWarn = console.warn
@@ -885,9 +891,16 @@ describe('buildResourceCapacityProfileMap', () => {
         ],
       })
       const result = buildResourceCapacityProfileMap(project)
-      // Same key → NR entry overwrites role entry (NR set last in Phase 3 Step A)
-      expect(result.size).toBe(1)
-      expect(warnings.some(w => w.includes('Key collision'))).toBe(true)
+      // With separate role/NR maps, both entries coexist — no collision
+      expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
+      expect(result.roleProfiles.has(collidingId)).toBe(true)
+      expect(result.namedResourceProfiles.has(collidingId)).toBe(true)
+      const roleData = result.roleProfiles.get(collidingId)!
+      expect(roleData.resolutionSource).toBe('LEGACY')
+      const nrData = result.namedResourceProfiles.get(collidingId)!
+      expect(nrData.resolutionSource).toBe('LEGACY')
+      // No warnings emitted — separate maps avoid collision
+      expect(warnings.some(w => w.includes('Key collision'))).toBe(false)
     } finally {
       console.warn = origWarn
     }
@@ -951,15 +964,15 @@ describe('buildResourceCapacityProfileMap', () => {
 
     const result = buildResourceCapacityProfileMap(project)
     // 2 entries: role + NR
-    expect(result.size).toBe(2)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
 
     // Both are PROFILE resolution
-    expect(result.get('rt-com')!.resolutionSource).toBe('PROFILE')
-    expect(result.get('nr-com')!.resolutionSource).toBe('PROFILE')
+    expect(result.roleProfiles.get('rt-com')!.resolutionSource).toBe('PROFILE')
+    expect(result.namedResourceProfiles.get('nr-com')!.resolutionSource).toBe('PROFILE')
 
     // The adapter enriches with profile data — no commercial fields exist
     // (commercial computation is the route's domain)
-    const keys = Object.keys(result.get('rt-com')!).sort()
+    const keys = Object.keys(result.roleProfiles.get('rt-com')!).sort()
     expect(keys).toEqual(['defaultPercent', 'endWeek', 'planningBasis', 'resolutionSource', 'segments', 'source', 'startWeek'])
   })
 })

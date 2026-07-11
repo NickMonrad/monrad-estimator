@@ -197,16 +197,14 @@ Resource Profile should explain staffing and assignment:
 
 Use plain labels such as **Capacity profile**, **Reserved capacity**, **Assigned work**, **Assigned days**, **Named person**, and **Planned resource**.
 
-**Current implementation status (PR #356, pending merge):** The Resource Profile route
-and CSV export adopt profile-first read precedence from persisted
-`CapacityProfile`/`CapacitySegment` rows when they exist. The route projects profile
-fields into legacy display fields via `projectCapacityProfileToLegacyAllocation`
-(`capacityProfileLegacyProjection.ts`), falling back to legacy fields when no profile
-exists. The CSV export includes **Capacity profile segments**, **Planning basis**,
-**Profile source**, **Default capacity %**, **Profile start**, and **Profile end**
-columns. Commercial calculations remain unchanged. Scheduler, leveller, Timeline,
-Squad Planner, and Commercial calculations are unchanged — they continue to read
-legacy allocation fields directly.
+**Current implementation status (PR #356, pending merge):** Resource Profile and CSV
+reads resolve each owner in this order: a valid persisted
+`CapacityProfile`/`CapacitySegment`; active Capacity Plan slot materialisation only when
+`shouldFallbackToActiveCapacityPlan` requires it; then pure legacy fields. The route
+projects the resolved profile into legacy display fields via
+`projectCapacityProfileToLegacyAllocation` (`capacityProfileLegacyProjection.ts`).
+Generated active-plan slots are presentation-only; Commercial calculations, scheduler,
+leveller, Timeline, and Squad Planner behavior remain unchanged.
 See the [Resource Profile and Export Adoption](#resource-profile-and-export-adoption) section.
 
 ### Commercial
@@ -502,12 +500,19 @@ planned resource).
 
 **Precedence (profile-first, no reconciliation gate):**
 
-1. If a persisted `CapacityProfile` exists for the owner (role or named resource),
-   map its data directly to `CapacityProfileResourceData` with `resolutionSource: 'PROFILE'`.
-2. Otherwise, fall back to legacy-derived data via `mapProjectToCapacityProfiles`
-   with `resolutionSource: 'LEGACY'`.
-3. Active Capacity Plan materialisation applies only where existing fallback rules
-   already require it (e.g. `CAPACITY_PLAN` mode).
+1. **Persisted owner-specific profile** — If a `CapacityProfile` exists for the
+   owner (role or named resource), map its data directly to
+   `CapacityProfileResourceData` with `resolutionSource: 'PROFILE'`.
+2. **Active Capacity Plan materialisation** — Only when the existing
+   `shouldFallbackToActiveCapacityPlan` logic requires it (e.g.
+   `allocationMode === 'CAPACITY_PLAN'` and no explicit profile overrides).
+   Materialised from active `CapacityPlan` periods with
+   `resolutionSource: 'ACTIVE_CAPACITY_PLAN'`. This tier is checked before LEGACY
+   because CAPACITY_PLAN-mode legacy fields are meaningless for display purposes.
+3. **Pure legacy compatibility state** — When neither a persisted profile nor an
+   active capacity plan materialisation applies, data is derived from legacy
+   `ResourceType`/`NamedResource` fields with `resolutionSource: 'LEGACY'`.
+   This is purely owner-specific legacy state, unaffected by capacity plan data.
 
 The adapter does **not** run `compareCapacityProfiles` or any reconciliation check.
 It uses persisted data directly when the owner-specific profile exists, without
@@ -522,6 +527,11 @@ comparing against legacy-derived expectations. This differs from the
 | `LEGACY` | Data derived from legacy `ResourceType`/`NamedResource` fields |
 | `ACTIVE_CAPACITY_PLAN` | Data materialised from active `CapacityPlan` periods (rare) |
 
+> **LEGACY is never produced by capacity plan materialisation.** The
+> `ACTIVE_CAPACITY_PLAN` resolution source is a separate fallback tier checked
+> before LEGACY. The `LEGACY` source is derived exclusively from owner-specific
+> legacy `ResourceType`/`NamedResource` fields — it is **not** contaminated by
+> active Capacity Plan data.
 **Output shape (`CapacityProfileResourceData`):**
 
 - `planningBasis` — resolved planning basis string
@@ -595,14 +605,45 @@ format (e.g. `W1-W4 50%; W5-W10 100%`), structurally distinct from the existing
   data directly when the owner-specific profile exists (`resolutionSource: 'PROFILE'`).
   No reconciliation gate is used — the old behaviour of falling back on mismatch
   was replaced by direct persisted-profile usage (PR #356, pending merge).
-- **Legacy fallback.** When no persisted profile exists for an owner, data is derived
-  from legacy `ResourceType`/`NamedResource` fields (`resolutionSource: 'LEGACY'`).
+- **Fallback precedence (exact order):**
+  1. Persisted owner-specific profile → `resolutionSource: 'PROFILE'`.
+  2. Active Capacity Plan materialisation → `resolutionSource: 'ACTIVE_CAPACITY_PLAN'`.
+     Applies only when `shouldFallbackToActiveCapacityPlan` logic requires it
+     (e.g. `allocationMode === 'CAPACITY_PLAN'` with no explicit profile override).
+  3. Pure owner-specific legacy compatibility state → `resolutionSource: 'LEGACY'`.
+     Derived from legacy `ResourceType`/`NamedResource` fields only. This tier
+     is **never** produced by active capacity plan materialisation — the two
+     resolution sources are distinct and mutually exclusive.
+- **LEGACY is not contaminated by CAPACITY_PLAN.** The `LEGACY` resolution source
+  produces data exclusively from owner-specific legacy compatibility fields. Active
+  Capacity Plan materialisation produces its own `ACTIVE_CAPACITY_PLAN` source and
+  is checked as a separate fallback tier before LEGACY.
+- **Role aggregate vs per-resource slot profiles.** Role-level capacity profiles
+  represent the aggregate capacity for the entire `ResourceType` — they sum across
+  all resources of that type (named resources + phantom slots). Each individual
+  named-resource slot (named person or planned resource) has its own independent
+  profile describing that specific resource's capacity. These are not interchangeable:
+  a role profile with `count: 3` has different semantics than three individual
+  per-resource profiles.
 - **Commercial calculations are unchanged.** The `capacityProfile` field is
   presentation-only in Resource Profile; Commercial billing formulas, billable
   days, discounts, tax, and totals are unaffected.
 - **Entity identity preserved.** One named person or planned resource with
   multiple capacity segments is still one row/entity. The adapter keys the map
-  by owner id, so duplicate entries never result from segment data.
+  by owner id, so duplicate entries never result from segment data. Generated
+  planned resources (`ownerKind: PLANNED_RESOURCE`) retain a single entity identity
+  and carry their profile metadata as a unit — segments are a property of the
+  profile, not a split of the entity.
+- **Duplicate persisted conflicts do not block fallback.** If the adapter's profile
+  map encounters duplicate entries for the same owner key (should not occur under
+  normal operation, but defensive), it does not throw or block — the duplicate
+  entry is skipped and the fallback tier (`LEGACY` or `ACTIVE_CAPACITY_PLAN`)
+  applies for that owner as if no profile existed.
+- **Role and named-resource lookups are independently keyed.** Role (ResourceType)
+  profiles are keyed by `resourceTypeId`; named-resource (NamedResource) profiles
+  are keyed by `namedResourceId`. These are separate key spaces — a
+  `resourceTypeId` value is never confused with a `namedResourceId` value. Each
+  lookup resolves within its own key domain.
 - **Capacity vs assignment vs billing separation.** The capacity profile describes
   *planned availability*, the assignment segments describe *consumed demand*, and
   the billing basis describes *how Commercial charges*. These are structurally

@@ -192,3 +192,49 @@ export function shouldFallbackToActiveCapacityPlan(
 
   return false
 }
+
+// ─── Shared per-resource slot materialisation ───────────────────────────────
+
+export type PerResourceSlotAssignment = {
+  resourceTypeId: string
+  /** One entry per slot window — existing named resources by index, otherwise deterministic generated IDs. */
+  resourceSlots: Array<{
+    id: string
+    name: string
+    slotWindows: CapacityPlanSlotWindow[]
+  }>
+  /** Aggregate slot set for role-level presentation. */
+  roleSlotWindows: CapacityPlanSlotWindow[]
+}
+
+/**
+ * Materialise per-resource slot assignments from capacity plan slot windows.
+ *
+ * Each existing named resource at position `i` receives slot window at index `i`.
+ * Remaining slots (beyond existing NR count) generate deterministic planned-resource
+ * IDs matching the route convention: `${resourceTypeId}-capacity-plan-${i+1}`.
+ *
+ * The role-level aggregate contains the full slot set for presentation.
+ * This function is **presentation-only** — it does not alter calculation/assignment semantics.
+ */
+export function materializePerResourceSlots(
+  slotWindows: CapacityPlanSlotWindow[],
+  resourceTypeId: string,
+  resourceTypeName: string,
+  existingNamedResources: Array<{ id: string; name: string }>,
+): PerResourceSlotAssignment {
+  const resourceSlots = slotWindows.map((window, idx) => {
+    const existing = existingNamedResources[idx]
+    return {
+      id: existing?.id ?? `${resourceTypeId}-capacity-plan-${idx + 1}`,
+      name: existing?.name ?? `${resourceTypeName} ${idx + 1}`,
+      slotWindows: [window],
+    }
+  })
+
+  return {
+    resourceTypeId,
+    resourceSlots,
+    roleSlotWindows: slotWindows,
+  }
+}

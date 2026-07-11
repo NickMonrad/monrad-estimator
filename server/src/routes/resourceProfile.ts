@@ -6,11 +6,13 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { effectiveDays } from '../utils/round.js'
 import {
   materializeCapacityPlanResources,
+  materializePerResourceSlots,
   shouldFallbackToActiveCapacityPlan,
 } from '../lib/capacityPlanMaterialisation.js'
+import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceAdapter.js'
+import type { CapacityProfileAdapterInput } from '../lib/capacityProfileResourceAdapter.js'
 import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
 import { buildFallbackWeeklyDemand, mergeWeeklyDemand, computePlanningWindow, convertWeeklyDemandCache } from '../lib/projectPlanningModel.js'
-import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceAdapter.js'
 import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
@@ -82,12 +84,15 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
   // Materialize capacity plan for shared model consumption
-  const activePlan = project.capacityPlans?.[0] ?? null
-  const capacityPlanByRt = materializeCapacityPlanResources(activePlan?.periods ?? [])
+  const capacityPlanByRt = materializeCapacityPlanResources(
+    (project.capacityPlans?.[0] ?? null)?.periods ?? [],
+  )
   // Build capacity-profile enrichment map (persisted-read with legacy fallback)
-  const capacityProfileMap = buildResourceCapacityProfileMap(project as unknown as Parameters<typeof buildResourceCapacityProfileMap>[0])
+  const { roleProfiles, namedResourceProfiles } = buildResourceCapacityProfileMap(
+    project as unknown as CapacityProfileAdapterInput,
+  )
 
-  // Project duration in weeks from the latest timeline entry end point + buffer weeks + onboarding weeks
+  // Project duration in weeks
   const planningWindow = computePlanningWindow(
     project.timelineEntries,
     project.startDate,
@@ -363,20 +368,29 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         mode === 'CAPACITY_PLAN' &&
         shouldFallbackToActiveCapacityPlan(resourceType.namedResources, capacityPlanMaterialized)
       const namedResourcesSource = useCapacityPlanFallback && capacityPlanMaterialized
-        ? capacityPlanMaterialized.slotWindows.map((window, idx) => {
-            const existing = resourceType.namedResources[idx]
-            return {
-              id: existing?.id ?? `${resourceType.id}-capacity-plan-${idx + 1}`,
-              name: existing?.name ?? `${resourceType.name} ${idx + 1}`,
-              allocationMode: 'CAPACITY_PLAN',
-              allocationPercent: window.allocationPercent,
-              allocationStartWeek: null,
-              allocationEndWeek: null,
-              pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-              startWeek: window.startWeek,
-              endWeek: window.endWeek,
-            }
-          })
+        ? (() => {
+            const assignment = materializePerResourceSlots(
+              capacityPlanMaterialized.slotWindows,
+              resourceType.id,
+              resourceType.name,
+              resourceType.namedResources,
+            )
+            return assignment.resourceSlots.map((slot, idx) => {
+              const existing = resourceType.namedResources[idx]
+              const window = slot.slotWindows[0]
+              return {
+                id: slot.id,
+                name: slot.name,
+                allocationMode: 'CAPACITY_PLAN',
+                allocationPercent: window.allocationPercent,
+                allocationStartWeek: null,
+                allocationEndWeek: null,
+                pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
+                startWeek: window.startWeek,
+                endWeek: window.endWeek,
+              }
+            })
+          })()
         : resourceType.namedResources
       const actualNamedResourceAssignment = namedResourceAssignments.get(resourceType.id)
       const actualNamedResourcesForType = actualNamedResourceAssignment?.namedResources ?? []
@@ -451,7 +465,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             // FULL_PROJECT
             nrAllocatedDays = round2(projectDurationWeeks * 5 * (nrPercent / 100))
           }
-          const nrProfileData = capacityProfileMap.get(nr.id) ?? undefined
+          const nrProfileData = namedResourceProfiles.get(nr.id) ?? undefined
           const nrProfileProjection = nrProfileData
             ? projectCapacityProfileToLegacyAllocation({
                 planningBasis: nrProfileData.planningBasis,
@@ -481,7 +495,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             actualAllocationEndWeek: actualNamedResource?.actualAllocationEndWeek ?? null,
             actualAllocatedWeeks: actualNamedResource?.actualAllocatedWeeks ?? [],
             actualAllocationSegments: actualNamedResource?.actualAllocationSegments ?? [],
-            synthetic: actualNamedResource?.synthetic ?? false,
+            synthetic: actualNamedResource?.synthetic ?? !resourceType.namedResources.some(persisted => persisted.id === nr.id),
             capacityProfile: nrProfileData ? {
               planningBasis: nrProfileData.planningBasis,
               source: nrProfileData.source,
@@ -497,7 +511,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         const syntheticAssignments = actualNamedResourcesForType
           .filter(actual => !existingIds.has(actual.id))
         namedResourcesOutput.push(...syntheticAssignments.map(actual => {
-          const synthNrProfileData = capacityProfileMap.get(actual.id) ?? undefined
+          const synthNrProfileData = namedResourceProfiles.get(actual.id) ?? undefined
           const synthNrProfileProjection = synthNrProfileData
             ? projectCapacityProfileToLegacyAllocation({
                 planningBasis: synthNrProfileData.planningBasis,
@@ -577,7 +591,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       const estimatedCost = allocatedCost
 
       // Profile-first: project display fields from profile when authoritative
-      const capacityProfileData = capacityProfileMap.get(resourceType.id) ?? undefined
+      const capacityProfileData = roleProfiles.get(resourceType.id) ?? undefined
       const profileProjection = capacityProfileData
         ? projectCapacityProfileToLegacyAllocation({
             planningBasis: capacityProfileData.planningBasis,
