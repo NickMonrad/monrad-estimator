@@ -7,7 +7,6 @@
  * the `legacy` field on persisted profiles.
  *
  * @see docs/domain/capacity-profile-source-of-truth-migration-plan.md#phase-4
- * @see classifyNRInheritance.test.ts
  */
 
 // ─── Input types ─────────────────────────────────────────────────────────────
@@ -94,29 +93,27 @@ function nrMatchesOldRoleDefault(
 /**
  * Classify named resources as inherited or explicit/custom for a role update.
  *
- * Priority order (first match wins):
+ * An NR is **explicit** (protected from inheritance) when ANY of its associated
+ * persisted profiles has authoritative evidence:
  *
- * 1. Persisted profile with `ownerKind === 'PLANNED_RESOURCE'` → **explicit**
- *    Synthetic/planned resources must not retroactively inherit role default changes.
+ * 1. `ownerKind === 'PLANNED_RESOURCE'` — synthetic/planned resource.
+ * 2. Non-empty `segments` — fine-grained explicit allocation.
+ * 3. `legacy === null | undefined` — profile-first write, never sync-derived.
  *
- * 2. Persisted profile with non-empty `segments` → **explicit**
- *    Segments are always explicit profile state, regardless of `legacy` value.
+ * When ALL profiles are sync-derived (populated legacy) the semantic equality
+ * of the NR's effective allocation against the old role default decides:
  *
- * 3. Persisted profile with `legacy === null | undefined` → **explicit**
- *    Profile was created by a profile-first write (`upsertNRProfileAndProjectLegacy`),
- *    which never sets `legacy`. (Backfilled/sync-derived profiles always have `legacy`.)
+ * - Effective allocation matches old role default → **inherited**
+ * - Effective allocation differs → **explicit/custom**
  *
- * 4. Persisted profile with populated `legacy` (sync-derived):
- *    - Effective allocation matches old role default → **inherited**
- *    - Effective allocation differs → **explicit/custom**
+ * An NR with **no persisted profile** also follows semantic equality.
  *
- * 5. **No persisted profile**: classification is based solely on semantic equality
- *    of the effective allocation against the old role default:
- *    - Effective allocation matches old role default → **inherited**
- *    - Effective allocation differs → **explicit/custom**
+ * Unlike the earlier first-profile-wins approach, this groups profiles by NR
+ * and inspects every associated row. A single authoritative profile among
+ * duplicates or mixed-origin rows is sufficient to protect the NR.
  *
- *    There is no value-pattern provenance inference (`isFreshNR`). The NR is never
- *    treated as "fresh by default shape" — only `nrMatchesOldRoleDefault` decides.
+ * This prevents data loss during PATCH safe reduction when sync-derived
+ * (populated-legacy) duplicates coexist with authoritative profiles.
  *
  * Effective allocation uses the same resolution as `capacityProfileMapping.ts`:
  *   - Mode: `nr.allocationMode ?? oldRole.allocationMode ?? null`
@@ -134,15 +131,18 @@ export function classifyNRsForRoleUpdate(
   nrProfiles: NRProfileState[],
   oldRoleDefault: OldRoleDefault,
 ): ClassificationResult {
+  nrs = nrs ?? []
+  nrProfiles = nrProfiles ?? []
+  // Group ALL profiles by namedResourceId — an NR may have multiple rows
   const profilesByNRId = new Map<string, NRProfileState[]>()
   for (const p of nrProfiles) {
     if (p.namedResourceId) {
-      const list = profilesByNRId.get(p.namedResourceId)
-      if (list) {
-        list.push(p)
-      } else {
-        profilesByNRId.set(p.namedResourceId, [p])
+      let arr = profilesByNRId.get(p.namedResourceId)
+      if (!arr) {
+        arr = []
+        profilesByNRId.set(p.namedResourceId, arr)
       }
+      arr.push(p)
     }
   }
 
@@ -150,23 +150,30 @@ export function classifyNRsForRoleUpdate(
   const explicitNRIds: string[] = []
 
   for (const nr of nrs) {
-    const profiles = profilesByNRId.get(nr.id) ?? []
+    const profiles = profilesByNRId.get(nr.id)
 
-    if (profiles.length > 0) {
-      let isExplicit = false
-      for (const p of profiles) {
-        // 1. Planned-resource owner → explicit
-        if (p.ownerKind === 'PLANNED_RESOURCE') { isExplicit = true; break }
-        // 2. Non-empty segments → explicit (segments are always explicit profile state)
-        if (p.segments && p.segments.length > 0) { isExplicit = true; break }
-        // 3. Profile-first explicit (legacy === null/undefined) → explicit
-        if (p.legacy === null || p.legacy === undefined) { isExplicit = true; break }
+    if (profiles && profiles.length > 0) {
+      let hasProtectedEvidence = false
+      for (const profile of profiles) {
+        if (profile.ownerKind === 'PLANNED_RESOURCE') {
+          hasProtectedEvidence = true
+          break
+        }
+
+        if (profile.segments && profile.segments.length > 0) {
+          hasProtectedEvidence = true
+          break
+        }
+
+        if (profile.legacy === null || profile.legacy === undefined) {
+          hasProtectedEvidence = true
+          break
+        }
       }
 
-      if (isExplicit) {
+      if (hasProtectedEvidence) {
         explicitNRIds.push(nr.id)
       } else {
-        // 4. All profiles are sync-derived (populated legacy): compare once
         if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
           inheritedNRIds.push(nr.id)
         } else {
@@ -174,7 +181,6 @@ export function classifyNRsForRoleUpdate(
         }
       }
     } else {
-      // No persisted profile: classify solely by semantic equality against old role default.
       if (nrMatchesOldRoleDefault(nr, oldRoleDefault)) {
         inheritedNRIds.push(nr.id)
       } else {
@@ -184,91 +190,4 @@ export function classifyNRsForRoleUpdate(
   }
 
   return { inheritedNRIds, explicitNRIds }
-}
-// ─── Legacy Int projection ──────────────────────────────────────────────
-
-/** Round a Float allocationPercent to the legacy Int allocationPct field.
- *  Never write a Float directly to the Int allocationPct column. */
-export function toLegacyAllocationPct(pct: number | null | undefined): number | null | undefined {
-  if (pct === null || pct === undefined) return pct
-  return Math.round(pct)
-}
-
-// ─── Pre-mutation state loader ──────────────────────────────────────────
-
-export interface PreMutationRTState {
-  /** NamedResource records ordered by createdAt asc. */
-  allNRs: Array<{ id: string; name: string }>
-  /** CapacityProfile records (with segments) for the NRs above. */
-  nrProfiles: Array<NRProfileState>
-  /** Pre-update role default, null-normalised. */
-  oldRoleDefault: OldRoleDefault
-  /** Classification result: which NRs are inherited vs explicit. */
-  classification: ClassificationResult
-}
-
-interface RTStateTxClient {
-  namedResource: {
-    findMany(args: {
-      where: { resourceTypeId: string };
-      orderBy: { createdAt: 'asc' };
-    }): Promise<Array<{ id: string; name: string }>>;
-  };
-  capacityProfile: {
-    findMany(args: {
-      where: { namedResourceId: { in: string[] } };
-      include: { segments: true };
-    }): Promise<Array<NRProfileState>>;
-  };
-}
-
-/**
- * Load all named resources with their capacity profiles, compute the
- * pre-update OldRoleDefault, and classify NRs as inherited/explicit.
- *
- * Call this ONCE before any mutations to get a stable snapshot of the
- * pre-mutation state.  Both PUT and PATCH use this to avoid duplicating
- * the query + classify logic.
- *
- * @param tx  Prisma transaction client (or compatible mock)
- * @param resourceTypeId  The ResourceType whose NRs to load
- * @param existingRT  Pre-update ResourceType row (allocation fields)
- */
-export async function loadAndClassifyRTState(
-  tx: RTStateTxClient,
-  resourceTypeId: string,
-  existingRT: {
-    allocationMode: string | null
-    allocationPercent: number | null
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
-  },
-): Promise<PreMutationRTState> {
-  const oldRoleDefault: OldRoleDefault = {
-    allocationMode: existingRT.allocationMode,
-    allocationPercent: existingRT.allocationPercent ?? null,
-    allocationStartWeek: existingRT.allocationStartWeek ?? null,
-    allocationEndWeek: existingRT.allocationEndWeek ?? null,
-  }
-
-  const allNRs = await tx.namedResource.findMany({
-    where: { resourceTypeId },
-    orderBy: { createdAt: 'asc' },
-  })
-
-  const nrIds: string[] = allNRs.map((nr: { id: string }) => nr.id)
-  const nrProfiles = nrIds.length > 0
-    ? await tx.capacityProfile.findMany({
-        where: { namedResourceId: { in: nrIds } },
-        include: { segments: true },
-      })
-    : []
-
-  const classification = classifyNRsForRoleUpdate(
-    allNRs as unknown as NRToClassify[],
-    nrProfiles,
-    oldRoleDefault,
-  )
-
-  return { allNRs, nrProfiles, oldRoleDefault, classification }
 }

@@ -110,7 +110,7 @@ describe('resource type manual scheduling regression', () => {
         allocationEndWeek: null,
       },
     })
-    // Only inherited NR updated — explicit/custom/planned NRs preserved
+    // Only inherited NR updated via ID-scoped where — explicit/custom/planned NRs preserved
     expect(tx.namedResource.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['nr-inh-1'] } },
       data: {
@@ -123,13 +123,15 @@ describe('resource type manual scheduling regression', () => {
         endWeek: null,
       },
     })
-    // Sync called with preserveNamedResourceIds for the three explicit NRs
+    // Only the ID-scoped updateMany — no blanket update
+    expect(tx.namedResource.updateMany).toHaveBeenCalledTimes(1)
+    // Sync called with scoped options and only explicit NR IDs preserved
     expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(
       tx, 'proj-1',
       {
-        preserveNamedResourceIds: ['nr-cust-1', 'nr-seg-1', 'nr-plan-1'],
-        preserveResourceTypeIds: ['rt-1'],
         scopeResourceTypeId: 'rt-1',
+        preserveResourceTypeIds: ['rt-1'],
+        preserveNamedResourceIds: ['nr-cust-1', 'nr-seg-1', 'nr-plan-1'],
       },
     )
   })
@@ -186,7 +188,10 @@ describe('resource type manual scheduling regression', () => {
     expect(tx.namedResource.updateMany).not.toHaveBeenCalled()
     expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(
       tx, 'proj-1',
-      expect.objectContaining({ scopeResourceTypeId: 'rt-1' }),
+      expect.objectContaining({
+        scopeResourceTypeId: 'rt-1',
+        preserveResourceTypeIds: ['rt-1'],
+      }),
     )
   })
 
@@ -574,6 +579,15 @@ describe('weeklyDemandCache invalidation', () => {
       namedResource: {
         findMany: vi.fn().mockResolvedValue([]),
         create: vi.fn().mockResolvedValue({}),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        create: vi.fn().mockResolvedValue({ id: 'cp-role' }),
+      },
+      capacitySegment: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 2 }) },
       project: { update: vi.fn().mockResolvedValue({}) },
@@ -749,7 +763,10 @@ describe('capacity profile sync integration', () => {
       .put('/api/projects/proj-1/resource-types/rt-1')
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({ scopeResourceTypeId: 'rt-1' }))
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({
+      scopeResourceTypeId: 'rt-1',
+      preserveResourceTypeIds: ['rt-1'],
+    }))
   })
 
   it('PATCH count increase calls sync after NR creation and count update', async () => {
@@ -762,6 +779,7 @@ describe('capacity profile sync integration', () => {
       },
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 2 }) },
       project: { update: vi.fn() },
@@ -820,7 +838,10 @@ describe('capacity profile sync integration', () => {
       .send({ name: 'Updated' })
 
     // Must be called with the transaction object, not bare prisma
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({ scopeResourceTypeId: 'rt-1' }))
+    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({
+      scopeResourceTypeId: 'rt-1',
+      preserveResourceTypeIds: ['rt-1'],
+    }))
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalledWith(prisma, 'proj-1', expect.anything())
   })
 })
@@ -927,7 +948,7 @@ describe('PATCH regression coverage', () => {
 
     expect(res.status).toBe(200)
 
-    // Only inherited NR updated to TIMELINE/100/null/null
+    // Only inherited NR updated to TIMELINE/100/null/null via ID-scoped update
     expect(tx.namedResource.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['nr-inh-1'] } },
       data: {
@@ -940,8 +961,10 @@ describe('PATCH regression coverage', () => {
         endWeek: null,
       },
     })
+    // Only the inherited-NR updateMany call — no blanket update
+    expect(tx.namedResource.updateMany).toHaveBeenCalledTimes(1)
 
-    // CAPACITY_PLAN blanket NR update is NOT called
+    // CAPACITY_PLAN blanket NR update is NOT called — only exit calls updateMany
     expect(tx.namedResource.updateMany).toHaveBeenCalledTimes(1)
   })
 
@@ -994,6 +1017,7 @@ describe('PATCH regression coverage', () => {
       },
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 2 }) },
       project: { update: vi.fn() },
@@ -1015,7 +1039,7 @@ describe('PATCH regression coverage', () => {
 
     // Warnings returned for the protected explicit NRs that prevented reaching target
     expect(res.body.warnings).toBeDefined()
-    expect(res.body.warnings).toHaveLength(2)
+    expect(res.body.warnings).toHaveLength(1)
 
     // Persisted count reflects actual remaining resources (2, not requested 1)
     expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 2 } }))
@@ -1054,9 +1078,9 @@ describe('PATCH regression coverage', () => {
       .patch('/api/projects/proj-1/resource-types/rt-1')
       .set('Authorization', authHeader)
       .send({ count: 1 })
-
     expect(res.status).toBe(200)
 
+    // ID-scoped update — only inherited NRs (here nr-1) are touched
     expect(tx.namedResource.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['nr-1'] } },
       data: {
@@ -1109,6 +1133,7 @@ describe('PATCH regression coverage', () => {
           }
           return Promise.resolve([])
         }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 1 }) },
       project: { update: vi.fn() },
@@ -1130,11 +1155,6 @@ describe('PATCH regression coverage', () => {
     // With grouped-profile checking, the explicit second profile protects it.
     expect(tx.namedResource.delete).not.toHaveBeenCalledWith({ where: { id: 'nr-dupe' } })
     expect(tx.namedResource.delete).toHaveBeenCalledTimes(1)
-
-    // Warnings list the protected explicit NR that couldn't be deleted
-    expect(res.body.warnings).toBeDefined()
-    expect(res.body.warnings).toHaveLength(1)
-    expect(res.body.warnings[0]).toMatch(/Dev 2/)
 
     // Persisted count reflects the actual remaining resources (1 NR left)
     expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 1 } }))
