@@ -96,6 +96,44 @@ It owns:
 
 Resource Profile can display estimated effort and planning-derived information, such as actual assigned days, but should not independently calculate a separate version of the effort or planning result.
 
+PR #356 (open, pending merge) introduces capacity-profile read adoption in Resource
+Profile, making it authoritative for displaying and exporting capacity-profile data
+from the persisted `CapacityProfile`/`CapacitySegment` read model. The adapter in
+`capacityProfileResourceAdapter.ts` resolves profiles with profile-first precedence:
+
+1. **Persisted owner-specific profile** — if a `CapacityProfile` exists for the
+   owner (role or named resource), its data is used with
+   `resolutionSource: 'PROFILE'`.
+2. **Active Capacity Plan materialisation** — only when the existing
+   `shouldFallbackToActiveCapacityPlan` logic requires it (e.g. `CAPACITY_PLAN`
+   mode with no explicit profile override). Materialised from active `CapacityPlan`
+   periods with `resolutionSource: 'ACTIVE_CAPACITY_PLAN'`. Checked before LEGACY
+   because CAPACITY_PLAN-mode legacy fields are meaningless for display.
+3. **Pure legacy compatibility state** — derived from legacy `ResourceType`/
+   `NamedResource` fields with `resolutionSource: 'LEGACY'`. This is owner-specific
+   legacy state only, never contaminated by capacity plan materialisation.
+
+**Commercial calculations remain unchanged.** Billing formulas, billable days,
+discounts, tax, and totals use the same inputs as before. The adapter's
+profile-first resolution enriches Resource Profile display and export from
+persisted `CapacityProfile`/`CapacitySegment` data. Separately, the pre-existing
+active Capacity Plan fallback (not introduced by PR #356) uses segment-aware
+trajectory capacity for named-resource assignment and planned-capacity totals in
+`namedResourceAssignments.ts` and `projectPlanningModel.ts`; this pre-dates and is
+independent of PR #356's adapter. Scheduler and leveller algorithms themselves are not
+redesigned by PR #356. Active-plan weekly capacity remains mathematically equivalent
+to existing plan headcount.
+
+**Role aggregate vs per-resource profiles:** Role-level (`ResourceType`) profiles
+represent aggregate capacity across all resources of that type. Each individual
+named-resource (`NamedResource`) profile is specific to one resource slot. These
+use different owner kinds and are independently keyed by `resourceTypeId` and
+`namedResourceId` respectively — the two key namespaces never collide.
+
+**Duplicate owner keys fall through:** If the adapter encounters a duplicate owner
+key in the profile map (defensive guard), it treats the entry as absent and falls
+through to the next precedence tier rather than throwing or blocking.
+
 ### Commercial owns billing and price presentation
 
 Commercial is the source of truth for pricing presentation and billable calculation choices.
@@ -278,6 +316,17 @@ Prefer fast integration/unit coverage around the shared planning model and API b
 
 ## Follow-up implementation sequence
 
+> **Note:** PR #356 (open, pending merge) introduces capacity-profile read adoption in
+> Resource Profile, as part of the #340 source-of-truth epic. It introduces profile-first
+> read precedence in the Resource Profile route and export hook, ahead of the #263
+> sequence above. This means Resource Profile display and export fields will resolve from
+> `CapacityProfile`/`CapacitySegment` when a persisted profile exists, rather than
+> exclusively from legacy `ResourceType`/`NamedResource` fields. Commercial calculations
+> (allocatedDays, actualAllocatedDays, totalDays, estimatedCost) remain unchanged.
+> Scheduler, leveller, Timeline, and Squad Planner also remain unchanged — they continue
+> to read legacy allocation fields directly. The sequence below is for the #263 epic
+> (ownership boundaries); the #340 epic (profile source-of-truth migration) runs in
+> parallel and may inform later #263 items.
 Recommended order under #263:
 
 1. #264 - Extract shared project planning read model.
@@ -312,19 +361,61 @@ The implementation work belongs in the follow-up issues under #263, especially #
 
 ## Implementation status
 
-### Adopted: Resource Profile + export consume capacity-profile DTO data (#341)
+### Pending: Capacity-profile read adoption in Resource Profile (PR #356, open)
 
-`server/src/lib/capacityProfileResourceAdapter.ts` enriches the Resource Profile
-response with capacity-profile data (`planningBasis`, `source`, `segments`) from
-the derived read model introduced in #326. The export CSV includes a `Capacity
-profile` column.
+PR #356 (open, pending merge) would make the persisted `CapacityProfile`/`CapacitySegment`
+read model authoritative for display and export in Resource Profile, using profile-first
+precedence. These changes are currently on the `feature/capacity-profile-resource-profile-reads`
+branch and will land when PR #356 merges.
 
-Key constraints preserved:
+**Key changes:**
 
-- Legacy ResourceType/NamedResource fields remain authoritative.
-- CapacityProfile is still a derived read model (source-of-truth migration is #340).
+- **Adapter (profile-first precedence, exact order):**
+  `buildResourceCapacityProfileMap` in `capacityProfileResourceAdapter.ts` uses
+  three-tier precedence: persisted owner-specific profile (`resolutionSource:
+  'PROFILE'`) → active Capacity Plan materialisation (`resolutionSource:
+  'ACTIVE_CAPACITY_PLAN'`, only when `shouldFallbackToActiveCapacityPlan` requires
+  it) → pure legacy compatibility state (`resolutionSource: 'LEGACY'`). No
+  reconciliation comparison is required — the adapter uses persisted data directly
+  when a profile exists for the owner.
+
+- **Route display-field projection:**
+  `GET /api/projects/:projectId/resource-profile` uses
+  `projectCapacityProfileToLegacyAllocation` (`capacityProfileLegacyProjection.ts`)
+  to project profile fields into legacy display fields (`allocationMode`,
+  `allocationPercent`, `allocationStartWeek`, `allocationEndWeek`) when a profile
+  exists, falling back to raw legacy fields when no profile is available.
+
+- **Client types updated:**
+  `ResourceProfileRow.capacityProfile` in `backlog.ts` includes `defaultPercent`,
+  `startWeek`, `endWeek`, and `resolutionSource` fields.
+
+- **CSV export:**
+  `useResourceProfileExport.ts` adds five new columns: **Planning basis**,
+  **Profile source**, **Default capacity %**, **Profile start**, **Profile end**.
+  The `Capacity profile segments` column shows segments in human-readable format
+  (e.g. `W1-W4 50%; W5-W10 100%`), distinct from the `Assignment segments` column.
+
+**Key constraints preserved:**
+
+- Legacy ResourceType/NamedResource fields remain authoritative for write paths.
 - Commercial billing formulas, billable days, discounts, tax, and totals are unchanged.
 - Entity identity is preserved — one named person / planned resource with multiple
   capacity segments is one row, not multiple.
+- Role aggregate vs per-resource profiles — role-level (ResourceType) profiles
+  represent aggregate capacity across all resources of that type; each
+  named-resource profile is specific to one resource slot.
+- Independent key spaces — role profiles keyed by `resourceTypeId`,
+  named-resource profiles by `namedResourceId`; the two namespaces never collide.
+- Duplicate owner keys in the profile map fall through to the next precedence
+  tier rather than blocking.
+
+**New files introduced:**
+
+| File | Purpose |
+|------|---------|
+| `server/src/lib/capacityProfileResourceAdapter.ts` | Adapter with profile-first read precedence |
+| `server/src/lib/capacityProfileLegacyProjection.ts` | Pure projection helper for display fields |
+| `server/src/test/capacityProfileResourceAdapter.test.ts` | 7 unit tests for adapter |
 
 See `capacity-profile-design.md#resource-profile-and-export-adoption` for details.

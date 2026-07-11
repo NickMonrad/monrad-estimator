@@ -156,7 +156,7 @@ describe('buildProfileCsv', () => {
     const csv = buildProfileCsv(profile)
     const lines = csv.split('\n').filter(l => l.length > 0)
     const headerCols = lines[0].split(',').length
-    expect(headerCols).toBe(21)
+    expect(headerCols).toBe(26)
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(',').length
       expect(cols, `row ${i} has ${cols} columns, expected ${headerCols}`).toBe(headerCols)
@@ -192,7 +192,7 @@ describe('buildProfileCsv', () => {
     })
     const lines = csv.split('\n').filter(l => l.length > 0)
     const header = lines[0].split(',')
-    const capacityProfileIdx = header.indexOf('Capacity profile')
+    const capacityProfileIdx = header.indexOf('Capacity profile segments')
     const assignmentSegmentsIdx = header.indexOf('Assignment segments')
     const assignedWeeksIdx = header.indexOf('Assigned weeks')
     expect(capacityProfileIdx).toBeGreaterThanOrEqual(0)
@@ -225,7 +225,7 @@ describe('buildProfileCsv', () => {
     })
     const lines = csv.split('\n').filter(l => l.length > 0)
     const header = lines[0].split(',')
-    const capacityProfileIdx = header.indexOf('Capacity profile')
+    const capacityProfileIdx = header.indexOf('Capacity profile segments')
     const assignedStartIdx = header.indexOf('Assigned start')
     expect(capacityProfileIdx).toBeGreaterThan(assignedStartIdx)
 
@@ -337,7 +337,7 @@ describe('buildProfileCsv', () => {
 
     const lines = csv.split('\n').filter(l => l.length > 0)
     const header = lines[0].split(',')
-    const capacityProfileIdx = header.indexOf('Capacity profile')
+    const capacityProfileIdx = header.indexOf('Capacity profile segments')
     const assignmentSegmentsIdx = header.indexOf('Assignment segments')
     const assignedWeeksIdx = header.indexOf('Assigned weeks')
     const billingBasisIdx = header.indexOf('Billing basis')
@@ -402,7 +402,7 @@ describe('buildProfileCsv', () => {
 
     const lines = csv.split('\n').filter(l => l.length > 0)
     const header = lines[0].split(',')
-    const capacityProfileIdx = header.indexOf('Capacity profile')
+    const capacityProfileIdx = header.indexOf('Capacity profile segments')
     const identityIdx = header.indexOf('Resource identity')
     const colCount = header.length
 

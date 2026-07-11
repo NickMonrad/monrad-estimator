@@ -3,6 +3,11 @@ import {
   ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
 } from 'recharts'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
+import {
+  formatCapacityProfileSource,
+  formatPlanningBasis,
+  formatResolutionSource,
+} from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 
 const TYPE_OPTIONS = [
@@ -153,17 +158,29 @@ export default function ResourceProfileTab({
                     <td className="px-4 py-3">
                       {(() => {
                         if (row.namedResources && row.namedResources.length > 0) {
-                          return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Named resources: mixed modes</span>
+                          const count = row.namedResources.length
+                          const profileCount = row.namedResources.filter(nr => nr.capacityProfile).length
+                          const hint = profileCount > 0 ? `${profileCount} capacity profile${profileCount > 1 ? 's' : ''}` : 'No profiles'
+                          return (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+                              {count} {count === 1 ? 'person' : 'people'} · {hint}
+                            </span>
+                          )
                         }
+                        const profile = row.capacityProfile
+                        const isProfileAuthoritative = profile?.resolutionSource === 'PROFILE'
                         const mode = row.allocationMode ?? 'EFFORT'
+                        const planningBasisLabel = isProfileAuthoritative && profile
+                          ? formatPlanningBasis(profile.planningBasis)
+                          : null
                         const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
                         const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
                         const badge = (() => {
-                          if (mode === 'EFFORT') return { label: 'Demand-following', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
-                          if (mode === 'TIMELINE') return { label: `Availability window · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
-                          if (mode === 'FULL_PROJECT') return { label: `Whole-project allocation · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
-                          if (mode === 'CAPACITY_PLAN') return { label: `Capacity profile · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
-                          return { label: `Whole-project allocation · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'EFFORT') return { label: planningBasisLabel ?? 'Demand-following', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
+                          if (mode === 'TIMELINE') return { label: `${planningBasisLabel ?? 'Availability window'} · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
+                          if (mode === 'FULL_PROJECT') return { label: `${planningBasisLabel ?? 'Whole-project allocation'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'CAPACITY_PLAN') return { label: `${planningBasisLabel ?? 'Capacity profile'} · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
+                          return { label: `${planningBasisLabel ?? 'Whole-project allocation'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
                         })()
                         return (
                           <div>
@@ -187,8 +204,28 @@ export default function ResourceProfileTab({
                             >
                               {badge.label}
                             </button>
+                            {profile && (
+                              <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 uppercase tracking-wide" aria-describedby={`profile-meta-${row.resourceTypeId}`}>
+                                {formatCapacityProfileSource(profile.source)}
+                              </span>
+                            )}
+                            {profile && (
+                              <span id={`profile-meta-${row.resourceTypeId}`} className="sr-only">
+                                Profile source: {formatCapacityProfileSource(profile.source)} · Resolution source: {formatResolutionSource(profile.resolutionSource)}
+                              </span>
+                            )}
                             {mode === 'TIMELINE' && effectiveStart != null && effectiveEnd != null && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.floor(effectiveStart)} → Wk {Math.floor(effectiveEnd)}</div>
+                            )}
+                            {profile && profile.segments.length > 0 && (
+                              <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                                {profile.segments.map((seg, i) => (
+                                  <span key={i}>
+                                    {i > 0 && <span className="mx-1">·</span>}
+                                    W{seg.startWeek + 1}-W{seg.endWeek + 1}: {seg.capacityPercent}%
+                                  </span>
+                                ))}
+                              </div>
                             )}
                           </div>
                         )

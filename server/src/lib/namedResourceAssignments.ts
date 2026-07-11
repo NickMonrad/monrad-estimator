@@ -1,5 +1,6 @@
 import {
   shouldFallbackToActiveCapacityPlan,
+  type CapacityPlanSlotWindow,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
 
@@ -62,6 +63,7 @@ export type DerivedNamedResourceAssignment = {
   actualAllocationStartWeek: number | null
   actualAllocationEndWeek: number | null
   actualAllocatedWeeks: NamedResourceAssignedWeek[]
+  capacitySegments?: CapacityPlanSlotWindow[]
   actualAllocationSegments: NamedResourceAssignedSegment[]
 }
 
@@ -105,22 +107,39 @@ function buildEffectiveNamedResources(
     shouldFallbackToActiveCapacityPlan(persistedNamedResources, capacityPlanMaterialized)
 
   const baseNamedResources = useCapacityPlanFallback && capacityPlanMaterialized
-    ? capacityPlanMaterialized.slotWindows.map((window, idx) => {
-        const existing = persistedNamedResources[idx]
-        return {
-          id: existing?.id ?? `${resourceType.id}-capacity-plan-${idx + 1}`,
-          name: existing?.name ?? `${resourceType.name} ${idx + 1}`,
-          startWeek: window.startWeek,
-          endWeek: window.endWeek,
-          allocationPct: window.allocationPercent,
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: window.allocationPercent,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-          synthetic: !existing,
-        }
-      })
+    ? (() => {
+        const usedTrajectories = capacityPlanMaterialized.resourceTrajectories
+
+        const trajectoryResources = usedTrajectories.map((trajectory, idx) => {
+          const existing = persistedNamedResources[idx]
+          const totalPercent = trajectory.segments.length > 0 ? trajectory.segments[0].allocationPercent : 100
+          return {
+            id: existing?.id ?? `${resourceType.id}-capacity-plan-${trajectory.trajectoryIndex + 1}`,
+            name: existing?.name ?? `${resourceType.name} ${trajectory.trajectoryIndex + 1}`,
+            startWeek: trajectory.segments[0]?.startWeek ?? null,
+            endWeek: trajectory.segments.length > 0 ? trajectory.segments[trajectory.segments.length - 1].endWeek : null,
+            allocationPct: totalPercent,
+            allocationMode: 'CAPACITY_PLAN',
+            allocationPercent: totalPercent,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
+            synthetic: !existing,
+            capacitySegments: trajectory.segments,
+          }
+        })
+
+        // Preserve persisted NRs not matched to any trajectory
+        const matchedIds = new Set(trajectoryResources.map(r => r.id))
+        const unmatchedPersisted = persistedNamedResources
+          .filter(nr => !matchedIds.has(nr.id))
+          .map(nr => ({
+            ...nr,
+            synthetic: false,
+          }))
+
+        return [...trajectoryResources, ...unmatchedPersisted]
+      })()
     : persistedNamedResources.map(namedResource => ({
         ...namedResource,
         synthetic: false,
@@ -164,11 +183,11 @@ function buildEffectiveNamedResources(
     actualAllocationEndWeek: null,
     actualAllocatedWeeks: [],
     actualAllocationSegments: [],
+    capacitySegments: (namedResource as { capacitySegments?: CapacityPlanSlotWindow[] }).capacitySegments,
     order,
     lastAssignedWeek: null,
   }))
 }
-
 function weeklyCapacityForNamedResource(
   namedResource: DerivedNamedResourceAssignment,
   week: number,
@@ -179,6 +198,15 @@ function weeklyCapacityForNamedResource(
   if (week < startWeek || week > endWeek) return 0
 
   const mode = toAllocationMode(namedResource.allocationMode)
+
+  // Segment-aware capacity for CAPACITY_PLAN resources with trajectory segments
+  if (mode === 'CAPACITY_PLAN' && namedResource.capacitySegments && namedResource.capacitySegments.length > 0) {
+    const segment = namedResource.capacitySegments.find(
+      s => week >= s.startWeek && week <= s.endWeek,
+    )
+    return segment ? 5 * (segment.allocationPercent / 100) : 0
+  }
+
   const allocationPercent = namedResource.allocationPercent ?? 100
 
   if (mode === 'EFFORT') return 5

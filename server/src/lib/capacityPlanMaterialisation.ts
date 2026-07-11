@@ -19,8 +19,14 @@ export type MaterializedCapacityPlanResource = {
   totalDays: number
   weeklyHeadcount: Map<number, number>
   slotWindows: CapacityPlanSlotWindow[]
+  resourceTrajectories: CapacityPlanResourceTrajectory[]
   startWeek: number | null
   endWeek: number | null
+}
+
+export type CapacityPlanResourceTrajectory = {
+  trajectoryIndex: number
+  segments: CapacityPlanSlotWindow[]
 }
 
 type CapacityPlanNamedResourceLike = {
@@ -137,6 +143,8 @@ export function materializeCapacityPlanResources(
       headcount: period.entries.find(entry => entry.resourceTypeId === resourceTypeId)?.headcount ?? 0,
     }))
 
+    const resourceTrajectories = materializeResourceTrajectories(rtPeriods)
+
     const weeklyHeadcount = new Map<number, number>()
     let totalDays = 0
 
@@ -157,12 +165,152 @@ export function materializeCapacityPlanResources(
       totalDays,
       weeklyHeadcount,
       slotWindows,
+      resourceTrajectories,
       startWeek: firstWeek,
       endWeek: lastWeek,
     })
   }
 
   return materialized
+}
+
+export function materializeResourceTrajectories(
+  periods: Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }>,
+): CapacityPlanResourceTrajectory[] {
+  const sortedPeriods = [...periods].sort((a, b) => a.periodIndex - b.periodIndex)
+  const maxUnits = Math.max(0, ...sortedPeriods.map(p => quantizeUnits(p.headcount)))
+  const TRAJECTORY_UNITS = 4
+  const trajectoryCount = Math.ceil(maxUnits / TRAJECTORY_UNITS)
+
+  if (trajectoryCount === 0) return []
+
+  const trajectories: CapacityPlanResourceTrajectory[] = []
+
+  for (let t = 0; t < trajectoryCount; t++) {
+    const firstUnit = t * TRAJECTORY_UNITS
+    const unitsInTrajectory = Math.min(TRAJECTORY_UNITS, maxUnits - firstUnit)
+    if (firstUnit >= maxUnits) continue
+
+    const segments: CapacityPlanSlotWindow[] = []
+    let current: CapacityPlanSlotWindow | null = null
+
+    for (const period of sortedPeriods) {
+      const periodUnits = quantizeUnits(period.headcount)
+      const activeUnits = Math.max(0, Math.min(unitsInTrajectory, periodUnits - firstUnit))
+      const activePercent = round2((activeUnits / TRAJECTORY_UNITS) * 100)
+      const inclusiveEndWeek = period.endWeek - 1
+
+      if (activePercent <= FLOAT_EPSILON || inclusiveEndWeek < period.startWeek) {
+        if (current) { segments.push(current); current = null }
+        continue
+      }
+
+      if (!current) {
+        current = { startWeek: period.startWeek, endWeek: inclusiveEndWeek, allocationPercent: round2(activePercent) }
+      } else if (
+        Math.abs(activePercent - current.allocationPercent) <= FLOAT_EPSILON &&
+        period.startWeek <= current.endWeek + 1
+      ) {
+        current.endWeek = inclusiveEndWeek
+      } else {
+        segments.push(current)
+        current = { startWeek: period.startWeek, endWeek: inclusiveEndWeek, allocationPercent: round2(activePercent) }
+      }
+    }
+
+    if (current) segments.push(current)
+    if (segments.length > 0) trajectories.push({ trajectoryIndex: t, segments })
+  }
+
+  return trajectories
+}
+
+export function computeDefaultPercentForSegments(segments: CapacityPlanSlotWindow[]): number | null {
+  if (segments.length === 0) return null
+  if (segments.length === 1) return segments[0].allocationPercent
+  const first = segments[0].allocationPercent
+  const allSame = segments.every(s => Math.abs(s.allocationPercent - first) <= 0.000001)
+  return allSame ? first : null
+}
+
+/**
+ * Build non-overlapping aggregate capacity segments from weekly headcount.
+ * Each week's headcount is converted to a percentage (1.0 FTE = 100%).
+ * Adjacent weeks with the same percentage are merged into one segment.
+ * Zero-capacity weeks and gaps produce no segments (discontinuities preserved).
+ * Percentages may exceed 100% (aggregate role capacity, not per-person).
+ */
+export function materializeRoleCapacitySegments(
+  weeklyHeadcount: Map<number, number>,
+): CapacityPlanSlotWindow[] {
+  if (weeklyHeadcount.size === 0) return []
+
+  const sortedWeeks = [...weeklyHeadcount.keys()].sort((a, b) => a - b)
+  const segments: CapacityPlanSlotWindow[] = []
+  let i = 0
+
+  while (i < sortedWeeks.length) {
+    const startWeek = sortedWeeks[i]
+    const pct = round2((weeklyHeadcount.get(startWeek) ?? 0) * 100)
+
+    if (pct <= FLOAT_EPSILON) { i++; continue }
+
+    let endWeek = startWeek
+    i++
+    while (i < sortedWeeks.length) {
+      const nextWeek = sortedWeeks[i]
+      const nextPct = round2((weeklyHeadcount.get(nextWeek) ?? 0) * 100)
+
+      // Gap in week numbers → segment ends
+      if (nextWeek > endWeek + 1) break
+      // Different percentage → segment ends
+      if (Math.abs(nextPct - pct) > FLOAT_EPSILON) break
+      // Zero capacity → segment ends (shouldn't happen since skipped above, but safety)
+      if (nextPct <= FLOAT_EPSILON) break
+
+      endWeek = nextWeek
+      i++
+    }
+
+    segments.push({ startWeek, endWeek, allocationPercent: pct })
+  }
+
+  return segments
+}
+
+export type MaterializedTrajectorySlot = {
+  id: string
+  name: string
+  trajectoryIndex: number
+  slotWindows: CapacityPlanSlotWindow[]
+  existingNamedResourceId: string | null
+  synthetic: boolean
+}
+
+/**
+ * Match resource trajectories to existing named resources by index.
+ * Trajectory i maps to existing named resource i (if one exists).
+ * Trajectories beyond existing count get generated planned-resource IDs.
+ * Persisted NRs without a matching trajectory are NOT included here
+ * (the caller preserves them independently).
+ */
+export function matchTrajectoriesToResources(
+  trajectories: CapacityPlanResourceTrajectory[],
+  resourceTypeId: string,
+  resourceTypeName: string,
+  existingNamedResources: Array<{ id: string; name: string }>,
+): MaterializedTrajectorySlot[] {
+  return trajectories.map((trajectory, idx) => {
+    const existing = existingNamedResources[idx]
+    return {
+      id: existing?.id ?? `${resourceTypeId}-capacity-plan-${trajectory.trajectoryIndex + 1}`,
+      name: existing?.name ?? `${resourceTypeName} ${trajectory.trajectoryIndex + 1}`,
+      trajectoryIndex: trajectory.trajectoryIndex,
+      slotWindows: trajectory.segments,
+      existingNamedResourceId: existing?.id ?? null,
+      synthetic: !existing,
+    }
+  })
 }
 
 export function shouldFallbackToActiveCapacityPlan(
@@ -191,4 +339,53 @@ export function shouldFallbackToActiveCapacityPlan(
   }
 
   return false
+}
+
+// ─── Shared per-resource slot materialisation ───────────────────────────────
+
+export type PerResourceSlotAssignment = {
+  resourceTypeId: string
+  /** One entry per slot window — existing named resources by index, otherwise deterministic generated IDs. */
+  resourceSlots: Array<{
+    id: string
+    name: string
+    slotWindows: CapacityPlanSlotWindow[]
+    trajectoryIndex: number
+    existingNamedResourceId: string | null
+    synthetic: boolean
+  }>
+  /** Aggregate slot set for role-level presentation. */
+  roleSlotWindows: CapacityPlanSlotWindow[]
+}
+
+/**
+ * Materialise per-resource slot assignments from capacity plan resource trajectories.
+ *
+ * Each trajectory at index i maps to existing named resource i (if one exists).
+ * Trajectories beyond existing count generate deterministic planned-resource
+ * IDs matching the route convention: `${resourceTypeId}-capacity-plan-${i+1}`.
+ *
+ * The role-level aggregate contains the full segment set for presentation.
+ * This function is **presentation-only** — it does not alter calculation/assignment semantics.
+ */
+export function materializePerResourceSlots(
+  trajectories: CapacityPlanResourceTrajectory[],
+  resourceTypeId: string,
+  resourceTypeName: string,
+  existingNamedResources: Array<{ id: string; name: string }>,
+): PerResourceSlotAssignment {
+  const matched = matchTrajectoriesToResources(trajectories, resourceTypeId, resourceTypeName, existingNamedResources)
+  const resourceSlots = matched.map(m => ({
+    id: m.id,
+    name: m.name,
+    slotWindows: m.slotWindows,
+    trajectoryIndex: m.trajectoryIndex,
+    existingNamedResourceId: m.existingNamedResourceId,
+    synthetic: m.synthetic,
+  }))
+  return {
+    resourceTypeId,
+    resourceSlots,
+    roleSlotWindows: trajectories.flatMap(t => t.segments),
+  }
 }

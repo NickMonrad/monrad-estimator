@@ -1,3 +1,22 @@
+// ─── Capacity Profile type unions (mirrors server CapacityProfileMapping) ──
+
+export type CapacityProfilePlanningBasis =
+  | 'demandFollowing'
+  | 'availabilityWindow'
+  | 'wholeProjectAllocation'
+  | 'capacityProfile'
+
+export type CapacityProfileSource =
+  | 'fixed'
+  | 'manual'
+  | 'availabilityWindow'
+  | 'squadPlanner'
+  | 'imported'
+  | 'derived'
+  | 'legacy'
+
+export type CapacityProfileResolutionSource = 'PROFILE' | 'LEGACY' | 'ACTIVE_CAPACITY_PLAN'
+
 export interface GlobalResourceType {
   id: string
   name: string
@@ -200,6 +219,7 @@ export interface NamedResourceEntry {
     days: number
   }>
   synthetic?: boolean
+  resourceIdentity?: 'NAMED_PERSON' | 'PLANNED_RESOURCE'
 }
 
 export interface TimelineSummary {
@@ -298,16 +318,25 @@ export interface ResourceProfileRow {
       days: number
     }>
     synthetic: boolean
+    resourceIdentity?: 'NAMED_PERSON' | 'PLANNED_RESOURCE'
     capacityProfile?: {
-      planningBasis: string
-      source: string
+      planningBasis: CapacityProfilePlanningBasis
+      source: CapacityProfileSource
+      defaultPercent: number | null
+      startWeek: number | null
+      endWeek: number | null
       segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+      resolutionSource: CapacityProfileResolutionSource
     }
   }>
   capacityProfile?: {
-    planningBasis: string
-    source: string
+    planningBasis: CapacityProfilePlanningBasis
+    source: CapacityProfileSource
+    defaultPercent: number | null
+    startWeek: number | null
+    endWeek: number | null
     segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    resolutionSource: CapacityProfileResolutionSource
   }
 }
 

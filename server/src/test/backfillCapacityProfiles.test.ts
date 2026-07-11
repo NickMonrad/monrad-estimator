@@ -199,7 +199,7 @@ describe('backfillCapacityProfiles', () => {
     vi.mocked(prisma.capacityProfile.findFirst).mockResolvedValue(null)
     vi.mocked(prisma.capacityProfile.create).mockResolvedValue({ id: 'cp-1' } as any)
     vi.mocked(materializeCapacityPlanResources).mockReturnValue(new Map([
-      ['rt-1', { slotWindows: [{ startWeek: 0, endWeek: 7, allocationPercent: 100 }], totalDays: 0, weeklyHeadcount: new Map(), resourceTypeId: 'rt-1', startWeek: null, endWeek: null }],
+      ['rt-1', { slotWindows: [{ startWeek: 0, endWeek: 7, allocationPercent: 100 }], resourceTrajectories: [], totalDays: 0, weeklyHeadcount: new Map(), resourceTypeId: 'rt-1', startWeek: null, endWeek: null }],
     ]))
 
     await backfillCapacityProfiles(prisma as any)
@@ -343,7 +343,7 @@ describe('backfillCapacityProfiles', () => {
     ])
     stubProject(proj)
     vi.mocked(materializeCapacityPlanResources).mockReturnValue(new Map([
-      ['rt-2', { slotWindows: [{ startWeek: 0, endWeek: 7, allocationPercent: 100 }], totalDays: 0, weeklyHeadcount: new Map(), resourceTypeId: 'rt-2', startWeek: null, endWeek: null }],
+      ['rt-2', { slotWindows: [{ startWeek: 0, endWeek: 7, allocationPercent: 100 }], resourceTrajectories: [], totalDays: 0, weeklyHeadcount: new Map(), resourceTypeId: 'rt-2', startWeek: null, endWeek: null }],
     ]))
     vi.mocked(prisma.capacityProfile.findMany)
       .mockResolvedValueOnce([]) // first call 1: no existing → create

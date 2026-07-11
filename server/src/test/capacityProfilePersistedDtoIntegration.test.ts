@@ -1280,9 +1280,9 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(nr.capacityProfile.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 50 })
       expect(nr.capacityProfile.segments[1]).toMatchObject({ startWeek: 6, endWeek: 9, capacityPercent: 100 })
 
-      // Legacy fields remain intact
+      // Display fields projected from profile
       expect(nr.allocationMode).toBe('CAPACITY_PLAN')
-      expect(nr.allocationPercent).toBe(100)
+      expect(nr.allocationPercent).toBe(75)
       expect(nr.pricingModel).toBe('PRO_RATA')
     })
   })
