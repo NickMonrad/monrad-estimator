@@ -1,75 +1,113 @@
 # Contributing Standards
 
-## Branching Strategy
+Repository-wide implementation and review rules are defined in `.github/instructions/project.instructions.md`. This document summarises the human contribution workflow and must remain consistent with that canonical contract.
 
-- `main` is the stable, reviewed branch. All completed work must be merged here via PR.
-- Feature branches follow the pattern `feature/phase-N-<name>` (e.g. `feature/phase-4-effort`).
-- **All feature branches must target `main` directly** — do not chain branches (e.g. phase-2 → phase-1 → main). Each phase PR should have `main` as its base.
-- One branch per phase. Small fixes or enhancements within a phase go on the same branch before the PR is raised.
+## Branching strategy
 
-## Pull Request Process
+- `main` is the stable, reviewed branch.
+- Start each piece of work from the latest `main`.
+- Target `main` directly; do not chain feature branches.
+- Use one branch per issue or independently reviewable work item.
 
-1. **Complete the phase** — all code written, tests passing, TypeScript clean.
-2. **Raise a PR** against `main` using the PR template (`.github/pull_request_template.md`).
-3. **Wait for human approval** — Copilot raises the PR but must NOT merge it. The repo owner reviews and merges.
-4. **Close the related GitHub issue** in the PR body using `Closes #N`.
-5. **Merge** — performed by the repo owner only. Squash or merge commit, never rebase onto main.
-6. **Start the next phase** from the updated `main` after merge.
+Branch names:
 
-## Phase Workflow (Copilot CLI)
-
-When building a new phase:
-```
-git checkout main && git pull
-git checkout -b feature/phase-N-<name>
-# ... build, test, commit ...
-gh pr create --base main --head feature/phase-N-<name>
-# Wait for review + merge before starting next phase
+```text
+feature/<issue>-<slug>
+fix/<issue>-<slug>
+docs/<issue>-<slug>
 ```
 
-## Commit Messages
+Examples:
 
-Follow the pattern: `type: short description`
+```text
+feature/365-agent-instruction-hardening
+fix/353-windows-e2e-runner
+```
 
-| Type | When to use |
+## Pull-request process
+
+1. Confirm the issue scope and acceptance criteria.
+2. Implement the smallest complete change and add appropriate tests.
+3. Run the repository validation contract.
+4. Update affected documentation and screenshots.
+5. Raise a PR against `main` using `.github/pull_request_template.md`.
+6. Include `Closes #N` in the PR body.
+7. Wait for human review and approval.
+8. The repository owner merges the PR.
+
+Contributors and agents must not push directly to `main`, merge their own PR, enable auto-merge, approve their own PR, or bypass required checks.
+
+## Commit messages
+
+Use:
+
+```text
+type(#issue): short description
+```
+
+| Type | Use |
 |---|---|
-| `feat` | New feature or phase work |
-| `fix` | Bug fix |
-| `refactor` | Rename, restructure, no behaviour change |
+| `feat` | New user or system capability |
+| `fix` | Defect correction |
+| `refactor` | Structural change without intended behaviour change |
 | `docs` | Documentation only |
-| `test` | Adding or fixing tests |
-| `chore` | Deps, config, tooling |
+| `test` | Test coverage or test infrastructure |
+| `chore` | Tooling, dependencies, CI, or repository maintenance |
 
-All commits must include the co-author trailer:
+Do not add a hard-coded Copilot co-author trailer. Attribution must reflect the actual authoring workflow.
+
+## Validation
+
+Run from the repository root:
+
+```bash
+npm run validate
 ```
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+This runs client and server lint, type-checking, builds, and unit/integration tests.
+
+Do not accept unexplained failures. A failure may only be classified as pre-existing after reproducing it on the merge base or current `main`.
+
+### End-to-end tests
+
+For user-visible behaviour, navigation, permissions, persistence, or critical cross-domain workflows, add or update Playwright coverage and run:
+
+```bash
+npm run test:e2e:local
 ```
 
-## Testing Standards
+The local runner manages the database, ports, dev processes, test execution, and cleanup across Windows, macOS, and Linux.
 
-- Every phase must include tests before the PR is raised.
-- Server: API integration tests in `server/src/test/` using Vitest + supertest.
-- Client: Component tests in `client/src/test/` using Vitest + React Testing Library.
-- E2E: Browser tests in `e2e/tests/` using Playwright (Chromium).
-- Run all three before raising a PR:
-  ```bash
-  npm test                  # in /server
-  npx tsc --noEmit          # in /server and /client
-  npm run test:e2e          # from repo root (requires both dev servers running)
-  ```
-- When adding new features, add a matching Playwright test to the relevant spec file in `e2e/tests/`.
+For documentation-only work, internal refactors with unchanged behaviour, or narrowly scoped server work, E2E may be marked not applicable when the PR explains why and lists the focused tests used instead.
 
-## README
+When Playwright tests change, update `e2e/TESTS.md`.
 
-- `README.md` at the repo root documents the project overview, tech stack, phases, and shipped enhancements.
-- **After a PR is merged to `main`, update `README.md`** to reflect any new phases completed, enhancements shipped, or issues resolved.
-- Add merged enhancements to the "Shipped Enhancements" table with the PR number.
-- Update phase status (`🚧` → `✅`) when a phase PR is merged.
-- Keep the "Open Issues & Backlog" table current — remove closed issues, add new ones.
+## Database migrations
 
-## GitHub Issues
+Before a Prisma schema migration or other operation that may alter persistent development data:
 
-- Each phase has a corresponding GitHub issue (labelled `phase`).
-- Future enhancements are tracked as issues labelled `backlog`.
-- Close the issue in the PR body: `Closes #N`.
-- Completed phases are labelled `completed` and closed when their PR merges.
+```bash
+npm run db:backup
+```
+
+Confirm a non-empty timestamped dump exists in `backups/` before continuing.
+
+Never run `prisma migrate reset` without explicit user approval. Prefer backward-compatible migrations and explain destructive behaviour in the PR.
+
+## Documentation
+
+Update documentation when behaviour, setup, architecture, commands, or supported workflows change.
+
+- Documentation must be accurate before the PR is marked ready for review.
+- Add a PR number to a README table only after the PR exists.
+- Do not invent a future PR number.
+- Regenerate screenshots with `npm run screenshots` for new pages or material layout changes.
+
+## Review standard
+
+Every review includes:
+
+1. a correctness pass covering behaviour, security, data safety, tests, accessibility, UX, and API contracts
+2. a simplicity pass covering unnecessary abstraction, duplicated state, unused flexibility, new dependencies, and code that can be deleted
+
+See `.github/instructions/simplicity-review.instructions.md` for the complete review procedure.
