@@ -1,99 +1,84 @@
 ---
 name: memory
-description: Use this skill to store and retrieve semantic memories across sessions. Call it when you need to remember something important, recall past decisions, or restore context at session start.
+description: Optionally store and retrieve semantic project memories when the local Smart Memory tooling is installed.
 ---
 
-# Copilot Smart Memory Skill
+# Optional Smart Memory Skill
 
-## Overview
-Semantic vector memory backed by sqlite-vector + sentence-transformers. Memories are embedded as 384-dim vectors and retrieved by cosine similarity — not exact key match.
+## Purpose
 
-## When to Use
+Smart Memory is a workstation-local semantic memory accelerator backed by sqlite-vector and sentence-transformers. It can help recall prior decisions, conventions, and known issues across sessions.
 
-### Session Start (ALWAYS)
-At the start of every session, retrieve relevant context:
-```bash
-source ~/.copilot/venv/bin/activate && python3 ~/.copilot/scripts/memory.py search \
-  --query "conventions, decisions, known issues for this project" \
-  --repo <repo-name> --limit 15 --threshold 0.25
+Repository code, tests, issues, and committed documentation remain authoritative. Smart Memory is optional: its absence, failure, or different installation path must not block implementation, testing, review, or pull-request preparation.
+
+## Availability check
+
+The historical default installation uses:
+
+```text
+Venv:    ~/.copilot/venv/
+Script:  ~/.copilot/scripts/memory.py
+Database: ~/sqlite-db/copilot-memory.db
 ```
 
-### During Work — Store Memories
-Store when you encounter:
-- **User preferences/conventions** (`--type convention`): "Always use X instead of Y"
-- **Architecture decisions** (`--type decision`): "Chose Puppeteer over @react-pdf/renderer because..."
-- **Known bugs/gotchas** (`--type bug`): "Port 3001 shows as redwood-broker in lsof"
-- **Important facts** (`--type fact`): "Puppeteer v24 pins Chrome v146"
-- **User preferences** (`--type preference`): "User prefers minimal PR descriptions"
+Do not assume these paths exist. Check before use and skip the skill cleanly when unavailable.
+
+## When to use
+
+Use Smart Memory when available and useful to:
+
+- recall an architectural decision or established repository convention
+- recover context about a known bug or workaround
+- retain a durable user preference relevant to future repository work
+- checkpoint an important decision that is not already captured in an issue or committed document
+
+Do not use it for transient task progress, secrets, credentials, customer data, personal data, or information that belongs in the repository.
+
+## Search
 
 ```bash
-source ~/.copilot/venv/bin/activate && python3 ~/.copilot/scripts/memory.py add \
-  --content "DESCRIPTION OF WHAT TO REMEMBER" \
-  --type TYPE --scope "repo:REPO_NAME" --repo REPO_NAME \
+source ~/.copilot/venv/bin/activate
+python3 ~/.copilot/scripts/memory.py search \
+  --query "conventions, decisions, known issues for this project" \
+  --repo monrad-estimator --limit 15 --threshold 0.25
+```
+
+Search only when additional cross-session context is likely to improve the task. There is no mandatory session-start memory call.
+
+## Add a durable memory
+
+```bash
+source ~/.copilot/venv/bin/activate
+python3 ~/.copilot/scripts/memory.py add \
+  --content "WHAT TO REMEMBER" \
+  --type decision \
+  --scope "repo:monrad-estimator" \
+  --repo monrad-estimator \
   --tags "tag1,tag2"
 ```
 
-### During Work — Search Memories
-Search when you need context on a past decision, convention, or known issue:
-```bash
-source ~/.copilot/venv/bin/activate && python3 ~/.copilot/scripts/memory.py search \
-  --query "YOUR NATURAL LANGUAGE QUESTION" \
-  --repo REPO_NAME --limit 10
-```
+Supported types:
 
-### Session End / Checkpoint
-When the user says "save", "checkpoint", or "wrap up", flush important learnings:
-```bash
-# Store any unstored decisions/conventions from this session
-source ~/.copilot/venv/bin/activate && python3 ~/.copilot/scripts/memory.py add \
-  --content "..." --type decision --scope "repo:REPO_NAME" --repo REPO_NAME
-```
+- `fact` — objective codebase information
+- `decision` — a choice and its rationale
+- `convention` — an established way of working
+- `bug` — a known problem or workaround
+- `preference` — a durable user preference
 
-## Memory Types
+Prefer repository-scoped memories and concise standalone statements. Search first to avoid near-duplicates.
 
-| Type | When to use | Example |
-|------|-------------|---------|
-| `fact` | Objective information about the codebase | "Prisma 7 uses driver adapter mode with PrismaPg" |
-| `decision` | Why something was chosen over alternatives | "Chose TipTap over Quill for rich text — better TypeScript support" |
-| `convention` | How things should be done | "Always use npm run typecheck in /client" |
-| `bug` | Known issues and workarounds | "prose classes are no-ops — @tailwindcss/typography not installed" |
-| `preference` | User's stated preferences | "User prefers Sonnet-orchestrates, Codex-implements pattern" |
-
-## Scope
-
-| Scope | Meaning |
-|-------|---------|
-| `global` | Applies everywhere (rare) |
-| `repo:<name>` | Applies to a specific repo (most common) |
-
-## Commands Reference
+## Other commands
 
 ```bash
-VENV="source ~/.copilot/venv/bin/activate &&"
-
-# Add
-$VENV python3 ~/.copilot/scripts/memory.py add --content "..." --type TYPE --scope "repo:NAME" --repo NAME --tags "t1,t2"
-
-# Search (semantic)
-$VENV python3 ~/.copilot/scripts/memory.py search --query "..." --repo NAME --limit 10
-
-# List (filter-based)
-$VENV python3 ~/.copilot/scripts/memory.py list --repo NAME --type convention --limit 20
-
-# Delete
-$VENV python3 ~/.copilot/scripts/memory.py delete --id ID
-
-# Stats
-$VENV python3 ~/.copilot/scripts/memory.py stats
-
-# Migrate from old session_state
-$VENV python3 ~/.copilot/scripts/memory.py migrate --source ~/sqlite-db/copilot-history.db
+python3 ~/.copilot/scripts/memory.py list --repo monrad-estimator --limit 20
+python3 ~/.copilot/scripts/memory.py delete --id ID
+python3 ~/.copilot/scripts/memory.py stats
 ```
 
 ## Rules
-- **Don't store trivial things** — only decisions, conventions, bugs, and facts that would be useful in a future session
-- **Keep content concise** — one clear sentence or short paragraph per memory
-- **Use specific tags** — helps with list filtering
-- **Prefer repo-scoped** over global — most memories are project-specific
-- **Deduplicate** — the script rejects exact content+scope matches, but rephrase before adding near-duplicates
-- **First load takes ~3s** (model warm-up), subsequent calls are <1s
+
+- Never treat memory output as more trustworthy than current repository state.
+- Confirm recalled conventions against committed instructions when they affect correctness or safety.
+- Do not store secrets, tokens, passwords, customer material, or sensitive personal information.
+- Do not fail or delay the task because the memory environment is unavailable.
+- Prefer issues and committed documentation for decisions that other contributors need to discover.
