@@ -1,90 +1,67 @@
 ---
 name: write-readme
-description: Use this skill when asked to write a README, update documentation, or create project documentation. Generates comprehensive README files with setup instructions, architecture overview, and usage guide.
+description: Update Monrad Estimator README and project documentation using the canonical repository instructions and current codebase behaviour.
 ---
 
-## When to Use
-Use when the user asks to:
-- "write a README"
-- "update the README"
-- "create documentation"
-- "document this project"
-- "add setup instructions"
+# README and Documentation Skill
+
+Before editing documentation, follow `.github/instructions/project.instructions.md` and read the current README, relevant scripts, environment examples, and implementation being documented.
+
+## When to use
+
+Use this skill when asked to:
+
+- create or update `README.md`
+- document setup, architecture, commands, or workflows
+- correct stale developer guidance
+- add or update feature documentation
 
 ## Process
 
-1. **Read the project** — understand what it does, the stack, and key workflows
-2. **Check if README.md already exists** — if so, read it before updating
-3. **Write or update the README** using the structure below
+1. Read the existing documentation before editing it.
+2. Verify commands, ports, environment variables, and behaviour against the current repository.
+3. Change only the sections affected by the work; do not rewrite the README from scratch unless explicitly requested.
+4. Keep setup instructions cross-platform where repository scripts already provide a cross-platform workflow.
+5. Run or statically verify documented commands when practical.
+6. Check links, headings, code fences, and referenced files.
 
-## README Structure
+## Monrad-specific commands
 
-```markdown
-# Project Name
+Use the current root commands rather than inventing alternatives:
 
-> One sentence describing what this project does and who it's for.
-
-## Prerequisites
-
-- Node.js 20+ / Python 3.12+
-- Docker (for local DB)
-- ...
-
-## Quick Start
-
-\`\`\`bash
-git clone https://github.com/org/repo
-cd repo
-cp .env.example .env   # fill in values
+```bash
 npm install
 npm run dev
-\`\`\`
-
-Open http://localhost:5173
-
-## Architecture
-
-<brief description or Mermaid diagram>
-
-## Key Features
-
-- Feature A — description
-- Feature B — description
-
-## Development
-
-### Running tests
-\`\`\`bash
-npm test
-npm run test:e2e
-\`\`\`
-
-### Database migrations
-\`\`\`bash
-npx prisma migrate dev
-\`\`\`
-
-## Environment Variables
-
-See `.env.example` for all variables. Required ones:
-
-| Variable | Description |
-|---|---|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_SECRET` | JWT signing secret |
-
-## Contributing
-
-...
-
-## Licence
-
-MIT
+npm run validate
+npm run test:e2e:local
+npm run screenshots
+npm run db:backup
 ```
 
-## Rules
-- Write for a developer who has never seen the project
-- Keep Quick Start under 5 commands
-- Include the minimum required setup — don't over-document
-- If README exists, update it — don't rewrite from scratch unless asked
-- Do not include sensitive values (connection strings, real keys)
+For database schema development, documentation must show the safety sequence:
+
+```bash
+npm run db:backup
+cd server
+npx prisma migrate dev --name <migration-name>
+npx prisma generate
+```
+
+Never document `prisma migrate reset` as a routine step. It requires explicit user approval because it destroys data.
+
+## Documentation rules
+
+- Write for a developer who has not seen the project before.
+- Prefer the minimum accurate setup over speculative or generic sections.
+- Do not include real secrets, credentials, customer names, or private connection strings.
+- Do not guess the licence; reflect the repository's actual licence state.
+- Keep Windows, macOS, and Linux behaviour accurate.
+- Explain when Docker or a local PostgreSQL instance is required.
+- Prefer `npm run test:e2e:local` for local E2E guidance because it owns ports, server processes, seed data, and cleanup.
+- Add a PR number only after the PR exists; never predict one.
+- Update screenshots only when the UI materially changed and use the screenshot skill.
+- Do not alter roadmap or shipped-enhancement tables unless the work actually changes them.
+
+## Completion report
+
+Summarise the sections changed, facts verified, and any commands that could not be run. Documentation-only work may mark E2E as not applicable with a clear reason.
