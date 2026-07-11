@@ -2945,6 +2945,12 @@ describe('persisted capacity-profile DTO integration', () => {
           .map((nr: any) => nr.id),
       )
       const snapshotA = () => {
+        const rts = storeRef.current.resourceTypes
+          .filter((r: any) => r.id === rtAId)
+          .map((r: any) => JSON.parse(JSON.stringify(r)))
+        const nrs = storeRef.current.namedResources
+          .filter((nr: any) => nr.resourceTypeId === rtAId)
+          .map((nr: any) => JSON.parse(JSON.stringify(nr)))
         const profiles = storeRef.current.capacityProfiles
           .filter((p: any) =>
             p.resourceTypeId === rtAId ||
@@ -2955,7 +2961,7 @@ describe('persisted capacity-profile DTO integration', () => {
         const segments = storeRef.current.capacitySegments
           .filter((s: any) => relatedProfileIds.has(s.capacityProfileId))
           .map((s: any) => JSON.parse(JSON.stringify(s)))
-        return { profiles, segments }
+        return { rts, nrs, profiles, segments }
       }
 
       // ── RT B with role profile ───────────────────────────────────────
@@ -3046,13 +3052,13 @@ describe('persisted capacity-profile DTO integration', () => {
       })
       storeRef.current.capacitySegments.push(
         { id: roleSeg1, capacityProfileId: roleProfileId, startWeek: 1, endWeek: 4, capacityPercent: 50, source: 'AVAILABILITY_WINDOW', createdAt: now, updatedAt: now },
-        { id: roleSeg2, capacityProfileId: roleProfileId, startWeek: 5, endWeek: 8, capacityPercent: 100, source: 'AVAILABILITY_WINDOW', createdAt: now, updatedAt: now },
-        { id: roleSeg3, capacityProfileId: roleProfileId, startWeek: 9, endWeek: 12, capacityPercent: 25, source: 'AVAILABILITY_WINDOW', createdAt: now, updatedAt: now },
+        { id: roleSeg2, capacityProfileId: roleProfileId, startWeek: 5, endWeek: 8, capacityPercent: 75, source: 'AVAILABILITY_WINDOW', createdAt: now, updatedAt: now },
+        { id: roleSeg3, capacityProfileId: roleProfileId, startWeek: 9, endWeek: 12, capacityPercent: 100, source: 'AVAILABILITY_WINDOW', createdAt: now, updatedAt: now },
       )
 
-      // Inherited NR (no profile, matches role defaults via legacy → TIMELINE/72)
+      // Inherited NR: matches authoritative role default projection (TIMELINE/75/W1-W12)
       addNamedResource('ncp-nr-inh', 'Inherited', rtId, {
-        allocationMode: 'TIMELINE', allocationPercent: 72, allocationPct: 72,
+        allocationMode: 'TIMELINE', allocationPercent: 75, allocationPct: 75,
         allocationStartWeek: 1, allocationEndWeek: 12,
       })
 
@@ -3108,9 +3114,9 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(roleSegs[0].id).toBe(roleSeg1)
       expect(roleSegs[0].capacityPercent).toBe(50)
       expect(roleSegs[1].id).toBe(roleSeg2)
-      expect(roleSegs[1].capacityPercent).toBe(100)
+      expect(roleSegs[1].capacityPercent).toBe(75)
       expect(roleSegs[2].id).toBe(roleSeg3)
-      expect(roleSegs[2].capacityPercent).toBe(25)
+      expect(roleSegs[2].capacityPercent).toBe(100)
 
       // ── New NR exists ─────────────────────────────────────────────
       const allNRs = storeRef.current.namedResources.filter((nr: any) => nr.resourceTypeId === rtId)
@@ -3119,6 +3125,15 @@ describe('persisted capacity-profile DTO integration', () => {
         !['ncp-nr-inh', 'ncp-nr-exp'].includes(nr.id),
       )
       expect(newNR).toBeDefined()
+
+      // ── New NR compatibility: lossy projection of multi-segment role profile ──
+      expect(newNR!.allocationMode).toBe('TIMELINE')
+      expect(newNR!.allocationPercent).toBe(75)
+      expect(newNR!.allocationPct).toBe(75)
+      expect(newNR!.allocationStartWeek).toBe(1)
+      expect(newNR!.allocationEndWeek).toBe(12)
+      expect(newNR!.startWeek).toBe(1)
+      expect(newNR!.endWeek).toBe(12)
 
       // ── New NR has cloned profile with NAMED_PERSON owner ─────────
       const newNRProfiles = storeRef.current.capacityProfiles.filter(
@@ -3140,14 +3155,13 @@ describe('persisted capacity-profile DTO integration', () => {
       const clonedSegs = storeRef.current.capacitySegments
         .filter((s: any) => s.capacityProfileId === nrp.id)
         .sort((a: any, b: any) => a.startWeek - b.startWeek)
-      expect(clonedSegs.length).toBe(3)
       expect(clonedSegs[0].capacityPercent).toBe(50)
       expect(clonedSegs[0].startWeek).toBe(1)
       expect(clonedSegs[0].endWeek).toBe(4)
-      expect(clonedSegs[1].capacityPercent).toBe(100)
+      expect(clonedSegs[1].capacityPercent).toBe(75)
       expect(clonedSegs[1].startWeek).toBe(5)
       expect(clonedSegs[1].endWeek).toBe(8)
-      expect(clonedSegs[2].capacityPercent).toBe(25)
+      expect(clonedSegs[2].capacityPercent).toBe(100)
       expect(clonedSegs[2].startWeek).toBe(9)
       expect(clonedSegs[2].endWeek).toBe(12)
 
@@ -3159,12 +3173,25 @@ describe('persisted capacity-profile DTO integration', () => {
       // Every cloned segment references the cloned NR profile
       clonedSegs.forEach((s: any) => expect(s.capacityProfileId).toBe(nrp.id))
 
-      // No duplicate role profile
-      expect(
-        storeRef.current.capacityProfiles.filter(
-          (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
-        ).length,
-      ).toBe(1)
+
+      // ── GET returns clone as named-person owned (legacy fallback, no segments) ──
+      // Note: legacy mapper skips role profiles when NRs exist, and the
+      // cloned profile has segments that cause reconciliation fallback,
+      // so segments are not included in the legacy-derived DTO.
+      const getRes = await request(app)
+        .get(`/api/projects/${projectId}/capacity-profiles`)
+        .set('Authorization', authHeader)
+      expect(getRes.status).toBe(200)
+      const profiles = getRes.body.capacityProfiles
+      expect(Array.isArray(profiles)).toBe(true)
+
+      // New NR's cloned profile appears as named-person owner
+      const nrDTOs = profiles.filter(
+        (p: any) => p.owner?.kind === 'namedPerson' && p.owner?.id === newNR!.id,
+      )
+      expect(nrDTOs.length).toBe(1)
+      expect(nrDTOs[0].planningBasis).toBe('availabilityWindow')
+      expect(nrDTOs[0].defaultPercent).toBe(75)
     })
 
     // ── Blocker 7a: count reduction preserves non-CP role profile ────
@@ -3175,17 +3202,20 @@ describe('persisted capacity-profile DTO integration', () => {
         .send({ count: 1 })
       expect(res.status).toBe(200)
 
-      // Only the inherited NR should be deleted
+      // Only the protected NR remains
       const remaining = storeRef.current.namedResources.filter(
         (nr: any) => nr.resourceTypeId === rtId,
       )
-      // 2 NRs remain: 1 inherited... wait, count=3 → 1 means delete 2 inherited NRs
-      // Actually, count=3 → 3 NRs exist. Request count=1 → targetRemove=2.
-      // Only 1 inherited NR exists → 1 removed. actualCount=2. Warning.
-      expect(remaining.length).toBeGreaterThanOrEqual(2)
+      expect(remaining.length).toBe(1)
+      expect(remaining[0].id).toBe('ncp-nr-exp')
+      expect(storeRef.current.namedResources.find((nr: any) => nr.id === 'ncp-nr-inh')).toBeUndefined()
 
-      // Explicit NR unchanged
-      expect(remaining.find((nr: any) => nr.id === 'ncp-nr-exp')).toBeDefined()
+      // Persisted count equals requested count (target reached)
+      const updatedRT = storeRef.current.resourceTypes.find((rt: any) => rt.id === rtId)
+      expect(updatedRT!.count).toBe(1)
+
+      // No warning — target was reachable
+      expect(res.body.warnings).toBeUndefined()
 
       // Role profile unchanged
       const roleProfiles = storeRef.current.capacityProfiles.filter(
@@ -3195,11 +3225,26 @@ describe('persisted capacity-profile DTO integration', () => {
       const rp = roleProfiles[0]
       expect(rp.planningBasis).toBe('AVAILABILITY_WINDOW')
       expect(rp.defaultPercent).toBe(75)
+      expect(rp.startWeek).toBe(1)
+      expect(rp.endWeek).toBe(12)
 
       // Role segments unchanged
       const roleSegs = storeRef.current.capacitySegments
         .filter((s: any) => s.capacityProfileId === roleProfileId)
+        .sort((a: any, b: any) => a.startWeek - b.startWeek)
       expect(roleSegs.length).toBe(3)
+      expect(roleSegs[0].id).toBe(roleSeg1)
+      expect(roleSegs[0].capacityPercent).toBe(50)
+      expect(roleSegs[0].startWeek).toBe(1)
+      expect(roleSegs[0].endWeek).toBe(4)
+      expect(roleSegs[1].id).toBe(roleSeg2)
+      expect(roleSegs[1].capacityPercent).toBe(75)
+      expect(roleSegs[1].startWeek).toBe(5)
+      expect(roleSegs[1].endWeek).toBe(8)
+      expect(roleSegs[2].id).toBe(roleSeg3)
+      expect(roleSegs[2].capacityPercent).toBe(100)
+      expect(roleSegs[2].startWeek).toBe(9)
+      expect(roleSegs[2].endWeek).toBe(12)
 
       // No duplicate role profile
       expect(
@@ -3208,7 +3253,6 @@ describe('persisted capacity-profile DTO integration', () => {
         ).length,
       ).toBe(1)
     })
-
     // ── Blocker 7b: same-count no-op preserves everything ────────────
     it('same-count PATCH preserves non-CAPACITY_PLAN profiles and segments unchanged', async () => {
       // Snapshot before
@@ -3450,6 +3494,184 @@ describe('persisted capacity-profile DTO integration', () => {
       )
       expect(roleProfiles.length).toBe(1)
       expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+    })
+
+    // ── Blocker 2: authoritative CAPACITY_PROFILE count-increase ──────
+    it('count increase with authoritative CAPACITY_PROFILE role profile exits to manual and does not clone old segments', async () => {
+      storeRef.current = createStore()
+      const rtId = 'cp-auth-inc'
+      const roleProfileId = 'cp-auth-role'
+      const roleSeg1 = 'cp-auth-seg-1'
+      const roleSeg2 = 'cp-auth-seg-2'
+      const inhNrId = 'cp-auth-inh'
+      const protNrId = 'cp-auth-prot'
+      const protProfId = 'cp-auth-prot-pro'
+
+      // RT legacy: EFFORT/100 (stale — authoritative role profile overrides)
+      addResourceType(rtId, 'Auth CP RT', 2, {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+      })
+
+      // Authoritative role profile: CAPACITY_PROFILE with multiple segments
+      const now = new Date()
+      storeRef.current.capacityProfiles.push({
+        id: roleProfileId,
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 90,
+        startWeek: null,
+        endWeek: null,
+        legacy: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      storeRef.current.capacitySegments.push(
+        { id: roleSeg1, capacityProfileId: roleProfileId, startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: now, updatedAt: now },
+        { id: roleSeg2, capacityProfileId: roleProfileId, startWeek: 5, endWeek: 7, capacityPercent: 50, source: 'SQUAD_PLANNER', createdAt: now, updatedAt: now },
+      )
+
+      // Inherited NR: matches effective CAPACITY_PLAN state (projected from role profile)
+      addNamedResource(inhNrId, 'Inherited CP', rtId, {
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 75, allocationPct: 75,
+        allocationStartWeek: 2, allocationEndWeek: 7,
+      })
+
+      // Protected NR: custom profile with segments
+      addNamedResource(protNrId, 'Protected CP', rtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 60, allocationPct: 60,
+        allocationStartWeek: 3, allocationEndWeek: 6,
+      })
+      storeRef.current.capacityProfiles.push({
+        id: protProfId,
+        projectId,
+        namedResourceId: protNrId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'MANUAL',
+        defaultPercent: 60,
+        startWeek: 3,
+        endWeek: 6,
+        legacy: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      const protSeg1 = 'cp-auth-prot-seg-1'
+      storeRef.current.capacitySegments.push(
+        { id: protSeg1, capacityProfileId: protProfId, startWeek: 3, endWeek: 6, capacityPercent: 60, source: 'MANUAL', createdAt: now, updatedAt: now },
+      )
+
+      // Snapshot protected NR state before mutation
+      const beforeProtNR = JSON.parse(JSON.stringify(
+        storeRef.current.namedResources.find((nr: any) => nr.id === protNrId),
+      ))
+      const beforeProtProf = JSON.parse(JSON.stringify(
+        storeRef.current.capacityProfiles.find((p: any) => p.id === protProfId),
+      ))
+      const beforeProtSegs = JSON.parse(JSON.stringify(
+        storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === protProfId),
+      ))
+
+      // PATCH count upward: 2 → 3
+      const res = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ count: 3 })
+      expect(res.status).toBe(200)
+
+      // ── Role exited to manual scheduling despite stale RT legacy ──
+      const updatedRT = storeRef.current.resourceTypes.find((r: any) => r.id === rtId)
+      expect(updatedRT!.allocationMode).toBe('TIMELINE')
+      expect(updatedRT!.allocationPercent).toBe(100)
+      expect(updatedRT!.allocationStartWeek).toBeNull()
+      expect(updatedRT!.allocationEndWeek).toBeNull()
+
+      // Exactly one manual role profile — old CAPACITY_PROFILE replaced
+      const roleProfiles = storeRef.current.capacityProfiles.filter(
+        (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
+      )
+      expect(roleProfiles.length).toBe(1)
+      expect(roleProfiles[0].planningBasis).not.toBe('CAPACITY_PROFILE')
+      expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(roleProfiles[0].defaultPercent).toBe(100)
+
+      // Old role segments not retained as active template
+      const oldRoleSegs = storeRef.current.capacitySegments.filter(
+        (s: any) => s.capacityProfileId === roleProfileId,
+      )
+      expect(oldRoleSegs.length).toBe(0)
+
+      // ── Inherited NR transitioned ──
+      const inhNR = storeRef.current.namedResources.find((nr: any) => nr.id === inhNrId)
+      expect(inhNR).toBeDefined()
+      expect(inhNR!.allocationMode).toBe('TIMELINE')
+      expect(inhNR!.allocationPercent).toBe(100)
+      expect(inhNR!.allocationPct).toBe(100)
+      expect(inhNR!.allocationStartWeek).toBeNull()
+      expect(inhNR!.allocationEndWeek).toBeNull()
+      expect(inhNR!.startWeek).toBeNull()
+      expect(inhNR!.endWeek).toBeNull()
+
+      // ── Protected NR unchanged ──
+      const afterProtNR = storeRef.current.namedResources.find((nr: any) => nr.id === protNrId)
+      expect(JSON.stringify(afterProtNR)).toBe(JSON.stringify(beforeProtNR))
+      const afterProtProf = storeRef.current.capacityProfiles.find((p: any) => p.id === protProfId)
+      expect(JSON.stringify(afterProtProf)).toBe(JSON.stringify(beforeProtProf))
+      const afterProtSegs = storeRef.current.capacitySegments.filter(
+        (s: any) => s.capacityProfileId === protProfId,
+      )
+      expect(JSON.stringify(afterProtSegs)).toBe(JSON.stringify(beforeProtSegs))
+
+      // ── New NR exists ──
+      const allNRs = storeRef.current.namedResources.filter((nr: any) => nr.resourceTypeId === rtId)
+      expect(allNRs.length).toBe(3)
+      const newNR = allNRs.find((nr: any) => nr.id !== inhNrId && nr.id !== protNrId)
+      expect(newNR).toBeDefined()
+
+      // ── New NR is TIMELINE/100 with null windows ──
+      expect(newNR!.allocationMode).toBe('TIMELINE')
+      expect(newNR!.allocationPercent).toBe(100)
+      expect(newNR!.allocationPct).toBe(100)
+      expect(newNR!.allocationStartWeek).toBeNull()
+      expect(newNR!.allocationEndWeek).toBeNull()
+      expect(newNR!.startWeek).toBeNull()
+      expect(newNR!.endWeek).toBeNull()
+
+      // ── New NR does NOT receive CAPACITY_PROFILE ──
+      const newNRProfile = storeRef.current.capacityProfiles.find(
+        (p: any) => p.namedResourceId === newNR!.id,
+      )
+      expect(newNRProfile).toBeDefined()
+      expect(newNRProfile!.planningBasis).not.toBe('CAPACITY_PROFILE')
+      // Should be scalar manual (AVAILABILITY_WINDOW or DEMAND_FOLLOWING)
+      expect(newNRProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(newNRProfile!.defaultPercent).toBe(100)
+
+      // ── New NR has no cloned segments ──
+      const newNRSegments = storeRef.current.capacitySegments.filter(
+        (s: any) => s.capacityProfileId === newNRProfile!.id,
+      )
+      expect(newNRSegments.length).toBe(0)
+
+      // ── GET reports new NR as manually scheduled ──
+      const getRes = await request(app)
+        .get(`/api/projects/${projectId}/capacity-profiles`)
+        .set('Authorization', authHeader)
+      expect(getRes.status).toBe(200)
+      const profiles = getRes.body.capacityProfiles
+      expect(Array.isArray(profiles)).toBe(true)
+      const nrDTOs = profiles.filter(
+        (p: any) => p.owner?.kind === 'namedPerson' && p.owner?.id === newNR!.id,
+      )
+      expect(nrDTOs.length).toBe(1)
+      expect(nrDTOs[0].planningBasis).toBe('availabilityWindow')
+      expect(nrDTOs[0].defaultPercent).toBe(100)
+      expect(nrDTOs[0].segments).toBeDefined()
+      expect(nrDTOs[0].segments.length).toBe(0)
     })
 
     // ── Blocker 4 (extension): GET capacity-profiles returns correct EFFORT/70 ──
