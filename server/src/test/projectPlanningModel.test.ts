@@ -195,6 +195,9 @@ describe('applyCapacityPlanFallback', () => {
         { startWeek: 0, endWeek: 4, allocationPercent: 100 },
         { startWeek: 5, endWeek: 9, allocationPercent: 50 },
       ],
+      resourceTrajectories: [
+        { trajectoryIndex: 0, segments: [{ startWeek: 0, endWeek: 4, allocationPercent: 100 }, { startWeek: 5, endWeek: 9, allocationPercent: 50 }] },
+      ],
       startWeek: 0,
       endWeek: 9,
     }
@@ -218,7 +221,8 @@ describe('applyCapacityPlanFallback', () => {
       },
     ]
     const result = applyCapacityPlanFallback(rt, cpMap)
-    expect(result[0].namedResources).toHaveLength(2)
+    // Trajectory model consolidates 2 flat windows into 1 stable resource with 2 segments
+    expect(result[0].namedResources).toHaveLength(1)
     expect(result[0].namedResources[0].id).toContain('capacity-plan-1')
     expect(result[0].namedResources[0].name).toBe('Security 1')
     expect(result[0].namedResources[0].allocationMode).toBe('CAPACITY_PLAN')
@@ -234,6 +238,7 @@ describe('applyCapacityPlanFallback', () => {
       slotWindows: [{ startWeek: 0, endWeek: 9, allocationPercent: 100 }],
       startWeek: 0,
       endWeek: 9,
+      resourceTrajectories: [],
     }
     const cpMap = new Map<string, MaterializedCapacityPlanResource>()
     cpMap.set('rt-cp', materialized)
@@ -503,6 +508,7 @@ describe('computeWeeklyCapacity', () => {
       weeklyHeadcount: new Map([[0, 1.5], [1, 1.5]]),
       slotWindows: [],
       startWeek: 0,
+      resourceTrajectories: [],
       endWeek: 1,
     }
     const cpMap = new Map<string, MaterializedCapacityPlanResource>()
@@ -578,6 +584,9 @@ describe('stable IDs and display metadata', () => {
         { startWeek: 0, endWeek: 4, allocationPercent: 100 },
         { startWeek: 5, endWeek: 9, allocationPercent: 50 },
       ],
+      resourceTrajectories: [
+        { trajectoryIndex: 0, segments: [{ startWeek: 0, endWeek: 4, allocationPercent: 100 }, { startWeek: 5, endWeek: 9, allocationPercent: 50 }] },
+      ],
       startWeek: 0,
       endWeek: 9,
     }
@@ -599,9 +608,9 @@ describe('stable IDs and display metadata', () => {
       capacityPlanMaterialized: materialized,
     }]
     const result = applyCapacityPlanFallback(rt, cpMap)
-    // IDs are deterministic: rt-id + capacity-plan-N
+    // Trajectory model consolidates into 1 resource
+    expect(result[0].namedResources).toHaveLength(1)
     expect(result[0].namedResources[0].id).toBe('rt-cp-capacity-plan-1')
-    expect(result[0].namedResources[1].id).toBe('rt-cp-capacity-plan-2')
   })
 
   it('named resource IDs are passed through from source records', () => {

@@ -369,27 +369,44 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         shouldFallbackToActiveCapacityPlan(resourceType.namedResources, capacityPlanMaterialized)
       const namedResourcesSource = useCapacityPlanFallback && capacityPlanMaterialized
         ? (() => {
+            const trajectories = capacityPlanMaterialized.resourceTrajectories
             const assignment = materializePerResourceSlots(
-              capacityPlanMaterialized.slotWindows,
+              trajectories,
               resourceType.id,
               resourceType.name,
               resourceType.namedResources,
             )
-            return assignment.resourceSlots.map((slot, idx) => {
-              const existing = resourceType.namedResources[idx]
-              const window = slot.slotWindows[0]
+            const trajectorySources = assignment.resourceSlots.map((slot) => {
+              const existing = slot.existingNamedResourceId
+                ? resourceType.namedResources.find(nr => nr.id === slot.existingNamedResourceId)
+                : undefined
               return {
                 id: slot.id,
                 name: slot.name,
                 allocationMode: 'CAPACITY_PLAN',
-                allocationPercent: window.allocationPercent,
+                allocationPercent: slot.slotWindows.length > 0 ? slot.slotWindows[0].allocationPercent : 100,
                 allocationStartWeek: null,
                 allocationEndWeek: null,
                 pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-                startWeek: window.startWeek,
-                endWeek: window.endWeek,
+                startWeek: slot.slotWindows.length > 0 ? slot.slotWindows[0].startWeek : null,
+                endWeek: slot.slotWindows.length > 0 ? slot.slotWindows[slot.slotWindows.length - 1].endWeek : null,
               }
             })
+            const matchedIds = new Set(assignment.resourceSlots.map(s => s.id))
+            const unmatchedPersisted = resourceType.namedResources
+              .filter(nr => !matchedIds.has(nr.id))
+              .map(nr => ({
+                id: nr.id,
+                name: nr.name,
+                allocationMode: nr.allocationMode ?? 'EFFORT',
+                allocationPercent: nr.allocationPercent ?? nr.allocationPct ?? 100,
+                allocationStartWeek: nr.allocationStartWeek ?? null,
+                allocationEndWeek: nr.allocationEndWeek ?? null,
+                pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' as const : 'ACTUAL_DAYS' as const,
+                startWeek: nr.startWeek ?? null,
+                endWeek: nr.endWeek ?? null,
+              }))
+            return [...trajectorySources, ...unmatchedPersisted]
           })()
         : resourceType.namedResources
       const actualNamedResourceAssignment = namedResourceAssignments.get(resourceType.id)

@@ -197,21 +197,14 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
 
     const securityRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-security')
     expect(securityRow).toBeTruthy()
-    expect(securityRow.allocatedDays).toBe(40)
+    expect(securityRow.allocatedDays).toBe(60)
     expect(securityRow.namedResources).toEqual([
       expect.objectContaining({
         name: 'Principal Consultant - Security',
         allocationMode: 'CAPACITY_PLAN',
         startWeek: 4,
-        endWeek: 7,
-        allocatedDays: 20,
-      }),
-      expect.objectContaining({
-        name: 'Security 2',
-        allocationMode: 'CAPACITY_PLAN',
-        startWeek: 12,
         endWeek: 15,
-        allocatedDays: 20,
+        allocatedDays: 60,
       }),
     ])
   })
@@ -295,14 +288,14 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
 
     const securityRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-security')
     expect(securityRow).toBeTruthy()
-    expect(securityRow.allocatedDays).toBe(20)
+    expect(securityRow.allocatedDays).toBe(80)
     expect(securityRow.namedResources).toEqual([
       expect.objectContaining({
         allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: 25,
+        allocationPercent: 100,
         startWeek: 0,
         endWeek: 15,
-        allocatedDays: 20,
+        allocatedDays: 80,
       }),
     ])
   })

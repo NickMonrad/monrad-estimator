@@ -513,8 +513,8 @@ describe('buildResourceCapacityProfileMap', () => {
     })
     const result = buildResourceCapacityProfileMap(project)
     // RT has stale windows → shouldFallbackToActiveCapacityPlan returns true
-    // Entries: role aggregate + 1 existing NR (slot 0) + 1 generated planned resource (slot 1)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(3)
+    // Entries: role aggregate + existing NR mapped to its trajectory (1 trajectory with 2 segments)
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
 
     const roleData = result.roleProfiles.get(rtId)!
     expect(roleData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
@@ -524,19 +524,13 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(roleData.segments).toHaveLength(2)
     expect(roleData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 50 })
     expect(roleData.segments[1]).toMatchObject({ startWeek: 0, endWeek: 7, capacityPercent: 50 })
-
-    // Existing NR gets only its own slot (slot index 0 = window [0,3,50%])
+    // Existing NR gets its trajectory segments (capacity changes from 100% to 50% at week 4)
     const nrData = result.namedResourceProfiles.get(nrId)!
     expect(nrData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
-    expect(nrData.segments).toHaveLength(1)
-    expect(nrData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 50 })
-
-    // Generated planned resource gets remaining slot (slot index 1 = window [0,7,50%])
-    const genId = `${rtId}-capacity-plan-2`
-    const genData = result.namedResourceProfiles.get(genId)!
-    expect(genData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
-    expect(genData.segments).toHaveLength(1)
-    expect(genData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 7, capacityPercent: 50 })
+    expect(nrData.segments).toHaveLength(2)
+    expect(nrData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 100 })
+    expect(nrData.segments[1]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 50 })
+    // No extra generated planned resource — single trajectory maps to existing NR
   })
 
   it('active capacity plan fallback: preserves persisted profile when present', () => {

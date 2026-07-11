@@ -117,11 +117,25 @@ export default function NamedResourcesPanel({
 
   const allocationById = new Map(allocations.map(allocation => [allocation.id, allocation]))
   const mergedResources = [
-    ...resources.map(resource => ({
-      ...resource,
-      allocation: allocationById.get(resource.id),
-      persisted: true,
-    })),
+    ...resources.map(resource => {
+      const allocation = allocationById.get(resource.id)
+      return {
+        id: resource.id,
+        resourceTypeId: resource.resourceTypeId,
+        name: resource.name,
+        // Display authoritative projected values from allocation when present, else raw API values
+        startWeek: allocation ? allocation.startWeek : resource.startWeek,
+        endWeek: allocation ? allocation.endWeek : resource.endWeek,
+        allocationPct: allocation ? allocation.allocationPercent : resource.allocationPct,
+        pricingModel: (resource.pricingModel ?? 'ACTUAL_DAYS') as PricingModel,
+        createdAt: resource.createdAt,
+        updatedAt: resource.updatedAt,
+        allocation,
+        // synthetic flag from allocation (for planned-resource identity), false for persisted named people
+        synthetic: allocation?.synthetic ?? false,
+        persisted: true,
+      }
+    }),
     ...allocations
       .filter(allocation => !resources.some(resource => resource.id === allocation.id))
       .map(allocation => ({
@@ -135,6 +149,7 @@ export default function NamedResourcesPanel({
         createdAt: '',
         updatedAt: '',
         allocation,
+        synthetic: true,
         persisted: false,
       })),
   ]
@@ -181,7 +196,7 @@ export default function NamedResourcesPanel({
                       disabled={!resource.persisted}
                       className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                     />
-                    {!resource.persisted && (
+                    {resource.synthetic && (
                       <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 uppercase tracking-wide">
                         Planned resource
                       </span>
@@ -269,10 +284,10 @@ export default function NamedResourcesPanel({
                     ) : null}
                   </div>
                   <button
-                    onClick={() => resource.persisted && deleteResource.mutate(resource.id)}
-                    disabled={!resource.persisted}
+                    onClick={() => resource.persisted && !resource.synthetic && deleteResource.mutate(resource.id)}
+                    disabled={!resource.persisted || resource.synthetic}
                     className="text-gray-400 dark:text-gray-500 hover:text-red-600 text-lg leading-none disabled:opacity-30"
-                    title={resource.persisted ? 'Delete' : 'Generated slot'}
+                    title={resource.synthetic ? 'Generated slot' : 'Delete'}
                   >
                     x
                   </button>
@@ -296,7 +311,10 @@ export default function NamedResourcesPanel({
                         )}
                       </div>
                       <div className="text-[10px] text-gray-400 dark:text-gray-500">
-                        Window: W{resource.allocation.capacityProfile.startWeek != null ? resource.allocation.capacityProfile.startWeek + 1 : '?'} → W{resource.allocation.capacityProfile.endWeek != null ? resource.allocation.capacityProfile.endWeek + 1 : '?'}
+                        {resource.allocation.capacityProfile.startWeek != null && resource.allocation.capacityProfile.endWeek != null
+                          ? <>Window: W{resource.allocation.capacityProfile.startWeek + 1} → W{resource.allocation.capacityProfile.endWeek + 1}</>
+                          : <span className="italic">No fixed window</span>
+                        }
                       </div>
                       {resource.allocation.capacityProfile.segments.length > 0 && (
                         <div className="text-[10px] text-gray-500 dark:text-gray-400">

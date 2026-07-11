@@ -16,8 +16,9 @@ import {
 } from './capacityProfileMapping.js'
 import {
   materializeCapacityPlanResources,
-  materializePerResourceSlots,
   shouldFallbackToActiveCapacityPlan,
+  materializePerResourceSlots,
+  computeDefaultPercentForSegments,
 } from './capacityPlanMaterialisation.js'
 import type {
   CapacityProfileResourceTypeLike,
@@ -208,13 +209,16 @@ function classifyProfiles(
 function materializedToActivePlanProfile(
   materialized: { slotWindows: CapacityPlanSlotInput[] },
 ): CapacityProfileResourceData {
+  const slotWindows = materialized.slotWindows
   return {
     planningBasis: 'capacityProfile',
     source: 'squadPlanner',
-    defaultPercent: 100,
+    defaultPercent: computeDefaultPercentForSegments(
+      slotWindows.map(w => ({ startWeek: w.startWeek, endWeek: w.endWeek, allocationPercent: w.allocationPercent }))
+    ),
     startWeek: null,
     endWeek: null,
-    segments: materialized.slotWindows.map(w => ({
+    segments: slotWindows.map(w => ({
       startWeek: w.startWeek,
       endWeek: w.endWeek,
       capacityPercent: w.allocationPercent,
@@ -223,21 +227,25 @@ function materializedToActivePlanProfile(
   }
 }
 
-/** Convert a single slot window to ACTIVE_CAPACITY_PLAN profile data (per-resource). */
+/** Convert slot windows to ACTIVE_CAPACITY_PLAN profile data (per-resource). */
 function singleSlotActivePlanProfile(
-  slotWindow: CapacityPlanSlotInput,
+  slotWindows: CapacityPlanSlotInput[],
 ): CapacityProfileResourceData {
+  const defaultPercent = computeDefaultPercentForSegments(
+    slotWindows.map(w => ({ startWeek: w.startWeek, endWeek: w.endWeek, allocationPercent: w.allocationPercent }))
+  )
+  const firstWindow = slotWindows[0] ?? null
   return {
     planningBasis: 'capacityProfile',
     source: 'squadPlanner',
-    defaultPercent: 100,
-    startWeek: slotWindow.startWeek,
-    endWeek: slotWindow.endWeek,
-    segments: [{
-      startWeek: slotWindow.startWeek,
-      endWeek: slotWindow.endWeek,
-      capacityPercent: slotWindow.allocationPercent,
-    }],
+    defaultPercent,
+    startWeek: firstWindow?.startWeek ?? null,
+    endWeek: firstWindow?.endWeek ?? null,
+    segments: slotWindows.map(w => ({
+      startWeek: w.startWeek,
+      endWeek: w.endWeek,
+      capacityPercent: w.allocationPercent,
+    })),
     resolutionSource: 'ACTIVE_CAPACITY_PLAN',
   }
 }
@@ -427,9 +435,10 @@ export function buildResourceCapacityProfileMap(
         roleProfiles.set(rt.id, materializedToActivePlanProfile(materialized))
       }
 
-      // Per-resource slot assignment using shared helper
+      // Per-resource trajectory assignment using stable trajectory model
+      const trajectories = materialized.resourceTrajectories
       const assignment = materializePerResourceSlots(
-        materialized.slotWindows,
+        trajectories,
         rt.id,
         rt.name,
         rt.namedResources,
@@ -438,8 +447,15 @@ export function buildResourceCapacityProfileMap(
       for (const slot of assignment.resourceSlots) {
         const nrClass = nrClassifications.get(slot.id) ?? { kind: 'NONE' as const }
         if (nrClass.kind !== 'VALID') {
-          const slotWindow = slot.slotWindows[0]
-          namedResourceProfiles.set(slot.id, singleSlotActivePlanProfile(slotWindow))
+          namedResourceProfiles.set(slot.id, singleSlotActivePlanProfile(slot.slotWindows))
+        }
+      }
+
+      // Preserve persisted NRs NOT matched to any trajectory
+      const matchedIds = new Set(assignment.resourceSlots.map(s => s.existingNamedResourceId).filter((id): id is string => id !== null))
+      for (const nr of rt.namedResources) {
+        if (!matchedIds.has(nr.id)) {
+          // This NR has no trajectory — its existing profile (LEGACY or PROFILE) stays as is
         }
       }
     }

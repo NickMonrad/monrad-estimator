@@ -292,18 +292,22 @@ export function applyCapacityPlanFallback(
 
     return {
       ...rt,
-      namedResources: materialized.slotWindows.map((window, idx) => ({
-        id: `${rt.id}-capacity-plan-${idx + 1}`,
-        name: `${rt.name} ${idx + 1}`,
-        startWeek: window.startWeek,
-        endWeek: window.endWeek,
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: window.allocationPercent,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        pricingModel: 'ACTUAL_DAYS',
-        synthetic: true,
-      })),
+      namedResources: materialized.resourceTrajectories.map((trajectory) => {
+        const firstSeg = trajectory.segments[0]
+        const lastSeg = trajectory.segments.length > 0 ? trajectory.segments[trajectory.segments.length - 1] : null
+        return {
+          id: `${rt.id}-capacity-plan-${trajectory.trajectoryIndex + 1}`,
+          name: `${rt.name} ${trajectory.trajectoryIndex + 1}`,
+          startWeek: firstSeg?.startWeek ?? null,
+          endWeek: lastSeg?.endWeek ?? null,
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: firstSeg?.allocationPercent ?? 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+          synthetic: true,
+        }
+      }),
     }
   })
 }

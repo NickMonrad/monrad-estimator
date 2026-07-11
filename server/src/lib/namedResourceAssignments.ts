@@ -1,4 +1,5 @@
 import {
+  materializeResourceTrajectories,
   shouldFallbackToActiveCapacityPlan,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
@@ -105,22 +106,45 @@ function buildEffectiveNamedResources(
     shouldFallbackToActiveCapacityPlan(persistedNamedResources, capacityPlanMaterialized)
 
   const baseNamedResources = useCapacityPlanFallback && capacityPlanMaterialized
-    ? capacityPlanMaterialized.slotWindows.map((window, idx) => {
-        const existing = persistedNamedResources[idx]
-        return {
-          id: existing?.id ?? `${resourceType.id}-capacity-plan-${idx + 1}`,
-          name: existing?.name ?? `${resourceType.name} ${idx + 1}`,
-          startWeek: window.startWeek,
-          endWeek: window.endWeek,
-          allocationPct: window.allocationPercent,
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: window.allocationPercent,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-          synthetic: !existing,
-        }
-      })
+    ? (() => {
+        // Materialise trajectories if not already done (pure function, result from materialized object is used)
+        materializeResourceTrajectories(
+          capacityPlanMaterialized.resourceTrajectories.length > 0
+            ? []  // trajectories already computed in materialized
+            : [],
+        )
+        // Use trajectories from the materialized result
+        const usedTrajectories = capacityPlanMaterialized.resourceTrajectories
+
+        const trajectoryResources = usedTrajectories.map((trajectory, idx) => {
+          const existing = persistedNamedResources[idx]
+          const totalPercent = trajectory.segments.length > 0 ? trajectory.segments[0].allocationPercent : 100
+          return {
+            id: existing?.id ?? `${resourceType.id}-capacity-plan-${trajectory.trajectoryIndex + 1}`,
+            name: existing?.name ?? `${resourceType.name} ${trajectory.trajectoryIndex + 1}`,
+            startWeek: trajectory.segments[0]?.startWeek ?? null,
+            endWeek: trajectory.segments.length > 0 ? trajectory.segments[trajectory.segments.length - 1].endWeek : null,
+            allocationPct: totalPercent,
+            allocationMode: 'CAPACITY_PLAN',
+            allocationPercent: totalPercent,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
+            synthetic: !existing,
+          }
+        })
+
+        // Preserve persisted NRs not matched to any trajectory
+        const matchedIds = new Set(trajectoryResources.map(r => r.id))
+        const unmatchedPersisted = persistedNamedResources
+          .filter(nr => !matchedIds.has(nr.id))
+          .map(nr => ({
+            ...nr,
+            synthetic: false,
+          }))
+
+        return [...trajectoryResources, ...unmatchedPersisted]
+      })()
     : persistedNamedResources.map(namedResource => ({
         ...namedResource,
         synthetic: false,
