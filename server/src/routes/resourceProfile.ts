@@ -490,7 +490,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
               endWeek: nrProfileData.endWeek,
               segments: nrProfileData.segments,
               resolutionSource: nrProfileData.resolutionSource,
-            } : (capacityProfileMap.get(nr.id) ?? undefined),
+            } : undefined,
           }
         })
         const existingIds = new Set(namedResourcesOutput.map(nr => nr.id))
@@ -535,7 +535,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
               endWeek: synthNrProfileData.endWeek,
               segments: synthNrProfileData.segments,
               resolutionSource: synthNrProfileData.resolutionSource,
-            } : (capacityProfileMap.get(actual.id) ?? undefined),
+            } : undefined,
           }
         }))
         const plannedAllocatedDays = round2(namedResourcesOutput.reduce((sum, nr) => sum + nr.allocatedDays, 0))
