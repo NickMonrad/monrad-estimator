@@ -305,7 +305,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
       expect.objectContaining({
         resourceTypeName: 'Security',
         allocationMode: 'CAPACITY_PLAN',
-        allocationPct: 100,
+        allocationPct: 25,
         startWeek: 0,
         endWeek: 15,
       }),

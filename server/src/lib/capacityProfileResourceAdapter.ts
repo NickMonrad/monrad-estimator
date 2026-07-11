@@ -21,6 +21,9 @@ import {
   computeDefaultPercentForSegments,
 } from './capacityPlanMaterialisation.js'
 import type {
+  CapacityPlanResourceTrajectory,
+} from './capacityPlanMaterialisation.js'
+import type {
   CapacityProfileResourceTypeLike,
   CapacityProfileNamedResourceLike,
   CapacityPlanSlotInput,
@@ -51,6 +54,8 @@ export interface CapacityProfileResourceData {
   segments: CapacityProfileResourceSegment[]
   /** Whether the data came from a persisted profile, legacy fallback, or active capacity plan. */
   resolutionSource: CapacityProfileResolutionSource
+  /** Identity derived from the profile ownerKind: NAMED_PERSON for named people, PLANNED_RESOURCE for planned resources. Undefined for role-level profiles. */
+  resourceIdentity?: 'NAMED_PERSON' | 'PLANNED_RESOURCE'
 }
 
 /**
@@ -207,15 +212,18 @@ function classifyProfiles(
 
 /** Convert a materialized capacity plan resource to ACTIVE_CAPACITY_PLAN profile data (role-level aggregate). */
 function materializedToActivePlanProfile(
-  materialized: { slotWindows: CapacityPlanSlotInput[] },
+  materialized: { slotWindows: CapacityPlanSlotInput[]; resourceTrajectories: CapacityPlanResourceTrajectory[] },
 ): CapacityProfileResourceData {
   const slotWindows = materialized.slotWindows
+  const trajectories = materialized.resourceTrajectories
+  const defaultPercent =
+    trajectories.length === 1 && trajectories[0].segments.length > 0
+      ? computeDefaultPercentForSegments(trajectories[0].segments)
+      : null
   return {
     planningBasis: 'capacityProfile',
     source: 'squadPlanner',
-    defaultPercent: computeDefaultPercentForSegments(
-      slotWindows.map(w => ({ startWeek: w.startWeek, endWeek: w.endWeek, allocationPercent: w.allocationPercent }))
-    ),
+    defaultPercent,
     startWeek: null,
     endWeek: null,
     segments: slotWindows.map(w => ({
@@ -234,13 +242,12 @@ function singleSlotActivePlanProfile(
   const defaultPercent = computeDefaultPercentForSegments(
     slotWindows.map(w => ({ startWeek: w.startWeek, endWeek: w.endWeek, allocationPercent: w.allocationPercent }))
   )
-  const firstWindow = slotWindows[0] ?? null
   return {
     planningBasis: 'capacityProfile',
     source: 'squadPlanner',
     defaultPercent,
-    startWeek: firstWindow?.startWeek ?? null,
-    endWeek: firstWindow?.endWeek ?? null,
+    startWeek: slotWindows.length > 0 ? Math.min(...slotWindows.map(w => w.startWeek)) : null,
+    endWeek: slotWindows.length > 0 ? Math.max(...slotWindows.map(w => w.endWeek)) : null,
     segments: slotWindows.map(w => ({
       startWeek: w.startWeek,
       endWeek: w.endWeek,
@@ -249,17 +256,19 @@ function singleSlotActivePlanProfile(
     resolutionSource: 'ACTIVE_CAPACITY_PLAN',
   }
 }
-
 /** Convert a resolved persisted profile DTO to CapacityProfileResourceData. */
-function profileDtoToData(p: {
-  planningBasis: string
-  source: string
-  defaultPercent?: number | null
-  startWeek?: number | null
-  endWeek?: number | null
-  segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
-}): CapacityProfileResourceData {
-  return {
+function profileDtoToData(
+  p: {
+    planningBasis: string
+    source: string
+    defaultPercent?: number | null
+    startWeek?: number | null
+    endWeek?: number | null
+    segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+  },
+  ownerKind?: string,
+): CapacityProfileResourceData {
+  const result: CapacityProfileResourceData = {
     planningBasis: p.planningBasis,
     source: p.source,
     defaultPercent: p.defaultPercent ?? null,
@@ -272,6 +281,10 @@ function profileDtoToData(p: {
     })),
     resolutionSource: 'PROFILE',
   }
+  if (ownerKind === 'PLANNED_RESOURCE' || ownerKind === 'NAMED_PERSON') {
+    result.resourceIdentity = ownerKind === 'PLANNED_RESOURCE' ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'
+  }
+  return result
 }
 
 // ─── Main function ───────────────────────────────────────────────────────────
@@ -345,7 +358,6 @@ export function buildResourceCapacityProfileMap(
 
   const roleProfiles = new Map<string, CapacityProfileResourceData>()
   const namedResourceProfiles = new Map<string, CapacityProfileResourceData>()
-
   for (const rt of project.resourceTypes) {
     const roleProfile = mapResourceTypeToCapacityProfile({
       projectId: project.id,
@@ -383,6 +395,7 @@ export function buildResourceCapacityProfileMap(
           capacityPercent: s.capacityPercent,
         })),
         resolutionSource: 'LEGACY',
+        resourceIdentity: nr.synthetic === true ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
       })
     }
   }
@@ -410,7 +423,7 @@ export function buildResourceCapacityProfileMap(
         namedResourceById,
       )
       if (dto[0]) {
-        namedResourceProfiles.set(nrId, profileDtoToData(dto[0]))
+        namedResourceProfiles.set(nrId, profileDtoToData(dto[0], classification.profile.ownerKind))
       }
     }
   }
@@ -432,7 +445,10 @@ export function buildResourceCapacityProfileMap(
       // Role-level: aggregate slots if not VALID
       const rtClass = rtClassifications.get(rt.id) ?? { kind: 'NONE' as const }
       if (rtClass.kind !== 'VALID') {
-        roleProfiles.set(rt.id, materializedToActivePlanProfile(materialized))
+        roleProfiles.set(rt.id, materializedToActivePlanProfile({
+          slotWindows: materialized.slotWindows,
+          resourceTrajectories: materialized.resourceTrajectories,
+        }))
       }
 
       // Per-resource trajectory assignment using stable trajectory model

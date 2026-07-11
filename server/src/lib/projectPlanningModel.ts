@@ -721,6 +721,8 @@ export async function buildProjectPlanningModel(
         allocationPercent: window.allocationPercent,
         allocationStartWeek: null,
         allocationEndWeek: null,
+        startWeek: window.startWeek,
+        allocationPct: window.allocationPercent,
         pricingModel: undefined,
       })),
     }

@@ -454,6 +454,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           source: string
           segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
         }
+        resourceIdentity?: 'NAMED_PERSON' | 'PLANNED_RESOURCE'
       }>
 
       if (hasNamedResources) {
@@ -465,12 +466,22 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           const nrPercent = nr.allocationPercent ?? 100
           let nrAllocatedDays: number
           if (nrMode === 'CAPACITY_PLAN') {
-            const startWeek = nr.startWeek
-            const endWeek = nr.endWeek
-            const allocationRatio = (nrPercent ?? 100) / 100
-            nrAllocatedDays = startWeek != null && endWeek != null
-              ? round2(Math.max(0, endWeek - startWeek + 1) * 5 * allocationRatio)
-              : 0
+            if (actualNamedResource?.capacitySegments && actualNamedResource.capacitySegments.length > 0) {
+              // Calculate from actual capacity segments
+              nrAllocatedDays = round2(
+                actualNamedResource.capacitySegments.reduce((sum, seg) => {
+                  const weeks = Math.max(0, seg.endWeek - seg.startWeek + 1)
+                  return sum + weeks * 5 * (seg.allocationPercent / 100)
+                }, 0)
+              )
+            } else {
+              const startWeek = nr.startWeek
+              const endWeek = nr.endWeek
+              const allocationRatio = (nrPercent ?? 100) / 100
+              nrAllocatedDays = startWeek != null && endWeek != null
+                ? round2(Math.max(0, endWeek - startWeek + 1) * 5 * allocationRatio)
+                : 0
+            }
           } else if (nrMode === 'EFFORT') {
             // Split effort equally across named resources
             nrAllocatedDays = round2(totalDays / namedResourcesSource.length)
@@ -511,6 +522,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             actualAllocationStartWeek: actualNamedResource?.actualAllocationStartWeek ?? null,
             actualAllocationEndWeek: actualNamedResource?.actualAllocationEndWeek ?? null,
             actualAllocatedWeeks: actualNamedResource?.actualAllocatedWeeks ?? [],
+            resourceIdentity: nrProfileData?.resourceIdentity ?? (actualNamedResource?.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'),
             actualAllocationSegments: actualNamedResource?.actualAllocationSegments ?? [],
             synthetic: actualNamedResource?.synthetic ?? !resourceType.namedResources.some(persisted => persisted.id === nr.id),
             capacityProfile: nrProfileData ? {
@@ -558,6 +570,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             actualAllocatedWeeks: actual.actualAllocatedWeeks,
             actualAllocationSegments: actual.actualAllocationSegments,
             synthetic: actual.synthetic,
+            resourceIdentity: synthNrProfileData?.resourceIdentity ?? (actual.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'),
             capacityProfile: synthNrProfileData ? {
               planningBasis: synthNrProfileData.planningBasis,
               source: synthNrProfileData.source,

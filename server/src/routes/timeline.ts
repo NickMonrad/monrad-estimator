@@ -82,23 +82,18 @@ function buildWarningResourceTypes(
 
     return {
       ...rt,
-      namedResources: materialized.resourceTrajectories.map((trajectory, idx) => {
-        const existing = rt.namedResources[idx]
-        const firstSeg = trajectory.segments[0]
-        const lastSeg = trajectory.segments.length > 0 ? trajectory.segments[trajectory.segments.length - 1] : null
-        return {
-          id: existing?.id ?? `${rt.id}-capacity-plan-${trajectory.trajectoryIndex + 1}`,
-          name: existing?.name ?? `${rt.name} ${trajectory.trajectoryIndex + 1}`,
-          startWeek: firstSeg?.startWeek ?? null,
-          endWeek: lastSeg?.endWeek ?? null,
-          allocationPct: firstSeg?.allocationPercent ?? 100,
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: firstSeg?.allocationPercent ?? 100,
-          pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-        }
-      }),
+      namedResources: (materialized.slotWindows ?? []).map((window, idx) => ({
+        id: `${rt.id}-capacity-plan-${idx + 1}`,
+        name: `${rt.name ?? ''} ${idx + 1}`,
+        endWeek: window.endWeek,
+        allocationMode: 'CAPACITY_PLAN' as const,
+        allocationPercent: window.allocationPercent,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: window.startWeek,
+        allocationPct: window.allocationPercent,
+        pricingModel: undefined,
+      })),
     }
   })
 }

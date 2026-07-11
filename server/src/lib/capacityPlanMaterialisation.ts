@@ -189,7 +189,7 @@ export function materializeResourceTrajectories(
   for (let t = 0; t < trajectoryCount; t++) {
     const firstUnit = t * TRAJECTORY_UNITS
     const unitsInTrajectory = Math.min(TRAJECTORY_UNITS, maxUnits - firstUnit)
-    if (unitsInTrajectory <= 0) continue
+    if (firstUnit >= maxUnits) continue
 
     const segments: CapacityPlanSlotWindow[] = []
     let current: CapacityPlanSlotWindow | null = null
@@ -197,7 +197,7 @@ export function materializeResourceTrajectories(
     for (const period of sortedPeriods) {
       const periodUnits = quantizeUnits(period.headcount)
       const activeUnits = Math.max(0, Math.min(unitsInTrajectory, periodUnits - firstUnit))
-      const activePercent = round2((activeUnits / unitsInTrajectory) * 100)
+      const activePercent = round2((activeUnits / TRAJECTORY_UNITS) * 100)
       const inclusiveEndWeek = period.endWeek - 1
 
       if (activePercent <= FLOAT_EPSILON || inclusiveEndWeek < period.startWeek) {

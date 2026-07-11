@@ -111,7 +111,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
           ? (capProfile.endWeek != null ? formatWeekLabel(capProfile.endWeek) : '')
           : (nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '')
         rows.push([
-          'Resource', row.name, nr.name, nr.synthetic ? 'Planned resource' : 'Named person',
+          'Resource', row.name, nr.name, nr.resourceIdentity === 'PLANNED_RESOURCE' || nr.synthetic ? 'Planned resource' : 'Named person',
           row.category, String(row.count), String(row.hoursPerDay),
           String(row.effortDays), String(nr.allocatedDays), String(nr.actualAllocatedDays),
           row.dayRate != null ? String(row.dayRate) : '',

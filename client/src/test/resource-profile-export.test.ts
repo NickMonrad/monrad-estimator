@@ -488,4 +488,438 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
       expect(csv.charCodeAt(i)).toBeLessThan(0x80)
     }
   })
+
+describe('capacity profile CSV export — trajectory tests', () => {
+  it('exports constant partial capacity (50%) trajectory', () => {
+    const profile = makeProfile({
+      resourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 800,
+          totalHours: 80,
+          totalDays: 10,
+          effortDays: 10,
+          allocatedDays: 10,
+          allocationMode: 'EFFORT',
+          allocationPercent: 50,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 9,
+          estimatedCost: null,
+          epics: [],
+          namedResources: [
+            {
+              id: 'nr-const',
+              name: 'Dev',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 50,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 7,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: 50,
+                startWeek: 0,
+                endWeek: 7,
+                segments: [
+                  { startWeek: 0, endWeek: 7, capacityPercent: 50 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    const csv = buildProfileCsv(profile)
+    const { rows } = parseCsv(csv)
+
+    // One resource row
+    const resourceRows = rows.filter(r => r[0] === 'Resource')
+    expect(resourceRows.length).toBe(1)
+    const row = resourceRows[0]
+
+    // Default capacity is 50%
+    expect(row[14]).toBe('50')
+    // Capacity profile segments show 50%, not 100%
+    expect(row[21]).toBe('W1-W8 50%')
+  })
+
+  it('exports changing capacity (100%→50%) trajectory', () => {
+    const profile = makeProfile({
+      resourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 800,
+          totalHours: 80,
+          totalDays: 10,
+          effortDays: 10,
+          allocatedDays: 10,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 9,
+          estimatedCost: null,
+          epics: [],
+          namedResources: [
+            {
+              id: 'nr-change',
+              name: 'Dev',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 7,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: null,
+                startWeek: 0,
+                endWeek: 7,
+                segments: [
+                  { startWeek: 0, endWeek: 3, capacityPercent: 100 },
+                  { startWeek: 4, endWeek: 7, capacityPercent: 50 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    const csv = buildProfileCsv(profile)
+    const { rows } = parseCsv(csv)
+
+    const resourceRows = rows.filter(r => r[0] === 'Resource')
+    // One resource row (one trajectory, not two)
+    expect(resourceRows.length).toBe(1)
+    const row = resourceRows[0]
+
+    // Default capacity is blank (null defaultPercent)
+    expect(row[14]).toBe('')
+    // Two segments exported: 100% and 50%
+    expect(row[21]).toBe('W1-W4 100%; W5-W8 50%')
+  })
+
+  it('exports discontinuous capacity trajectory', () => {
+    const profile = makeProfile({
+      resourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 800,
+          totalHours: 80,
+          totalDays: 10,
+          effortDays: 10,
+          allocatedDays: 10,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 11,
+          estimatedCost: null,
+          epics: [],
+          namedResources: [
+            {
+              id: 'nr-disc',
+              name: 'Dev',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 11,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: null,
+                startWeek: 0,
+                endWeek: 11,
+                segments: [
+                  { startWeek: 0, endWeek: 3, capacityPercent: 100 },
+                  { startWeek: 8, endWeek: 11, capacityPercent: 100 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    const csv = buildProfileCsv(profile)
+    const { rows } = parseCsv(csv)
+
+    const resourceRows = rows.filter(r => r[0] === 'Resource')
+    // One resource row (not two rows for two segments)
+    expect(resourceRows.length).toBe(1)
+    const row = resourceRows[0]
+
+    // Two separated segments — gap (W5-W8) not filled
+    expect(row[21]).toBe('W1-W4 100%; W9-W12 100%')
+    // No segment covering the gap
+    expect(row[21]).not.toMatch(/W5/i)
+    expect(row[21]).not.toMatch(/W6/i)
+    expect(row[21]).not.toMatch(/W7/i)
+    expect(row[21]).not.toMatch(/W8/i)
+  })
+
+  it('exports 1.5 FTE as two rows', () => {
+    const profile = makeProfile({
+      resourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 2,
+          hoursPerDay: 8,
+          dayRate: 800,
+          totalHours: 160,
+          totalDays: 20,
+          effortDays: 20,
+          allocatedDays: 20,
+          allocationMode: 'EFFORT',
+          allocationPercent: 150,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 9,
+          estimatedCost: null,
+          epics: [],
+          namedResources: [
+            {
+              id: 'nr-100',
+              name: 'Resource 1',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 7,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: 100,
+                startWeek: 0,
+                endWeek: 7,
+                segments: [
+                  { startWeek: 0, endWeek: 7, capacityPercent: 100 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+            {
+              id: 'nr-50',
+              name: 'Resource 2',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 50,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 7,
+              allocatedDays: 5,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: 50,
+                startWeek: 0,
+                endWeek: 7,
+                segments: [
+                  { startWeek: 0, endWeek: 7, capacityPercent: 50 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    const csv = buildProfileCsv(profile)
+    const { rows } = parseCsv(csv)
+
+    const resourceRows = rows.filter(r => r[0] === 'Resource')
+    // Two rows for 1.5 FTE (100% + 50%)
+    expect(resourceRows.length).toBe(2)
+
+    // First row: 100% capacity
+    expect(resourceRows[0][2]).toBe('Resource 1')
+    expect(resourceRows[0][14]).toBe('100')
+    expect(resourceRows[0][21]).toContain('100%')
+    // Second row: 50% capacity (not 100%)
+    expect(resourceRows[1][2]).toBe('Resource 2')
+    expect(resourceRows[1][14]).toBe('50')
+    expect(resourceRows[1][21]).toContain('50%')
+  })
+
+  it('exports planned resource with identity', () => {
+    const profile = makeProfile({
+      resourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 2,
+          hoursPerDay: 8,
+          dayRate: 800,
+          totalHours: 160,
+          totalDays: 20,
+          effortDays: 20,
+          allocatedDays: 20,
+          allocationMode: 'EFFORT',
+          allocationPercent: 200,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 9,
+          estimatedCost: null,
+          epics: [],
+          namedResources: [
+            {
+              id: 'nr-planned',
+              name: 'Planned Resource',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 7,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: true,
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: 100,
+                startWeek: 0,
+                endWeek: 7,
+                segments: [
+                  { startWeek: 0, endWeek: 7, capacityPercent: 100 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+            {
+              id: 'nr-named',
+              name: 'Named Person',
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 7,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: 100,
+                startWeek: 0,
+                endWeek: 7,
+                segments: [
+                  { startWeek: 0, endWeek: 7, capacityPercent: 100 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    const csv = buildProfileCsv(profile)
+    const { rows } = parseCsv(csv)
+
+    const resourceRows = rows.filter(r => r[0] === 'Resource')
+    expect(resourceRows.length).toBe(2)
+
+    // Resource identity column (index 3)
+    const plannedRow = resourceRows.find(r => r[2] === 'Planned Resource')
+    const namedRow = resourceRows.find(r => r[2] === 'Named Person')
+    expect(plannedRow).toBeDefined()
+    expect(namedRow).toBeDefined()
+
+    // Planned resource shows 'Planned resource'
+    expect(plannedRow![3]).toBe('Planned resource')
+    // Named person shows 'Named person'
+    expect(namedRow![3]).toBe('Named person')
+  })
+})
 })

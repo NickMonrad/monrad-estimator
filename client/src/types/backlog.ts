@@ -219,6 +219,7 @@ export interface NamedResourceEntry {
     days: number
   }>
   synthetic?: boolean
+  resourceIdentity?: 'NAMED_PERSON' | 'PLANNED_RESOURCE'
 }
 
 export interface TimelineSummary {
@@ -317,6 +318,7 @@ export interface ResourceProfileRow {
       days: number
     }>
     synthetic: boolean
+    resourceIdentity?: 'NAMED_PERSON' | 'PLANNED_RESOURCE'
     capacityProfile?: {
       planningBasis: CapacityProfilePlanningBasis
       source: CapacityProfileSource

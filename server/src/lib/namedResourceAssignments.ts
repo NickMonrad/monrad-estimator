@@ -1,6 +1,6 @@
 import {
-  materializeResourceTrajectories,
   shouldFallbackToActiveCapacityPlan,
+  type CapacityPlanSlotWindow,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
 
@@ -63,6 +63,7 @@ export type DerivedNamedResourceAssignment = {
   actualAllocationStartWeek: number | null
   actualAllocationEndWeek: number | null
   actualAllocatedWeeks: NamedResourceAssignedWeek[]
+  capacitySegments?: CapacityPlanSlotWindow[]
   actualAllocationSegments: NamedResourceAssignedSegment[]
 }
 
@@ -107,13 +108,6 @@ function buildEffectiveNamedResources(
 
   const baseNamedResources = useCapacityPlanFallback && capacityPlanMaterialized
     ? (() => {
-        // Materialise trajectories if not already done (pure function, result from materialized object is used)
-        materializeResourceTrajectories(
-          capacityPlanMaterialized.resourceTrajectories.length > 0
-            ? []  // trajectories already computed in materialized
-            : [],
-        )
-        // Use trajectories from the materialized result
         const usedTrajectories = capacityPlanMaterialized.resourceTrajectories
 
         const trajectoryResources = usedTrajectories.map((trajectory, idx) => {
@@ -131,6 +125,7 @@ function buildEffectiveNamedResources(
             allocationEndWeek: null,
             pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
             synthetic: !existing,
+            capacitySegments: trajectory.segments,
           }
         })
 
@@ -188,11 +183,11 @@ function buildEffectiveNamedResources(
     actualAllocationEndWeek: null,
     actualAllocatedWeeks: [],
     actualAllocationSegments: [],
+    capacitySegments: (namedResource as { capacitySegments?: CapacityPlanSlotWindow[] }).capacitySegments,
     order,
     lastAssignedWeek: null,
   }))
 }
-
 function weeklyCapacityForNamedResource(
   namedResource: DerivedNamedResourceAssignment,
   week: number,
@@ -203,6 +198,15 @@ function weeklyCapacityForNamedResource(
   if (week < startWeek || week > endWeek) return 0
 
   const mode = toAllocationMode(namedResource.allocationMode)
+
+  // Segment-aware capacity for CAPACITY_PLAN resources with trajectory segments
+  if (mode === 'CAPACITY_PLAN' && namedResource.capacitySegments && namedResource.capacitySegments.length > 0) {
+    const segment = namedResource.capacitySegments.find(
+      s => week >= s.startWeek && week <= s.endWeek,
+    )
+    return segment ? 5 * (segment.allocationPercent / 100) : 0
+  }
+
   const allocationPercent = namedResource.allocationPercent ?? 100
 
   if (mode === 'EFFORT') return 5

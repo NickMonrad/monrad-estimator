@@ -131,7 +131,8 @@ export default function NamedResourcesPanel({
         createdAt: resource.createdAt,
         updatedAt: resource.updatedAt,
         allocation,
-        // synthetic flag from allocation (for planned-resource identity), false for persisted named people
+        // resourceIdentity from profile when available; fall back to synthetic for backward compat
+        resourceIdentity: allocation?.resourceIdentity ?? (allocation?.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'),
         synthetic: allocation?.synthetic ?? false,
         persisted: true,
       }
@@ -149,6 +150,7 @@ export default function NamedResourcesPanel({
         createdAt: '',
         updatedAt: '',
         allocation,
+        resourceIdentity: allocation?.resourceIdentity === 'PLANNED_RESOURCE' ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
         synthetic: true,
         persisted: false,
       })),
@@ -193,10 +195,10 @@ export default function NamedResourcesPanel({
                           updateResource.mutate({ id: resource.id, name: value })
                         }
                       }}
-                      disabled={!resource.persisted}
+                      disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
                       className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                     />
-                    {resource.synthetic && (
+                    {(resource.resourceIdentity === 'PLANNED_RESOURCE' || resource.synthetic) && (
                       <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 uppercase tracking-wide">
                         Planned resource
                       </span>
@@ -215,7 +217,7 @@ export default function NamedResourcesPanel({
                         updateResource.mutate({ id: resource.id, startWeek: value })
                       }
                     }}
-                    disabled={!resource.persisted}
+                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
                     className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   />
                   <input
@@ -231,7 +233,7 @@ export default function NamedResourcesPanel({
                         updateResource.mutate({ id: resource.id, endWeek: value })
                       }
                     }}
-                    disabled={!resource.persisted}
+                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
                     className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   />
                   <input
@@ -251,7 +253,7 @@ export default function NamedResourcesPanel({
                         updateResource.mutate({ id: resource.id, allocationPct: value })
                       }
                     }}
-                    disabled={!resource.persisted}
+                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
                     className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   />
                   <label htmlFor={`billing-basis-${resource.id}`} className="block text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium" title="Determines which days are used for commercial billing — does not affect the planning schedule">Billing basis</label>
@@ -268,7 +270,7 @@ export default function NamedResourcesPanel({
                         })
                       }
                     }}
-                    disabled={!resource.persisted}
+                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
                     className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
                   >
                     <option value="ACTUAL_DAYS">Actual scheduled days</option>
@@ -284,10 +286,10 @@ export default function NamedResourcesPanel({
                     ) : null}
                   </div>
                   <button
-                    onClick={() => resource.persisted && !resource.synthetic && deleteResource.mutate(resource.id)}
-                    disabled={!resource.persisted || resource.synthetic}
+                    onClick={() => resource.persisted && resource.resourceIdentity !== 'PLANNED_RESOURCE' && !resource.synthetic && deleteResource.mutate(resource.id)}
+                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE' || resource.synthetic}
                     className="text-gray-400 dark:text-gray-500 hover:text-red-600 text-lg leading-none disabled:opacity-30"
-                    title={resource.synthetic ? 'Generated slot' : 'Delete'}
+                    title={resource.resourceIdentity === 'PLANNED_RESOURCE' || resource.synthetic ? 'Planned resources cannot be deleted' : 'Delete'}
                   >
                     x
                   </button>

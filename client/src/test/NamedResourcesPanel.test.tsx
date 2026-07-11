@@ -345,8 +345,8 @@ describe('NamedResourcesPanel capacity profile display', () => {
     // Source badge visible
     expect(screen.getByText('Squad Planner')).toBeInTheDocument()
 
-    // Delete button shows "Generated slot" and is disabled
-    expect(screen.getByTitle('Generated slot')).toBeDisabled()
+    // Delete button shows planned-resource message and is disabled
+    expect(screen.getByTitle('Planned resources cannot be deleted')).toBeDisabled()
     expect(screen.queryByTitle('Delete')).not.toBeInTheDocument()
   })
 })
