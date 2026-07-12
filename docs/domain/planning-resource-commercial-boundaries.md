@@ -460,6 +460,11 @@ fields (`allocationMode`, `allocationPercent`, etc.) with no segment fidelity.
 - Commercial billing basis (`pricingModel`) is snapshotted via V2/V3 `namedResources`
   and remains Commercial-owned; V3 does not introduce a separate billing-basis
   snapshot field.
+- ProjectDiscount rows remain Commercial-owned and are not serialized into V3 snapshots.
+  During rollback, discounts linked to pruned ResourceTypes are deleted before those
+  owners are removed; project-wide discounts and discounts for target ResourceTypes
+  are preserved. A pruned role discount is never promoted to project-wide scope by
+  setting `resourceTypeId` to `null`.
 - Capacity Plan history (Capacity Plan periods/entries) is **not** part of PR #367;
   it is tracked by #359 separately.
 
