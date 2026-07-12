@@ -12,6 +12,43 @@
  * @module projectSnapshotTypes
  */
 
+import { Prisma } from '@prisma/client'
+
+// ─── JSON value discriminator for nullable Prisma JSON fields ────────────────
+// Prisma reads both database NULL (Prisma.DbNull) and JSON null (Prisma.JsonNull)
+// as JavaScript `null`. This discriminator preserves the distinction across
+// snapshot serialisation/deserialisation.
+
+export type SnapshotJsonValue =
+  | { kind: 'DB_NULL' }
+  | { kind: 'JSON_NULL' }
+  | { kind: 'VALUE'; value: Record<string, unknown> | unknown[] | string | number | boolean | null }
+
+/**
+ * Convert a SnapshotJsonValue to the Prisma sentinel or value used for writes.
+ * DB_NULL → Prisma.DbNull
+ * JSON_NULL → Prisma.JsonNull
+ * VALUE → the contained value
+ */
+export function snapshotJsonValueToPrisma(sjv: SnapshotJsonValue): Prisma.NullableJsonNullValueInput | Prisma.InputJsonValue {
+  switch (sjv.kind) {
+    case 'DB_NULL': return Prisma.DbNull
+    case 'JSON_NULL': return Prisma.JsonNull
+    case 'VALUE': return sjv.value as Prisma.InputJsonValue
+  }
+}
+
+/**
+ * Serialise a SnapshotJsonValue to a JSON-safe plain object for storage in
+ * the snapshot JSON column. The `kind` discriminator survives JSON.parse.
+ */
+export function snapshotJsonValueToPlain(sjv: SnapshotJsonValue): Record<string, unknown> {
+  if (sjv.kind === 'VALUE') {
+    return { kind: 'VALUE', value: sjv.value as unknown }
+  }
+  return { kind: sjv.kind }
+}
+
 // ─── Capacity-profile enum string literal unions ─────────────────────────────
 // These mirror the Prisma-generated $Enums.* types exactly.
 // When the Prisma client is regenerated, update these to match.
@@ -185,8 +222,8 @@ export type SnapshotCapacityProfile = {
   defaultPercent: number | null
   startWeek: number | null
   endWeek: number | null
-  /** Original legacy field values; JSON-compatible. */
-  legacy: unknown
+  /** Original legacy field values; SnapshotJsonValue preserves DB_NULL vs JSON_NULL. */
+  legacy: SnapshotJsonValue
   segments: SnapshotCapacitySegment[]
 }
 

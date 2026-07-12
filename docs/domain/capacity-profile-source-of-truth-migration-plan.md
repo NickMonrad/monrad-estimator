@@ -105,7 +105,8 @@ This means:
 PR #357 (open, pending merge, branch `feature/snapshot-v3-capacity-profiles`) extends the
 BacklogSnapshot schema to version 3 so that rollback preserves capacity profile data.
 Snapshot v3 is the first-class representation for capacity profiles; v2 and v1 snapshots
-are still accepted on restore without data loss.
+are still accepted on restore, but v1 is epic-only (profiles untouched) and v2 is
+best-effort compatibility reconstruction (no segments or planned-resource ownership restored).
 
 #### Schema versions
 

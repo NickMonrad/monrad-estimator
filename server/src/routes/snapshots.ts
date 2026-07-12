@@ -13,6 +13,7 @@ import {
   SnapshotSchemaError,
   type SnapshotData,
   type SnapshotEpic,
+  type SnapshotJsonValue,
   type SnapshotV2,
   type SnapshotV3,
 } from '../lib/projectSnapshotTypes.js'
@@ -66,6 +67,32 @@ async function fetchEpics(projectId: string, db: SnapshotDbClient = prisma) {
   })
 }
 
+/**
+ * Detect which project capacity profiles have database-NULL legacy.
+ * Prisma reads both DB_NULL (Prisma.DbNull) and JSON null (Prisma.JsonNull)
+ * as JavaScript null; this raw query distinguishes them so the snapshot can
+ * preserve the exact null semantics.
+ *
+ * Returns an empty map when $queryRawUnsafe is unavailable (e.g. mock client),
+ * so all profiles are treated as VALUE/JSON_VALUE — safe for tests that don't
+ * exercise DB_NULL vs JSON_NULL discrimination.
+ */
+async function fetchLegacyNullMap(
+  projectId: string,
+  db: SnapshotDbClient,
+): Promise<Map<string, boolean>> {
+  try {
+    const rows = await (db as PrismaClient).$queryRawUnsafe<Array<{ id: string; legacy_is_null: boolean }>>(
+      'SELECT id, "legacy" IS NULL AS legacy_is_null FROM "CapacityProfile" WHERE "projectId" = $1',
+      projectId,
+    )
+    return new Map(rows.map(r => [r.id, r.legacy_is_null]))
+  } catch {
+    // Mock clients may not support $queryRawUnsafe; return empty map.
+    return new Map()
+  }
+}
+
 /** Build the full project snapshot (schemaVersion 3) with ordered capacity profiles. */
 async function buildSnapshot(
   projectId: string,
@@ -82,6 +109,7 @@ async function buildSnapshot(
     featureDependencies,
     overheadItems,
     rawProfiles,
+    legacyNullMap,
   ] = await Promise.all([
     fetchEpics(projectId, db),
     db.project.findUnique({
@@ -91,32 +119,19 @@ async function buildSnapshot(
     db.resourceType.findMany({
       where: { projectId },
       select: {
-        id: true,
-        name: true,
-        category: true,
-        count: true,
-        hoursPerDay: true,
-        dayRate: true,
-        globalTypeId: true,
-        allocationMode: true,
-        allocationPercent: true,
-        allocationStartWeek: true,
-        allocationEndWeek: true,
+        id: true, name: true, category: true, count: true, hoursPerDay: true,
+        dayRate: true, globalTypeId: true,
+        allocationMode: true, allocationPercent: true,
+        allocationStartWeek: true, allocationEndWeek: true,
       },
     }),
     db.namedResource.findMany({
       where: { resourceType: { projectId } },
       select: {
-        id: true,
-        resourceTypeId: true,
-        name: true,
-        startWeek: true,
-        endWeek: true,
-        allocationPct: true,
-        allocationMode: true,
-        allocationPercent: true,
-        allocationStartWeek: true,
-        allocationEndWeek: true,
+        id: true, resourceTypeId: true, name: true,
+        startWeek: true, endWeek: true, allocationPct: true,
+        allocationMode: true, allocationPercent: true,
+        allocationStartWeek: true, allocationEndWeek: true,
         pricingModel: true,
       },
     }),
@@ -143,9 +158,7 @@ async function buildSnapshot(
     db.capacityProfile.findMany({
       where: { projectId },
       include: {
-        segments: {
-          orderBy: { startWeek: 'asc' },
-        },
+        segments: { orderBy: { startWeek: 'asc' } },
       },
       orderBy: [
         { ownerKind: 'asc' },
@@ -153,6 +166,7 @@ async function buildSnapshot(
         { namedResourceId: 'asc' },
       ],
     }),
+    fetchLegacyNullMap(projectId, db),
   ])
 
   // Convert Date to ISO string for JSON compatibility
@@ -167,26 +181,39 @@ async function buildSnapshot(
       }
     : null
 
-  // Map Prisma model rows to SnapshotCapacityProfile, preserving all fields including nulls
-  const capacityProfiles = rawProfiles.map(p => ({
-    id: p.id,
-    ownerKind: p.ownerKind as SnapshotV3['capacityProfiles'][number]['ownerKind'],
-    resourceTypeId: p.resourceTypeId,
-    namedResourceId: p.namedResourceId,
-    planningBasis: p.planningBasis as SnapshotV3['capacityProfiles'][number]['planningBasis'],
-    source: p.source as SnapshotV3['capacityProfiles'][number]['source'],
-    defaultPercent: p.defaultPercent,
-    startWeek: p.startWeek,
-    endWeek: p.endWeek,
-    legacy: p.legacy,
-    segments: sortSnapshotSegments(p.segments.map(s => ({
-      id: s.id,
-      startWeek: s.startWeek,
-      endWeek: s.endWeek,
-      capacityPercent: s.capacityPercent,
-      source: s.source as SnapshotV3['capacityProfiles'][number]['segments'][number]['source'],
-    }))),
-  }))
+  // Map Prisma model rows to SnapshotCapacityProfile, preserving null semantics
+  const capacityProfiles = rawProfiles.map(p => {
+    // Determine the precise null state for legacy
+    const isDBNull = legacyNullMap.get(p.id) ?? false
+    let legacy: SnapshotJsonValue
+    if (isDBNull) {
+      legacy = { kind: 'DB_NULL' }
+    } else if (p.legacy === null) {
+      legacy = { kind: 'JSON_NULL' }
+    } else {
+      legacy = { kind: 'VALUE', value: p.legacy as Record<string, unknown> | unknown[] | string | number | boolean | null }
+    }
+
+    return {
+      id: p.id,
+      ownerKind: p.ownerKind as SnapshotV3['capacityProfiles'][number]['ownerKind'],
+      resourceTypeId: p.resourceTypeId,
+      namedResourceId: p.namedResourceId,
+      planningBasis: p.planningBasis as SnapshotV3['capacityProfiles'][number]['planningBasis'],
+      source: p.source as SnapshotV3['capacityProfiles'][number]['source'],
+      defaultPercent: p.defaultPercent,
+      startWeek: p.startWeek,
+      endWeek: p.endWeek,
+      legacy,
+      segments: sortSnapshotSegments(p.segments.map(s => ({
+        id: s.id,
+        startWeek: s.startWeek,
+        endWeek: s.endWeek,
+        capacityPercent: s.capacityPercent,
+        source: s.source as SnapshotV3['capacityProfiles'][number]['segments'][number]['source'],
+      }))),
+    }
+  })
 
   return {
     schemaVersion: 3 as const,
