@@ -479,10 +479,12 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
 
     // ── 2 resource types with exact IDs ───────────────────────────
     rtDevId = await createResourceType(projectId, 'rt-dev', 'Developer', {
+      dayRate: 500,
       allocationMode: 'TIMELINE',
       allocationPercent: 100,
     })
     rtDesId = await createResourceType(projectId, 'rt-des', 'Designer', {
+      dayRate: 450,
       allocationMode: 'EFFORT',
       allocationPercent: 80,
       allocationStartWeek: 0,
