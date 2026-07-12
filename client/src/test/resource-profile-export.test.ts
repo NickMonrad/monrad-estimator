@@ -1100,6 +1100,8 @@ describe('regression: restored scenario A profile data produces identical export
     const { headers: headersA, rows: rowsA } = parseCsv(csvA)
     const identityIdx = headersA.indexOf('Resource identity')
     const segmentsIdx = headersA.indexOf('Capacity profile segments')
+    const billingBasisIdx = headersA.indexOf('Billing basis')
+
     const resourceRowsA = rowsA.filter(r => r[0] === 'Resource')
 
     // Exactly 3 resource rows (Alice, New Starter, Bob) — no duplicates
@@ -1122,6 +1124,11 @@ describe('regression: restored scenario A profile data produces identical export
     expect(plannedRowA![segmentsIdx]).toBe('W3-W10 50%')
     // Bob: constant 100% segment
     expect(bobRowA![segmentsIdx]).toBe('W1-W10 100%')
+    // Billing basis column — pricing model survives export
+    expect(aliceRowA![billingBasisIdx]).toBe('Bill actual scheduled days')
+    expect(plannedRowA![billingBasisIdx]).toBe('Bill planned allocation')
+    expect(bobRowA![billingBasisIdx]).toBe('Bill actual scheduled days')
+
 
     // --- Phase 2: mutate to state B ---
     const stateB = JSON.parse(JSON.stringify(canonicalA)) as ResourceProfile
@@ -1179,6 +1186,8 @@ describe('regression: restored scenario A profile data produces identical export
     const { headers: headersRestored, rows: rowsRestored } = parseCsv(csvRestored)
     const identityIdxR = headersRestored.indexOf('Resource identity')
     const segmentsIdxR = headersRestored.indexOf('Capacity profile segments')
+    const billingBasisIdxR = headersRestored.indexOf('Billing basis')
+
     const resourceRowsRestored = rowsRestored.filter(r => r[0] === 'Resource')
 
     // Exact string match against canonical A
@@ -1194,6 +1203,11 @@ describe('regression: restored scenario A profile data produces identical export
     expect(aliceRestored![segmentsIdxR]).toBe('W1-W8 75%')
     expect(plannedRestored![segmentsIdxR]).toBe('W3-W10 50%')
     expect(bobRestored![segmentsIdxR]).toBe('W1-W10 100%')
+    // Billing basis column restored — pricing model survives rollback
+    expect(aliceRestored![billingBasisIdxR]).toBe('Bill actual scheduled days')
+    expect(plannedRestored![billingBasisIdxR]).toBe('Bill planned allocation')
+    expect(bobRestored![billingBasisIdxR]).toBe('Bill actual scheduled days')
+
 
     // Planned resource identity restored
     expect(plannedRestored![identityIdxR]).toBe('Planned resource')
