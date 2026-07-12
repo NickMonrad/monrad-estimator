@@ -266,6 +266,15 @@ interface CanonicalProjectState {
   dbNullProfileIds: string[]
 }
 
+/**
+ * Strip database-managed timestamps from raw Prisma rows so canonical
+ * comparisons compare only restorable business fields.
+ */
+function stripTimestamps<T extends Record<string, unknown>>(row: T): Omit<T, 'createdAt' | 'updatedAt'> {
+  const { createdAt, updatedAt, ...rest } = row
+  return rest as Omit<T, 'createdAt' | 'updatedAt'>
+}
+
 async function captureCanonicalState(projectId: string): Promise<CanonicalProjectState> {
   const [resourceTypes, namedResources, capacityProfiles, timelineEntries, storyTimelineEntries, overheadItems] = await Promise.all([
     prisma.resourceType.findMany({ where: { projectId }, orderBy: { id: 'asc' } }),
@@ -280,7 +289,18 @@ async function captureCanonicalState(projectId: string): Promise<CanonicalProjec
     prisma.projectOverhead.findMany({ where: { projectId }, orderBy: { id: 'asc' } }),
   ])
   const dbNullIds = Array.from(await detectDbNullProfileIds(projectId))
-  return { resourceTypes, namedResources, capacityProfiles, timelineEntries, storyTimelineEntries, overheadItems, dbNullProfileIds: dbNullIds }
+  return {
+    resourceTypes,
+    namedResources: namedResources.map(stripTimestamps),
+    capacityProfiles: capacityProfiles.map(p => ({
+      ...stripTimestamps(p),
+      segments: p.segments.map(s => stripTimestamps(s)),
+    })),
+    timelineEntries: timelineEntries.map(stripTimestamps),
+    storyTimelineEntries: storyTimelineEntries.map(stripTimestamps),
+    overheadItems: overheadItems.map(stripTimestamps),
+    dbNullProfileIds: dbNullIds,
+  }
 }
 
 
@@ -602,9 +622,9 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(namedP!.segments).toHaveLength(1)
 
     // PLANNED_RESOURCE — VALUE(number), 3 segments
-    const plannedP = data.capacityProfiles.find(p => p.ownerKind === 'PLANNED_RESOURCE')
+    const plannedP = data.capacityProfiles.find(p => p.id === profilePlannedId)
     expect(plannedP).toBeDefined()
-    expect(plannedP!.id).toBe(profilePlannedId)
+    expect(plannedP!.ownerKind).toBe('PLANNED_RESOURCE')
     expect(plannedP!.legacy.kind).toBe('VALUE')
     if (plannedP!.legacy.kind === 'VALUE') {
       expect(plannedP!.legacy.value).toBe(42)
