@@ -870,8 +870,8 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const devRow = afterRows.find(r => r.resourceTypeId === rtDevId)!
     const devCp = devRow.capacityProfile as Record<string, unknown>
     expect(devCp.resolutionSource).toBe('PROFILE')
-    expect(devCp.planningBasis).toBe('DEMAND_FOLLOWING')
-    expect(devCp.source).toBe('MANUAL')
+    expect(devCp.planningBasis).toBe('demandFollowing')
+    expect(devCp.source).toBe('manual')
     expect(devCp.defaultPercent).toBeNull()
     expect(devCp.startWeek).toBeNull()
     expect(devCp.endWeek).toBeNull()
@@ -886,8 +886,8 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(aliceRow.resourceIdentity).toBe('NAMED_PERSON')
     const aliceCp = aliceRow.capacityProfile as Record<string, unknown>
     expect(aliceCp.resolutionSource).toBe('PROFILE')
-    expect(aliceCp.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(aliceCp.source).toBe('SQUAD_PLANNER')
+    expect(aliceCp.planningBasis).toBe('availabilityWindow')
+    expect(aliceCp.source).toBe('squadPlanner')
     expect(aliceCp.defaultPercent).toBe(100)
     expect(aliceCp.startWeek).toBe(2)
     expect(aliceCp.endWeek).toBe(8)
