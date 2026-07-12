@@ -931,20 +931,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     extraRoleDiscountId = await createDiscount(
       projectId, extraRtId, 'PERCENTAGE', 20, 'Post-snapshot role discount', 2,
     )
-    const existingStory = await prisma.userStory.findFirst({
-      where: { feature: { epic: { projectId } } },
-      select: { id: true },
-    })
-    if (!existingStory) throw new Error('Scenario A fixture story missing')
-    await prisma.task.create({
-      data: {
-        name: 'Post-snapshot role task',
-        userStoryId: existingStory.id,
-        order: 99,
-        hoursEffort: 8,
-        resourceTypeId: extraRtId,
-      },
-    })
 
     // Delete ROLE segments, add new ones
     await prisma.capacitySegment.deleteMany({ where: { capacityProfileId: profileRoleId } })
@@ -983,6 +969,15 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     })
     const newStory = await prisma.userStory.create({
       data: { name: 'Mutated Story', featureId: newFeature.id, order: 0 },
+    })
+    await prisma.task.create({
+      data: {
+        name: 'Post-snapshot role task',
+        userStoryId: newStory.id,
+        order: 99,
+        hoursEffort: 8,
+        resourceTypeId: extraRtId,
+      },
     })
     await prisma.task.create({
       data: {
