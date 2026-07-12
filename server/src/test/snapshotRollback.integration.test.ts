@@ -361,6 +361,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
   let rtDesId: string
   let nrAliceId: string
   let nrCharlieId: string
+  let nrDaveId: string
   let profileRoleId: string
   let profileNamedId: string
   let profilePlannedId: string
@@ -409,6 +410,11 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       projectId, rtDevId, 'nr-charlie', 'Charlie',
       { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
     )
+    // ── 4th named resource for synthetic PLANNED_RESOURCE ownership ──
+    nrDaveId = await createNamedResource(
+      projectId, rtDevId, 'nr-dave', 'Dave',
+      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+    )
 
     // ── ROLE profile for Developer — DB_NULL legacy ───────────────
     profileRoleId = await createProfile(
@@ -445,7 +451,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     // ── PLANNED_RESOURCE (synthetic) — VALUE(number) legacy ───────
     // Discontinuous, overlapping, and >100% segments to test fidelity
     profilePlannedId = await createProfile(
-      projectId, 'prof-planned', 'PLANNED_RESOURCE', null, null,
+      projectId, 'prof-planned', 'PLANNED_RESOURCE', null, nrDaveId,
       {
         planningBasis: 'CAPACITY_PROFILE',
         source: 'DERIVED',
@@ -562,7 +568,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(data.resourceTypes[0].id).toBe(rtDevId)
 
     // Named resources
-    expect(data.namedResources).toHaveLength(3)
+    expect(data.namedResources).toHaveLength(4)
     const alice = data.namedResources.find(n => n.name === 'Alice')
     expect(alice).toBeDefined()
     expect(alice!.pricingModel).toBe('ACTUAL_DAYS')
@@ -735,7 +741,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const nrs = await prisma.namedResource.findMany({
       where: { resourceType: { projectId } },
     })
-    expect(nrs).toHaveLength(3)
+    expect(nrs).toHaveLength(4)
     expect(nrs.find(n => n.id === nrAliceId)!.pricingModel).toBe('ACTUAL_DAYS')
 
     // Exactly 4 profiles restored, no extras
