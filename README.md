@@ -255,6 +255,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Timeline workflow cleanup — canonical Update timeline CTA, hidden Level current timeline action, advanced planning copy updates | #314 |
 | Resource Counts allocation controls — stable named-resource columns, clearer planning-basis labels, preserved mode switching/start/end/allocation updates, and stale-banner behaviour | #315 |
 | Windows E2E local runner — unified env loading (server/.env + shell), cleanup-before-seed, resolved env across all processes | #354 |
+| Snapshot v3 — capacity-profile preservation with atomic rollback | #357 |
 
 ---
 
