@@ -1965,6 +1965,8 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
       startWeek: 2,
       endWeek: 6,
     })
+    // Include effort so the Resource Profile DTO has a row for this RT.
+    await createEpicBacklog(projectId, rtId, null)
 
     // Create stale persisted profiles that DIFFER from v2-derived state
     await createProfile(
