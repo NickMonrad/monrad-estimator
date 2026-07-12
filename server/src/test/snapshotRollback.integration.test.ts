@@ -1930,7 +1930,7 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
 
     // Add a PLANNED_RESOURCE that should NOT survive v2 rollback
     await createProfile(
-      projectId, 'prof-e-planned', 'PLANNED_RESOURCE', null, null,
+      projectId, 'prof-e-planned', 'PLANNED_RESOURCE', null, nrId,
       { planningBasis: 'CAPACITY_PROFILE', source: 'DERIVED' },
       Prisma.DbNull,
     )
