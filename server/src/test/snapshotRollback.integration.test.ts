@@ -257,6 +257,8 @@ async function createDiscount(
 interface CommercialParity {
   rows: Array<{
     id: string
+    name: string
+    kind: 'resource' | 'named-resource' | 'overhead'
     resourceTypeId: string
     subtotal: number
     netSubtotal: number
@@ -275,6 +277,21 @@ interface CommercialParity {
   totalProjectDiscount: number
   afterDiscounts: number
   grandTotal: number
+}
+
+function normalizeCommercialParity(data: CommercialParity): CommercialParity {
+  return {
+    ...data,
+    rows: data.rows.map(row => row.kind === 'overhead'
+      ? {
+          ...row,
+          // V3 snapshots intentionally omit ProjectOverhead IDs, so rollback
+          // recreates this row with a new ID. Compare overheads by stable name.
+          id: `overhead:${row.name}`,
+          resourceTypeId: `overhead:${row.name}`,
+        }
+      : row),
+  }
 }
 
 async function computeCommercialData(
@@ -1127,7 +1144,8 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       discountsAfterRollback,
       projectTaxAfterRollback,
     )
-    expect(commercialAfterRollback).toEqual(commercialBefore)
+    expect(normalizeCommercialParity(commercialAfterRollback))
+      .toEqual(normalizeCommercialParity(commercialBefore))
     // RTs: IDs preserved, original names restored
     const rts = await prisma.resourceType.findMany({
       where: { projectId },
