@@ -87,6 +87,7 @@ afterAll(async () => {
   })
   await prisma.capacityProfile.deleteMany({ where: { project: { ownerId: userId } } })
   await prisma.projectOverhead.deleteMany({ where: { project: { ownerId: userId } } })
+  await prisma.projectDiscount.deleteMany({ where: { project: { ownerId: userId } } })
   await prisma.timelineEntry.deleteMany({ where: { project: { ownerId: userId } } })
   await prisma.storyTimelineEntry.deleteMany({ where: { project: { ownerId: userId } } })
   await prisma.epicDependency.deleteMany({ where: { epic: { project: { ownerId: userId } } } })
@@ -238,6 +239,58 @@ async function createSegment(
     },
   })
 }
+
+async function createDiscount(
+  projectId: string,
+  resourceTypeId: string | null,
+  type: 'PERCENTAGE' | 'FIXED_AMOUNT',
+  value: number,
+  label: string,
+  order: number,
+): Promise<string> {
+  const discount = await prisma.projectDiscount.create({
+    data: { projectId, resourceTypeId, type, value, label, order },
+  })
+  return discount.id
+}
+
+interface CommercialParity {
+  rows: Array<{
+    id: string
+    resourceTypeId: string
+    subtotal: number
+    netSubtotal: number
+    appliedDiscounts: Array<{
+      id: string
+      resourceTypeId: string | null
+      calculatedAmount: number
+    }>
+  }>
+  subtotal: number
+  projectDiscounts: Array<{
+    id: string
+    resourceTypeId: string | null
+    calculatedAmount: number
+  }>
+  totalProjectDiscount: number
+  afterDiscounts: number
+  grandTotal: number
+}
+
+async function computeCommercialData(
+  profile: unknown,
+  discounts: unknown[],
+  project: { taxRate: number | null; taxLabel: string },
+): Promise<CommercialParity> {
+  const modulePath = new URL('../../../client/src/utils/financialCalculations.ts', import.meta.url).href
+  const clientCalculations = await import(modulePath)
+  return clientCalculations.computeCommercialData(
+    profile as never,
+    discounts as never,
+    project,
+  ) as CommercialParity
+}
+
 /**
  * Canonical state type for deep comparison after v3 rollback.
  */
@@ -408,6 +461,10 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
   let segmentArrayNull1: string
   let segmentString1: string
   let segmentBool1: string
+  let projectDiscountId: string
+  let targetRoleDiscountId: string
+  let extraRoleDiscountId: string
+  let commercialBefore: CommercialParity
   let canonicalBefore: CanonicalProjectState
   // HTTP response snapshots for read-parity assertions
   let resourceProfileBefore: unknown
@@ -653,6 +710,14 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       },
     })
 
+    // ── Baseline discounts: project-wide plus target-role ─────────
+    projectDiscountId = await createDiscount(
+      projectId, null, 'PERCENTAGE', 5, 'Project-wide baseline', 0,
+    )
+    targetRoleDiscountId = await createDiscount(
+      projectId, rtDevId, 'PERCENTAGE', 10, 'Developer baseline', 1,
+    )
+
     // ── Build and persist snapshot ────────────────────────────────
     const data = await buildSnapshot(projectId, prisma)
     const snap = await prisma.backlogSnapshot.create({
@@ -682,6 +747,20 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     timelineBefore = tlBefore.body
     expect(resourceProfileBefore).toHaveProperty('resourceRows')
     expect(timelineBefore).toHaveProperty('entries')
+
+    const projectTax = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { taxRate: true, taxLabel: true },
+    })
+    if (!projectTax) throw new Error('Scenario A project missing tax settings')
+    const discountsBefore = await prisma.projectDiscount.findMany({
+      where: { projectId },
+      orderBy: { order: 'asc' },
+    })
+    commercialBefore = await computeCommercialData(resourceProfileBefore, discountsBefore, projectTax)
+    expect(commercialBefore.projectDiscounts.map(d => d.id)).toEqual([projectDiscountId])
+    const baselineTargetRow = commercialBefore.rows.find(r => r.resourceTypeId === rtDevId)
+    expect(baselineTargetRow?.appliedDiscounts.map(d => d.id)).toContain(targetRoleDiscountId)
   })
 
   it('captured snapshot has all domains and exact values', async () => {
@@ -820,6 +899,9 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     // Add a post-snapshot role owner, named resource, compatibility allocation,
     // and persisted profile. V3 rollback must remove this owner set entirely.
     extraRtId = await createResourceType(projectId, 'rt-extra', 'Post-snapshot role', {
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 700,
       allocationMode: 'TIMELINE',
       allocationPercent: 45,
       allocationStartWeek: 2,
@@ -843,6 +925,24 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       Prisma.DbNull,
     )
     await createSegment(extraProfileId, 'seg-extra-owner', 2, 7, 45)
+
+    extraRoleDiscountId = await createDiscount(
+      projectId, extraRtId, 'PERCENTAGE', 20, 'Post-snapshot role discount', 2,
+    )
+    const existingStory = await prisma.userStory.findFirst({
+      where: { feature: { epic: { projectId } } },
+      select: { id: true },
+    })
+    if (!existingStory) throw new Error('Scenario A fixture story missing')
+    await prisma.task.create({
+      data: {
+        name: 'Post-snapshot role task',
+        userStoryId: existingStory.id,
+        order: 99,
+        hoursEffort: 8,
+        resourceTypeId: extraRtId,
+      },
+    })
 
     // Delete ROLE segments, add new ones
     await prisma.capacitySegment.deleteMany({ where: { capacityProfileId: profileRoleId } })
@@ -981,11 +1081,56 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(aliceRPB.allocationStartWeek).toBe(1)
     expect(aliceRPB.allocationEndWeek).toBe(6)
 
+    const discountsB = await prisma.projectDiscount.findMany({
+      where: { projectId },
+      orderBy: { order: 'asc' },
+    })
+    const projectTaxB = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { taxRate: true, taxLabel: true },
+    })
+    if (!projectTaxB) throw new Error('Scenario A project missing tax settings in B-state')
+    const commercialB = await computeCommercialData(resourceProfileAfterMutation, discountsB, projectTaxB)
+    const extraCommercialRow = commercialB.rows.find(r => r.resourceTypeId === extraRtId)
+    expect(extraCommercialRow).toBeDefined()
+    expect(extraCommercialRow!.appliedDiscounts.map(d => d.id)).toContain(extraRoleDiscountId)
+    expect(commercialB.projectDiscounts.map(d => d.id)).not.toContain(extraRoleDiscountId)
+    expect(commercialB.grandTotal).not.toBe(commercialBefore.grandTotal)
+
     // ── Rollback ──────────────────────────────────────────────────
     await rollbackProjectSnapshot({ projectId, snapshotId, userId, db: prisma })
 
     // ── Verify exact restoration ──────────────────────────────────
 
+    const discountsAfterRollback = await prisma.projectDiscount.findMany({
+      where: { projectId },
+      orderBy: { order: 'asc' },
+    })
+    expect(discountsAfterRollback).toHaveLength(2)
+    expect(discountsAfterRollback.map(d => d.id)).toEqual([projectDiscountId, targetRoleDiscountId])
+    const restoredProjectDiscount = discountsAfterRollback.find(d => d.id === projectDiscountId)!
+    expect(restoredProjectDiscount.resourceTypeId).toBeNull()
+    expect(restoredProjectDiscount.label).toBe('Project-wide baseline')
+    const restoredTargetDiscount = discountsAfterRollback.find(d => d.id === targetRoleDiscountId)!
+    expect(restoredTargetDiscount.resourceTypeId).toBe(rtDevId)
+    expect(restoredTargetDiscount.label).toBe('Developer baseline')
+    expect(discountsAfterRollback.find(d => d.id === extraRoleDiscountId)).toBeUndefined()
+
+    const rpAfterRollback = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+      .expect(200)
+    const projectTaxAfterRollback = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { taxRate: true, taxLabel: true },
+    })
+    if (!projectTaxAfterRollback) throw new Error('Scenario A project missing tax settings after rollback')
+    const commercialAfterRollback = await computeCommercialData(
+      rpAfterRollback.body,
+      discountsAfterRollback,
+      projectTaxAfterRollback,
+    )
+    expect(commercialAfterRollback).toEqual(commercialBefore)
     // RTs: IDs preserved, original names restored
     const rts = await prisma.resourceType.findMany({
       where: { projectId },

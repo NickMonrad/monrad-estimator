@@ -508,29 +508,37 @@ async function pruneNonTargetOwners(
   const targetRtIds = new Set(data.resourceTypes.map(rt => rt.id))
   const targetNrIds = new Set(data.namedResources.map(nr => nr.id))
 
-  // 1. Null out non-cascading FK references to non-target ResourceTypes.
-  //    Discount.resourceTypeId has no onDelete cascade — null it first to avoid
-  //    FK violations when the RT is deleted.
-  if (tx.projectDiscount) {
-    const targetRtIdList = Array.from(targetRtIds)
-    const discountsToNull = await tx.projectDiscount.findMany({
+  // 1. Determine non-target ResourceTypes before deleting any owners.
+  const rtWhere = targetRtIds.size > 0
+    ? { projectId, id: { notIn: Array.from(targetRtIds) } }
+    : { projectId }
+  const nonTargetRts = await tx.resourceType.findMany({
+    where: rtWhere,
+    select: { id: true },
+  })
+  const nonTargetRtIds = nonTargetRts.map(rt => rt.id)
+
+  // 2. Delete role-scoped discounts owned exclusively by pruned roles.
+  //    Never null resourceTypeId: null means project-wide to Commercial.
+  //    The projectId predicate prevents touching another project's discounts.
+  if (nonTargetRtIds.length > 0) {
+    await tx.projectDiscount.deleteMany({
       where: {
         projectId,
-        resourceTypeId: targetRtIds.size > 0
-          ? { not: null, notIn: targetRtIdList }
-          : { not: null },
+        resourceTypeId: { in: nonTargetRtIds },
       },
-      select: { id: true },
     })
-    if (discountsToNull.length > 0) {
-      await tx.projectDiscount.updateMany({
-        where: { id: { in: discountsToNull.map(d => d.id) } },
-        data: { resourceTypeId: null },
-      })
-    }
   }
 
-  // 2. Delete non-target NamedResources (cascades to their capacity profiles)
+  // 3. Clear other non-cascading references before deleting ResourceTypes.
+  if (nonTargetRtIds.length > 0 && tx.templateTask) {
+    await tx.templateTask.updateMany({
+      where: { resourceTypeId: { in: nonTargetRtIds } },
+      data: { resourceTypeId: null },
+    })
+  }
+
+  // 4. Delete non-target NamedResources (cascades to their capacity profiles).
   const nrWhere = targetNrIds.size > 0
     ? { resourceType: { projectId }, id: { notIn: Array.from(targetNrIds) } }
     : { resourceType: { projectId } }
@@ -544,24 +552,10 @@ async function pruneNonTargetOwners(
     })
   }
 
-  // 3. Delete non-target ResourceTypes (cascade handles their NRs and profiles)
-  const rtWhere = targetRtIds.size > 0
-    ? { projectId, id: { notIn: Array.from(targetRtIds) } }
-    : { projectId }
-  const nonTargetRts = await tx.resourceType.findMany({
-    where: rtWhere,
-    select: { id: true },
-  })
-  if (nonTargetRts.length > 0 && tx.templateTask) {
-    await tx.templateTask.updateMany({
-      where: { resourceTypeId: { in: nonTargetRts.map(rt => rt.id) } },
-      data: { resourceTypeId: null },
-    })
-  }
-
-  if (nonTargetRts.length > 0) {
+  // 5. Delete non-target ResourceTypes (cascade handles profiles).
+  if (nonTargetRtIds.length > 0) {
     await tx.resourceType.deleteMany({
-      where: { id: { in: nonTargetRts.map(rt => rt.id) } },
+      where: { id: { in: nonTargetRtIds } },
     })
   }
 }
