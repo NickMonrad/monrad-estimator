@@ -203,7 +203,7 @@ All levels support full CRUD (create, read, update, delete) and drag-and-drop re
 
 - Accessible from the Backlog page
 - Shows a list of named snapshots with timestamp, trigger, and optional label
-- Snapshot triggers: `manual`, `csv_import`, `template_apply`, `optimiser_apply`, `pre_rollback`
+- Snapshot triggers: `manual`, `csv_import`, `template_apply`, `optimiser_apply`, `level_resources`, `pre_rollback`
 - Click any snapshot to **preview** the historical state
 - **Rollback** button restores the backlog to the selected snapshot (auto-saves a pre-rollback snapshot first)
 
@@ -850,7 +850,7 @@ The snapshot schema has three versions:
 | Field | Notes |
 |---|---|
 | Label | Optional user-provided name |
-| Trigger | `manual`, `csv_import`, `template_apply`, `optimiser_apply`, `pre_rollback` |
+| Trigger | `manual`, `csv_import`, `template_apply`, `optimiser_apply`, `level_resources`, `pre_rollback` |
 | Created at | Timestamp |
 | Created by | User who triggered the snapshot |
 | schemaVersion | 3 (current); older snapshots may be 2 or 1 (no field) |
@@ -861,11 +861,12 @@ See the [Snapshot v3 design](domain/capacity-profile-design.md#snapshot-schema-v
 
 | Trigger | When it fires |
 |---|---|
-| `csv_import` | Immediately before a CSV import is committed |
-| `template_apply` | Immediately before applying a template to a story |
-| `optimiser_apply` | Immediately before the optimiser applies a scenario |
-| `pre_rollback` | Immediately before a rollback is applied (captures current state so the rollback is reversible) |
 | `manual` | User clicks "Save snapshot" button in History panel |
+| `csv_import` | Immediately before a CSV import is committed |
+| `template_apply` | Immediately before applying a template to a story or refreshing from template |
+| `optimiser_apply` | Immediately before the Optimiser or Squad Planner applies a scenario |
+| `level_resources` | Immediately before resource levelling is applied from the Timeline page |
+| `pre_rollback` | Immediately before a rollback is applied (captures current state so the rollback is reversible) |
 
 ### Rollback Behaviour
 
@@ -880,7 +881,6 @@ Rollback behaviour depends on the snapshot's schema version:
 6. Timeline entries, story timeline entries, dependencies, and overheads are deleted and recreated from snapshot data.
 7. **All existing CapacityProfile and CapacitySegment rows are deleted** and recreated **exactly** from the snapshot's `capacityProfiles` array — preserving profile IDs, owner kinds, owner IDs, planning basis, source, default percent, profile window, legacy JSON, and every segment with its ID, weeks, capacity percent, and source.
 8. All writes share one `$transaction` — any failure rolls back every change including the pre-rollback capture.
-9. Timeline entries are restored from snapshot data.
 
 **V2 (schemaVersion: 2) — Full state + best-effort legacy profile reconstruction:**
 1–6. Same as V3 (common state restore).
@@ -975,13 +975,12 @@ User
 │   │           └── Task (many, ordered)
 │   ├── ResourceType (many, project-scoped)
 │   │   └── NamedResource (many)
-│   │       ├── CapacityProfile (one, optional)
+│   │       ├── CapacityProfile (zero-or-more, during migration)
 │   │       │   └── CapacitySegment (many)
-│   │   ├── CapacityProfile (one per ResourceType, for role-level)
+│   │   ├── CapacityProfile (zero-or-more, during migration)
 │   │   │   └── CapacitySegment (many)
 │   ├── ProjectDiscount (many)
-│   ├── BacklogSnapshot (many)
-│   │   └── CapacityProfile (many, per project, own segments)
+│   ├── BacklogSnapshot (many, v3 JSON embeds serialized CapacityProfile[])
 │   ├── TimelineEntry (one per Feature)
 │   └── GeneratedDocument (many)
 ├── Customer (many, owned by user)
@@ -1057,12 +1056,11 @@ per-version details.
 
 Key points:
 1. Auto-snapshot of current state (trigger: `pre_rollback`) so rollback is reversible.
-2. Cascade-delete all epics (removes features, stories, tasks, timeline entries).
+2. Cascade-delete all epics (removes features, stories, and tasks).
 3. Recreate entire hierarchy from snapshot JSON.
 4. Resource types re-matched by name — if a resource type was renamed since the snapshot, tasks for that type will have no resource type after rollback.
-5. Timeline entries are **not** restored; the Gantt will regenerate from the restored backlog structure.
+5. **V3 & V2:** Timeline entries, story timeline entries, dependencies, and overheads are restored from snapshot data. **V1:** Timeline entries are **not** restored — the Gantt will regenerate from the restored backlog structure.
 6. **V3 rollback additionally replaces** all project capacity profiles and segments exactly from the snapshot data. V2 rollback reconstructs best-effort legacy profiles. V1 rollback leaves profiles untouched.
-
 ### Inactive Items
 
 `isActive = false` on any level excludes that level and all its children from:

@@ -428,11 +428,10 @@ This affects the ownership model by ensuring that Resource Profile-owned capacit
 data survives rollback:
 
 **Resource Profile boundary strengthened.** Since `CapacityProfile` / `CapacitySegment`
-data is owned by Resource Profile (capacity inputs), V3 snapshots now preserve this
-data exactly. A rollback no longer reconstructs profiles from legacy compatibility
-fields (V2 behaviour) or leaves them untouched (V1 behaviour). Capacity profile
-configuration chosen in Resource Profile is restored exactly on rollback.
-
+data is owned by Resource Profile (capacity inputs), V3 snapshots preserve this
+data exactly. A rollback would no longer reconstruct profiles from legacy compatibility
+fields (V2 behaviour) or leave them untouched (V1 behaviour). Capacity profile
+configuration chosen in Resource Profile would be restored exactly on rollback.
 **Null-legacy discrimination via `SnapshotJsonValue`:** The `CapacityProfile.legacy`
 column is a nullable PostgreSQL `Json?` field. Prisma distinguishes database NULL
 (untouched column) from JSON `null` (explicitly-set JSON null), but both read back as
@@ -444,19 +443,19 @@ profile rows where `legacy` was never written (typical for profile-first profile
 are restored as database NULL, not JSON null.
 
 **Snapshot/rollback:**
-- `buildSnapshot` produces `schemaVersion: 3` for all new application snapshots,
-  including `capacityProfiles: SnapshotCapacityProfile[]` with full segment data.
-- Pre-rollback auto-snapshots capture current capacity profiles alongside the
-  full project state inside the same transaction — any rollback is reversible.
-- V3 restore replaces all existing project profiles/segments with the exact
-  snapshot state (same transaction as epic/resource restoration).
-- V1 snapshots (epic-only) leave capacity profiles untouched on rollback.
-- V2 snapshots reconstruct profiles from every ResourceType (ROLE-kind, synthetic IDs)
-  and every NamedResource (NAMED_PERSON-kind, synthetic IDs) using legacy compatibility
-  fields (`allocationMode`, `allocationPercent`, etc.) with no segment fidelity.
+`buildSnapshot` would produce `schemaVersion: 3` for all new application snapshots,
+including `capacityProfiles: SnapshotCapacityProfile[]` with full segment data.
+Pre-rollback auto-snapshots would capture current capacity profiles alongside the
+full project state inside the same transaction — any rollback is reversible.
+V3 restore would replace all existing project profiles/segments with the exact
+snapshot state (same transaction as epic/resource restoration).
+V1 snapshots (epic-only) leave capacity profiles untouched on rollback.
+V2 snapshots reconstruct profiles from every `ResourceType` (ROLE-kind, synthetic IDs)
+and every `NamedResource` (NAMED_PERSON-kind, synthetic IDs) using legacy compatibility
+fields (`allocationMode`, `allocationPercent`, etc.) with no segment fidelity.
 
 **Domain boundaries respected:**
-- Capacity profile data (Resource Profile ownership) is snapshotted and restored
+- Capacity profile data (Resource Profile ownership) would be snapshotted and restored
   as-is — no Timeline/Planning derivation or Commercial interpolation occurs.
 - Commercial billing basis (`pricingModel`) is snapshotted via V2/V3 `namedResources`
   and remains Commercial-owned; V3 does not introduce a separate billing-basis

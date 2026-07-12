@@ -24,6 +24,7 @@ import {
   deriveFeatureSpanFromWeeklyAllocations,
   stripCapacityPlanMaterialization,
 } from '../routes/squadPlan.js'
+import { buildSnapshot } from '../routes/snapshots.js'
 import type { SchedulerResourceType } from '../lib/scheduler.js'
 
 
@@ -571,5 +572,40 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     expect(weeklyDemandCache['rt-dev|0']).toBeCloseTo(5, 6)
     expect(weeklyDemandCache['rt-dev|4']).toBeCloseTo(2.5, 6)
     expect(weeklyDemandCache['rt-dev|4']).toBeLessThan(5)
+  })
+
+  it('returns 500 when buildSnapshot rejects, preventing snapshot persistence and mutation', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+    vi.mocked(buildSnapshot).mockRejectedValueOnce(new Error('Snapshot null-state rejection'))
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send({
+        name: 'Test plan',
+        targetWeeks: 10,
+        periodWeeks: 4,
+        maxDelta: 1,
+        periods: [
+          {
+            periodIndex: 0,
+            startWeek: 0,
+            endWeek: 4,
+            entries: [
+              {
+                resourceTypeId: 'rt-dev',
+                headcount: 1,
+                demandFTE: 0.8,
+                utilisationPct: 80,
+              },
+            ],
+          },
+        ],
+      })
+
+    expect(res.status).toBe(500)
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 })

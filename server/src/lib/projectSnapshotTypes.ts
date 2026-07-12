@@ -13,6 +13,7 @@
  */
 
 import { Prisma } from '@prisma/client'
+import type { $Enums } from '@prisma/client'
 
 // ─── JSON value discriminator for nullable Prisma JSON fields ────────────────
 // Prisma reads both database NULL (Prisma.DbNull) and JSON null (Prisma.JsonNull)
@@ -22,7 +23,7 @@ import { Prisma } from '@prisma/client'
 export type SnapshotJsonValue =
   | { kind: 'DB_NULL' }
   | { kind: 'JSON_NULL' }
-  | { kind: 'VALUE'; value: Record<string, unknown> | unknown[] | string | number | boolean | null }
+  | { kind: 'VALUE'; value: Record<string, unknown> | unknown[] | string | number | boolean }
 
 /**
  * Convert a SnapshotJsonValue to the Prisma sentinel or value used for writes.
@@ -145,12 +146,12 @@ export type SnapshotProjectFields = {
 export type SnapshotResourceType = {
   id: string
   name: string
-  category: string
+  category: $Enums.ResourceCategory
   count: number
   hoursPerDay: number | null
   dayRate: number | null
+  allocationMode: $Enums.AllocationMode
   globalTypeId: string | null
-  allocationMode: string
   allocationPercent: number
   allocationStartWeek: number | null
   allocationEndWeek: number | null
@@ -163,7 +164,7 @@ export type SnapshotNamedResource = {
   startWeek: number | null
   endWeek: number | null
   allocationPct: number
-  allocationMode: string
+  allocationMode: $Enums.AllocationMode
   allocationPercent: number
   allocationStartWeek: number | null
   allocationEndWeek: number | null
@@ -196,7 +197,7 @@ export type SnapshotFeatureDependency = {
 
 export type SnapshotOverheadItem = {
   name: string
-  type: string
+  type: $Enums.OverheadType
   value: number
   resourceTypeId: string | null
   order: number
