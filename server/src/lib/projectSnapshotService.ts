@@ -356,17 +356,17 @@ async function restoreSnapshotCommonState(
 
   for (const epic of data.epics) {
     const newEpic = await tx.epic.create({
-      data: { name: epic.name, description: epic.description, order: epic.order, projectId },
+      data: { name: epic.name, description: epic.description, assumptions: epic.assumptions, order: epic.order, projectId, featureMode: epic.featureMode, scheduleMode: epic.scheduleMode, timelineStartWeek: epic.timelineStartWeek, isActive: epic.isActive },
     })
     epicIdMap.set(epic.id, newEpic.id)
     for (const feature of epic.features) {
       const newFeature = await tx.feature.create({
-        data: { name: feature.name, description: feature.description, assumptions: feature.assumptions, order: feature.order, epicId: newEpic.id },
+      data: { name: feature.name, description: feature.description, assumptions: feature.assumptions, order: feature.order, epicId: newEpic.id, featureMode: feature.featureMode, isActive: feature.isActive, timelineColour: feature.timelineColour, timelineStartWeek: feature.timelineStartWeek },
       })
       featureIdMap.set(feature.id, newFeature.id)
       for (const story of feature.userStories) {
         const newStory = await tx.userStory.create({
-          data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId },
+      data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId, isActive: story.isActive ?? true },
         })
         storyIdMap.set(story.id, newStory.id)
         for (const task of story.tasks) {
@@ -490,6 +490,78 @@ async function restoreSnapshotCommonState(
         order: o.order,
       })),
       skipDuplicates: true,
+    })
+  }
+}
+
+/**
+ * V3-only: Delete ResourceTypes and NamedResources that exist in the project
+ * but are absent from the target snapshot, handling FK-safe ordering.
+ * Called after restoreSnapshotCommonState has recreated dependent rows
+ * and before recreateV3CapacityProfiles recreates profiles.
+ */
+async function pruneNonTargetOwners(
+  tx: SnapshotDbClient,
+  projectId: string,
+  data: { resourceTypes: Array<{ id: string }>; namedResources: Array<{ id: string }> },
+): Promise<void> {
+  const targetRtIds = new Set(data.resourceTypes.map(rt => rt.id))
+  const targetNrIds = new Set(data.namedResources.map(nr => nr.id))
+
+  // 1. Null out non-cascading FK references to non-target ResourceTypes.
+  //    Discount.resourceTypeId has no onDelete cascade — null it first to avoid
+  //    FK violations when the RT is deleted.
+  if (tx.projectDiscount) {
+    const targetRtIdList = Array.from(targetRtIds)
+    const discountsToNull = await tx.projectDiscount.findMany({
+      where: {
+        projectId,
+        resourceTypeId: targetRtIds.size > 0
+          ? { not: null, notIn: targetRtIdList }
+          : { not: null },
+      },
+      select: { id: true },
+    })
+    if (discountsToNull.length > 0) {
+      await tx.projectDiscount.updateMany({
+        where: { id: { in: discountsToNull.map(d => d.id) } },
+        data: { resourceTypeId: null },
+      })
+    }
+  }
+
+  // 2. Delete non-target NamedResources (cascades to their capacity profiles)
+  const nrWhere = targetNrIds.size > 0
+    ? { resourceType: { projectId }, id: { notIn: Array.from(targetNrIds) } }
+    : { resourceType: { projectId } }
+  const nonTargetNrs = await tx.namedResource.findMany({
+    where: nrWhere,
+    select: { id: true },
+  })
+  if (nonTargetNrs.length > 0) {
+    await tx.namedResource.deleteMany({
+      where: { id: { in: nonTargetNrs.map(nr => nr.id) } },
+    })
+  }
+
+  // 3. Delete non-target ResourceTypes (cascade handles their NRs and profiles)
+  const rtWhere = targetRtIds.size > 0
+    ? { projectId, id: { notIn: Array.from(targetRtIds) } }
+    : { projectId }
+  const nonTargetRts = await tx.resourceType.findMany({
+    where: rtWhere,
+    select: { id: true },
+  })
+  if (nonTargetRts.length > 0 && tx.templateTask) {
+    await tx.templateTask.updateMany({
+      where: { resourceTypeId: { in: nonTargetRts.map(rt => rt.id) } },
+      data: { resourceTypeId: null },
+    })
+  }
+
+  if (nonTargetRts.length > 0) {
+    await tx.resourceType.deleteMany({
+      where: { id: { in: nonTargetRts.map(rt => rt.id) } },
     })
   }
 }
@@ -632,15 +704,15 @@ export async function rollbackProjectSnapshot({
       await tx.epic.deleteMany({ where: { projectId } })
       for (const epic of parsedData) {
         const newEpic = await tx.epic.create({
-          data: { name: epic.name, description: epic.description, order: epic.order, projectId },
+          data: { name: epic.name, description: epic.description, assumptions: epic.assumptions, order: epic.order, projectId, featureMode: epic.featureMode, scheduleMode: epic.scheduleMode, timelineStartWeek: epic.timelineStartWeek, isActive: epic.isActive },
         })
         for (const feature of epic.features) {
           const newFeature = await tx.feature.create({
-            data: { name: feature.name, description: feature.description, assumptions: feature.assumptions, order: feature.order, epicId: newEpic.id },
+            data: { name: feature.name, description: feature.description, assumptions: feature.assumptions, order: feature.order, epicId: newEpic.id, featureMode: feature.featureMode, isActive: feature.isActive, timelineColour: feature.timelineColour, timelineStartWeek: feature.timelineStartWeek },
           })
           for (const story of feature.userStories) {
             const newStory = await tx.userStory.create({
-              data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId },
+              data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId, isActive: story.isActive ?? true },
             })
             for (const task of story.tasks) {
               const taskRtId = task.resourceType?.name
@@ -670,6 +742,7 @@ export async function rollbackProjectSnapshot({
     } else if (isSnapshotV3(parsedData)) {
       // --- V3: full-state restore + exact profile/segment replacement ---
       await restoreSnapshotCommonState(tx, projectId, parsedData)
+      await pruneNonTargetOwners(tx, projectId, parsedData)
       await recreateV3CapacityProfiles(tx, projectId, parsedData)
     }
 

@@ -390,6 +390,9 @@ describe('canonical commercial consistency', () => {
 
     const resultA = computeCommercialData(profileA, discounts, projectSettings)
     expect(resultA).not.toBeNull()
+    // No duplicate commercial row IDs after initial computation
+    const rowIdsA = resultA!.rows.map(r => r.id)
+    expect(new Set(rowIdsA).size).toBe(rowIdsA.length)
 
     // ── State A known totals ────────────────────────────────────────
     // Alice ACTUAL_DAYS: 10 actual days × $500 = $5,000
@@ -460,6 +463,9 @@ describe('canonical commercial consistency', () => {
     // ── Restore A DTO → recompute ───────────────────────────────────
     const resultRestored = computeCommercialData(profileA, discounts, projectSettings)
     expect(resultRestored).not.toBeNull()
+    // No duplicate commercial row IDs after restoring A
+    const rowIdsR = resultRestored!.rows.map(r => r.id)
+    expect(new Set(rowIdsR).size).toBe(rowIdsR.length)
 
     // ── Exact commercial parity between initial and post-restore ─────
     expect(resultRestored!.subtotal).toBe(resultA!.subtotal)

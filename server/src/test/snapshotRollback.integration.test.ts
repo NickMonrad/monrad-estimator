@@ -342,10 +342,9 @@ async function createEpicBacklog(
  * legacy IS NULL at the storage level.
  */
 async function detectDbNullProfileIds(projectId: string): Promise<Set<string>> {
-  const rows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
-    `SELECT cp.id FROM "CapacityProfile" cp WHERE cp."projectId" = $1 AND cp.legacy IS NULL`,
-    projectId,
-  )
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT cp.id FROM "CapacityProfile" cp WHERE cp."projectId" = ${projectId} AND cp.legacy IS NULL
+  `)
   const seen = new Set<string>()
   for (const r of rows) {
     seen.add(r.id)
@@ -379,6 +378,9 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
   let snapshotId: string
   let rtDevId: string
   let rtDesId: string
+  let extraRtId: string
+  let extraNrId: string
+  let extraProfileId: string
   let nrAliceId: string
   let nrCharlieId: string
   let nrDaveId: string
@@ -815,6 +817,33 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
   it('mutates all domains then rollback restores exact original state', async () => {
     // ── Mutate every captured domain ──────────────────────────────
 
+    // Add a post-snapshot role owner, named resource, compatibility allocation,
+    // and persisted profile. V3 rollback must remove this owner set entirely.
+    extraRtId = await createResourceType(projectId, 'rt-extra', 'Post-snapshot role', {
+      allocationMode: 'TIMELINE',
+      allocationPercent: 45,
+      allocationStartWeek: 2,
+      allocationEndWeek: 7,
+    })
+    extraNrId = await createNamedResource(projectId, extraRtId, 'nr-extra', 'Post-snapshot person', {
+      allocationMode: 'TIMELINE',
+      allocationPercent: 45,
+      allocationStartWeek: 2,
+      allocationEndWeek: 7,
+    })
+    extraProfileId = await createProfile(
+      projectId, 'prof-extra-owner', 'ROLE', extraRtId, null,
+      {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'MANUAL',
+        defaultPercent: 45,
+        startWeek: 2,
+        endWeek: 7,
+      },
+      Prisma.DbNull,
+    )
+    await createSegment(extraProfileId, 'seg-extra-owner', 2, 7, 45)
+
     // Delete ROLE segments, add new ones
     await prisma.capacitySegment.deleteMany({ where: { capacityProfileId: profileRoleId } })
     await createSegment(profileRoleId, 'seg-mutated-1', 10, 15, 30)
@@ -971,6 +1000,9 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     })
     expect(nrs).toHaveLength(8)
     expect(nrs.find(n => n.id === nrAliceId)!.pricingModel).toBe('ACTUAL_DAYS')
+    expect(rts.find(r => r.id === extraRtId)).toBeUndefined()
+    expect(nrs.find(n => n.id === extraNrId)).toBeUndefined()
+
 
     const profiles = await prisma.capacityProfile.findMany({
       where: { projectId },
@@ -1087,6 +1119,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       id: string
       legacy_type: string
       legacy_is_null: boolean
+      legacyJsonType: string | null
       null_kind: string
       nested_nulls_preserved: boolean
     }>>(Prisma.sql`
@@ -1094,6 +1127,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         cp.id,
         pg_typeof(cp.legacy)::text AS legacy_type,
         cp.legacy IS NULL AS legacy_is_null,
+        jsonb_typeof(cp.legacy) AS "legacyJsonType",
         CASE
           WHEN cp.legacy IS NULL THEN 'DB_NULL'
           WHEN cp.legacy = 'null'::jsonb THEN 'JSON_NULL'
@@ -1131,10 +1165,34 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(nullKindMap.get(profileArrayNullId)).toBe('VALUE')
     expect(nullKindMap.get(profileStringId)).toBe('VALUE')
     expect(nullKindMap.get(profileBoolId)).toBe('VALUE')
+    // Confirm per-profile storage nullness independently from null_kind
+    const legacyIsNullMap = new Map(rawRows.map(r => [r.id, r.legacy_is_null]))
+    expect(legacyIsNullMap.get(profileRoleId)).toBe(true)
+    expect(legacyIsNullMap.get(profilePlannedNrId)).toBe(true)
+    expect(legacyIsNullMap.get(profileJsonNullId)).toBe(false)
+    expect(legacyIsNullMap.get(profileNamedId)).toBe(false)
+    expect(legacyIsNullMap.get(profilePlannedId)).toBe(false)
+    expect(legacyIsNullMap.get(profileNestedObjId)).toBe(false)
+    expect(legacyIsNullMap.get(profileArrayNullId)).toBe(false)
+    expect(legacyIsNullMap.get(profileStringId)).toBe(false)
+    expect(legacyIsNullMap.get(profileBoolId)).toBe(false)
+
 
     // Nested nulls are preserved in jsonb
     const nestedRow = rawRows.find(r => r.id === profileNestedObjId)!
     expect(nestedRow.nested_nulls_preserved).toBe(true)
+
+    // Per-profile jsonb_typeof value-type assertions
+    const jsonTypeMap = new Map(rawRows.map(r => [r.id, r.legacyJsonType]))
+    expect(jsonTypeMap.get(profileRoleId)).toBeNull()
+    expect(jsonTypeMap.get(profilePlannedNrId)).toBeNull()
+    expect(jsonTypeMap.get(profileJsonNullId)).toBe('null')
+    expect(jsonTypeMap.get(profileNamedId)).toBe('object')
+    expect(jsonTypeMap.get(profilePlannedId)).toBe('number')
+    expect(jsonTypeMap.get(profileNestedObjId)).toBe('object')
+    expect(jsonTypeMap.get(profileArrayNullId)).toBe('array')
+    expect(jsonTypeMap.get(profileStringId)).toBe('string')
+    expect(jsonTypeMap.get(profileBoolId)).toBe('boolean')
 
     // Backlog restored
     const epics = await prisma.epic.findMany({ where: { projectId } })
@@ -1184,6 +1242,12 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const beforeTL = timelineBefore as Record<string, unknown>
     const afterRows = profileAfter.resourceRows as Array<Record<string, unknown>>
     const beforeRows = beforeRP.resourceRows as Array<Record<string, unknown>>
+    // The restored Resource Profile and Timeline DTOs must not resolve deleted
+    // post-snapshot owners through legacy fallback.
+    expect(afterRows.find(r => r.resourceTypeId === extraRtId)).toBeUndefined()
+    const afterTimelineNRs = timelineAfter.namedResources as Array<Record<string, unknown>>
+    expect(afterTimelineNRs.find(nr => nr.id === extraNrId)).toBeUndefined()
+
 
     // ── Role profile: PROFILE resolutionSource, exact restored segments, null fields ──
     const devRow = afterRows.find(r => r.resourceTypeId === rtDevId)!
@@ -1899,7 +1963,7 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
       allocationMode: 'TIMELINE',
       allocationPercent: 60,
       startWeek: 2,
-      endWeek: 8,
+      endWeek: 6,
     })
 
     // Create stale persisted profiles that DIFFER from v2-derived state
@@ -2013,6 +2077,39 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
     expect(roleLegacy.allocationPercent).toBe(60)
     expect(roleLegacy.allocationStartWeek).toBe(0)
     expect(roleLegacy.allocationEndWeek).toBe(10)
+
+    // Verify the application-facing Resource Profile DTO resolves the
+    // reconstructed compatibility profile, not the stale persisted profile.
+    const resourceProfileResponse = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+      .expect(200)
+    const resourceTypeRow = resourceProfileResponse.body.resourceRows.find(
+      (row: Record<string, unknown>) => row.resourceTypeId === rtId,
+    )
+    expect(resourceTypeRow).toBeDefined()
+    expect(resourceTypeRow.capacityProfile).toMatchObject({
+      resolutionSource: 'PROFILE',
+      planningBasis: 'availabilityWindow',
+      source: 'availabilityWindow',
+      defaultPercent: 60,
+      startWeek: 0,
+      endWeek: 10,
+      segments: [],
+    })
+    const namedResourceRow = resourceTypeRow.namedResources.find(
+      (row: Record<string, unknown>) => row.id === nrId,
+    )
+    expect(namedResourceRow).toBeDefined()
+    expect(namedResourceRow.capacityProfile).toMatchObject({
+      resolutionSource: 'PROFILE',
+      planningBasis: 'availabilityWindow',
+      source: 'availabilityWindow',
+      defaultPercent: 60,
+      startWeek: 2,
+      endWeek: 6,
+      segments: [],
+    })
   })
 })
 
@@ -2256,18 +2353,17 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     expect(stles).toHaveLength(0)
 
     // ── Raw SQL: comprehensive legacy null-type coverage ───────────
-    const rawRows = await prisma.$queryRawUnsafe<
+    const rawRows = await prisma.$queryRaw<
       Array<{ id: string; legacy_is_null: boolean; jsonb_typeof: string | null }>
-    >(
-      `SELECT
-         cp.id,
-         cp.legacy IS NULL AS legacy_is_null,
-         jsonb_typeof(cp.legacy) AS jsonb_typeof
-       FROM "CapacityProfile" cp
-       WHERE cp."projectId" = $1
-       ORDER BY cp.id`,
-      projectId,
-    )
+    >(Prisma.sql`
+      SELECT
+        cp.id,
+        cp.legacy IS NULL AS legacy_is_null,
+        jsonb_typeof(cp.legacy) AS jsonb_typeof
+      FROM "CapacityProfile" cp
+      WHERE cp."projectId" = ${projectId}
+      ORDER BY cp.id
+    `)
 
     // All 8 profiles verified by raw SQL
     // 1. ROLE — Prisma.DbNull → SQL NULL, jsonb_typeof NULL
@@ -2340,5 +2436,175 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Test count: 12 total (A:2, B:1, C:1, D:6, E:1, F:1)
+// Scenario G — v3 restores scope and scheduling fields
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario G — v3 restores scope and scheduling fields', () => {
+  let projectId: string
+  let snapshotId: string
+  let epicId: string
+  let featureId: string
+  let storyId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-g-dev', 'Developer', {
+      allocationMode: 'TIMELINE',
+      allocationPercent: 60,
+      allocationStartWeek: 2,
+      allocationEndWeek: 6,
+    })
+    const backlog = await createEpicBacklog(projectId, rtId, null)
+    epicId = backlog.epicId
+    featureId = backlog.featureId
+    storyId = backlog.storyId
+
+    await prisma.epic.update({
+      where: { id: epicId },
+      data: {
+        assumptions: 'Epic assumptions survive rollback',
+        featureMode: 'parallel',
+        scheduleMode: 'parallel',
+        timelineStartWeek: 4,
+        isActive: false,
+      },
+    })
+    await prisma.feature.update({
+      where: { id: featureId },
+      data: {
+        assumptions: 'Feature assumptions survive rollback',
+        featureMode: 'parallel',
+        isActive: false,
+        timelineColour: '#123456',
+        timelineStartWeek: 5,
+      },
+    })
+    await prisma.userStory.update({
+      where: { id: storyId },
+      data: {
+        assumptions: 'Story assumptions survive rollback',
+        isActive: false,
+      },
+    })
+    await prisma.timelineEntry.create({
+      data: { projectId, featureId, startWeek: 4, durationWeeks: 3, isManual: true },
+    })
+    await prisma.storyTimelineEntry.create({
+      data: { projectId, storyId, startWeek: 5, durationWeeks: 2, isManual: true },
+    })
+
+    const snapshot = await buildSnapshot(projectId, prisma)
+    snapshotId = (
+      await prisma.backlogSnapshot.create({
+        data: {
+          projectId,
+          label: 'Scope and scheduling snapshot',
+          trigger: 'manual',
+          snapshot: snapshot as unknown as object,
+          createdById: userId,
+        },
+      })
+    ).id
+  })
+
+  it('restores captured fields and preserves inactive read behavior', async () => {
+    const beforeResourceProfile = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+      .expect(200)
+    const beforeTimeline = await request(app)
+      .get(`/api/projects/${projectId}/timeline`)
+      .set('Authorization', authHeader)
+      .expect(200)
+
+    await prisma.epic.update({
+      where: { id: epicId },
+      data: {
+        assumptions: null,
+        featureMode: 'sequential',
+        scheduleMode: 'sequential',
+        timelineStartWeek: null,
+        isActive: true,
+      },
+    })
+    await prisma.feature.update({
+      where: { id: featureId },
+      data: {
+        assumptions: null,
+        featureMode: 'sequential',
+        isActive: true,
+        timelineColour: null,
+        timelineStartWeek: null,
+      },
+    })
+    await prisma.userStory.update({
+      where: { id: storyId },
+      data: { assumptions: null, isActive: true },
+    })
+
+    await rollbackProjectSnapshot({ projectId, snapshotId, userId, db: prisma })
+
+    const restoredEpic = await prisma.epic.findFirst({
+      where: { projectId },
+      include: { features: { include: { userStories: true } } },
+    })
+    expect(restoredEpic).toMatchObject({
+      assumptions: 'Epic assumptions survive rollback',
+      featureMode: 'parallel',
+      scheduleMode: 'parallel',
+      timelineStartWeek: 4,
+      isActive: false,
+    })
+    const restoredFeature = restoredEpic!.features[0]
+    expect(restoredFeature).toMatchObject({
+      assumptions: 'Feature assumptions survive rollback',
+      featureMode: 'parallel',
+      isActive: false,
+      timelineColour: '#123456',
+      timelineStartWeek: 5,
+    })
+    expect(restoredFeature.userStories[0]).toMatchObject({
+      assumptions: 'Story assumptions survive rollback',
+      isActive: false,
+    })
+
+    const afterResourceProfile = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+      .expect(200)
+    expect(afterResourceProfile.body.resourceRows.map((row: Record<string, unknown>) => ({
+      resourceTypeId: row.resourceTypeId,
+      totalHours: row.totalHours,
+      totalDays: row.totalDays,
+      allocatedDays: row.allocatedDays,
+    }))).toEqual(beforeResourceProfile.body.resourceRows.map((row: Record<string, unknown>) => ({
+      resourceTypeId: row.resourceTypeId,
+      totalHours: row.totalHours,
+      totalDays: row.totalDays,
+      allocatedDays: row.allocatedDays,
+    })))
+
+    const afterTimeline = await request(app)
+      .get(`/api/projects/${projectId}/timeline`)
+      .set('Authorization', authHeader)
+      .expect(200)
+    const projectScheduling = (body: Record<string, unknown>) => ({
+      entries: (body.entries as Array<Record<string, unknown>>).map(entry => ({
+        startWeek: entry.startWeek,
+        durationWeeks: entry.durationWeeks,
+        isManual: entry.isManual,
+      })),
+      storyEntries: ((body.storyEntries ?? []) as Array<Record<string, unknown>>).map(entry => ({
+        startWeek: entry.startWeek,
+        durationWeeks: entry.durationWeeks,
+        isManual: entry.isManual,
+      })),
+    })
+    expect(projectScheduling(afterTimeline.body)).toEqual(projectScheduling(beforeTimeline.body))
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Test count: 13 total (A:2, B:1, C:1, D:6, E:1, F:1, G:1)
 // All under describeIf — skipped when INTEGRATION_TEST is not 'true'.
