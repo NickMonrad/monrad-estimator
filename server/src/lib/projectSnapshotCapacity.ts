@@ -10,7 +10,24 @@
  * @module projectSnapshotCapacity
  */
 
+import type { Prisma } from '@prisma/client'
 import type { SnapshotV2, SnapshotV3 } from './projectSnapshotTypes.js'
+import { snapshotJsonValueToPrisma } from './projectSnapshotTypes.js'
+
+// ─── Narrow transaction interface ────────────────────────────────────────────
+// Replaces `tx: any` with a minimal Prisma-compatible contract covering only
+// the capacity profile/segment operations this module uses.
+
+export interface CapacityProfileTxClient {
+  capacityProfile: {
+    deleteMany(args: { where: { projectId: string } }): Promise<{ count: number }>
+    create(args: { data: Prisma.CapacityProfileCreateInput }): Promise<unknown>
+  }
+  capacitySegment: {
+    deleteMany(args: { where: { capacityProfile: { projectId: string } } }): Promise<{ count: number }>
+    create(args: { data: Prisma.CapacitySegmentCreateInput }): Promise<unknown>
+  }
+}
 
 // ─── Planning basis mapping ──────────────────────────────────────────────────
 
@@ -19,7 +36,7 @@ import type { SnapshotV2, SnapshotV3 } from './projectSnapshotTypes.js'
  * Mirror of the internal mapping in capacityProfileMapping.ts.
  * null/undefined/EFFORT → DEMAND_FOLLOWING
  */
-function allocationModeToPlanningBasis(mode: string | null | undefined): string {
+function allocationModeToPlanningBasis(mode: string | null | undefined): 'DEMAND_FOLLOWING' | 'AVAILABILITY_WINDOW' | 'WHOLE_PROJECT_ALLOCATION' | 'CAPACITY_PROFILE' {
   switch (mode) {
     case 'TIMELINE':
       return 'AVAILABILITY_WINDOW'
@@ -32,7 +49,7 @@ function allocationModeToPlanningBasis(mode: string | null | undefined): string 
       return 'DEMAND_FOLLOWING'
   }
 }
-function allocationModeToSource(mode: string | null | undefined): string {
+function allocationModeToSource(mode: string | null | undefined): 'FIXED' | 'AVAILABILITY_WINDOW' | 'LEGACY' | 'MANUAL' | 'SQUAD_PLANNER' | 'IMPORTED' | 'DERIVED' {
   switch (mode) {
     case 'TIMELINE':
       return 'AVAILABILITY_WINDOW'
@@ -63,7 +80,7 @@ function allocationModeToSource(mode: string | null | undefined): string {
  * captures.
  */
 export async function recreateV2CapacityProfiles(
-  tx: any,
+  tx: CapacityProfileTxClient,
   projectId: string,
   snapshot: SnapshotV2,
 ): Promise<void> {
@@ -75,10 +92,10 @@ export async function recreateV2CapacityProfiles(
     await tx.capacityProfile.create({
       data: {
         id: `snapshot-v2-role-${rt.id}`,
-        projectId,
+        project: { connect: { id: projectId } },
         ownerKind: 'ROLE',
-        resourceTypeId: rt.id,
-        namedResourceId: null,
+        resourceType: { connect: { id: rt.id } },
+        namedResource: undefined,
         planningBasis: allocationModeToPlanningBasis(rt.allocationMode),
         source: allocationModeToSource(rt.allocationMode),
         defaultPercent: rt.allocationPercent,
@@ -108,10 +125,10 @@ export async function recreateV2CapacityProfiles(
     await tx.capacityProfile.create({
       data: {
         id: `snapshot-v2-named-${nr.id}`,
-        projectId,
+        project: { connect: { id: projectId } },
         ownerKind: 'NAMED_PERSON',
-        resourceTypeId: null,
-        namedResourceId: nr.id,
+        resourceType: undefined,
+        namedResource: { connect: { id: nr.id } },
         planningBasis: allocationModeToPlanningBasis(mode),
         source: allocationModeToSource(mode),
         defaultPercent: effectivePercent,
@@ -143,7 +160,7 @@ export async function recreateV2CapacityProfiles(
  * This is an exact replacement — no broad legacy sync afterward.
  */
 export async function recreateV3CapacityProfiles(
-  tx: any,
+  tx: CapacityProfileTxClient,
   projectId: string,
   v3: SnapshotV3,
 ): Promise<void> {
@@ -157,16 +174,16 @@ export async function recreateV3CapacityProfiles(
     await tx.capacityProfile.create({
       data: {
         id: profile.id,
-        projectId,
+        project: { connect: { id: projectId } },
         ownerKind: profile.ownerKind,
-        resourceTypeId: profile.resourceTypeId,
-        namedResourceId: profile.namedResourceId,
+        resourceType: profile.resourceTypeId ? { connect: { id: profile.resourceTypeId } } : undefined,
+        namedResource: profile.namedResourceId ? { connect: { id: profile.namedResourceId } } : undefined,
         planningBasis: profile.planningBasis,
         source: profile.source,
         defaultPercent: profile.defaultPercent,
         startWeek: profile.startWeek,
         endWeek: profile.endWeek,
-        legacy: profile.legacy,
+        legacy: snapshotJsonValueToPrisma(profile.legacy),
       },
     })
 
@@ -174,7 +191,7 @@ export async function recreateV3CapacityProfiles(
       await tx.capacitySegment.create({
         data: {
           id: seg.id,
-          capacityProfileId: profile.id,
+          capacityProfile: { connect: { id: profile.id } },
           startWeek: seg.startWeek,
           endWeek: seg.endWeek,
           capacityPercent: seg.capacityPercent,

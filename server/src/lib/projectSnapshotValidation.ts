@@ -12,6 +12,7 @@ import type {
   SnapshotV3,
   SnapshotCapacityProfile,
   SnapshotCapacitySegment,
+  SnapshotJsonValue,
   CapacityProfileOwnerKindEnum,
   CapacityProfilePlanningBasisEnum,
   CapacityProfileSourceEnum,
@@ -59,6 +60,54 @@ function fail(path: string, detail: string): never {
 
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
+}
+
+function isJsonCompatible(value: unknown): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return true
+  if (Array.isArray(value)) return value.every(isJsonCompatible)
+  if (typeof value === 'object' && value !== null) {
+    return Object.values(value).every(isJsonCompatible)
+  }
+  return false
+}
+
+/**
+ * Validate a SnapshotJsonValue discriminator.
+ * - kind must be 'DB_NULL', 'JSON_NULL', or 'VALUE'
+ * - DB_NULL and JSON_NULL must not carry an extra value
+ * - VALUE must carry a JSON-compatible value
+ */
+export function validateSnapshotJsonValue(
+  sjv: unknown,
+  pfx: string,
+): asserts sjv is SnapshotJsonValue {
+  if (typeof sjv !== 'object' || sjv === null) {
+    fail(pfx, 'SnapshotJsonValue must be a non-null object')
+  }
+  const obj = sjv as Record<string, unknown>
+  const kind = obj.kind
+  if (kind === 'DB_NULL') {
+    if (obj.value !== undefined) {
+      fail(pfx, 'DB_NULL kind must not have an extra "value" field')
+    }
+    return
+  }
+  if (kind === 'JSON_NULL') {
+    if (obj.value !== undefined) {
+      fail(pfx, 'JSON_NULL kind must not have an extra "value" field')
+    }
+    return
+  }
+  if (kind === 'VALUE') {
+    if (!('value' in obj)) {
+      fail(pfx, 'VALUE kind must have a "value" field')
+    }
+    if (!isJsonCompatible(obj.value)) {
+      fail(pfx, 'VALUE kind contains a non-serialisable value (undefined, function, symbol, bigint, or cyclic reference)')
+    }
+    return
+  }
+  fail(pfx, `unsupported SnapshotJsonValue kind "${String(kind)}"`)
 }
 
 /**
@@ -264,6 +313,9 @@ function validateProfile(
   ) {
     fail(pfx, `endWeek (${profile.endWeek}) must be >= startWeek (${profile.startWeek})`)
   }
+
+  // Legacy — SnapshotJsonValue discriminator
+  validateSnapshotJsonValue(profile.legacy, `${pfx}.legacy`)
 
   // Segments
   if (!Array.isArray(profile.segments)) {

@@ -203,7 +203,7 @@ All levels support full CRUD (create, read, update, delete) and drag-and-drop re
 
 - Accessible from the Backlog page
 - Shows a list of named snapshots with timestamp, trigger, and optional label
-- Snapshot triggers: `manual`, `csv_import`, `template_apply`, `pre_rollback`
+- Snapshot triggers: `manual`, `csv_import`, `template_apply`, `optimiser_apply`, `pre_rollback`
 - Click any snapshot to **preview** the historical state
 - **Rollback** button restores the backlog to the selected snapshot (auto-saves a pre-rollback snapshot first)
 
@@ -845,7 +845,7 @@ The snapshot schema has three versions:
 
 - **V1 (legacy):** Epic tree only (no resource types, named resources, timeline entries, or capacity profiles).
 - **V2:** Full project state — epics, resource types, named resources, timeline entries, dependencies, overheads. No capacity profiles.
-- **V3 (current):** All V2 fields plus `capacityProfiles: SnapshotCapacityProfile[]` with full segment data. All new application snapshots use schema version 3, set via the `schemaVersion` field in the JSON.
+- **V3 (current):** All V2 fields plus `capacityProfiles: SnapshotCapacityProfile[]` (including full `CapacitySegment` arrays). All new application snapshots use schema version 3, set via the `schemaVersion` field in the JSON.
 
 | Field | Notes |
 |---|---|
@@ -877,10 +877,10 @@ Rollback behaviour depends on the snapshot's schema version:
 3. All existing Epics (and their cascade: Features → Stories → Tasks) are **deleted**.
 4. Epics, Features, Stories, and Tasks are **recreated** from the snapshot JSON.
 5. Resource types are re-matched by name for task FKs.
-6. Timeline entries, story timeline entries, dependencies, and overheads are deleted and recreated.
+6. Timeline entries, story timeline entries, dependencies, and overheads are deleted and recreated from snapshot data.
 7. **All existing CapacityProfile and CapacitySegment rows are deleted** and recreated **exactly** from the snapshot's `capacityProfiles` array — preserving profile IDs, owner kinds, owner IDs, planning basis, source, default percent, profile window, legacy JSON, and every segment with its ID, weeks, capacity percent, and source.
 8. All writes share one `$transaction` — any failure rolls back every change including the pre-rollback capture.
-9. Timeline entries are **not** restored from capacity data; the Gantt regenerates from the restored backlog structure.
+9. Timeline entries are restored from snapshot data.
 
 **V2 (schemaVersion: 2) — Full state + best-effort legacy profile reconstruction:**
 1–6. Same as V3 (common state restore).
@@ -981,6 +981,7 @@ User
 │   │   │   └── CapacitySegment (many)
 │   ├── ProjectDiscount (many)
 │   ├── BacklogSnapshot (many)
+│   │   └── CapacityProfile (many, per project, own segments)
 │   ├── TimelineEntry (one per Feature)
 │   └── GeneratedDocument (many)
 ├── Customer (many, owned by user)

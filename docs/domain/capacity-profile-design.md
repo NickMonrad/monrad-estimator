@@ -214,9 +214,15 @@ Resource Profile should explain staffing and assignment:
 Use plain labels such as **Capacity profile**, **Reserved capacity**, **Assigned work**, **Assigned days**, **Named person**, and **Planned resource**.
 
 **Current implementation status:** PR #356 (merged) made Resource Profile and CSV
-reads resolve each owner in this order: a valid persisted
-`CapacityProfile`/`CapacitySegment`; active Capacity Plan slot materialisation only when
-`shouldFallbackToActiveCapacityPlan` requires it; then pure legacy fields.
+reads resolve each owner in this order:
+
+1. **Persisted owner-specific profile** → `resolutionSource: PROFILE` — a valid persisted
+   `CapacityProfile`/`CapacitySegment` exists for the owner.
+2. **Active Capacity Plan fallback** → `resolutionSource: ACTIVE_CAPACITY_PLAN` —
+   materialise from active `CapacityPlan` periods only when
+   `shouldFallbackToActiveCapacityPlan` requires it.
+3. **Pure legacy fallback** → `resolutionSource: LEGACY` — derive from legacy
+   `ResourceType`/`NamedResource` fields.
 Persisted profile adoption drives display and export from `CapacityProfile`/`CapacitySegment`
 data. Separately, the pre-existing active Capacity Plan fallback in
 `namedResourceAssignments.ts` uses segment-aware trajectory capacity for named-resource
@@ -747,7 +753,7 @@ Each `SnapshotCapacityProfile` (in `projectSnapshotTypes.ts`):
 | `source` | enum | Original profile source (FIXED, MANUAL, SQUAD_PLANNER, etc.) |
 | `defaultPercent` | `number \| null` | Profile-level default capacity % |
 | `startWeek` / `endWeek` | `number \| null` | Nullable profile window |
-| `legacy` | `unknown` | Original legacy JSON (may be `null`); preserved verbatim |
+| `legacy` | `SnapshotJsonValue` | Original legacy JSON (may be `null`); preserved verbatim |
 | `segments` | `SnapshotCapacitySegment[]` | Full segment set |
 
 Each `SnapshotCapacitySegment`:

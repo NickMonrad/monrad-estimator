@@ -16,6 +16,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
+import { Prisma } from '@prisma/client'
 import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
@@ -24,6 +25,7 @@ import {
   SnapshotSchemaError,
   isSnapshotV2,
   isSnapshotV3,
+
   type SnapshotV2,
   type SnapshotV3,
 } from '../lib/projectSnapshotTypes.js'
@@ -150,7 +152,7 @@ describe('validateSnapshotV3', () => {
           defaultPercent: null,
           startWeek: null,
           endWeek: null,
-          legacy: null,
+          legacy: { kind: 'DB_NULL' },
           segments: [],
         },
         {
@@ -163,7 +165,7 @@ describe('validateSnapshotV3', () => {
           defaultPercent: 100,
           startWeek: 0,
           endWeek: 10,
-          legacy: { allocationMode: 'EFFORT' },
+          legacy: { kind: 'VALUE', value: { allocationMode: 'EFFORT' } },
           segments: [
             { id: 'seg-1', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER' },
           ],
@@ -233,7 +235,7 @@ describe('validateSnapshotV3', () => {
       defaultPercent: 50,
       startWeek: 2,
       endWeek: 6,
-      legacy: null,
+      legacy: { kind: 'DB_NULL' },
       segments: [],
     })
     // Two ROLE profiles with same resourceTypeId — allowed
@@ -258,7 +260,7 @@ describe('validateSnapshotV3', () => {
 
   it('accepts null legacy field', () => {
     const snap = makeBaseV3()
-    snap.capacityProfiles[0].legacy = null
+    snap.capacityProfiles[0].legacy = { kind: 'DB_NULL' }
     expect(() => validateSnapshotV3(snap)).not.toThrow()
   })
 
@@ -477,7 +479,7 @@ describe('buildSnapshot', () => {
     expect(cp2.defaultPercent).toBe(100)
     expect(cp2.startWeek).toBe(0)
     expect(cp2.endWeek).toBe(10)
-    expect(cp2.legacy).toEqual({ allocationMode: 'EFFORT' })
+    expect(cp2.legacy).toEqual({ kind: 'VALUE', value: { allocationMode: 'EFFORT' } })
     expect(cp2.segments.map(s => s.id)).toEqual(['seg-2a', 'seg-2b', 'seg-2c'])
     expect(cp2.segments[0]).toEqual({ id: 'seg-2a', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER' })
     expect(cp2.segments[1].startWeek).toBe(4)
@@ -489,7 +491,7 @@ describe('buildSnapshot', () => {
     expect(cp3.namedResourceId).toBe('nr-bob')
     expect(cp3.planningBasis).toBe('WHOLE_PROJECT_ALLOCATION')
     expect(cp3.source).toBe('MANUAL')
-    expect(cp3.legacy).toEqual({ oldField: 'value' })
+    expect(cp3.legacy).toEqual({ kind: 'VALUE', value: { oldField: 'value' } })
     expect(cp3.segments.map(s => s.id)).toEqual(['seg-3a', 'seg-3b'])
     expect(cp3.segments[0].capacityPercent).toBe(50)
     expect(cp3.segments[1].capacityPercent).toBe(100)
@@ -504,7 +506,7 @@ describe('buildSnapshot', () => {
     expect(cp1.defaultPercent).toBeNull()
     expect(cp1.startWeek).toBeNull()
     expect(cp1.endWeek).toBeNull()
-    expect(cp1.legacy).toBeNull()
+    expect(cp1.legacy).toEqual({ kind: 'JSON_NULL' })
     expect(cp1.segments).toEqual([])
   })
 })
@@ -621,7 +623,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
 
     const created = cpCreate.mock.calls[0][0]?.data as Record<string, unknown>
     expect(created.id).toBe('snapshot-v2-role-rt-1')
-    expect(created.projectId).toBe(projId)
+    expect(created.project).toEqual({ connect: { id: projId } })
     expect(created.ownerKind).toBe('ROLE')
     expect(created.planningBasis).toBe('AVAILABILITY_WINDOW')
     expect(created.source).toBe('AVAILABILITY_WINDOW')
@@ -652,12 +654,12 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
         {
           id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-dev', namedResourceId: null,
           planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null,
-          startWeek: null, endWeek: null, legacy: null, segments: [],
+          startWeek: null, endWeek: null, legacy: { kind: 'DB_NULL' }, segments: [],
         },
         {
           id: 'cp-2', ownerKind: 'NAMED_PERSON', resourceTypeId: null, namedResourceId: 'nr-alice',
           planningBasis: 'AVAILABILITY_WINDOW', source: 'SQUAD_PLANNER', defaultPercent: 100,
-          startWeek: 0, endWeek: 10, legacy: { mode: 'EFFORT' },
+          startWeek: 0, endWeek: 10, legacy: { kind: 'VALUE', value: { mode: 'EFFORT' } },
           segments: [
             { id: 'seg-a', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER' },
           ],
@@ -713,11 +715,10 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
 
     const cp1 = cpCreate.mock.calls[0][0]?.data as Record<string, unknown>
     expect(cp1.id).toBe('cp-1')
-    expect(cp1.projectId).toBe(projId)
+    expect(cp1.project).toEqual({ connect: { id: projId } })
     expect(cp1.ownerKind).toBe('ROLE')
-    expect(cp1.resourceTypeId).toBe('rt-dev')
-    expect(cp1.namedResourceId).toBeNull()
-    expect(cp1.legacy).toBeNull()
+    expect(cp1.resourceType).toEqual({ connect: { id: 'rt-dev' } })
+    expect(cp1.legacy).toBe(Prisma.DbNull)
     expect(cp1.planningBasis).toBe('DEMAND_FOLLOWING')
     expect(cp1.source).toBe('FIXED')
     expect(cp1.defaultPercent).toBeNull()
@@ -726,9 +727,10 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
 
     const cp2 = cpCreate.mock.calls[1][0]?.data as Record<string, unknown>
     expect(cp2.id).toBe('cp-2')
-    expect(cp2.projectId).toBe(projId)
+    expect(cp2.project).toEqual({ connect: { id: projId } })
     expect(cp2.ownerKind).toBe('NAMED_PERSON')
-    expect(cp2.namedResourceId).toBe('nr-alice')
+    expect(cp2.resourceType).toBeUndefined()
+    expect(cp2.namedResource).toEqual({ connect: { id: 'nr-alice' } })
     expect(cp2.legacy).toEqual({ mode: 'EFFORT' })
     expect(cp2.planningBasis).toBe('AVAILABILITY_WINDOW')
     expect(cp2.source).toBe('SQUAD_PLANNER')
@@ -740,7 +742,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     expect(segCreate.mock.calls.length).toBe(1)
     const seg1 = segCreate.mock.calls[0][0]?.data as Record<string, unknown>
     expect(seg1.id).toBe('seg-a')
-    expect(seg1.capacityProfileId).toBe('cp-2')
+    expect(seg1.capacityProfile).toEqual({ connect: { id: 'cp-2' } })
     expect(seg1.startWeek).toBe(0)
     expect(seg1.endWeek).toBe(4)
     expect(seg1.capacityPercent).toBe(100)
@@ -767,7 +769,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
       capacityProfiles: [
         { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: null, namedResourceId: null,
           planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null,
-          startWeek: null, endWeek: null, legacy: null, segments: [] },
+          startWeek: null, endWeek: null, legacy: { kind: 'DB_NULL' }, segments: [] },
       ],
     }
 
@@ -822,7 +824,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
       capacityProfiles: [
         { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-dev', namedResourceId: null,
           planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null,
-          startWeek: null, endWeek: null, legacy: null, segments: [] },
+          startWeek: null, endWeek: null, legacy: { kind: 'DB_NULL' }, segments: [] },
       ],
     }
 
@@ -975,7 +977,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
       capacityProfiles: [
         { id: 'cp-new', ownerKind: 'ROLE', resourceTypeId: 'rt-new', namedResourceId: null,
           planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null,
-          startWeek: null, endWeek: null, legacy: null, segments: [] },
+          startWeek: null, endWeek: null, legacy: { kind: 'DB_NULL' }, segments: [] },
       ],
     }
 
@@ -1074,7 +1076,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
       capacityProfiles: [
         { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-dev', namedResourceId: null,
           planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null,
-          startWeek: null, endWeek: null, legacy: null, segments: [] },
+          startWeek: null, endWeek: null, legacy: { kind: 'DB_NULL' }, segments: [] },
       ],
     }
 

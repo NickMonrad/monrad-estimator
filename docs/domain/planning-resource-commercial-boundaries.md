@@ -420,9 +420,9 @@ branch and landed when PR #356 merged.
 
 See `capacity-profile-design.md#resource-profile-and-export-adoption` for details.
 
-### Pending: Snapshot v3 capacity-profile preservation (PR #357, open)
+### Pending: Snapshot v3 capacity-profile preservation (PR #367, open)
 
-PR #357 (open, branch `feature/snapshot-v3-capacity-profiles`) extends the
+PR #367 (open, branch `feature/snapshot-v3-capacity-profiles`) extends the
 BacklogSnapshot schema to version 3 so that rollback preserves capacity profile data.
 This affects the ownership model by ensuring that Resource Profile-owned capacity
 data survives rollback:
@@ -432,6 +432,16 @@ data is owned by Resource Profile (capacity inputs), V3 snapshots now preserve t
 data exactly. A rollback no longer reconstructs profiles from legacy compatibility
 fields (V2 behaviour) or leaves them untouched (V1 behaviour). Capacity profile
 configuration chosen in Resource Profile is restored exactly on rollback.
+
+**Null-legacy discrimination via `SnapshotJsonValue`:** The `CapacityProfile.legacy`
+column is a nullable PostgreSQL `Json?` field. Prisma distinguishes database NULL
+(untouched column) from JSON `null` (explicitly-set JSON null), but both read back as
+JavaScript `null`. PR #367 introduces the `SnapshotJsonValue` discriminator type
+(`projectSnapshotTypes.ts`) with three variants — `{ kind: 'DB_NULL' }`,
+`{ kind: 'JSON_NULL' }`, and `{ kind: 'VALUE'; value: ... }` — so that the snapshot
+serialiser can capture and restore the exact Prisma sentinel on rollback. This ensures
+profile rows where `legacy` was never written (typical for profile-first profiles)
+are restored as database NULL, not JSON null.
 
 **Snapshot/rollback:**
 - `buildSnapshot` produces `schemaVersion: 3` for all new application snapshots,
@@ -451,7 +461,7 @@ configuration chosen in Resource Profile is restored exactly on rollback.
 - Commercial billing basis (`pricingModel`) is snapshotted via V2/V3 `namedResources`
   and remains Commercial-owned; V3 does not introduce a separate billing-basis
   snapshot field.
-- Capacity Plan history (Capacity Plan periods/entries) is **not** part of PR #357;
+- Capacity Plan history (Capacity Plan periods/entries) is **not** part of PR #367;
   it is tracked by #359 separately.
 
 See [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md#phase-2b-—-snapshot-v3-capacity-profile-preservation)
