@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "lint": "eslint .",
+    "test:snapshot-integration": "vitest run --config vitest.integration.config.ts src/test/snapshotRollback.integration.test.ts",
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "e2e:cleanup": "tsx scripts/e2e-cleanup.ts",

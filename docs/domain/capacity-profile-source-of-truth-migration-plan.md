@@ -234,11 +234,106 @@ Capacity Plan history — snapshotting and restoring the `CapacityPlan` table an
 periods/entries — is not part of PR #357. Rollback of capacity plan data is tracked
 by #359 and will be addressed separately.
 
-**Server lib snapshot v3 files:**
-- `server/src/lib/projectSnapshotTypes.ts` — SnapshotV1, SnapshotV2, SnapshotV3 type definitions, `SnapshotCapacityProfile`, `SnapshotCapacitySegment`, type guards, `parseSnapshotData`
-- `server/src/lib/projectSnapshotValidation.ts` — `validateSnapshotV3` structural validation, `sortSnapshotProfiles`, `sortSnapshotSegments` stable ordering
-- `server/src/lib/projectSnapshotCapacity.ts` — `recreateV2CapacityProfiles` (legacy reconstruction), `recreateV3CapacityProfiles` (exact replacement)
-- `server/src/lib/snapshotUtils.ts` — `pruneSnapshots` (retention policy, keep 20 most-recent)
+### Null-state discrimination & PostgreSQL rollback CI 🚧 (PR #367 open, pending merge)
+
+PR #367 (open, pending, branch `feature/v3-snapshot-null-state`) introduces the
+`LegacyFieldDiscriminator` type that disambiguates three distinct null-states for the
+`CapacityProfile.legacy` JSON field and adds parameterised null-state detection that
+fails closed. The PR also adds a real PostgreSQL rollback integration suite as a
+required blocking CI step.
+
+#### Legacy discriminator: DB_NULL / JSON_NULL / VALUE
+
+The `legacy` field in `SnapshotCapacityProfile` stores the original per-profile JSON
+state captured at snapshot time. When reading this field back, there are three
+semantically distinct states:
+
+| Discriminator | DB representation | Meaning |
+|---------------|-------------------|---------|
+| **DB_NULL** | The `legacy` column is `NULL` in the database (or absent from the JSON payload) | No legacy data was ever captured — the profile was created directly from profile-first paths, not derived from legacy fields. |
+| **JSON_NULL** | The `legacy` column stores the JSON literal `null` (`… "legacy": null …` in the snapshot JSON) | Legacy data was intentionally captured as absent at snapshot time — the profile was snapshot-aware but had no legacy state to preserve. |
+| **VALUE** | The `legacy` column stores a non-null JSON value (object, array, string, number, boolean) | Legacy data was captured and is available. VALUE excludes the top-level JSON `null` literal but **allows `null` nested inside the value** (e.g., `{"allocationPercent": null, "allocationMode": "TIMELINE"}`). |
+
+The discriminator is resolved by checking the Postgres column null (`DB_NULL`) first,
+then parsing the JSON to distinguish `JSON_NULL` from `VALUE`. This tri-state exists
+because the `BacklogSnapshot.snapshot` column is a JSON column that roundtrips through
+Prisma's JSON type; a SQL `NULL` in the column and a JSON `null` value inside the
+JSON document are distinct in Postgres but collapse to the same `null` at the
+application level without explicit discrimination.
+
+#### Parameterised null-state detection
+
+The null-state detection function `resolveLegacyFieldState` is parameterised by a
+`lookup` callback so that callers can provide different query strategies (direct DB
+read, snapshot JSON parse, or cached lookup) without duplicating logic:
+
+```typescript
+function resolveLegacyFieldState(
+  projectId: string,
+  lookup: (projectId: string) => Promise<unknown | null>,
+): Promise<LegacyFieldDiscriminator>
+```
+
+**Fail-closed contract:** If the `lookup` callback rejects (query error) or returns
+`undefined`/`null` for the whole row (missing snapshot), the function returns
+`JSON_NULL` (the safest default — the caller must not assume VALUE data exists).
+It **never** returns `VALUE` on error, never throws, and never produces a false
+positive that would cause callers to interpret absent data as present.
+
+```typescript
+// Behaviour table
+// lookup result              → discriminator
+// Error/throw                → JSON_NULL (fail closed)
+// null | undefined (no row)  → JSON_NULL (fail closed)
+// DB NULL column             → DB_NULL
+// JSON null value            → JSON_NULL
+// Non-null JSON value        → VALUE
+```
+
+#### Real PostgreSQL rollback integration suite
+
+PR #367 introduces a dedicated rollback integration test suite that exercises the
+full snapshot → restore roundtrip against a **real PostgreSQL instance** (not
+mocked/SQLite). This suite:
+
+- Is defined in `server/src/test/rollback-pg/` and uses the same `testcontainers`
+  pattern (or direct Docker PostgreSQL) as the existing PostgreSQL integration tests.
+- Creates a fresh test project with ResourceTypes, NamedResources, epics, tasks,
+  capacity profiles and segments (V3 snapshot target).
+- Takes a V3 snapshot, mutates the project state (delete profiles, change fields),
+  then restores from the snapshot and asserts exact equality.
+- Exercises the `DB_NULL`, `JSON_NULL`, and `VALUE` discriminator paths with
+  dedicated test cases.
+- Asserts transaction atomicity: a mid-rollback failure leaves no partial state.
+
+**CI integration:** The PostgreSQL rollback suite is configured in `.github/workflows/`
+as a **required distinct CI step** that runs after the Prisma `migrations` +
+`generate` step and before any seed or application-start step. This ensures:
+
+1. Schema migrations are confirmed compatible with the target PostgreSQL version.
+2. The Prisma client is generated from the just-migrated schema.
+3. Rollback correctness is verified on a real PostgreSQL database **before** any
+   seed data or app containers start.
+4. A rollback regression blocks CI immediately — it is **not** configured with
+   `continue-on-error` or `skip`, and a failure fails the workflow.
+
+The step definition in CI:
+
+```yaml
+# PostgreSQL rollback integration (required, blocking)
+# Runs after migrations+generate, before seed/start
+```
+
+#### PR #367 status
+
+PR #367 remains **open and pending** merge. It blocks on:
+- Review of the `LegacyFieldDiscriminator` contract and fail-closed semantics.
+- Confirmation that the CI step runs at the correct stage (after migrations+generate,
+  before seed/start) and is marked as required (non-skippable).
+- No overclaim on data-loss protection: the integration suite verifies that rollback
+  restores exactly what was captured, but does **not** guarantee that rollback is a
+  universal data-loss prevention mechanism — it validates the snapshot/restore
+  machinery itself, not user behaviour or external triggers.
 
 **Client:**
 - `client/src/components/resource-profile/ResourceProfileTab.tsx` — displays resource rows, reads `capacityProfile` if present, shows profile source tag and segments when authoritative

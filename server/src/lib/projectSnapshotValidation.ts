@@ -62,21 +62,34 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
-function isJsonCompatible(value: unknown): boolean {
-  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return true
-  if (Array.isArray(value)) return value.every(isJsonCompatible)
+function isJsonCompatible(value: unknown, stack?: Set<object>): boolean {
+  stack = stack ?? new Set<object>()
+  // Primitives
+  if (value === null) return true
+  if (typeof value === 'string') return true
+  if (typeof value === 'boolean') return true
+  if (typeof value === 'number') return Number.isFinite(value)
+  // Arrays — detect cycles in the current path only (shared refs are fine)
+  if (Array.isArray(value)) {
+    if (stack.has(value)) return false
+    stack.add(value)
+    const ok = value.every(v => isJsonCompatible(v, stack))
+    stack.delete(value)
+    return ok
+  }
+  // Plain objects only — reject Date, RegExp, custom classes
   if (typeof value === 'object' && value !== null) {
-    return Object.values(value).every(isJsonCompatible)
+    const proto = Object.getPrototypeOf(value)
+    if (proto !== null && proto !== Object.prototype) return false
+    if (stack.has(value)) return false
+    stack.add(value)
+    const ok = Object.values(value).every(v => isJsonCompatible(v, stack))
+    stack.delete(value)
+    return ok
   }
   return false
 }
 
-/**
- * Validate a SnapshotJsonValue discriminator.
- * - kind must be 'DB_NULL', 'JSON_NULL', or 'VALUE'
- * - DB_NULL and JSON_NULL must not carry an extra value
- * - VALUE must carry a JSON-compatible value
- */
 export function validateSnapshotJsonValue(
   sjv: unknown,
   pfx: string,
@@ -85,25 +98,36 @@ export function validateSnapshotJsonValue(
     fail(pfx, 'SnapshotJsonValue must be a non-null object')
   }
   const obj = sjv as Record<string, unknown>
-  const kind = obj.kind
+  // kind must be present and a string
+  if (typeof obj.kind !== 'string') {
+    fail(pfx, `SnapshotJsonValue kind must be a string, got ${typeof obj.kind === 'string' ? '"' + obj.kind + '"' : String(typeof obj.kind)}`)
+  }
+  const kind = obj.kind as string
   if (kind === 'DB_NULL') {
-    if (obj.value !== undefined) {
-      fail(pfx, 'DB_NULL kind must not have an extra "value" field')
+    const keys = Object.keys(obj)
+    if (keys.length !== 1 || keys[0] !== 'kind') {
+      fail(pfx, 'DB_NULL must have exactly one field "kind"')
     }
     return
   }
   if (kind === 'JSON_NULL') {
-    if (obj.value !== undefined) {
-      fail(pfx, 'JSON_NULL kind must not have an extra "value" field')
+    const keys = Object.keys(obj)
+    if (keys.length !== 1 || keys[0] !== 'kind') {
+      fail(pfx, 'JSON_NULL must have exactly one field "kind"')
     }
     return
   }
   if (kind === 'VALUE') {
-    if (!('value' in obj)) {
-      fail(pfx, 'VALUE kind must have a "value" field')
+    const keys = Object.keys(obj)
+    if (keys.length !== 2 || !keys.includes('kind') || !keys.includes('value')) {
+      fail(pfx, 'VALUE must have exactly two fields: "kind" and "value"')
+    }
+    // Top-level null is not valid for VALUE — use DB_NULL / JSON_NULL for null semantics
+    if (obj.value === null) {
+      fail(pfx, 'VALUE kind must not contain a top-level null value')
     }
     if (!isJsonCompatible(obj.value)) {
-      fail(pfx, 'VALUE kind contains a non-serialisable value (undefined, function, symbol, bigint, or cyclic reference)')
+      fail(pfx, 'VALUE kind contains a non-serialisable value (undefined, NaN, ±Infinity, function, symbol, bigint, cyclic reference, or non-plain object)')
     }
     return
   }

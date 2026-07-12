@@ -922,4 +922,286 @@ describe('capacity profile CSV export — trajectory tests', () => {
     expect(namedRow![3]).toBe('Named person')
   })
 })
+
+describe('regression: restored scenario A profile data produces identical export', () => {
+  it('produces identical CSV from restored scenario A, B differs, no duplicates', () => {
+    // Scenario A — canonical data with two resource roles, three named resources
+    // (one planned resource), capacity profiles with segments, and overhead.
+    const scenarioA: ResourceProfile = {
+      projectId: 'project-1',
+      hoursPerDay: 8,
+      projectDurationWeeks: 12,
+      bufferWeeks: 1,
+      onboardingWeeks: 0,
+      summary: { totalHours: 240, totalDays: 33, totalCost: null, hasCost: false },
+      resourceRows: [
+        {
+          resourceTypeId: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 2,
+          hoursPerDay: 8,
+          dayRate: 800,
+          totalHours: 160,
+          totalDays: 20,
+          effortDays: 20,
+          allocatedDays: 20,
+          allocationMode: 'EFFORT',
+          allocationPercent: 200,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 9,
+          estimatedCost: null,
+          epics: [],
+          capacityProfile: undefined,
+          namedResources: [
+            {
+              id: 'nr-alice',
+              name: 'Alice',
+              pricingModel: 'ACTUAL_DAYS',
+              allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 75,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 7,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              resourceIdentity: 'NAMED_PERSON',
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: 75,
+                startWeek: 0,
+                endWeek: 7,
+                segments: [
+                  { startWeek: 0, endWeek: 7, capacityPercent: 75 },
+                ],
+              },
+            },
+            {
+              id: 'nr-planned',
+              name: 'New Starter',
+              pricingModel: 'PRO_RATA',
+              allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 50,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 2,
+              endWeek: 9,
+              allocatedDays: 5,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: true,
+              resourceIdentity: 'PLANNED_RESOURCE',
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: 50,
+                startWeek: 2,
+                endWeek: 9,
+                segments: [
+                  { startWeek: 2, endWeek: 9, capacityPercent: 50 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+          ],
+        },
+        {
+          resourceTypeId: 'rt-design',
+          name: 'Designer',
+          category: 'DESIGN',
+          count: 1,
+          hoursPerDay: 8,
+          dayRate: 700,
+          totalHours: 80,
+          totalDays: 10,
+          effortDays: 10,
+          allocatedDays: 10,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: 0,
+          derivedEndWeek: 9,
+          estimatedCost: null,
+          epics: [],
+          capacityProfile: undefined,
+          namedResources: [
+            {
+              id: 'nr-bob',
+              name: 'Bob',
+              pricingModel: 'ACTUAL_DAYS',
+              allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: 0,
+              endWeek: 9,
+              allocatedDays: 10,
+              derivedStartWeek: null,
+              derivedEndWeek: null,
+              actualAllocatedDays: 0,
+              actualAllocationStartWeek: null,
+              actualAllocationEndWeek: null,
+              actualAllocatedWeeks: [],
+              actualAllocationSegments: [],
+              synthetic: false,
+              resourceIdentity: 'NAMED_PERSON',
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                defaultPercent: 100,
+                startWeek: 0,
+                endWeek: 9,
+                segments: [
+                  { startWeek: 0, endWeek: 9, capacityPercent: 100 },
+                ],
+                resolutionSource: 'PROFILE',
+              },
+            },
+          ],
+        },
+      ],
+      overheadRows: [
+        {
+          overheadId: 'oh-pm',
+          name: 'Project Management',
+          resourceTypeId: null,
+          resourceTypeName: null,
+          dayRate: null,
+          type: 'PERCENTAGE',
+          value: 10,
+          computedDays: 3,
+          estimatedCost: null,
+          requiredFTE: 0.05,
+          currentCount: null,
+        },
+      ],
+    }
+
+    // --- Phase 1: canonical A export ---
+    const canonicalA = JSON.parse(JSON.stringify(scenarioA)) as ResourceProfile
+    const csvA = buildProfileCsv(canonicalA)
+    const { headers: headersA, rows: rowsA } = parseCsv(csvA)
+    const identityIdx = headersA.indexOf('Resource identity')
+    const segmentsIdx = headersA.indexOf('Capacity profile segments')
+    const resourceRowsA = rowsA.filter(r => r[0] === 'Resource')
+
+    // Exactly 3 resource rows (Alice, New Starter, Bob) — no duplicates
+    expect(resourceRowsA.length).toBe(3)
+
+    // Planned resource identity column (index 3)
+    const aliceRowA = resourceRowsA.find(r => r[2] === 'Alice')
+    const plannedRowA = resourceRowsA.find(r => r[2] === 'New Starter')
+    const bobRowA = resourceRowsA.find(r => r[2] === 'Bob')
+    expect(aliceRowA).toBeDefined()
+    expect(plannedRowA).toBeDefined()
+    expect(bobRowA).toBeDefined()
+    expect(aliceRowA![identityIdx]).toBe('Named person')
+    expect(plannedRowA![identityIdx]).toBe('Planned resource')
+    expect(bobRowA![identityIdx]).toBe('Named person')
+
+    // Alice: 75% weeks 0-7
+    expect(aliceRowA![segmentsIdx]).toBe('W1-W8 75%')
+    // New Starter: constant 50% segment
+    expect(plannedRowA![segmentsIdx]).toBe('W3-W10 50%')
+    // Bob: constant 100% segment
+    expect(bobRowA![segmentsIdx]).toBe('W1-W10 100%')
+
+    // --- Phase 2: mutate to state B ---
+    const stateB = JSON.parse(JSON.stringify(canonicalA)) as ResourceProfile
+
+    // Alice → constant 100%
+    const aliceB = stateB.resourceRows[0].namedResources![0]
+    aliceB.capacityProfile = {
+      ...aliceB.capacityProfile!,
+      defaultPercent: 100,
+      segments: [{ startWeek: 0, endWeek: 7, capacityPercent: 100 }],
+    }
+
+    // New Starter → named person with 100% segment
+    const nsB = stateB.resourceRows[0].namedResources![1]
+    nsB.synthetic = false
+    nsB.resourceIdentity = 'NAMED_PERSON'
+    nsB.capacityProfile = {
+      ...nsB.capacityProfile!,
+      defaultPercent: 100,
+      segments: [{ startWeek: 2, endWeek: 9, capacityPercent: 100 }],
+    }
+
+    // Bob → constant 75%
+    const bobB = stateB.resourceRows[1].namedResources![0]
+    bobB.capacityProfile = {
+      ...bobB.capacityProfile!,
+      defaultPercent: 75,
+      segments: [{ startWeek: 0, endWeek: 9, capacityPercent: 75 }],
+    }
+
+    const csvB = buildProfileCsv(stateB)
+    const { headers: headersB, rows: rowsB } = parseCsv(csvB)
+    const identityIdxB = headersB.indexOf('Resource identity')
+    const segmentsIdxB = headersB.indexOf('Capacity profile segments')
+    const resourceRowsB = rowsB.filter(r => r[0] === 'Resource')
+
+    // Still 3 rows — no extra rows introduced by mutation
+    expect(resourceRowsB.length).toBe(3)
+
+    // Verify B actually differs from A
+    expect(csvB).not.toBe(csvA)
+
+    // Verify B's mutated values
+    const aliceRowB = resourceRowsB.find(r => r[2] === 'Alice')
+    expect(aliceRowB![segmentsIdxB]).toBe('W1-W8 100%')
+    const nsRowB = resourceRowsB.find(r => r[2] === 'New Starter')
+    expect(nsRowB![identityIdxB]).toBe('Named person')
+    expect(nsRowB![segmentsIdxB]).toBe('W3-W10 100%')
+    const bobRowB = resourceRowsB.find(r => r[2] === 'Bob')
+    expect(bobRowB![segmentsIdxB]).toBe('W1-W10 75%')
+
+    // --- Phase 3: restore to Scenario A ---
+    const restoredA = JSON.parse(JSON.stringify(canonicalA)) as ResourceProfile
+    const csvRestored = buildProfileCsv(restoredA)
+    const { headers: headersRestored, rows: rowsRestored } = parseCsv(csvRestored)
+    const identityIdxR = headersRestored.indexOf('Resource identity')
+    const segmentsIdxR = headersRestored.indexOf('Capacity profile segments')
+    const resourceRowsRestored = rowsRestored.filter(r => r[0] === 'Resource')
+
+    // Exact string match against canonical A
+    expect(csvRestored).toBe(csvA)
+
+    // No duplicates — same cardinality as canonical A
+    expect(resourceRowsRestored.length).toBe(3)
+
+    // Restored segments match canonical A
+    const aliceRestored = resourceRowsRestored.find(r => r[2] === 'Alice')
+    const plannedRestored = resourceRowsRestored.find(r => r[2] === 'New Starter')
+    const bobRestored = resourceRowsRestored.find(r => r[2] === 'Bob')
+    expect(aliceRestored![segmentsIdxR]).toBe('W1-W8 75%')
+    expect(plannedRestored![segmentsIdxR]).toBe('W3-W10 50%')
+    expect(bobRestored![segmentsIdxR]).toBe('W1-W10 100%')
+
+    // Planned resource identity restored
+    expect(plannedRestored![identityIdxR]).toBe('Planned resource')
+
+    // State-B values absent from restored output
+    expect(aliceRestored![segmentsIdxR]).not.toContain('100%')
+    expect(plannedRestored![identityIdxR]).not.toBe('Named person')
+    expect(bobRestored![segmentsIdxR]).not.toContain('75%')
+  })
+})
 })

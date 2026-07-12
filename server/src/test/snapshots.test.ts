@@ -9,9 +9,11 @@
  *  - Pure parser tests (parseSnapshotData, type guards)
  *  - Pure validation tests (validateSnapshotV3, sort helpers)
  *  - buildSnapshot v3 creation with mock db parameter (returns schemaVersion 3)
+ *  - rollbackProjectSnapshot service with v1/v2/v3/failure semantics
  *  - V1/V2/V3 route rollback
  *  - Pre-flight validation: invalid v3, unknown schema, cross-project IDs
  *  - Transaction atomicity (failure rejects with 500)
+ *  - Route persistence on buildSnapshot failure
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -35,7 +37,7 @@ import {
   sortSnapshotProfiles,
   sortSnapshotSegments,
 } from '../lib/projectSnapshotValidation.js'
-import { buildSnapshot } from '../routes/snapshots.js'
+import { buildSnapshot, rollbackProjectSnapshot, SnapshotNotFoundError, RollbackPreflightError } from '../lib/projectSnapshotService.js'
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -121,7 +123,7 @@ describe('validateSnapshotV3', () => {
       project: null,
       resourceTypes: [
         {
-          id: 'rt-dev', name: 'Developer', category: 'role', count: 2,
+          id: 'rt-dev', name: 'Developer', category: 'ENGINEERING', count: 2,
           hoursPerDay: 8, dayRate: 500, globalTypeId: null,
           allocationMode: 'TIMELINE', allocationPercent: 100,
           allocationStartWeek: 0, allocationEndWeek: 10,
@@ -308,7 +310,7 @@ describe('validateSnapshotV3', () => {
   it('rejects overhead item referencing missing resourceTypeId', () => {
     const snap = makeBaseV3()
     snap.overheadItems.push({
-      name: 'PM', type: 'percent', value: 10, resourceTypeId: 'rt-nonexistent', order: 1,
+      name: 'PM', type: 'PERCENTAGE', value: 10, resourceTypeId: 'rt-nonexistent', order: 1,
     })
     expect(() => validateSnapshotV3(snap)).toThrow(/not found in snapshot.resourceTypes/)
   })
@@ -316,7 +318,7 @@ describe('validateSnapshotV3', () => {
   it('accepts overhead item with null resourceTypeId', () => {
     const snap = makeBaseV3()
     snap.overheadItems.push({
-      name: 'Fixed', type: 'fixed', value: 1000, resourceTypeId: null, order: 1,
+      name: 'Fixed', type: 'FIXED_DAYS', value: 1000, resourceTypeId: null, order: 1,
     })
     expect(() => validateSnapshotV3(snap)).not.toThrow()
   })
@@ -426,11 +428,11 @@ describe('buildSnapshot', () => {
       },
       resourceType: {
         findMany: vi.fn().mockResolvedValue([
-          { id: 'rt-dev', name: 'Developer', category: 'role', count: 2,
+          { id: 'rt-dev', name: 'Developer', category: 'ENGINEERING', count: 2,
             hoursPerDay: 8, dayRate: 500, globalTypeId: null,
             allocationMode: 'TIMELINE', allocationPercent: 100,
             allocationStartWeek: 0, allocationEndWeek: 10 },
-          { id: 'rt-des', name: 'Designer', category: 'role', count: 1,
+          { id: 'rt-des', name: 'Designer', category: 'ENGINEERING', count: 1,
             hoursPerDay: 8, dayRate: 450, globalTypeId: null,
             allocationMode: 'EFFORT', allocationPercent: 100,
             allocationStartWeek: null, allocationEndWeek: null },
@@ -456,6 +458,11 @@ describe('buildSnapshot', () => {
       featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
       projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
       capacityProfile: { findMany: vi.fn().mockResolvedValue(rawProfiles) },
+      $queryRaw: vi.fn().mockResolvedValue([
+        { id: 'cp-3', legacy_is_null: false, legacy_typeof: 'object' },
+        { id: 'cp-1', legacy_is_null: false, legacy_typeof: 'null' },
+        { id: 'cp-2', legacy_is_null: false, legacy_typeof: 'object' },
+      ]),
     }
 
     const result = await buildSnapshot(projId, db as never)
@@ -509,6 +516,122 @@ describe('buildSnapshot', () => {
     expect(cp1.legacy).toEqual({ kind: 'JSON_NULL' })
     expect(cp1.segments).toEqual([])
   })
+  it('distinguishes DB_NULL from JSON_NULL via legacy_is_null query', async () => {
+    const rawProfiles = [
+      {
+        id: 'cp-dbn', ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev', namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+        defaultPercent: null, startWeek: null, endWeek: null,
+        legacy: null,
+        segments: [],
+      },
+      {
+        id: 'cp-jn', ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null, namedResourceId: 'nr-alice',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'SQUAD_PLANNER',
+        defaultPercent: 100, startWeek: 0, endWeek: 10,
+        legacy: null,
+        segments: [],
+      },
+    ]
+
+    const db = {
+      epic: { findMany: vi.fn().mockResolvedValue([]) },
+      project: { findUnique: vi.fn().mockResolvedValue(null) },
+      resourceType: { findMany: vi.fn().mockResolvedValue([]) },
+      namedResource: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'nr-alice', resourceTypeId: 'rt-dev', name: 'Alice',
+            startWeek: null, endWeek: null, allocationPct: 100,
+            allocationMode: 'EFFORT', allocationPercent: 100,
+            allocationStartWeek: null, allocationEndWeek: null,
+            pricingModel: 'ACTUAL_DAYS' },
+        ]),
+      },
+      timelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
+      storyTimelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
+      epicDependency: { findMany: vi.fn().mockResolvedValue([]) },
+      featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
+      projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
+      capacityProfile: { findMany: vi.fn().mockResolvedValue(rawProfiles) },
+      // cp-dbn maps to DB_NULL (legacy_is_null=true), cp-jn to JSON_NULL (legacy_typeof='null')
+      $queryRaw: vi.fn().mockResolvedValue([
+        { id: 'cp-dbn', legacy_is_null: true, legacy_typeof: null },
+        { id: 'cp-jn', legacy_is_null: false, legacy_typeof: 'null' },
+      ]),
+    }
+
+    const result = await buildSnapshot(projId, db as never)
+
+    const cpDbn = result.capacityProfiles.find(p => p.id === 'cp-dbn')
+    expect(cpDbn).toBeDefined()
+    expect(cpDbn!.legacy).toEqual({ kind: 'DB_NULL' })
+
+    const cpJn = result.capacityProfiles.find(p => p.id === 'cp-jn')
+    expect(cpJn).toBeDefined()
+    expect(cpJn!.legacy).toEqual({ kind: 'JSON_NULL' })
+  })
+
+  it('rejects buildSnapshot on $queryRaw failure', async () => {
+    const db = {
+      epic: { findMany: vi.fn().mockResolvedValue([]) },
+      project: { findUnique: vi.fn().mockResolvedValue(null) },
+      resourceType: { findMany: vi.fn().mockResolvedValue([]) },
+      namedResource: { findMany: vi.fn().mockResolvedValue([]) },
+      timelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
+      storyTimelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
+      epicDependency: { findMany: vi.fn().mockResolvedValue([]) },
+      featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
+      projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
+      capacityProfile: { findMany: vi.fn().mockResolvedValue([{
+        id: 'cp-1', ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev', namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+        defaultPercent: null, startWeek: null, endWeek: null,
+        legacy: null, segments: [],
+      }]) },
+      $queryRaw: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+    }
+
+    await expect(buildSnapshot(projId, db as never)).rejects.toThrow('DB connection lost')
+  })
+
+  it('rejects buildSnapshot when null-state rows are fewer than profiles', async () => {
+    const db = {
+      epic: { findMany: vi.fn().mockResolvedValue([]) },
+      project: { findUnique: vi.fn().mockResolvedValue(null) },
+      resourceType: { findMany: vi.fn().mockResolvedValue([]) },
+      timelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
+      storyTimelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
+      epicDependency: { findMany: vi.fn().mockResolvedValue([]) },
+      featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
+      projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
+      capacityProfile: { findMany: vi.fn().mockResolvedValue([
+        { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-dev', namedResourceId: null,
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+          defaultPercent: null, startWeek: null, endWeek: null,
+          legacy: null, segments: [] },
+        { id: 'cp-2', ownerKind: 'NAMED_PERSON', resourceTypeId: null, namedResourceId: 'nr-alice',
+          planningBasis: 'AVAILABILITY_WINDOW', source: 'SQUAD_PLANNER',
+          defaultPercent: 100, startWeek: 0, endWeek: 10,
+          legacy: null, segments: [] },
+      ]) },
+      namedResource: { findMany: vi.fn().mockResolvedValue([
+        { id: 'nr-alice', resourceTypeId: 'rt-dev', name: 'Alice',
+          startWeek: null, endWeek: null, allocationPct: 100,
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS' },
+      ]) },
+      // Only 1 row for 2 profiles — triggers missing profile error
+      $queryRaw: vi.fn().mockResolvedValue([
+        { id: 'cp-1', legacy_is_null: false, legacy_typeof: 'null' },
+      ]),
+    }
+
+    await expect(buildSnapshot(projId, db as never)).rejects.toThrow('Missing null-state row')
+  })
 })
 // ═══════════════════════════════════════════════════════════════════════════
 // 5. Route — V1/V2/V3 rollback
@@ -529,6 +652,7 @@ function makeRouteTx(overrides: Record<string, unknown> = {}) {
     epicDependency: { findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
     featureDependency: { findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
     projectOverhead: { findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    $queryRaw: vi.fn().mockResolvedValue([]),
     capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 999 }), create: vi.fn().mockResolvedValue({}) },
     capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 999 }), create: vi.fn().mockResolvedValue({}) },
     feature: { create: vi.fn().mockResolvedValue({ id: 'new-feature' }) },
@@ -580,7 +704,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     const v2Data = {
       schemaVersion: 2, epics: [], project: null,
       resourceTypes: [{
-        id: 'rt-1', name: 'Developer', category: 'role', count: 1,
+        id: 'rt-1', name: 'Developer', category: 'ENGINEERING', count: 1,
         hoursPerDay: null, dayRate: null, globalTypeId: null,
         allocationMode: 'TIMELINE', allocationPercent: 60,
         allocationStartWeek: 2, allocationEndWeek: 6,
@@ -636,7 +760,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     const v3Target: SnapshotV3 = {
       schemaVersion: 3, epics: [], project: null,
       resourceTypes: [
-        { id: 'rt-dev', name: 'Developer', category: 'role', count: 2,
+        { id: 'rt-dev', name: 'Developer', category: 'ENGINEERING', count: 2,
           hoursPerDay: 8, dayRate: 500, globalTypeId: null,
           allocationMode: 'TIMELINE', allocationPercent: 100,
           allocationStartWeek: 0, allocationEndWeek: 10 },
@@ -756,7 +880,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
   it('V3: invalid profile data returns 400 before transaction', async () => {
     const invalidV3 = {
       schemaVersion: 3, epics: [], project: null,
-      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'role', count: 1,
+      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
         hoursPerDay: 8, dayRate: 500, globalTypeId: null,
         allocationMode: 'TIMELINE', allocationPercent: 100,
         allocationStartWeek: 0, allocationEndWeek: 10 }],
@@ -814,7 +938,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
   it('cross-project ID collision returns 400 before transaction', async () => {
     const v3Target: SnapshotV3 = {
       schemaVersion: 3, epics: [], project: null,
-      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'role', count: 1,
+      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
         hoursPerDay: 8, dayRate: 500, globalTypeId: null,
         allocationMode: 'TIMELINE', allocationPercent: 100,
         allocationStartWeek: 0, allocationEndWeek: 10 }],
@@ -852,7 +976,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
   it('V3: foreign resourceType from snapshot.resourceTypes rejected before transaction', async () => {
     const v3Target: SnapshotV3 = {
       schemaVersion: 3, epics: [], project: null,
-      resourceTypes: [{ id: 'rt-foreign', name: 'OtherTeam', category: 'role', count: 1,
+      resourceTypes: [{ id: 'rt-foreign', name: 'OtherTeam', category: 'ENGINEERING', count: 1,
         hoursPerDay: 8, dayRate: 500, globalTypeId: null,
         allocationMode: 'TIMELINE', allocationPercent: 100,
         allocationStartWeek: 0, allocationEndWeek: 10 }],
@@ -885,7 +1009,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
   it('V3: foreign namedResource from snapshot.namedResources rejected before transaction', async () => {
     const v3Target: SnapshotV3 = {
       schemaVersion: 3, epics: [], project: null,
-      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'role', count: 1,
+      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
         hoursPerDay: 8, dayRate: 500, globalTypeId: null,
         allocationMode: 'TIMELINE', allocationPercent: 100,
         allocationStartWeek: 0, allocationEndWeek: 10 }],
@@ -924,11 +1048,11 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     const v3Target: SnapshotV3 = {
       schemaVersion: 3, epics: [], project: null,
       resourceTypes: [
-        { id: 'rt-dev', name: 'Dev', category: 'role', count: 1,
+        { id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
           hoursPerDay: 8, dayRate: 500, globalTypeId: null,
           allocationMode: 'TIMELINE', allocationPercent: 100,
           allocationStartWeek: 0, allocationEndWeek: 10 },
-        { id: 'rt-foreign', name: 'Other', category: 'role', count: 1,
+        { id: 'rt-foreign', name: 'Other', category: 'ENGINEERING', count: 1,
           hoursPerDay: 8, dayRate: 500, globalTypeId: null,
           allocationMode: 'TIMELINE', allocationPercent: 100,
           allocationStartWeek: 0, allocationEndWeek: 10 },
@@ -936,7 +1060,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [],
-      overheadItems: [{ name: 'PM', type: 'percent', value: 10, resourceTypeId: 'rt-foreign', order: 1 }],
+      overheadItems: [{ name: 'PM', type: 'PERCENTAGE', value: 10, resourceTypeId: 'rt-foreign', order: 1 }],
       capacityProfiles: [],
     }
 
@@ -964,7 +1088,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
   it('V3: new IDs not in DB are allowed (valid rollback)', async () => {
     const v3Target: SnapshotV3 = {
       schemaVersion: 3, epics: [], project: null,
-      resourceTypes: [{ id: 'rt-new', name: 'NewRole', category: 'role', count: 1,
+      resourceTypes: [{ id: 'rt-new', name: 'NewRole', category: 'ENGINEERING', count: 1,
         hoursPerDay: 8, dayRate: 500, globalTypeId: null,
         allocationMode: 'TIMELINE', allocationPercent: 100,
         allocationStartWeek: 0, allocationEndWeek: 10 }],
@@ -1066,7 +1190,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
   it('V3 tx callback failure rejects with 500 (restore/write error)', async () => {
     const v3Target: SnapshotV3 = {
       schemaVersion: 3, epics: [], project: null,
-      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'role', count: 1,
+      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
         hoursPerDay: 8, dayRate: 500, globalTypeId: null,
         allocationMode: 'TIMELINE', allocationPercent: 100,
         allocationStartWeek: 0, allocationEndWeek: 10 }],
@@ -1113,5 +1237,325 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     expect(cpCreate.mock.calls.length).toBeGreaterThanOrEqual(1)
     // No external cleanup — DB transaction provides atomicity
     expect(bsDeleteSpy).not.toHaveBeenCalled()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 8. Route persistence on buildSnapshot failure
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('route persistence on buildSnapshot failure', () => {
+  it('manual POST persists nothing on $queryRaw failure', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
+    // Provide minimal data for buildSnapshot queries
+    vi.mocked(prisma.project.findUnique).mockResolvedValue({
+      startDate: new Date(), onboardingWeeks: 0, bufferWeeks: 0, hoursPerDay: 7.6,
+    } as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([])
+    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([])
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([])
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([])
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([])
+    vi.mocked(prisma.featureDependency.findMany).mockResolvedValue([])
+    vi.mocked(prisma.projectOverhead.findMany).mockResolvedValue([])
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: null, namedResourceId: null,
+        legacy: null },
+    ] as never)
+    // $queryRaw rejects → buildSnapshot throws
+    const mockQueryRaw = vi.fn().mockRejectedValue(new Error('Query failure'))
+    ;(prisma as unknown as Record<string, unknown>).$queryRaw = mockQueryRaw
+
+    const bsCreate = vi.mocked(prisma.backlogSnapshot.create)
+    const bsDeleteMany = vi.mocked(prisma.backlogSnapshot.deleteMany)
+
+    const res = await request(app)
+      .post(`/api/projects/${projId}/snapshots`)
+      .set('Authorization', authHeader)
+      .send({ label: 'fail-test' })
+
+    expect(res.status).toBe(500)
+    expect(bsCreate).not.toHaveBeenCalled()
+    expect(bsDeleteMany).not.toHaveBeenCalled()
+
+    delete (prisma as unknown as Record<string, unknown>).$queryRaw
+  })
+
+  it('rollback transaction aborts before destructive restore on buildSnapshot failure', async () => {
+    const v3Target: SnapshotV3 = {
+      schemaVersion: 3, epics: [], project: null,
+      resourceTypes: [
+        { id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
+          hoursPerDay: 8, dayRate: 500, globalTypeId: null,
+          allocationMode: 'TIMELINE', allocationPercent: 100,
+          allocationStartWeek: 0, allocationEndWeek: 10 },
+      ],
+      namedResources: [],
+      timelineEntries: [], storyTimelineEntries: [],
+      epicDependencies: [], featureDependencies: [], overheadItems: [],
+      capacityProfiles: [
+        { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-dev', namedResourceId: null,
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null,
+          startWeek: null, endWeek: null, legacy: { kind: 'DB_NULL' }, segments: [] },
+      ],
+    }
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-fail-build', projectId: projId, label: 'fail-build',
+      trigger: 'manual', snapshot: v3Target as unknown as never,
+      createdById: userId, createdAt: new Date(),
+    } as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([] as never)
+
+    const bsCreate = vi.fn()
+    const cpDelete = vi.fn().mockResolvedValue({ count: 0 })
+    const epicDel = vi.fn().mockResolvedValue({ count: 0 })
+
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
+      const tx = makeRouteTx({
+        $queryRaw: vi.fn().mockRejectedValue(new Error('Null-state query failure')),
+        backlogSnapshot: { create: bsCreate, findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+        capacityProfile: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: null, namedResourceId: null,
+              planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+              defaultPercent: null, startWeek: null, endWeek: null,
+              legacy: null, segments: [] },
+          ]),
+          deleteMany: cpDelete, create: vi.fn(),
+        },
+        epic: { findMany: vi.fn().mockResolvedValue([]), deleteMany: epicDel },
+      })
+      return typeof fn === 'function'
+        ? (fn as (t: unknown) => Promise<unknown>)(tx)
+        : Promise.resolve(fn)
+    })
+
+    const res = await request(app)
+      .post(`/api/projects/${projId}/snapshots/snap-fail-build/rollback`)
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(500)
+    // Pre-rollback snapshot NOT created
+    expect(bsCreate).not.toHaveBeenCalled()
+    // No destructive operations attempted
+    expect(cpDelete).not.toHaveBeenCalled()
+    expect(epicDel).not.toHaveBeenCalled()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 9. rollbackProjectSnapshot service (direct unit tests)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('rollbackProjectSnapshot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('V1: rolls back bare epic array via service', async () => {
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-v1-svc', projectId: projId, label: 'V1 svc',
+      trigger: 'manual',
+      snapshot: [{ id: 'e1', name: 'Epic', description: null, assumptions: null, order: 0,
+        featureMode: 'FIFO', scheduleMode: 'ASAP', timelineStartWeek: null,
+        isActive: true, projectId: projId, features: [] }],
+      createdById: userId, createdAt: new Date(),
+    } as never)
+
+    const epicDel = vi.fn().mockResolvedValue({ count: 0 })
+    const bsCreate = vi.fn().mockResolvedValue({})
+
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
+      const tx = makeRouteTx({
+        capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({}) },
+        epic: { findMany: vi.fn().mockResolvedValue([]), deleteMany: epicDel, create: vi.fn().mockResolvedValue({ id: 'new-e1' }) },
+        backlogSnapshot: { create: bsCreate, findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      })
+      return typeof fn === 'function'
+        ? (fn as (t: unknown) => Promise<unknown>)(tx)
+        : Promise.resolve(fn)
+    })
+
+    await rollbackProjectSnapshot({ projectId: projId, snapshotId: 'snap-v1-svc', userId })
+    expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
+    expect(bsCreate).toHaveBeenCalled()
+    expect(epicDel).toHaveBeenCalled()
+  })
+
+  it('V2: full-state restore via service', async () => {
+    const v2Data = {
+      schemaVersion: 2, epics: [], project: null,
+      resourceTypes: [{
+        id: 'rt-1', name: 'Developer', category: 'ENGINEERING', count: 1,
+        hoursPerDay: null, dayRate: null, globalTypeId: null,
+        allocationMode: 'TIMELINE', allocationPercent: 60,
+        allocationStartWeek: 2, allocationEndWeek: 6,
+      }],
+      namedResources: [],
+      timelineEntries: [], storyTimelineEntries: [],
+      epicDependencies: [], featureDependencies: [], overheadItems: [],
+    }
+
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-v2-svc', projectId: projId, label: 'V2 svc',
+      trigger: 'manual', snapshot: v2Data,
+      createdById: userId, createdAt: new Date(),
+    } as never)
+
+    const cpDelete = vi.fn().mockResolvedValue({ count: 999 })
+    const segDelete = vi.fn().mockResolvedValue({ count: 999 })
+    const cpCreate = vi.fn().mockResolvedValue({})
+
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
+      const tx = makeRouteTx({
+        capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: cpDelete, create: cpCreate },
+        capacitySegment: { deleteMany: segDelete, create: vi.fn().mockResolvedValue({}) },
+      })
+      return typeof fn === 'function'
+        ? (fn as (t: unknown) => Promise<unknown>)(tx)
+        : Promise.resolve(fn)
+    })
+
+    await rollbackProjectSnapshot({ projectId: projId, snapshotId: 'snap-v2-svc', userId })
+    expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
+    expect(cpDelete).toHaveBeenCalled()
+    expect(segDelete).toHaveBeenCalled()
+    expect(cpCreate).toHaveBeenCalled()
+  })
+
+  it('V3: exact profile/segment replacement via service', async () => {
+    const v3Target: SnapshotV3 = {
+      schemaVersion: 3, epics: [], project: null,
+      resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 2,
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 0, allocationEndWeek: 10 }],
+      namedResources: [{ id: 'nr-alice', resourceTypeId: 'rt-dev', name: 'Alice',
+        startWeek: null, endWeek: null, allocationPct: 100,
+        allocationMode: 'EFFORT', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS' }],
+      timelineEntries: [], storyTimelineEntries: [],
+      epicDependencies: [], featureDependencies: [], overheadItems: [],
+      capacityProfiles: [
+        { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-dev', namedResourceId: null,
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null,
+          startWeek: null, endWeek: null, legacy: { kind: 'DB_NULL' }, segments: [] },
+        { id: 'cp-2', ownerKind: 'NAMED_PERSON', resourceTypeId: null, namedResourceId: 'nr-alice',
+          planningBasis: 'AVAILABILITY_WINDOW', source: 'SQUAD_PLANNER', defaultPercent: 100,
+          startWeek: 0, endWeek: 10, legacy: { kind: 'VALUE', value: { mode: 'EFFORT' } },
+          segments: [{ id: 'seg-a', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+        },
+      ],
+    }
+
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-v3-svc', projectId: projId, label: 'V3 svc',
+      trigger: 'manual', snapshot: v3Target as unknown as never,
+      createdById: userId, createdAt: new Date(),
+    } as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
+      { id: 'rt-dev', projectId: projId },
+    ] as never)
+    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([
+      { id: 'nr-alice', resourceType: { projectId: projId } },
+    ] as never)
+
+    const cpDelete = vi.fn().mockResolvedValue({ count: 999 })
+    const segDelete = vi.fn().mockResolvedValue({ count: 999 })
+    const cpCreate = vi.fn().mockResolvedValue({})
+    const bsCreate = vi.fn().mockResolvedValue({})
+
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
+      const tx = makeRouteTx({
+        capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: cpDelete, create: cpCreate },
+        capacitySegment: { deleteMany: segDelete, create: vi.fn().mockResolvedValue({}) },
+        backlogSnapshot: { create: bsCreate, findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      })
+      return typeof fn === 'function'
+        ? (fn as (t: unknown) => Promise<unknown>)(tx)
+        : Promise.resolve(fn)
+    })
+
+    await rollbackProjectSnapshot({ projectId: projId, snapshotId: 'snap-v3-svc', userId })
+    expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
+    expect(bsCreate).toHaveBeenCalled()
+    expect(cpDelete).toHaveBeenCalled()
+    expect(segDelete).toHaveBeenCalled()
+    expect(cpCreate.mock.calls.length).toBe(2)
+  })
+
+  it('throws SnapshotNotFoundError when snapshot missing', async () => {
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue(null as never)
+
+    await expect(rollbackProjectSnapshot({
+      projectId: projId, snapshotId: 'missing', userId,
+    })).rejects.toThrow(SnapshotNotFoundError)
+
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
+  })
+
+  it('throws SnapshotSchemaError on unparseable snapshot JSON', async () => {
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-bad-json', projectId: projId, label: 'bad',
+      trigger: 'manual', snapshot: 'not-a-valid-snapshot',
+      createdById: userId, createdAt: new Date(),
+    } as never)
+
+    await expect(rollbackProjectSnapshot({
+      projectId: projId, snapshotId: 'snap-bad-json', userId,
+    })).rejects.toThrow(SnapshotSchemaError)
+
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
+  })
+
+  it('throws RollbackPreflightError on cross-project ID collision', async () => {
+    const v3Target: SnapshotV3 = {
+      schemaVersion: 3, epics: [], project: null,
+      resourceTypes: [{ id: 'rt-foreign', name: 'Foreign', category: 'ENGINEERING', count: 1,
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 0, allocationEndWeek: 10 }],
+      namedResources: [],
+      timelineEntries: [], storyTimelineEntries: [],
+      epicDependencies: [], featureDependencies: [], overheadItems: [],
+      capacityProfiles: [
+        { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-foreign', namedResourceId: null,
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null,
+          startWeek: null, endWeek: null, legacy: { kind: 'DB_NULL' }, segments: [] },
+      ],
+    }
+
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-cross-svc', projectId: projId, label: 'cross-svc',
+      trigger: 'manual', snapshot: v3Target as unknown as never,
+      createdById: userId, createdAt: new Date(),
+    } as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
+      { id: 'rt-foreign', projectId: 'other-project' },
+    ] as never)
+
+    await expect(rollbackProjectSnapshot({
+      projectId: projId, snapshotId: 'snap-cross-svc', userId,
+    })).rejects.toThrow(RollbackPreflightError)
+
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
+  })
+
+  it('propagates $transaction rejection with 500-equivalent error', async () => {
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-tx-fail', projectId: projId, label: 'tx-fail',
+      trigger: 'manual',
+      snapshot: [{ id: 'e1', name: 'E', features: [] }],
+      createdById: userId, createdAt: new Date(),
+    } as never)
+
+    vi.mocked(prisma.$transaction).mockRejectedValue(new Error('DB timeout'))
+
+    await expect(rollbackProjectSnapshot({
+      projectId: projId, snapshotId: 'snap-tx-fail', userId,
+    })).rejects.toThrow('DB timeout')
   })
 })

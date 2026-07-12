@@ -630,7 +630,10 @@ format (e.g. `W1-W4 50%; W5-W10 100%`), structurally distinct from the existing
   data directly when the owner-specific profile exists (`resolutionSource: 'PROFILE'`).
   No reconciliation gate is used — the old behaviour of falling back on mismatch
   was replaced by direct persisted-profile usage (PR #356, merged).
-- **Fallback precedence (exact order):**
+- **Resolution precedence (exact order):**
+  1. Persisted owner-specific profile → `resolutionSource: 'PROFILE'`.
+     The adapter uses a persisted `CapacityProfile`/`CapacitySegment` directly
+     when it exists for the owner.
   2. Active Capacity Plan materialisation → `resolutionSource: 'ACTIVE_CAPACITY_PLAN'`.
      Applies only when `shouldFallbackToActiveCapacityPlan` logic requires it
      (e.g. `allocationMode === 'CAPACITY_PLAN'` with no explicit profile override).
@@ -675,9 +678,9 @@ format (e.g. `W1-W4 50%; W5-W10 100%`), structurally distinct from the existing
   and carry their profile metadata as a unit — segments are a property of the
   profile, not a split of the entity.
 - **Duplicate persisted conflicts do not block fallback.** If the adapter's profile
-  map encounters duplicate entries for the same owner key (should not occur under
-  normal operation, but defensive), it does not throw or block — the duplicate
-  entry is skipped and the fallback tier (`LEGACY` or `ACTIVE_CAPACITY_PLAN`)
+  map encounters duplicate entries for the same owner key (possible in migration
+  states preceding #361, handled defensively), it does not throw or block — the
+  duplicate entry is skipped and the fallback tier (`LEGACY` or `ACTIVE_CAPACITY_PLAN`)
   applies for that owner as if no profile existed.
 - **Role and named-resource lookups are independently keyed.** Role (ResourceType)
   profiles are keyed by `resourceTypeId`; named-resource (NamedResource) profiles
