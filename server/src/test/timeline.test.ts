@@ -1,8 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
+
+vi.mock('../routes/snapshots.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../routes/snapshots.js')>()
+  return {
+    ...actual,
+    buildSnapshot: vi.fn().mockResolvedValue({}),
+  }
+})
+
+vi.mock('../lib/snapshotUtils.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../lib/snapshotUtils.js')>()
+  return {
+    ...actual,
+    pruneSnapshots: vi.fn().mockResolvedValue(undefined),
+  }
+})
+
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
+import { buildSnapshot } from '../routes/snapshots.js'
 import { getWeeklyCapacity } from '../routes/timeline.js'
 
 process.env.JWT_SECRET = 'test-secret'
@@ -1389,5 +1407,26 @@ describe('getWeeklyCapacity', () => {
     // 2 named (100%) + 3 phantom slots → effective headcount = 5 = count
     // Total = 5 * 8 * 5 = 200
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(200)
+  })
+})
+
+describe('POST /api/projects/:projectId/timeline/level — buildSnapshot rejection', () => {
+  it('returns 500 when buildSnapshot rejects, preventing snapshot persistence and mutation', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
+    vi.mocked(buildSnapshot).mockRejectedValueOnce(new Error('Snapshot null-state rejection'))
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/timeline/level')
+      .set('Authorization', authHeader)
+      .send({})
+
+    expect(res.status).toBe(500)
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 })

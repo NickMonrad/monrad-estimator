@@ -249,7 +249,7 @@ export async function buildSnapshot(
     }
   })
 
-  return {
+  const snapshot: SnapshotV3 = {
     schemaVersion: 3 as const,
     epics,
     project: projectFields,
@@ -262,6 +262,9 @@ export async function buildSnapshot(
     overheadItems,
     capacityProfiles: sortSnapshotProfiles(capacityProfiles),
   }
+
+  validateSnapshotV3(snapshot)
+  return snapshot
 }
 
 // ─── restoreSnapshotCommonState ───────────────────────────────────────────────

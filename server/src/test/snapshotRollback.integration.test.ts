@@ -392,6 +392,20 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
   let segmentPlanned1: string
   let segmentPlanned2: string
   let segmentPlanned3: string
+  let nrEveId: string
+  let nrFrankId: string
+  let nrGraceId: string
+  let nrHeidiId: string
+  let profileJsonNullId: string
+  let profileNestedObjId: string
+  let profileArrayNullId: string
+  let profileStringId: string
+  let profileBoolId: string
+  let segmentJsonNull1: string
+  let segmentNestedObj1: string
+  let segmentArrayNull1: string
+  let segmentString1: string
+  let segmentBool1: string
   let canonicalBefore: CanonicalProjectState
   // HTTP response snapshots for read-parity assertions
   let resourceProfileBefore: unknown
@@ -503,6 +517,97 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     await createSegment(profilePlannedNrId, 'seg-planned-nr-2', 3, 5, 75)
     await createSegment(profilePlannedNrId, 'seg-planned-nr-3', 6, 10, 50)
 
+    // ══════════════════════════════════════════════════════════════
+    // NEW: 5 additional capacity profiles for all 7 legacy JSON states
+    // ══════════════════════════════════════════════════════════════
+
+    // ── 4 more named resources for new profiles ───────────────────
+    nrEveId = await createNamedResource(
+      projectId, rtDevId, 'nr-eve', 'Eve',
+      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+    )
+    nrFrankId = await createNamedResource(
+      projectId, rtDevId, 'nr-frank', 'Frank',
+      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+    )
+    nrGraceId = await createNamedResource(
+      projectId, rtDevId, 'nr-grace', 'Grace',
+      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+    )
+    nrHeidiId = await createNamedResource(
+      projectId, rtDevId, 'nr-heidi', 'Heidi',
+      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+    )
+
+    // ── (1) ROLE for Designer — JSON_NULL legacy ──────────────────
+    profileJsonNullId = await createProfile(
+      projectId, 'prof-json-null', 'ROLE', rtDesId, null,
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
+      Prisma.JsonNull,
+    )
+    segmentJsonNull1 = 'seg-json-null-1'
+    await createSegment(profileJsonNullId, segmentJsonNull1, 3, 7, 80)
+
+    // ── (2) NAMED_PERSON for Eve — VALUE(nested-null object) legacy ──
+    profileNestedObjId = await createProfile(
+      projectId, 'prof-nested-obj', 'NAMED_PERSON', null, nrEveId,
+      {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 50,
+        startWeek: 1,
+        endWeek: 6,
+      },
+      { nested: { value: null, items: [1, null, 3] }, mode: null },
+    )
+    segmentNestedObj1 = 'seg-nested-obj-1'
+    await createSegment(profileNestedObjId, segmentNestedObj1, 1, 4, 100)
+
+    // ── (3) PLANNED_RESOURCE for Frank — VALUE(null-containing array) legacy ──
+    profileArrayNullId = await createProfile(
+      projectId, 'prof-array-null', 'PLANNED_RESOURCE', null, nrFrankId,
+      {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'DERIVED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+      },
+      [1, null, 'text', null, false],
+    )
+    segmentArrayNull1 = 'seg-array-null-1'
+    await createSegment(profileArrayNullId, segmentArrayNull1, 4, 8, 60)
+
+    // ── (4) PLANNED_RESOURCE for Grace — VALUE(string) legacy ─────
+    profileStringId = await createProfile(
+      projectId, 'prof-string', 'PLANNED_RESOURCE', null, nrGraceId,
+      {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'DERIVED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+      },
+      'hello-world',
+    )
+    segmentString1 = 'seg-string-1'
+    await createSegment(profileStringId, segmentString1, 0, 2, 100)
+
+    // ── (5) PLANNED_RESOURCE for Heidi — VALUE(boolean) legacy ────
+    profileBoolId = await createProfile(
+      projectId, 'prof-bool', 'PLANNED_RESOURCE', null, nrHeidiId,
+      {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'DERIVED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+      },
+      true,
+    )
+    segmentBool1 = 'seg-bool-1'
+    await createSegment(profileBoolId, segmentBool1, 2, 5, 75)
+
     // ── Full backlog ──────────────────────────────────────────────
     const backlog = await createEpicBacklog(projectId, rtDevId, null)
     // Add a second task under Designer RT so the Designer resource type
@@ -560,7 +665,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     snapshotId = snap.id
     canonicalBefore = await captureCanonicalState(projectId)
     expect(canonicalBefore.resourceTypes).toHaveLength(2)
-    expect(canonicalBefore.capacityProfiles).toHaveLength(4)
+    expect(canonicalBefore.capacityProfiles).toHaveLength(9)
 
     // ── Capture Resource Profile & Timeline HTTP responses before mutation ──
     const rpBefore = await request(app)
@@ -588,13 +693,13 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(data.resourceTypes[0].id).toBe(rtDevId)
 
     // Named resources
-    expect(data.namedResources).toHaveLength(4)
+    expect(data.namedResources).toHaveLength(8)
     const alice = data.namedResources.find(n => n.name === 'Alice')
     expect(alice).toBeDefined()
     expect(alice!.pricingModel).toBe('ACTUAL_DAYS')
 
-    // Four profiles
-    expect(data.capacityProfiles).toHaveLength(4)
+    // Nine profiles (4 original + 5 new covering all 7 legacy JSON states)
+    expect(data.capacityProfiles).toHaveLength(9)
 
     // ROLE — DB_NULL, 2 segments
     const roleP = data.capacityProfiles.find(p => p.ownerKind === 'ROLE')
@@ -634,6 +739,70 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(plannedP!.segments[2].startWeek).toBe(8)
     expect(plannedP!.segments[2].endWeek).toBe(8)
 
+
+    // ── (5 new) JSON_NULL (ROLE/Designer) — 1 segment ──────────────
+    const jsonNullP = data.capacityProfiles.find(p => p.id === profileJsonNullId)
+    expect(jsonNullP).toBeDefined()
+    expect(jsonNullP!.ownerKind).toBe('ROLE')
+    expect(jsonNullP!.resourceTypeId).toBe(rtDesId)
+    expect(jsonNullP!.legacy.kind).toBe('JSON_NULL')
+    expect(jsonNullP!.segments).toHaveLength(1)
+    expect(jsonNullP!.segments[0].startWeek).toBe(3)
+    expect(jsonNullP!.segments[0].capacityPercent).toBe(80)
+
+    // ── (6) NAMED_PERSON (Eve) — VALUE(nested-null object) legacy ──
+    const nestedP = data.capacityProfiles.find(p => p.id === profileNestedObjId)
+    expect(nestedP).toBeDefined()
+    expect(nestedP!.ownerKind).toBe('NAMED_PERSON')
+    expect(nestedP!.namedResourceId).toBe(nrEveId)
+    expect(nestedP!.legacy.kind).toBe('VALUE')
+    if (nestedP!.legacy.kind === 'VALUE') {
+      const val = nestedP!.legacy.value as Record<string, unknown>
+      expect(val).toHaveProperty('nested')
+      const nested = val.nested as Record<string, unknown>
+      expect(nested.value).toBeNull()
+      expect((nested.items as unknown[])[0]).toBe(1)
+      expect((nested.items as unknown[])[1]).toBeNull()
+      expect(nested.items).toHaveLength(3)
+      expect(val.mode).toBeNull()
+    }
+    expect(nestedP!.segments).toHaveLength(1)
+
+    // ── (7) PLANNED_RESOURCE (Frank) — VALUE(null-containing array) legacy ──
+    const arrayNullP = data.capacityProfiles.find(p => p.id === profileArrayNullId)
+    expect(arrayNullP).toBeDefined()
+    expect(arrayNullP!.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(arrayNullP!.legacy.kind).toBe('VALUE')
+    if (arrayNullP!.legacy.kind === 'VALUE') {
+      const arr = arrayNullP!.legacy.value as unknown[]
+      expect(arr[0]).toBe(1)
+      expect(arr[1]).toBeNull()
+      expect(arr[2]).toBe('text')
+      expect(arr[3]).toBeNull()
+      expect(arr[4]).toBe(false)
+      expect(arr).toHaveLength(5)
+    }
+    expect(arrayNullP!.segments).toHaveLength(1)
+
+    // ── (8) PLANNED_RESOURCE (Grace) — VALUE(string) legacy ──────
+    const stringP = data.capacityProfiles.find(p => p.id === profileStringId)
+    expect(stringP).toBeDefined()
+    expect(stringP!.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(stringP!.legacy.kind).toBe('VALUE')
+    if (stringP!.legacy.kind === 'VALUE') {
+      expect(stringP!.legacy.value).toBe('hello-world')
+    }
+    expect(stringP!.segments).toHaveLength(1)
+
+    // ── (9) PLANNED_RESOURCE (Heidi) — VALUE(boolean) legacy ────
+    const boolP = data.capacityProfiles.find(p => p.id === profileBoolId)
+    expect(boolP).toBeDefined()
+    expect(boolP!.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(boolP!.legacy.kind).toBe('VALUE')
+    if (boolP!.legacy.kind === 'VALUE') {
+      expect(boolP!.legacy.value).toBe(true)
+    }
+    expect(boolP!.segments).toHaveLength(1)
     // Backlog, timeline, overhead present
     expect(data.epics).toHaveLength(1)
     expect(data.epics[0].features).toHaveLength(1)
@@ -716,6 +885,45 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       },
     })
 
+    // ── Mutate new capacity profiles for B-state ─────────────────
+
+    // JSON_NULL profile: change segments and field values
+    await prisma.capacitySegment.deleteMany({
+      where: { capacityProfileId: profileJsonNullId },
+    })
+    await createSegment(profileJsonNullId, 'seg-json-mut', 10, 12, 50)
+    await prisma.capacityProfile.update({
+      where: { id: profileJsonNullId },
+      data: { planningBasis: 'CAPACITY_PROFILE', startWeek: 5, endWeek: 10 },
+    })
+
+    // Nested-null object profile: change segments and field values
+    await prisma.capacitySegment.deleteMany({
+      where: { capacityProfileId: profileNestedObjId },
+    })
+    await createSegment(profileNestedObjId, 'seg-nested-mut', 0, 2, 200)
+    await prisma.capacityProfile.update({
+      where: { id: profileNestedObjId },
+      data: { defaultPercent: 80, startWeek: 2, endWeek: 8 },
+    })
+
+    // Null-containing array profile: delete segments only
+    await prisma.capacitySegment.deleteMany({
+      where: { capacityProfileId: profileArrayNullId },
+    })
+
+    // String legacy profile: delete entirely
+    await prisma.capacitySegment.deleteMany({
+      where: { capacityProfileId: profileStringId },
+    })
+    await prisma.capacityProfile.delete({ where: { id: profileStringId } })
+
+    // Boolean legacy profile: change fields
+    await prisma.capacityProfile.update({
+      where: { id: profileBoolId },
+      data: { planningBasis: 'AVAILABILITY_WINDOW', defaultPercent: 50 },
+    })
+
     // ── Capture B-state HTTP responses (after mutations, before rollback) ──
     const rpB = await request(app)
       .get(`/api/projects/${projectId}/resource-profile`)
@@ -761,16 +969,16 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const nrs = await prisma.namedResource.findMany({
       where: { resourceType: { projectId } },
     })
-    expect(nrs).toHaveLength(4)
+    expect(nrs).toHaveLength(8)
     expect(nrs.find(n => n.id === nrAliceId)!.pricingModel).toBe('ACTUAL_DAYS')
 
-    // Exactly 4 profiles restored, no extras
     const profiles = await prisma.capacityProfile.findMany({
       where: { projectId },
       include: { segments: { orderBy: { startWeek: 'asc' as const } } },
       orderBy: { ownerKind: 'asc' as const },
     })
-    expect(profiles).toHaveLength(4)
+    // Exactly 9 profiles restored, no extras (4 original + 5 new JSON state profiles)
+    expect(profiles).toHaveLength(9)
 
     // ROLE profile: exact original values
     const roleRow = profiles.find(p => p.id === profileRoleId)!
@@ -810,12 +1018,123 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(plannedNrRow.segments[2].endWeek).toBe(10)
     expect(plannedNrRow.segments[2].capacityPercent).toBe(50)
 
-    // DB_NULL legacy preserved at storage level
+    // ── JSON_NULL (ROLE/Designer) profile: exact original values ──
+    const jsonNullRow = profiles.find(p => p.id === profileJsonNullId)!
+    expect(jsonNullRow.ownerKind).toBe('ROLE')
+    expect(jsonNullRow.resourceTypeId).toBe(rtDesId)
+    expect(jsonNullRow.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(jsonNullRow.source).toBe('MANUAL')
+    expect(jsonNullRow.defaultPercent).toBeNull()
+    expect(jsonNullRow.startWeek).toBeNull()
+    expect(jsonNullRow.endWeek).toBeNull()
+    expect(jsonNullRow.segments).toHaveLength(1)
+    expect(jsonNullRow.segments[0].startWeek).toBe(3)
+    expect(jsonNullRow.segments[0].endWeek).toBe(7)
+    expect(jsonNullRow.segments[0].capacityPercent).toBe(80)
+
+    // ── NAMED_PERSON (Eve) — VALUE(nested-null object) legacy ─────
+    const nestedObjRow = profiles.find(p => p.id === profileNestedObjId)!
+    expect(nestedObjRow.ownerKind).toBe('NAMED_PERSON')
+    expect(nestedObjRow.namedResourceId).toBe(nrEveId)
+    expect(nestedObjRow.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(nestedObjRow.source).toBe('SQUAD_PLANNER')
+    expect(nestedObjRow.defaultPercent).toBe(50)
+    expect(nestedObjRow.startWeek).toBe(1)
+    expect(nestedObjRow.endWeek).toBe(6)
+    expect(nestedObjRow.segments).toHaveLength(1)
+    expect(nestedObjRow.segments[0].startWeek).toBe(1)
+    expect(nestedObjRow.segments[0].capacityPercent).toBe(100)
+
+    // ── PLANNED_RESOURCE (Frank) — VALUE(null-containing array) legacy ──
+    const arrayNullRow = profiles.find(p => p.id === profileArrayNullId)!
+    expect(arrayNullRow.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(arrayNullRow.namedResourceId).toBe(nrFrankId)
+    expect(arrayNullRow.segments).toHaveLength(1)
+    expect(arrayNullRow.segments[0].startWeek).toBe(4)
+    expect(arrayNullRow.segments[0].capacityPercent).toBe(60)
+
+    // ── PLANNED_RESOURCE (Grace) — VALUE(string) legacy ──────────
+    const stringRow = profiles.find(p => p.id === profileStringId)!
+    expect(stringRow.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(stringRow.namedResourceId).toBe(nrGraceId)
+    expect(stringRow.segments).toHaveLength(1)
+    expect(stringRow.segments[0].startWeek).toBe(0)
+    expect(stringRow.segments[0].capacityPercent).toBe(100)
+
+    // ── PLANNED_RESOURCE (Heidi) — VALUE(boolean) legacy ─────────
+    const boolRow = profiles.find(p => p.id === profileBoolId)!
+    expect(boolRow.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(boolRow.namedResourceId).toBe(nrHeidiId)
+    expect(boolRow.segments).toHaveLength(1)
+    expect(boolRow.segments[0].startWeek).toBe(2)
+    expect(boolRow.segments[0].capacityPercent).toBe(75)
+
+    // ── DB_NULL legacy preserved at storage level ────────────────
     const dbNullIds = await detectDbNullProfileIds(projectId)
     expect(dbNullIds.has(profileRoleId)).toBe(true)
     expect(dbNullIds.has(profileNamedId)).toBe(false)
     expect(dbNullIds.has(profilePlannedId)).toBe(false)
     expect(dbNullIds.has(profilePlannedNrId)).toBe(true)
+    // New profiles: none are DB_NULL at storage level
+    expect(dbNullIds.has(profileJsonNullId)).toBe(false)
+    expect(dbNullIds.has(profileNestedObjId)).toBe(false)
+    expect(dbNullIds.has(profileArrayNullId)).toBe(false)
+    expect(dbNullIds.has(profileStringId)).toBe(false)
+    expect(dbNullIds.has(profileBoolId)).toBe(false)
+
+    // ── Parameterized SQL: verify jsonb storage semantics and nested nulls ──
+    const rawRows = await prisma.$queryRaw<Array<{
+      id: string
+      legacy_type: string
+      legacy_is_null: boolean
+      null_kind: string
+      nested_nulls_preserved: boolean
+    }>>(Prisma.sql`
+      SELECT
+        cp.id,
+        pg_typeof(cp.legacy)::text AS legacy_type,
+        cp.legacy IS NULL AS legacy_is_null,
+        CASE
+          WHEN cp.legacy IS NULL THEN 'DB_NULL'
+          WHEN cp.legacy = 'null'::jsonb THEN 'JSON_NULL'
+          ELSE 'VALUE'
+        END AS null_kind,
+        CASE
+          WHEN cp.id = ${profileNestedObjId}
+            AND cp.legacy IS NOT NULL
+            AND cp.legacy::jsonb #>> '{nested,value}' IS NULL
+            AND cp.legacy::jsonb #>> '{mode}' IS NULL
+            AND jsonb_array_length(cp.legacy::jsonb #> '{nested,items}') = 3
+            AND cp.legacy::jsonb #>> '{nested,items,1}' IS NULL
+          THEN true
+          WHEN cp.id <> ${profileNestedObjId} THEN true
+          ELSE false
+        END AS nested_nulls_preserved
+      FROM "CapacityProfile" cp
+      WHERE cp."projectId" = ${projectId}
+      ORDER BY cp.id
+    `)
+
+    // All profiles have jsonb type
+    for (const row of rawRows) {
+      expect(row.legacy_type).toBe('jsonb')
+    }
+
+    // Confirm per-profile null_kind
+    const nullKindMap = new Map(rawRows.map(r => [r.id, r.null_kind]))
+    expect(nullKindMap.get(profileRoleId)).toBe('DB_NULL')
+    expect(nullKindMap.get(profilePlannedNrId)).toBe('DB_NULL')
+    expect(nullKindMap.get(profileJsonNullId)).toBe('JSON_NULL')
+    expect(nullKindMap.get(profileNamedId)).toBe('VALUE')
+    expect(nullKindMap.get(profilePlannedId)).toBe('VALUE')
+    expect(nullKindMap.get(profileNestedObjId)).toBe('VALUE')
+    expect(nullKindMap.get(profileArrayNullId)).toBe('VALUE')
+    expect(nullKindMap.get(profileStringId)).toBe('VALUE')
+    expect(nullKindMap.get(profileBoolId)).toBe('VALUE')
+
+    // Nested nulls are preserved in jsonb
+    const nestedRow = rawRows.find(r => r.id === profileNestedObjId)!
+    expect(nestedRow.nested_nulls_preserved).toBe(true)
 
     // Backlog restored
     const epics = await prisma.epic.findMany({ where: { projectId } })
@@ -895,13 +1214,21 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       { startWeek: 2, endWeek: 5, capacityPercent: 100 },
     ])
 
-    // ── Designer RT: now has a task, appears with legacy-derived capacityProfile ──
+    // ── Designer RT: has a persisted ROLE profile (jsonNull) → PROFILE resolution ──
     const desRow = afterRows.find(r => r.resourceTypeId === rtDesId)!
     expect(desRow.resourceTypeId).toBe(rtDesId)
-    // No ROLE profile persisted → capacityProfile comes from LEGACY fallback
+    // Designer now has a persisted ROLE profile (jsonNull legacy) built from the snapshot
     const desCp = desRow.capacityProfile as Record<string, unknown> | undefined
     expect(desCp).toBeDefined()
-    expect(desCp!.resolutionSource).toBe('LEGACY')
+    expect(desCp!.resolutionSource).toBe('PROFILE')
+    expect(desCp!.planningBasis).toBe('demandFollowing')
+    expect(desCp!.source).toBe('manual')
+    expect(desCp!.defaultPercent).toBeNull()
+    expect(desCp!.startWeek).toBeNull()
+    expect(desCp!.endWeek).toBeNull()
+    expect(desCp!.segments).toEqual([
+      { startWeek: 3, endWeek: 7, capacityPercent: 80 },
+    ])
 
     // ── Bob (no persisted profile) under Designer RT: LEGACY resolutionSource ──
     const desNrs = desRow.namedResources as Array<Record<string, unknown>>
