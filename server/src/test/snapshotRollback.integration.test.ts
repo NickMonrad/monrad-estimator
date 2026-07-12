@@ -624,10 +624,14 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     await prisma.capacitySegment.deleteMany({ where: { capacityProfileId: profileRoleId } })
     await createSegment(profileRoleId, 'seg-mutated-1', 10, 15, 30)
 
-    // Change NAMED_PERSON profile fields
+    // Change NAMED_PERSON profile fields for B-state (different startWeek/endWeek, 50% segment)
     await prisma.capacityProfile.update({
       where: { id: profileNamedId },
-      data: { planningBasis: 'WHOLE_PROJECT_ALLOCATION', defaultPercent: 50 },
+      data: { defaultPercent: 50, startWeek: 1, endWeek: 6 },
+    })
+    await prisma.capacitySegment.update({
+      where: { id: segmentNamed1 },
+      data: { startWeek: 1, endWeek: 6, capacityPercent: 50 },
     })
 
     // Delete PLANNED_RESOURCE profile entirely
@@ -651,11 +655,18 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const newFeature = await prisma.feature.create({
       data: { name: 'Mutated Feature', epicId: newEpic.id, order: 0 },
     })
-    await prisma.userStory.create({
+    const newStory = await prisma.userStory.create({
       data: { name: 'Mutated Story', featureId: newFeature.id, order: 0 },
     })
-
-    // Clear timelines
+    await prisma.task.create({
+      data: {
+        name: 'Mutated Task',
+        userStoryId: newStory.id,
+        order: 0,
+        hoursEffort: 8,
+        resourceTypeId: rtDevId,
+      },
+    })
     await prisma.timelineEntry.deleteMany({ where: { projectId } })
     await prisma.storyTimelineEntry.deleteMany({ where: { projectId } })
 
@@ -988,6 +999,13 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     }
     await createSegment('prof-b-a', 'seg-b-1', 1, 4, 75)
     await createSegment('prof-b-a', 'seg-b-2', 5, 8, 50)
+    // ── Backlog for route rendering (not part of snapshot, just for HTTP response) ──
+    const bEpic = await prisma.epic.create({ data: { name: 'B Epic', projectId, order: 0 } })
+    const bFeature = await prisma.feature.create({ data: { name: 'B Feature', epicId: bEpic.id, order: 0 } })
+    const bStory = await prisma.userStory.create({ data: { name: 'B Story', featureId: bFeature.id, order: 0 } })
+    await prisma.task.create({
+      data: { name: 'B Task', userStoryId: bStory.id, order: 0, hoursEffort: 8, resourceTypeId: rtId },
+    })
   })
 
   it('rollback to A, verify pre_rollback captures B, rollback pre_rollback to restore B', async () => {
@@ -999,7 +1017,7 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     // B-state ROLE profile: AVAILABILITY_WINDOW, 75%, with segments
     const bRoleRow = (rpB.body.resourceRows as Array<Record<string, unknown>>).find(r => r.resourceTypeId === rtId)!
     const bRoleCp = bRoleRow.capacityProfile as Record<string, unknown>
-    expect(bRoleCp.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(bRoleCp.planningBasis).toBe('availabilityWindow')
     expect(bRoleCp.defaultPercent).toBe(75)
     expect(bRoleCp.segments).toHaveLength(2)
     const tlB = await request(app)
