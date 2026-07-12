@@ -702,7 +702,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(data.capacityProfiles).toHaveLength(9)
 
     // ROLE — DB_NULL, 2 segments
-    const roleP = data.capacityProfiles.find(p => p.ownerKind === 'ROLE')
+    const roleP = data.capacityProfiles.find(p => p.id === profileRoleId)
     expect(roleP).toBeDefined()
     expect(roleP!.id).toBe(profileRoleId)
     expect(roleP!.resourceTypeId).toBe(rtDevId)
@@ -715,7 +715,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(roleP!.segments[1].capacityPercent).toBe(50)
 
     // NAMED_PERSON — VALUE(object), 1 segment
-    const namedP = data.capacityProfiles.find(p => p.ownerKind === 'NAMED_PERSON')
+    const namedP = data.capacityProfiles.find(p => p.id === profileNamedId)
     expect(namedP).toBeDefined()
     expect(namedP!.id).toBe(profileNamedId)
     expect(namedP!.namedResourceId).toBe(nrAliceId)
@@ -1895,7 +1895,7 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
     })
 
     // Create NR inheriting TIMELINE mode at 60%
-    nrId = await createNamedResource(projectId, rtId, 'nr-eve', 'Eve', {
+    nrId = await createNamedResource(projectId, rtId, 'nr-eve-scenario-e', 'Eve', {
       allocationMode: 'TIMELINE',
       allocationPercent: 60,
       startWeek: 2,
@@ -2038,7 +2038,7 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     if (!runIntegration) return
     projectId = await createProject()
     rtId = await createResourceType(projectId, 'rt-f-dev', 'Developer')
-    nrId = await createNamedResource(projectId, rtId, 'nr-frank', 'Frank')
+    nrId = await createNamedResource(projectId, rtId, 'nr-frank-scenario-f', 'Frank')
 
     // ROLE profile — DB_NULL legacy
     profileRoleId = await createProfile(
