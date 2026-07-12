@@ -262,7 +262,7 @@ interface CanonicalProjectState {
   capacityProfiles: CanonicalProfileRow[]
   timelineEntries: Array<{ startWeek: number; durationWeeks: number; isManual: boolean }>
   storyTimelineEntries: Array<{ startWeek: number; durationWeeks: number; isManual: boolean }>
-  overheadItems: Array<{ id: string; name: string; type: string; value: number; resourceTypeId: string | null; order: number }>
+  overheadItems: Array<{ name: string; type: string; value: number; resourceTypeId: string | null; order: number }>
   dbNullProfileIds: string[]
 }
 
@@ -298,7 +298,7 @@ async function captureCanonicalState(projectId: string): Promise<CanonicalProjec
     })),
     timelineEntries: timelineEntries.map(e => ({ startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: e.isManual })),
     storyTimelineEntries: storyTimelineEntries.map(e => ({ startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: e.isManual })),
-    overheadItems: overheadItems.map(stripTimestamps),
+    overheadItems: overheadItems.map(o => ({ name: o.name, type: o.type, value: o.value, resourceTypeId: o.resourceTypeId, order: o.order })),
     dbNullProfileIds: dbNullIds,
   }
 }
