@@ -271,7 +271,7 @@ interface CanonicalProjectState {
  * comparisons compare only restorable business fields.
  */
 function stripTimestamps<T extends Record<string, unknown>>(row: T): Omit<T, 'createdAt' | 'updatedAt'> {
-  const { createdAt, updatedAt, ...rest } = row
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = row
   return rest as Omit<T, 'createdAt' | 'updatedAt'>
 }
 
