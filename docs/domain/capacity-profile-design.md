@@ -717,13 +717,13 @@ See the separate [`capacity-profile-source-of-truth-migration-plan.md`](capacity
 
 ## Snapshot schema v3 / snapshot rollback capacity safety
 
-> **Pending merge:** PR #367 (open, branch `feature/snapshot-v3-capacity-profiles`)
-> extends the BacklogSnapshot to version 3 so that rollback preserves capacity
-> profile data. This section describes the implemented v3 behaviour pending merge.
+> **Merged (PR #367):** PR #367 (`feature/snapshot-v3-capacity-profiles`) extended the
+> BacklogSnapshot to version 3 so that rollback preserves capacity profile data.
+> This section describes the live v3 behaviour.
 
 ### Motivation
 
-Before PR #357, snapshots captured the epic tree only (V1) or the full project
+Before PR #367, snapshots captured the epic tree only (V1) or the full project
 state minus capacity profiles (V2). A rollback would either leave profiles untouched
 (V1) or reconstruct them from legacy compatibility fields (V2). Neither preserved
 segmented capacity data, explicit `PLANNED_RESOURCE` ownership, or manual profile
@@ -853,13 +853,50 @@ No segments are created. No active Capacity Plan materialisation. Planned-resour
 
 ### Scope boundaries
 
-- **No Prisma schema migration in #357.** Capacity profiles live in the existing
+- **No Prisma schema migration in #367.** Capacity profiles live in the existing
   `BacklogSnapshot.snapshot` JSON column. Types, validation, and capacity helpers
   are pure runtime additions.
-- **Capacity Plan history is owned by #359.** PR #357 does not snapshot or restore
+- **Capacity Plan history is owned by #359.** PR #367 does not snapshot or restore
   the `CapacityPlan` table or its periods/entries.
 - **Duplicate owner consolidation is owned by #361.**
 - **BuildSnapshot produces v3** for all new snapshots (manual, `csv_import`,
   `template_apply`, `optimiser_apply`, `pre_rollback` triggers).
 - **Existing V1 and V2 snapshots remain readable** and restore successfully with
   version-appropriate profile handling.
+
+## Project Clone: capacity profile handling
+
+> Issue #358 defines how clone preserves capacity profile state.
+
+When a project is cloned, the clone route directly copies every persisted
+`CapacityProfile` and `CapacitySegment` row belonging to the source project.
+Clone is an exact copy of the authoritative profile data, not a regeneration
+or compatibility sync.
+
+### Clone behaviour
+
+- **Direct copy.** Persisted `CapacityProfile`/`CapacitySegment` rows are
+  read from the source project and recreated with new, clone-owned IDs.
+- **Owner remapping.** Each profile's owner reference is strictly remapped:
+  `ROLE` profiles point to the clone's `ResourceType` rows;
+  `NAMED_PERSON` and `PLANNED_RESOURCE` profiles point to the clone's
+  `NamedResource` rows.
+- **PLANNED_RESOURCE identity preserved.** Planned resources in the clone
+  keep their `ownerKind: PLANNED_RESOURCE` designation. The clone does not
+  promote planned resources to named persons.
+- **Legacy null-state preserved.** PostgreSQL `DB_NULL` and JSON `null`
+  legacy values are copied with their exact Prisma sentinel semantics.
+- **No compatibility sync.** The clone does not invoke
+  `syncCapacityProfilesForProject` or any other profile-regeneration helper.
+  The copied profiles are authoritative in the clone.
+- **Duplicate owners preserved 1:1.** If the source project has duplicate
+  owner keys across multiple profiles (permitted state tracked by #361),
+  the clone reproduces them identically without consolidation or repair.
+
+### What clone does not do
+
+- No schema changes.
+- No scheduler or leveller redesign.
+- No duplicate-owner repair (owned by #361).
+- No capacity-plan materialisation or interpolation.
+- No compatibility sync or profile regeneration.

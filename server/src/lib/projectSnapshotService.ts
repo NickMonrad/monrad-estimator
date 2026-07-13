@@ -6,7 +6,6 @@
  * service operates on already-authenticated inputs.
  */
 
-import { Prisma } from '@prisma/client'
 import type { PrismaClient } from '@prisma/client'
 import { prisma } from './prisma.js'
 import {
@@ -16,20 +15,21 @@ import {
   isSnapshotV3,
   SnapshotSchemaError,
   type SnapshotData,
-  type SnapshotJsonValue,
   type SnapshotV2,
   type SnapshotV3,
 } from './projectSnapshotTypes.js'
 import {
   validateSnapshotV3,
-  sortSnapshotProfiles,
-  sortSnapshotSegments,
 } from './projectSnapshotValidation.js'
 import {
   recreateV2CapacityProfiles,
   recreateV3CapacityProfiles,
 } from './projectSnapshotCapacity.js'
 import { pruneSnapshots } from './snapshotUtils.js'
+import {
+  loadExactCapacityProfiles,
+  type SnapshotDbClient,
+} from './exactCapacityProfileReader.js'
 
 // ─── Error types ──────────────────────────────────────────────────────────────
 
@@ -54,12 +54,6 @@ export class RollbackPreflightError extends RollbackError {
   }
 }
 
-// ─── Client type ──────────────────────────────────────────────────────────────
-
-/** Client type compatible with both PrismaClient and transaction client. */
-export type SnapshotDbClient =
-  | PrismaClient
-  | Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>
 
 // ─── Internal helpers (moved verbatim from the Express route) ─────────────────
 
@@ -86,45 +80,6 @@ async function fetchEpics(projectId: string, db: SnapshotDbClient = prisma) {
   })
 }
 
-/**
- * Detect which project capacity profiles have database-NULL legacy.
- * Prisma reads both DB_NULL (Prisma.DbNull) and JSON null (Prisma.JsonNull)
- * as JavaScript null; this raw query distinguishes them so the snapshot can
- * preserve the exact null semantics.
- *
- * Uses parameterised Prisma.sql via $queryRaw for compatibility with
- * PrismaClient, transaction clients, and explicit unit doubles.
- * Validates exact 1:1 correspondence with ORM-loaded profiles.
- */
-async function fetchLegacyNullMap(
-  projectId: string,
-  db: SnapshotDbClient,
-  rawProfiles: Array<{ id: string }>,
-): Promise<Map<string, boolean>> {
-  const rows = await db.$queryRaw<Array<{ id: string; legacy_is_null: boolean; legacy_typeof: string | null }>>(
-    Prisma.sql`SELECT id, "legacy" IS NULL AS legacy_is_null, jsonb_typeof("legacy") AS legacy_typeof FROM "CapacityProfile" WHERE "projectId" = ${projectId} ORDER BY id`,
-  )
-
-  // Validate exact 1:1 correspondence with ORM-loaded profiles
-  const profileIds = new Set(rawProfiles.map(p => p.id))
-  const seen = new Set<string>()
-  for (const row of rows) {
-    if (seen.has(row.id)) {
-      throw new Error(`Duplicate null-state row for capacity profile ${row.id}`)
-    }
-    if (!profileIds.has(row.id)) {
-      throw new Error(`Null-state row references unknown capacity profile ${row.id}`)
-    }
-    seen.add(row.id)
-  }
-  for (const p of rawProfiles) {
-    if (!seen.has(p.id)) {
-      throw new Error(`Missing null-state row for capacity profile ${p.id}`)
-    }
-  }
-
-  return new Map(rows.map(r => [r.id, r.legacy_is_null]))
-}
 
 // ─── buildSnapshot (public) ───────────────────────────────────────────────────
 
@@ -143,7 +98,7 @@ export async function buildSnapshot(
     epicDependencies,
     featureDependencies,
     overheadItems,
-    rawProfiles,
+    capacityProfiles,
   ] = await Promise.all([
     fetchEpics(projectId, db),
     db.project.findUnique({
@@ -189,20 +144,9 @@ export async function buildSnapshot(
       where: { projectId },
       select: { name: true, type: true, value: true, resourceTypeId: true, order: true },
     }),
-    db.capacityProfile.findMany({
-      where: { projectId },
-      include: {
-        segments: { orderBy: { startWeek: 'asc' } },
-      },
-      orderBy: [
-        { ownerKind: 'asc' },
-        { resourceTypeId: 'asc' },
-        { namedResourceId: 'asc' },
-      ],
-    }),
+    loadExactCapacityProfiles(projectId, db),
   ])
 
-  const legacyNullMap = await fetchLegacyNullMap(projectId, db, rawProfiles)
   // Convert Date to ISO string for JSON compatibility
   const projectFields = project
     ? {
@@ -215,40 +159,6 @@ export async function buildSnapshot(
       }
     : null
 
-  // Map Prisma model rows to SnapshotCapacityProfile, preserving null semantics
-  const capacityProfiles = rawProfiles.map(p => {
-    // Determine the precise null state for legacy
-    const isDBNull = legacyNullMap.get(p.id) ?? false
-    let legacy: SnapshotJsonValue
-    if (isDBNull) {
-      legacy = { kind: 'DB_NULL' }
-    } else if (p.legacy === null) {
-      legacy = { kind: 'JSON_NULL' }
-    } else {
-      legacy = { kind: 'VALUE', value: p.legacy as Record<string, unknown> | unknown[] | string | number | boolean }
-    }
-
-    return {
-      id: p.id,
-      ownerKind: p.ownerKind as SnapshotV3['capacityProfiles'][number]['ownerKind'],
-      resourceTypeId: p.resourceTypeId,
-      namedResourceId: p.namedResourceId,
-      planningBasis: p.planningBasis as SnapshotV3['capacityProfiles'][number]['planningBasis'],
-      source: p.source as SnapshotV3['capacityProfiles'][number]['source'],
-      defaultPercent: p.defaultPercent,
-      startWeek: p.startWeek,
-      endWeek: p.endWeek,
-      legacy,
-      segments: sortSnapshotSegments(p.segments.map(s => ({
-        id: s.id,
-        startWeek: s.startWeek,
-        endWeek: s.endWeek,
-        capacityPercent: s.capacityPercent,
-        source: s.source as SnapshotV3['capacityProfiles'][number]['segments'][number]['source'],
-      }))),
-    }
-  })
-
   const snapshot: SnapshotV3 = {
     schemaVersion: 3 as const,
     epics,
@@ -260,7 +170,7 @@ export async function buildSnapshot(
     epicDependencies,
     featureDependencies,
     overheadItems,
-    capacityProfiles: sortSnapshotProfiles(capacityProfiles),
+    capacityProfiles,
   }
 
   validateSnapshotV3(snapshot)

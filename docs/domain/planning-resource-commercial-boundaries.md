@@ -420,9 +420,9 @@ branch and landed when PR #356 merged.
 
 See `capacity-profile-design.md#resource-profile-and-export-adoption` for details.
 
-### Pending: Snapshot v3 capacity-profile preservation (PR #367, open)
+### Snapshot v3 capacity-profile preservation ✅ (PR #367, merged)
 
-PR #367 (open, branch `feature/snapshot-v3-capacity-profiles`) extends the
+PR #367 (merged, branch `feature/snapshot-v3-capacity-profiles`) extended the
 BacklogSnapshot schema to version 3 so that rollback preserves capacity profile data.
 This affects the ownership model by ensuring that Resource Profile-owned capacity
 data survives rollback:
@@ -445,7 +445,7 @@ owner itself is not pruned.
 **Null-legacy discrimination via `SnapshotJsonValue`:** The
 `CapacityProfile.legacy` column is a nullable PostgreSQL `Json?` field. Prisma
 distinguishes database NULL (untouched column) from JSON `null` (explicitly-set
-JSON null), but both read back as JavaScript `null`. PR #367 introduces the
+JSON null), but both read back as JavaScript `null`. PR #367 introduced the
 `SnapshotJsonValue` discriminator type (`projectSnapshotTypes.ts`) with three
 variants — `{ kind: 'DB_NULL' }`, `{ kind: 'JSON_NULL' }`, and
 `{ kind: 'VALUE'; value: ... }` — so that the snapshot serialiser can capture and
@@ -480,3 +480,27 @@ fidelity.
 
 See [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md#phase-2b-—-snapshot-v3-capacity-profile-preservation)
 and [`capacity-profile-design.md`](capacity-profile-design.md#snapshot-schema-v3--snapshot-rollback-capacity-safety) for details.
+
+### Project Clone: capacity profile handling
+
+> Issue #358 defines project clone with respect to domain boundaries.
+
+Project clone copies persisted `CapacityProfile`/`CapacitySegment` rows
+directly, respecting the established ownership boundaries:
+
+- **Direct copy.** Profiles and segments are copied with new clone-owned IDs;
+  no compatibility sync or regeneration is invoked.
+- **Owner remapping.** `ROLE` profiles remap to the clone's `ResourceType`;
+  `NAMED_PERSON`/`PLANNED_RESOURCE` profiles remap to the clone's `NamedResource`.
+- **PLANNED_RESOURCE identity preserved.** Planned resources are not promoted
+  to named persons during clone.
+- **Legacy null-state preserved.** `DB_NULL`/`JSON_NULL` values round-trip
+  with correct Prisma sentinels.
+- **Duplicate owners preserved 1:1.** The clone does not consolidate duplicates;
+  #361 remains responsible for that.
+
+**What is not changed:**
+- No schema migration.
+- No scheduler or leveller redesign.
+- No capacity-plan materialisation.
+- No duplicate-owner repair.

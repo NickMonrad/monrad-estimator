@@ -97,6 +97,11 @@ jobs:
         working-directory: server
         run: npm run test:snapshot-integration
 
+
+      # ── Clone integration tests (real PostgreSQL) ─────────────
+      - name: Clone integration tests
+        working-directory: server
+        run: npm run test:clone-integration
       - name: Seed database (creates E2E test user)
         working-directory: server
         run: npx tsx prisma/seed.ts
