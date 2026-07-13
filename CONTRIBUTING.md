@@ -64,9 +64,11 @@ Run from the repository root:
 npm run validate
 ```
 
-This runs client and server lint, type-checking, builds, and unit/integration tests.
+This is the complete client/server validation workflow. It runs client and server lint, type-checking, builds, and unit/integration tests.
 
-Do not accept unexplained failures. A failure may only be classified as pre-existing after reproducing it on the merge base or current `main`.
+Workspace-specific commands may be used to diagnose an individual failure, but they do not replace the root validation command.
+
+Do not accept unexplained failures. A failure may only be classified as pre-existing after reproducing it on the merge base or current `main`. Do not enable or merge a new CI gate in a permanently failing state; remediate the exposed failure before the gate is treated as complete.
 
 ### End-to-end tests
 
@@ -86,11 +88,23 @@ When Playwright tests change, update `e2e/TESTS.md`.
 
 Before a Prisma schema migration or other operation that may alter persistent development data:
 
-```bash
-npm run db:backup
-```
+1. Confirm the configured database in `server/.env` or `DATABASE_URL` and whether it runs in the default Docker container or directly on the host.
+2. Run:
 
-Confirm a non-empty timestamped dump exists in `backups/` before continuing.
+   ```bash
+   npm run db:backup
+   ```
+
+3. Confirm the command backed up that configured database and produced a non-empty timestamped dump in `backups/`.
+4. Record the backup method and output path in the PR description or implementation handoff.
+5. Only then run the migration.
+
+`npm run db:backup` is the required repository entry point. It must work on Windows, macOS, and Linux and support both documented local PostgreSQL setups:
+
+- the default `monrad-pg` Docker container
+- a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
+
+The command must fail clearly rather than silently backing up the wrong database. If it cannot back up the current configuration, stop and fix the backup tooling or configuration before migrating.
 
 Never run `prisma migrate reset` without explicit user approval. Prefer backward-compatible migrations and explain destructive behaviour in the PR.
 
@@ -99,6 +113,8 @@ Never run `prisma migrate reset` without explicit user approval. Prefer backward
 Update documentation when behaviour, setup, architecture, commands, or supported workflows change.
 
 - Documentation must be accurate before the PR is marked ready for review.
+- README test guidance must use `npm run validate` as the complete client/server workflow.
+- README database guidance must match the Docker and non-Docker behaviour implemented by `npm run db:backup`.
 - Add a PR number to a README table only after the PR exists.
 - Do not invent a future PR number.
 - Regenerate screenshots with `npm run screenshots` for new pages or material layout changes.
