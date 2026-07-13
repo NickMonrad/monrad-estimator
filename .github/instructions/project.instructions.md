@@ -123,11 +123,24 @@ When multiple screens consume the same concept, fix or extend the owning domain 
 
 ## Prisma and data safety
 
-Before any Prisma schema migration or operation that can alter stored data:
+Before any Prisma schema migration or other operation that can alter stored data:
 
-1. Run `npm run db:backup` from the repository root.
-2. Confirm the command completed successfully and produced a timestamped dump in `backups/`.
-3. Only then run the required migration command.
+1. Identify the configured database from `server/.env`, `DATABASE_URL`, and any explicit backup-tool overrides. Confirm whether PostgreSQL is running in the default Docker container or directly on the host.
+2. Run `npm run db:backup` from the repository root.
+3. Confirm the command backed up the configured database and produced a non-empty timestamped dump in `backups/`.
+4. Record the backup method and output path in the implementation handoff or PR description.
+5. Only then run the required migration command.
+
+The repository backup tooling is a safety boundary and must:
+
+- work on Windows, macOS, and Linux without POSIX-only shell syntax
+- support both documented local database topologies: the default `monrad-pg` Docker container and a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
+- derive the database connection from repository configuration rather than silently assuming the default database, user, or host
+- allow an explicit container override for Docker-based development
+- fail clearly when Docker, `pg_dump`, credentials, or the configured database are unavailable
+- never report success after backing up a different database from the one the application is configured to use
+
+If `npm run db:backup` cannot back up the configured database, stop. Do not migrate, skip the backup, or substitute an unverified empty dump. Fix the backup configuration or tooling first.
 
 Rules:
 
@@ -167,7 +180,9 @@ This must cover:
 - client and server builds
 - client and server unit/integration tests
 
-A failure may only be described as pre-existing after reproducing the same failure on the merge base or current `main`. Unexplained failures are blockers.
+A failure may only be described as pre-existing after reproducing the same failure on the merge base or current `main`. Unexplained failures are blockers. A new CI gate must not be merged in a permanently failing state, even when it exposes an older failure; either remediate the failure in the same PR or track and complete the prerequisite remediation before enabling the gate.
+
+Repository-facing setup and contribution documentation must present `npm run validate` as the primary complete client/server validation command. Lower-level workspace commands may be documented for targeted diagnosis, but must not replace or contradict the root validation contract.
 
 ### End-to-end testing
 
@@ -208,6 +223,8 @@ Update documentation when behaviour, setup, architecture, commands, or supported
 
 - Keep `README.md`, `CONTRIBUTING.md`, and domain documentation accurate.
 - Documentation must be correct before the PR is marked ready for review.
+- README database guidance must describe the same Docker and non-Docker backup behaviour implemented by `npm run db:backup`.
+- README test guidance must use `npm run validate` as the complete client/server validation workflow.
 - When a README table requires a PR number, add it after the PR exists; do not invent or predict a number.
 - Regenerate screenshots for new pages or material layout changes with `npm run screenshots` and commit only intentional image changes.
 - Do not mechanically edit roadmap or shipped-enhancement tables when the change does not affect them.
