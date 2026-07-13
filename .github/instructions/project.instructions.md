@@ -140,6 +140,7 @@ The repository backup tooling is a safety boundary and must:
 - allow `MONRAD_DB_CONTAINER` to override the Docker container name when Docker mode is active
 - allow `MONRAD_ENV_FILE` as a test/developer override for the `.env` path
 - fail clearly when Docker, `pg_dump`, credentials, or the configured database are unavailable
+- pass authority and query-string database passwords through the `PGPASSWORD` environment variable in host mode rather than through process arguments
 - report only the backup mode, executable, and exit/spawn status on command failure; never print a credential-bearing `DATABASE_URL`
 - never report success after backing up a different database from the one the application is configured to use
 
@@ -182,7 +183,7 @@ This must cover:
 - client and server type-checking
 - client and server builds
 - client and server unit/integration tests
-- backup regression tests
+- backup regression tests (Linux and Windows CI)
 
 A failure may only be described as pre-existing after reproducing the same failure on the merge base or current `main`. Unexplained failures are blockers. A new CI gate must not be merged in a permanently failing state, even when it exposes an older failure; either remediate the failure in the same PR or track and complete the prerequisite remediation before enabling the gate.
 

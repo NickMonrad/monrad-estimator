@@ -29,8 +29,12 @@ npm run validate
 - [ ] Client and server type-checking passed
 - [ ] Client and server builds passed
 - [ ] Client and server unit/integration tests passed
-- [ ] Backup regression tests passed
+- [ ] Backup regression tests passed (Linux and Windows CI)
 - [ ] No unexplained failures were classified as pre-existing
+
+## Security
+
+- [ ] Backup credential handling was verified (PGPASSWORD used, no credential-bearing process arguments)
 
 ## E2E tests
 

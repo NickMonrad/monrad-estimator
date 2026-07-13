@@ -4,12 +4,13 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import crypto from 'node:crypto'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const backupDir = process.env.MONRAD_BACKUP_DIR ?? path.join(root, 'backups')
 const container = process.env.MONRAD_DB_CONTAINER ?? 'monrad-pg'
 const timestamp = formatTimestamp(new Date())
-const destination = nextDestination(path.join(backupDir, `backup-${timestamp}.dump`))
+const destination = path.join(backupDir, `backup-${timestamp}-${process.pid}-${crypto.randomUUID()}.dump`)
 const temporaryDestination = `${destination}.tmp-${process.pid}`
 const containerPath = `/tmp/monrad-backup-${timestamp}-${process.pid}.dump`
 let mode = 'host'
@@ -59,11 +60,27 @@ function resolveConfig(repositoryRoot) {
   const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
   if (!database) throw new Error('DATABASE_URL must include a database name')
 
+  const authorityPassword = parsed.password ? decodeURIComponent(parsed.password) : null
+  const queryPasswords = parsed.searchParams.getAll('password')
+  if (queryPasswords.length > 1) {
+    throw new Error('DATABASE_URL must include at most one password query parameter')
+  }
+  const queryPassword = queryPasswords[0] ?? null
+  if (authorityPassword !== null && queryPassword !== null && authorityPassword !== queryPassword) {
+    throw new Error('DATABASE_URL authority and query passwords conflict')
+  }
+
+  // Build sanitized URL with every password removed.
+  const sanitizedUrl = new URL(parsed)
+  sanitizedUrl.password = ''
+  sanitizedUrl.searchParams.delete('password')
+
   return {
-    databaseUrl,
+    databaseUrl: sanitizedUrl.href,
     database,
     user: decodeURIComponent(parsed.username) || process.env.POSTGRES_USER || fileValues.POSTGRES_USER || 'postgres',
     host: parsed.hostname,
+    password: authorityPassword ?? queryPassword,
   }
 }
 
@@ -82,6 +99,22 @@ function readEnvFile(filename) {
     values[match[1]] = value
   }
   return values
+}
+
+function resolveCommand(name, defaultCommand) {
+  const command = process.env[`MONRAD_${name}_COMMAND`] ?? defaultCommand
+  let prefixArgs = []
+  const raw = process.env[`MONRAD_${name}_ARGS`]
+  if (raw != null) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed)) throw new Error('must be a JSON array')
+      prefixArgs = parsed
+    } catch (err) {
+      throw new Error(`MONRAD_${name}_ARGS configuration error: ${err.message}`)
+    }
+  }
+  return { command, prefixArgs }
 }
 /**
  * Resolves the backup mode from the environment.
@@ -113,8 +146,9 @@ function resolveMode() {
 }
 
 function createDockerBackup(databaseConfig, containerName, remotePath, localPath) {
-  const docker = process.env.MONRAD_DOCKER_COMMAND ?? 'docker'
-  run(docker, [
+  const { command, prefixArgs } = resolveCommand('DOCKER', 'docker')
+  run(command, [
+    ...prefixArgs,
     'exec',
     containerName,
     'pg_dump',
@@ -126,21 +160,27 @@ function createDockerBackup(databaseConfig, containerName, remotePath, localPath
     '-f',
     remotePath,
   ], { context: 'Docker backup' })
-  run(docker, ['cp', `${containerName}:${remotePath}`, localPath], { context: 'Docker backup' })
+  run(command, [...prefixArgs, 'cp', `${containerName}:${remotePath}`, localPath], { context: 'Docker backup' })
 }
 
 function createHostBackup(databaseConfig, localPath) {
-  const pgDump = process.env.MONRAD_PG_DUMP_COMMAND ?? 'pg_dump'
-  run(pgDump, ['--format=custom', '--file', localPath, '--dbname', databaseConfig.databaseUrl], { context: 'host backup' })
+  const { command, prefixArgs } = resolveCommand('PG_DUMP', 'pg_dump')
+  const options = {
+    context: 'host backup',
+    env: { PGPASSWORD: databaseConfig.password ?? undefined },
+  }
+  run(command, [...prefixArgs, '--format=custom', '--file', localPath, '--dbname', databaseConfig.databaseUrl], options)
 }
 
 function runDockerCleanup(containerName, remotePath) {
-  const docker = process.env.MONRAD_DOCKER_COMMAND ?? 'docker'
-  run(docker, ['exec', containerName, 'rm', '-f', remotePath], { allowFailure: true, stdio: 'ignore', context: 'Docker cleanup' })
+  const { command, prefixArgs } = resolveCommand('DOCKER', 'docker')
+  run(command, [...prefixArgs, 'exec', containerName, 'rm', '-f', remotePath], { allowFailure: true, stdio: 'ignore', context: 'Docker cleanup' })
 }
 
-function run(command, args, { allowFailure = false, stdio = 'inherit', context = 'backup' } = {}) {
-  const result = spawnSync(command, args, { cwd: root, stdio, shell: false })
+function run(command, args, { allowFailure = false, stdio = 'inherit', context = 'backup', env } = {}) {
+  const spawnOptions = { cwd: root, stdio, shell: false }
+  if (env) spawnOptions.env = { ...process.env, ...env }
+  const result = spawnSync(command, args, spawnOptions)
   if (result.error) {
     if (allowFailure) return
     throw new Error(`${context} command ${command} is unavailable: ${result.error.message}`)
@@ -149,8 +189,6 @@ function run(command, args, { allowFailure = false, stdio = 'inherit', context =
     throw new Error(`${context} command ${command} failed with exit code ${result.status}`)
   }
 }
-
-
 function verifyDump(filename) {
   let stat
   try {
@@ -159,15 +197,6 @@ function verifyDump(filename) {
     throw new Error(`backup command did not create a dump: ${filename}`)
   }
   if (!stat.isFile() || stat.size === 0) throw new Error(`backup dump is empty: ${filename}`)
-}
-
-function nextDestination(filename) {
-  if (!fs.existsSync(filename)) return filename
-  const extension = path.extname(filename)
-  const stem = filename.slice(0, -extension.length)
-  let index = 1
-  while (fs.existsSync(`${stem}-${index}${extension}`)) index += 1
-  return `${stem}-${index}${extension}`
 }
 
 function removeIfPresent(filename) {
