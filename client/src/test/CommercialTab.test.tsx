@@ -1,3 +1,4 @@
+import React from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import CommercialTab from '@/components/resource-profile/CommercialTab'
@@ -99,7 +100,7 @@ describe('CommercialTab billing basis indicator', () => {
     })
 
     renderTab(data)
-    expect(screen.getByText('(person · actual scheduled days)')).toBeInTheDocument()
+    expect(screen.getByText('(named person · bill actual scheduled days)')).toBeInTheDocument()
   })
 
   it('shows planned allocation indicator for PRO_RATA named resources', () => {
@@ -131,7 +132,7 @@ describe('CommercialTab billing basis indicator', () => {
     })
 
     renderTab(data)
-    expect(screen.getByText('(person · planned allocation)')).toBeInTheDocument()
+    expect(screen.getByText('(named person · bill planned allocation)')).toBeInTheDocument()
   })
 
   it('does not show billing basis indicator for resource (non-named) rows', () => {
@@ -229,7 +230,7 @@ describe('CommercialTab billing basis indicator', () => {
     renderTab(data)
 
     // The billing basis indicator is a <span> — not a <select>, <input>, or <button>
-    const indicator = screen.getByText('(person · actual scheduled days)')
+    const indicator = screen.getByText('(named person · bill actual scheduled days)')
     expect(indicator.tagName).toBe('SPAN')
 
     // Verify no allocation-mode editing controls from #276 are present

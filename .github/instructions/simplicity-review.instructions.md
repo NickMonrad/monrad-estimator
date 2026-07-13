@@ -4,7 +4,7 @@ applyTo: "**"
 
 # Simplicity and Review Instructions
 
-These instructions apply to all implementation and review work in Monrad Estimator. They complement `.github/copilot-instructions.md`.
+These instructions apply to all implementation and review work in Monrad Estimator. They complement `.github/instructions/project.instructions.md`.
 
 ## Simplicity Rule
 
