@@ -46,11 +46,16 @@ jobs:
         run: |
           cd server && npm audit --audit-level=high
           cd ../client && npm audit --audit-level=high
-        continue-on-error: true  # Don't fail CI on audit warnings initially
+        continue-on-error: true
 
       # ── Install all workspace dependencies at once ──────────────
       - name: Install all dependencies
         run: npm ci
+
+      # ── Client clone commercial parity test ──────────────────────
+      - name: Client clone commercial parity test
+        working-directory: client
+        run: npx vitest run src/test/clone-commercial-parity.test.ts
 
       # ── Client snapshot regression tests ─────────────────────────
       - name: Client snapshot regression tests
@@ -97,6 +102,11 @@ jobs:
         working-directory: server
         run: npm run test:snapshot-integration
 
+
+      # ── Clone integration tests (real PostgreSQL) ─────────────
+      - name: Clone integration tests
+        working-directory: server
+        run: npm run test:clone-integration
       - name: Seed database (creates E2E test user)
         working-directory: server
         run: npx tsx prisma/seed.ts

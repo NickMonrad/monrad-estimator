@@ -100,9 +100,9 @@ This means:
 - `server/src/lib/projectPlanningModel.ts` — reads RT/NR allocation fields for resource-demand calculation
 - `server/src/lib/namedResourceAssignments.ts` — reads NR allocation fields for assignment logic
 
-### Phase 2b — Snapshot v3 capacity-profile preservation 🚧 (PR #357 open, pending merge)
+### Phase 2b — Snapshot v3 capacity-profile preservation ✅ (PR #367 merged)
 
-PR #357 (open, pending merge, branch `feature/snapshot-v3-capacity-profiles`) extends the
+PR #367 (merged, branch `feature/snapshot-v3-capacity-profiles`) extended the
 BacklogSnapshot schema to version 3 so that rollback preserves capacity profile data.
 Snapshot v3 is the first-class representation for capacity profiles; v2 and v1 snapshots
 are still accepted on restore, but v1 is epic-only (profiles untouched) and v2 is
@@ -222,24 +222,24 @@ array. During V2 restore:
    are not claimed for V2-restored profiles.
 5. The delete-and-recreate is inside the same transaction as the full state restore.
 
-#### No Prisma schema migration in #357
+#### No Prisma schema migration in #367
 
-PR #357 introduces no Prisma schema migration. The `capacityProfiles` field is stored
+PR #367 introduced no Prisma schema migration. The `capacityProfiles` field is stored
 inside the existing `BacklogSnapshot.snapshot` JSON column. The new TypeScript types,
 validation, and capacity helpers are pure runtime additions.
 
 #### Out of scope: Capacity Plan history (#359)
 
 Capacity Plan history — snapshotting and restoring the `CapacityPlan` table and its
-periods/entries — is not part of PR #357. Rollback of capacity plan data is tracked
+periods/entries — is not part of PR #367. Rollback of capacity plan data is tracked
 by #359 and will be addressed separately.
 
-### Null-state discrimination & PostgreSQL rollback CI 🚧 (PR #367 open, pending merge)
+### Null-state discrimination & PostgreSQL rollback CI ✅ (PR #367 merged)
 
-PR #367 (open, pending, branch `feature/v3-snapshot-null-state`) introduces the
+PR #367 (merged) introduced the
 `LegacyFieldDiscriminator` type that disambiguates three distinct null-states for the
-`CapacityProfile.legacy` JSON field and adds parameterised null-state detection that
-fails closed. The PR also adds a real PostgreSQL rollback integration suite as a
+`CapacityProfile.legacy` JSON field and added parameterised null-state detection that
+fails closed. The PR also added a real PostgreSQL rollback integration suite as a
 required blocking CI step.
 
 #### Legacy discriminator: DB_NULL / JSON_NULL / VALUE
@@ -292,7 +292,7 @@ positive that would cause callers to interpret absent data as present.
 
 #### Real PostgreSQL rollback integration suite
 
-PR #367 introduces a dedicated rollback integration test suite that exercises the
+PR #367 introduced a dedicated rollback integration test suite that exercises the
 full snapshot → restore roundtrip against a **real PostgreSQL instance** (not
 mocked/SQLite). This suite:
 
@@ -326,14 +326,8 @@ The step definition in CI:
 
 #### PR #367 status
 
-PR #367 remains **open and pending** merge. It blocks on:
-- Review of the `LegacyFieldDiscriminator` contract and fail-closed semantics.
-- Confirmation that the CI step runs at the correct stage (after migrations+generate,
-  before seed/start) and is marked as required (non-skippable).
-- No overclaim on data-loss protection: the integration suite verifies that rollback
-  restores exactly what was captured, but does **not** guarantee that rollback is a
-  universal data-loss prevention mechanism — it validates the snapshot/restore
-  machinery itself, not user behaviour or external triggers.
+PR #367 is **merged**. V3 snapshot capacity profiles, null-state discrimination,
+and the required PostgreSQL rollback CI step are all live in `main`.
 
 **Client:**
 - `client/src/components/resource-profile/ResourceProfileTab.tsx` — displays resource rows, reads `capacityProfile` if present, shows profile source tag and segments when authoritative
@@ -611,6 +605,94 @@ Tracked separately by #342.
 | Phase 3 implementation | NamedResource capacity/profile editing as source of truth |
 | Phase 4 implementation | ResourceType capacity writes as source of truth |
 | Phase 5 implementation | Squad Planner apply as source of truth |
+
+## Project Clone: capacity profile handling
+
+> Issue #358 defines project clone with respect to capacity profile state.
+
+Clone is a direct copy of persisted authoritative `CapacityProfile` and
+`CapacitySegment` rows, not a profile-regeneration or compatibility-sync
+operation. This section documents how clone interacts with the source-of-truth
+migration.
+
+### Clone behaviour
+
+- **Direct copy.** Every `CapacityProfile` and `CapacitySegment` row is copied
+  from the source project and recreated with new, clone-owned IDs.
+- **Owner remapping.** Owner references are strictly remapped to the clone's
+  own `ResourceType` and `NamedResource` rows.
+- **PLANNED_RESOURCE identity preserved.** Planned resources keep their
+  `ownerKind: PLANNED_RESOURCE` status; the clone does not promote them.
+- **Legacy null-state preserved.** `DB_NULL` and `JSON_NULL` legacy values
+  round-trip through their exact Prisma sentinels.
+- **No compatibility sync invoked.** `syncCapacityProfilesForProject` is not
+  called. The copied profiles are the clone's authoritative state.
+- **Duplicate owners preserved 1:1.** Duplicate owner keys (permitted)
+  are copied without consolidation or repair. Issue #361 remains responsible
+  for duplicate-owner consolidation.
+
+### Migration status
+
+| Concern | Status |
+|---------|--------|
+| Profile rows directly copied | ✅ Implemented (direct Prisma copy) |
+| New IDs assigned | ✅ Clone-owned IDs |
+| Owner remapping to clone entities | ✅ Strict per-kind remapping |
+| PLANNED_RESOURCE identity | ✅ Preserved |
+| DB NULL / JSON null fidelity | ✅ Via Prisma sentinels |
+| No sync/regeneration | ✅ Compatibility helpers not invoked |
+| Duplicate owners unmodified | ✅ 1:1 copy; #361 deferred |
+| Schema migration required | No — pure data-layer operation |
+| Billing models preserved | ✅ ACTUAL_DAYS and PRO_RATA; FIXED_PRICE is not supported |
+| Zero-capacity segments preserved | ✅ `capacityPercent: 0` segments cloned verbatim |
+| Rollback transaction atomicity | ✅ Mid-transaction failure reverts all clone writes |
+| Endpoint parity (resource-profile) | ✅ GET source/clone DTOs match after ID normalisation |
+| CSV export parity (buildProfileCsv) | ✅ Required real PostgreSQL clone integration (`projects.clone.integration.test.ts`) executes production `buildProfileCsv` against source/clone HTTP DTOs; exact CSV output matches after expected ID/name normalisation |
+| Commercial calculator parity | ✅ Required real PostgreSQL clone integration (`projects.clone.integration.test.ts`) executes production `computeCommercialData` against source/clone HTTP DTOs; commercial subtotal, after-discounts, and grand total match completely |
+
+### Supported billing model
+
+Clone preserves the `pricingModel` value verbatim. The production Commercial
+calculator (`computeCommercialData` in `financialCalculations.ts`) supports
+**ACTUAL_DAYS** (Bill actual scheduled days) and **PRO_RATA** (Bill planned
+allocation). Any unrecognised value falls through to ACTUAL_DAYS. **FIXED_PRICE**
+is not a supported billing branch and must not appear in clone fixtures or
+evidence — the integration test exercises both ACTUAL_DAYS and PRO_RATA paths.
+
+### Zero-capacity segments
+
+Segments with `capacityPercent: 0` are valid and are copied identically during
+clone. The clone route does not filter, merge, or normalise zero-capacity
+entries — they remain in the profile with their original start week, end week,
+and source. CSV output via `buildProfileCsv` includes the zero segment without
+alteration.
+
+### Rollback transaction evidence
+
+The clone integration suite (`projects.clone.integration.test.ts`) includes a
+guarded real-PostgreSQL scenario that proves atomic rollback after write begins:
+a source project is set up with all clone data, but one capacity profile
+references an unmappable ResourceType/NamedResource. The clone endpoint is called,
+the project and child rows are written, then the route fails on the invalid
+reference. The test asserts the transaction rolled back every row — project
+metadata, resource types, named resources, profiles, segments, epics, features,
+stories, tasks, timeline entries — leaving zero residual state.
+
+### Endpoint, CSV, and Commercial parity
+
+Three independent parity checks establish source-vs-clone identity at the
+endpoint, CSV, and commercial-calculator layers:
+
+1. **Endpoint parity (server integration tests).** Production
+   `GET /api/projects/:id/resource-profile` is called on both source and clone.
+   After normalising clone-owned IDs and generated names, row count, multiplicity,
+   profile fields (`planningBasis`, `source`, `defaultPercent`, `startWeek`,
+   `endWeek`, segments), billable days, overhead rows, subtotals, grand totals,
+   discounts, and tax fields are asserted equal.
+
+2. **CSV export and commercial parity (client functions against endpoint DTOs).** `projects.clone.integration.test.ts` fetches the real source and clone HTTP `GET /api/projects/:id/resource-profile` DTOs, then executes production `buildProfileCsv` and `computeCommercialData` against those DTOs. After expected ID/name normalisation, exact CSV output (planning basis, profile source, windows, segments, planned-resource identity, billing basis, and row multiplicity) and commercial subtotal, after-discounts, and grand total all match.
+
+The focused client test (`clone-commercial-parity.test.ts`) is separate: it is a utility regression over ID-remapped, DTO-shaped fixtures, not real endpoint evidence. CI runs that client Vitest step separately from the required/blocking server command `npm run test:clone-integration` (working directory `server`). The clone integration step runs after Prisma migrations and client generation and blocks CI on failure.
 
 ## Remaining work for #342 — Legacy-field consumers
 
