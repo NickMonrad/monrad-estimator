@@ -169,17 +169,20 @@ test('backs up through explicit Docker container and cleans remote dump', (t) =>
   const backupDir = path.join(directory, 'backups')
   const docker = createTestHelper(directory, 'fake-docker', `
 import fs from 'node:fs'
+import path from 'node:path'
 const args = process.argv.slice(2)
+const localRemotePath = () => path.join(${JSON.stringify(directory)}, path.basename(args.at(-1)))
 if (args[0] === 'exec' && args.includes('pg_dump')) {
-  fs.writeFileSync(args.at(-1), Buffer.from('docker dump'))
+  fs.writeFileSync(localRemotePath(), Buffer.from('docker dump'))
   process.exit(0)
 }
 if (args[0] === 'cp') {
-  fs.copyFileSync(args[1].split(':').slice(1).join(':'), args[2])
+  const remotePath = path.join(${JSON.stringify(directory)}, path.basename(args[1].split(':').slice(1).join(':')))
+  fs.copyFileSync(remotePath, args[2])
   process.exit(0)
 }
 if (args[0] === 'exec' && args[2] === 'rm') {
-  try { fs.rmSync(args.at(-1), { force: true }) } catch {}
+  try { fs.rmSync(localRemotePath(), { force: true }) } catch {}
   process.exit(0)
 }
 process.exit(12)
@@ -206,15 +209,17 @@ test('failed Docker backup removes the local dump and attempts remote cleanup', 
   const cleanupMarker = path.join(directory, 'cleanup.marker')
   const docker = createTestHelper(directory, 'failing-docker', `
 import fs from 'node:fs'
+import path from 'node:path'
 const args = process.argv.slice(2)
+const localRemotePath = () => path.join(${JSON.stringify(directory)}, path.basename(args.at(-1)))
 if (args[0] === 'exec' && args.includes('pg_dump')) {
-  fs.writeFileSync(args.at(-1), Buffer.from('remote dump'))
+  fs.writeFileSync(localRemotePath(), Buffer.from('remote dump'))
   process.exit(0)
 }
 if (args[0] === 'cp') process.exit(31)
 if (args[0] === 'exec' && args[2] === 'rm') {
-  fs.writeFileSync(${JSON.stringify(cleanupMarker)}, args.at(-1))
-  fs.rmSync(args.at(-1), { force: true })
+  fs.writeFileSync(${JSON.stringify(cleanupMarker)}, localRemotePath())
+  fs.rmSync(localRemotePath(), { force: true })
   process.exit(0)
 }
 process.exit(12)
