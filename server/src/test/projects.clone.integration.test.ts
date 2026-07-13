@@ -1391,6 +1391,10 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       if (discMap.has(id)) return `disc:${discMap.get(id)}`
       if (overheadMap.has(id)) return `overhead:${overheadMap.get(id)}`
       if (id === projId) return 'project:self'
+      // computeCommercialData creates synthetic role-row IDs from the resource type ID.
+      for (const [rawId, name] of rtMap) {
+        if (id.startsWith(`${rawId}-`)) return `rt:${name}${id.slice(rawId.length)}`
+      }
       return id
     }
 
@@ -1402,6 +1406,10 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
         for (const ad of row.appliedDiscounts) {
           ad.id = normaliseId(ad.id, rtM, nrM, dM, overheadM, pId)
           if (ad.resourceTypeId) ad.resourceTypeId = normaliseId(ad.resourceTypeId, rtM, nrM, dM, overheadM, pId)
+          if (ad.resourceType) {
+            ad.resourceType.id = normaliseId(ad.resourceType.id, rtM, nrM, dM, overheadM, pId)
+            ad.resourceType.projectId = normaliseId(ad.resourceType.projectId, rtM, nrM, dM, overheadM, pId)
+          }
           delete ad.createdAt
         }
       }
@@ -1510,7 +1518,6 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
 
     const iNamedId = colIdx('Resource identity')
     const iResName = colIdx('Resource name')
-    const iRole = colIdx('Role')
     const iPlanBasis = colIdx('Planning basis')
     const iProfSrc = colIdx('Profile source')
     const iDefPct = colIdx('Default capacity %')
@@ -1529,8 +1536,10 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       const cols = line.split(',')
       // Named identity — not a generated UUID (builder emits no IDs)
       expect(cols[iNamedId]).toBeDefined()
-      // Resource name present for role/named rows
-      if (cols[iRole]) expect(cols[iResName]).toBeTruthy()
+      // Named-resource rows carry a resource name; role-level rows intentionally do not.
+      if (cols[iNamedId] === 'Named person' || cols[iNamedId] === 'Planned resource') {
+        expect(cols[iResName]).toBeTruthy()
+      }
       // Planning basis / profile source / capacity %
       expect(cols[iPlanBasis]).toBeDefined()
       if (cols[iCapSeg]) expect(cols[iProfSrc]).toBeDefined()
