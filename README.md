@@ -109,7 +109,17 @@ CLIENT_URL="http://localhost:5173"  # base URL used in email links
 
 For **Brevo**: generate an SMTP key at *Settings → SMTP & API → SMTP*, then verify a sender address at *Senders & IPs → Add a sender*.
 
-### 4. Run database migrations
+### 4. Back up before schema changes
+
+Run the repository backup command before any Prisma migration or other destructive database change:
+
+```bash
+npm run db:backup
+```
+
+The command reads `DATABASE_URL` from the process environment first, then `server/.env`, and writes a verified non-empty custom-format dump to `backups/`. For a local URL it uses the running `monrad-pg` Docker container when available; otherwise it invokes the host `pg_dump`. Use `MONRAD_DB_MODE=docker` or `MONRAD_DB_MODE=host` to select a mode explicitly, and `MONRAD_DB_CONTAINER` to override the Docker container name. The command fails instead of silently backing up an unconfigured or different database. Run `npm run test:backup` for the focused Docker, host, configuration-precedence, verification, cleanup, and failure-path regression tests.
+
+### 5. Run database migrations
 
 ```bash
 cd server
@@ -117,7 +127,7 @@ npx prisma migrate deploy
 npx prisma generate
 ```
 
-### 5. Start development servers
+### 6. Start development servers
 
 ```bash
 npm run dev          # API on :3001 + Vite on :5173 (concurrently)
@@ -139,15 +149,11 @@ Server logs are written to `logs/dev-servers.log` when running in the background
 > ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) where nested optional dependencies
 > with native binaries may be skipped on Windows.
 
-### Run tests
+### Validate and run tests
 
 ```bash
-# Server unit/integration tests
-cd server && npm test
-
-# TypeScript check
-cd server && npx tsc --noEmit
-cd client && npx tsc --noEmit
+# Complete client/server validation: lint, typecheck, builds, and unit tests
+npm run validate
 
 # E2E (preferred — local runner starts isolated API/Vite servers, chooses free ports)
 # Loads server/.env, runs e2e-cleanup before seed, passes resolved env to all processes
