@@ -134,8 +134,8 @@ Before any Prisma schema migration or other operation that can alter stored data
 The repository backup tooling is a safety boundary and must:
 
 - work on Windows, macOS, and Linux without POSIX-only shell syntax
-- support both documented local database topologies: a `monrad-pg` Docker container (with explicit `MONRAD_DB_MODE=docker` or `MONRAD_DB_CONTAINER`) and a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
-- default to host-mode `pg_dump` when neither `MONRAD_DB_MODE` nor `MONRAD_DB_CONTAINER` is set (conservative default — no automatic Docker endpoint detection)
+- support both documented local database topologies: a `monrad-pg` Docker container selected with explicit `MONRAD_DB_MODE=docker` (with `MONRAD_DB_CONTAINER` overriding its name) and a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
+- default to host-mode `pg_dump` when `MONRAD_DB_MODE` is unset (conservative default — no automatic Docker endpoint detection)
 - derive the database connection from repository configuration rather than silently assuming the default database, user, or host
 - allow `MONRAD_DB_CONTAINER` to override the Docker container name when Docker mode is active
 - allow `MONRAD_ENV_FILE` as a test/developer override for the `.env` path
