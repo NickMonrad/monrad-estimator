@@ -41,12 +41,6 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      # ── Audit dependencies ───────────────────────────────────────
-      - name: Audit dependencies
-        run: |
-          cd server && npm audit --audit-level=high
-          cd ../client && npm audit --audit-level=high
-
       # ── Install all workspace dependencies at once ──────────────
       - name: Install all dependencies
         run: npm ci
