@@ -140,10 +140,9 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 | Test | Description |
 |------|-------------|
-| desktop: add named resource, edit fields, verify persistence | At 1440×900, adds a named resource to Developer, changes planning basis to TIMELINE (waiting for each PATCH response), sets allocation % to 80, start week 2, end week 10, reloads page, asserts all four persisted values (TIMELINE/80/2/10), removes the named resource, asserts no horizontal overflow |
-| narrow viewport: fields and labels remain usable | At 820×900, adds a named resource, asserts desktop column headers are visible (above `sm` breakpoint), changes to TIMELINE mode, asserts allocation/start/end controls all visible, asserts remove action reachable, asserts no horizontal overflow |
-| mobile viewport: controls stack vertically with inline labels | At 390×844, adds a named resource, asserts desktop column headers are hidden, asserts mobile inline labels (`Basis:`, `Alloc:`, `Start:`, `End:`) are visible, changes to TIMELINE mode, asserts allocation/start/end/reach controls, asserts no horizontal overflow |
-#### `Timeline — cache invalidation` describe block (1 test)
+| desktop: resource-counts section renders compact cards with labels and headers | At 1440×900, verifies resource type cards (Developer, Tech Lead) with Count and Hrs/day labels, add buttons, hours input with accessible name, column headers (Named resource, Planning basis, Allocation %, Start, End), and no horizontal overflow |
+| narrow viewport: desktop column headers remain visible, no overflow | At 820×900, verifies resource type names, column headers all visible (above `sm` breakpoint), and no horizontal overflow |
+| mobile viewport: desktop column headers hidden | At 390×844, verifies section content visible and column header row has `hidden` CSS class |
 
 | Test | Description |
 |------|-------------|
