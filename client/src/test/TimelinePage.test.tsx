@@ -853,6 +853,18 @@ describe('TimelinePage — resource-counts layout', () => {
         expect.objectContaining({ allocationStartWeek: 5 }),
       )
     })
+
+    // Change end week
+    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    fireEvent.change(endInput, { target: { value: '15' } })
+    fireEvent.blur(endInput)
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        expect.objectContaining({ allocationEndWeek: 15 }),
+      )
+    })
   })
 
   it('add and remove actions retain their current callbacks', async () => {
