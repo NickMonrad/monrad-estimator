@@ -3,6 +3,8 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
+import { loadExactCapacityProfiles } from '../lib/exactCapacityProfileReader.js'
+import { snapshotJsonValueToPrisma } from '../lib/projectSnapshotTypes.js'
 
 const router = Router()
 router.use(authenticate)
@@ -80,50 +82,50 @@ router.patch('/:id/tax', asyncHandler(async (req: AuthRequest, res: Response) =>
 
 // Clone project — deep copy (specific route before /:id)
 router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const source = await prisma.project.findFirst({
-    where: { id: req.params.id as string, ownerId: req.userId },
-    include: {
-      resourceTypes: { include: { namedResources: true } },
-      overheads: true,
-      discounts: true,
-      timelineEntries: true,
-      storyTimelineEntries: true,
-      capacityPlans: {
-        include: {
-          periods: {
-            include: { entries: true },
+  const clonedProject = await prisma.$transaction(async (tx) => {
+    const source = await tx.project.findFirst({
+      where: { id: req.params.id as string, ownerId: req.userId },
+      include: {
+        resourceTypes: { include: { namedResources: true } },
+        overheads: true,
+        discounts: true,
+        timelineEntries: true,
+        storyTimelineEntries: true,
+        capacityPlans: {
+          include: {
+            periods: {
+              include: { entries: true },
+            },
           },
         },
-      },
-      epics: {
-        include: {
-          epicDependencies: true,
-          epicDependents: true,
-          features: {
-            include: {
-              dependencies: true,
-              dependents: true,
-              timelineEntry: true,
-              userStories: {
-                include: {
-                  dependencies: true,
-                  dependents: true,
-                  timelineEntry: true,
-                  tasks: true,
+        epics: {
+          include: {
+            epicDependencies: true,
+            epicDependents: true,
+            features: {
+              include: {
+                dependencies: true,
+                dependents: true,
+                timelineEntry: true,
+                userStories: {
+                  include: {
+                    dependencies: true,
+                    dependents: true,
+                    timelineEntry: true,
+                    tasks: true,
+                  },
                 },
               },
             },
           },
         },
       },
-    },
-  })
-  if (!source) { res.status(404).json({ error: 'Not found' }); return }
+    })
+    if (!source) return null
 
-  // #176: wrap entire clone in a transaction so partial failures roll back cleanly
-  const clonedProject = await prisma.$transaction(async (tx) => {
     // Build ID maps for all cloned entities
     const rtIdMap = new Map<string, string>()
+    const nrIdMap = new Map<string, string>()
     const epicIdMap = new Map<string, string>()
     const featureIdMap = new Map<string, string>()
     const storyIdMap = new Map<string, string>()
@@ -167,7 +169,7 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
 
       // Copy named resources
       for (const nr of rt.namedResources) {
-        await tx.namedResource.create({
+        const newNr = await tx.namedResource.create({
           data: {
             name: nr.name,
             startWeek: nr.startWeek,
@@ -181,6 +183,7 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
             resourceTypeId: newRt.id,
           },
         })
+        nrIdMap.set(nr.id, newNr.id)
       }
     }
 
@@ -394,12 +397,79 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
       }
     }
 
+    // Clone exact capacity profiles (preserving DB_NULL vs JSON_NULL semantics)
+    const exactProfiles = await loadExactCapacityProfiles(source.id, tx)
+    for (const profile of exactProfiles) {
+      // Validate owner shape and remap owner IDs (strict: never null owner)
+      let newResourceTypeId: string | null = null
+      let newNamedResourceId: string | null = null
+      if (profile.ownerKind === 'ROLE') {
+        if (!profile.resourceTypeId || profile.namedResourceId !== null) {
+          throw new Error(
+            `Clone failed: ROLE capacity profile ${profile.id} must have resourceTypeId and null namedResourceId`,
+          )
+        }
+        const mapped = rtIdMap.get(profile.resourceTypeId)
+        if (!mapped) {
+          throw new Error(
+            `Clone failed: ROLE capacity profile ${profile.id} references missing resource type "${profile.resourceTypeId}"`,
+          )
+        }
+        newResourceTypeId = mapped
+      } else if (profile.ownerKind === 'NAMED_PERSON' || profile.ownerKind === 'PLANNED_RESOURCE') {
+        if (!profile.namedResourceId || profile.resourceTypeId !== null) {
+          throw new Error(
+            `Clone failed: ${profile.ownerKind} capacity profile ${profile.id} must have namedResourceId and null resourceTypeId`,
+          )
+        }
+        const mapped = nrIdMap.get(profile.namedResourceId)
+        if (!mapped) {
+          throw new Error(
+            `Clone failed: ${profile.ownerKind} capacity profile ${profile.id} references missing named resource "${profile.namedResourceId}"`,
+          )
+        }
+        newNamedResourceId = mapped
+      } else {
+        throw new Error(
+          `Clone failed: capacity profile ${profile.id} has unknown ownerKind "${profile.ownerKind}"`,
+        )
+      }
+
+      const newProfile = await tx.capacityProfile.create({
+        data: {
+          projectId: newProject.id,
+          ownerKind: profile.ownerKind,
+          resourceTypeId: newResourceTypeId,
+          namedResourceId: newNamedResourceId,
+          planningBasis: profile.planningBasis,
+          source: profile.source,
+          defaultPercent: profile.defaultPercent,
+          startWeek: profile.startWeek,
+          endWeek: profile.endWeek,
+          legacy: snapshotJsonValueToPrisma(profile.legacy),
+        },
+      })
+
+      for (const segment of profile.segments) {
+        await tx.capacitySegment.create({
+          data: {
+            capacityProfileId: newProfile.id,
+            startWeek: segment.startWeek,
+            endWeek: segment.endWeek,
+            capacityPercent: segment.capacityPercent,
+            source: segment.source,
+          },
+        })
+      }
+    }
+
     return tx.project.findFirst({
       where: { id: newProject.id },
       include: { resourceTypes: true, _count: { select: { epics: true } } },
     })
-  }, { timeout: 30000 })
+  }, { timeout: 30000, isolationLevel: 'RepeatableRead' })
 
+  if (!clonedProject) { res.status(404).json({ error: 'Not found' }); return }
   res.status(201).json(clonedProject)
 }))
 
