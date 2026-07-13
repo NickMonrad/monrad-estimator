@@ -23,10 +23,18 @@ import {
 } from '../lib/capacity-planner.js'
 import {
   materializeCapacityPlanResources,
+  materializeResourceTrajectories,
   type CapacityPlanSlotWindow,
   type CapacityPlanPeriodInput,
 } from '../lib/capacityPlanMaterialisation.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
+import {
+  conflictPreflightCheck,
+  findOrCreatePlannedResources,
+  materializeProfilesForResourceType,
+  writePlannerProfiles,
+  projectCompatibilityFields,
+  clearSurplusCompatibilityFields,
+} from '../lib/squadPlannerProfileWriter.js'
 
 type ApplyPeriodEntry = {
   resourceTypeId: string
@@ -413,6 +421,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       if (!isNonNegativeFiniteNumber(entry.demandFTE)) {
         res.status(400).json({ error: 'period entry demandFTE must be a finite number >= 0' }); return
       }
+
+
       if (!isNonNegativeFiniteNumber(entry.utilisationPct)) {
         res.status(400).json({ error: 'period entry utilisationPct must be a finite number >= 0' }); return
       }
@@ -420,6 +430,29 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   const shouldActivate = setActive ?? true
+
+  // ── 1a. Conflict preflight (before snapshot) ─────────────────────────────
+  if (shouldActivate) {
+    const conflictResult = await conflictPreflightCheck(
+      prisma,
+      projectId,
+      normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+    )
+    if (conflictResult?.hasConflict) {
+      const messages: string[] = []
+      if (conflictResult.duplicateOwnerProfiles.length > 0) {
+        messages.push('Duplicate role profiles exist for one or more resource types. Repair required before applying.')
+      }
+      if (conflictResult.protectedNamedPersonProfiles.length > 0) {
+        for (const p of conflictResult.protectedNamedPersonProfiles) {
+          const label = p.namedResourceName ?? p.resourceTypeName
+          messages.push(`"${label}" has an explicit named-person profile and cannot be replaced by the planner.`)
+        }
+      }
+      res.status(409).json({ error: messages.join('; ') })
+      return
+    }
+  }
 
   // ── 1. Create pre-apply snapshot for undo ───────────────────────────────
   const snapshotData = await buildSnapshot(projectId)
@@ -450,7 +483,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     slotWindowsByRt = deriveSlotWindowsByResourceType(normalisedPeriods)
   }
 
-  // ── 3. Transaction: plan + capacity-profile-affecting writes + sync ──────
+  // ── 3. Transaction: plan + profile-first capacity writes ─────────────────
   const plan = await prisma.$transaction(async tx => {
     // Deactivate existing active plans
     if (shouldActivate) {
@@ -490,8 +523,9 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       include: { periods: { include: { entries: true } } },
     })
 
-    // Update RT counts + allocation mode + NR assignments (capacity-profile-affecting)
-    if (shouldActivate && maxHeadcountByRt && slotWindowsByRt) {
+
+    // ── Profile-first: write authoritative profiles directly, project compatibility ──
+    if (shouldActivate && maxHeadcountByRt) {
       // Update RT counts and allocation mode for demand RTs
       for (const [rtId, count] of maxHeadcountByRt) {
         await tx.resourceType.update({
@@ -512,60 +546,64 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         data: { allocationMode: 'CAPACITY_PLAN' },
       })
 
-      // Auto-create missing NRs then assign slot windows
+      // Fetch resource type names for materialisation
+      const rtNames = await tx.resourceType.findMany({
+        where: { projectId, id: { in: [...maxHeadcountByRt.keys()] } },
+        select: { id: true, name: true },
+      })
+      const rtNameById = new Map(rtNames.map(rt => [rt.id, rt.name]))
+
+      // Write authoritative profiles per resource type
       for (const [rtId] of maxHeadcountByRt) {
-        const slotWindows = slotWindowsByRt.get(rtId) ?? []
+        const rtName = rtNameById.get(rtId) ?? 'Resource'
 
-        // Fetch existing NRs with stable ordering
-        const existingNRs = await tx.namedResource.findMany({
-          where: { resourceTypeId: rtId },
-          orderBy: { id: 'asc' },
-          select: { id: true },
-        })
+        // Compute trajectories to know required count and provide data
+        const rtPeriods = normalisedPeriods.map(p => ({
+          periodIndex: p.periodIndex,
+          startWeek: p.startWeek,
+          endWeek: p.endWeek,
+          headcount: p.entries.find(e => e.resourceTypeId === rtId)?.headcount ?? 0,
+        }))
+        const trajectories = materializeResourceTrajectories(rtPeriods)
 
-        const missing = Math.max(0, slotWindows.length - existingNRs.length)
-        if (missing > 0) {
-          const rt = await tx.resourceType.findUnique({
-            where: { id: rtId },
-            select: { name: true },
-          })
-          const baseName = rt?.name ?? 'Resource'
-          const startIndex = existingNRs.length + 1
-          const newNRs = Array.from({ length: missing }, (_, i) => ({
-            resourceTypeId: rtId,
-            name: `${baseName} ${startIndex + i}`,
-            allocationMode: 'CAPACITY_PLAN' as const,
-            startWeek: 0,
-          }))
-          await tx.namedResource.createMany({ data: newNRs })
-        }
-
-        // Re-fetch all NRs (including any just created) with stable ordering
-        const allNRs = await tx.namedResource.findMany({
-          where: { resourceTypeId: rtId },
-          orderBy: { id: 'asc' },
-          select: { id: true },
-        })
-
-        // Assign each NR one slot window
-        await Promise.all(
-          allNRs.map((nr, idx) => {
-            const win = slotWindows[idx] ?? { startWeek: -1, endWeek: -1, allocationPercent: 100 }
-            return tx.namedResource.update({
-              where: { id: nr.id },
-              data: {
-                startWeek: win.startWeek,
-                endWeek: win.endWeek,
-                allocationPercent: win.allocationPercent,
-                allocationMode: 'CAPACITY_PLAN',
-              },
-            })
-          })
+        // Find/create named resources with stable ordering (createdAt, id)
+        const { namedResources } = await findOrCreatePlannedResources(
+          tx,
+          rtId,
+          rtName,
+          trajectories.length,
         )
-      }
 
-      // Sync capacity profiles after all authoritative legacy writes
-      await syncCapacityProfilesForProject(tx, projectId)
+        // Build profile write sets (role + per-resource)
+        const materialized = materializeProfilesForResourceType(
+          rtId,
+          rtName,
+          normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+          namedResources,
+        )
+
+        // Authoritative profile + segment persistence
+        await writePlannerProfiles(
+          tx,
+          projectId,
+          [materialized.roleProfile],
+          materialized.plannedProfiles,
+          materialized.surplusResources,
+        )
+
+        // Project compatibility fields from just-written profiles
+        await projectCompatibilityFields(
+          tx,
+          projectId,
+          [materialized.roleProfile],
+          materialized.plannedProfiles,
+        )
+
+        // Clear surplus resource windows so legacy readers see no stale capacity
+        if (materialized.surplusResources.length > 0) {
+          await clearSurplusCompatibilityFields(tx, materialized.surplusResources)
+        }
+      }
     }
 
     return createdPlan
