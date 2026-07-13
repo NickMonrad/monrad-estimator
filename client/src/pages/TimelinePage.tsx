@@ -1116,6 +1116,7 @@ export default function TimelinePage() {
                                   step="0.1"
                                   defaultValue={rt.hoursPerDay ?? ''}
                                   placeholder={project?.hoursPerDay ? String(project.hoursPerDay) : ''}
+                                  aria-label={`Hours per day for ${rt.name}`}
                                   onBlur={e => {
                                     const value = e.target.value.trim()
                                     const parsed = value === '' ? null : parseFloat(value)
@@ -1142,8 +1143,7 @@ export default function TimelinePage() {
                             {/* Named resources section */}
                             {nrs.length > 0 && (
                               <div className="border-t border-gray-100 dark:border-gray-700 mt-2 pt-2">
-                                {/* Column headers — hidden on very small screens */}
-                                <div className="hidden sm:grid sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_24px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
+                                <div className="grid sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
                                   <span>Named resource</span>
                                   <span>Planning basis</span>
                                   <span className="text-right">Allocation %</span>
@@ -1159,7 +1159,7 @@ export default function TimelinePage() {
                                   return (
                                     <div
                                       key={nr.id ?? `${rt.id}-${i}`}
-                                      className="grid grid-cols-1 sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_24px] gap-x-1.5 gap-y-1 items-center text-xs text-gray-500 dark:text-gray-400 py-1.5 px-1 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40"
+                                      className="grid grid-cols-1 sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 gap-y-1 items-center text-xs text-gray-500 dark:text-gray-400 py-1.5 px-1 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40"
                                     >
                                       {/* Name — direct child so closest('div') from text finds the grid row */}
                                       <span className="truncate text-gray-600 dark:text-gray-300 font-medium min-w-0">{nr.name}</span>
@@ -1171,6 +1171,7 @@ export default function TimelinePage() {
                                           {nr.id ? (
                                             <select
                                               value={mode}
+                                              aria-label={`Planning basis for ${nr.name}`}
                                               onChange={e => {
                                                 const newMode = e.target.value
                                                 const pct = newMode === 'EFFORT' ? 100 : (nr.allocationPercent ?? 100)
@@ -1209,6 +1210,7 @@ export default function TimelinePage() {
                                               min={1}
                                               max={100}
                                               defaultValue={nr.allocationPercent ?? 100}
+                                              aria-label={`Allocation percentage for ${nr.name}`}
                                               onBlur={e => {
                                                 const val = Math.min(100, Math.max(1, parseInt(e.target.value) || 100))
                                                 updateNamedResource.mutate({
@@ -1240,6 +1242,7 @@ export default function TimelinePage() {
                                               min={1}
                                               placeholder="W1"
                                               defaultValue={nr.allocationStartWeek ?? nr.startWeek ?? ''}
+                                              aria-label={`Start week for ${nr.name}`}
                                               onBlur={e => {
                                                 const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
                                                 updateNamedResource.mutate({
@@ -1258,12 +1261,12 @@ export default function TimelinePage() {
                                               type="number"
                                               disabled
                                               placeholder="—"
+                                              aria-label={`Start week for ${nr.name}`}
                                               className="w-full text-xs border border-gray-100 dark:border-gray-700 rounded px-1 py-0 text-right bg-gray-50 dark:bg-gray-800 text-gray-300 dark:text-gray-600 placeholder-gray-300 cursor-not-allowed"
                                             />
                                           )}
                                         </div>
                                       </div>
-
                                       {/* End week */}
                                       <div className="flex items-center gap-1.5 sm:justify-end">
                                         <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">End:</span>
@@ -1275,6 +1278,7 @@ export default function TimelinePage() {
                                               min={1}
                                               placeholder="W∞"
                                               defaultValue={nr.allocationEndWeek ?? nr.endWeek ?? ''}
+                                              aria-label={`End week for ${nr.name}`}
                                               onBlur={e => {
                                                 const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
                                                 updateNamedResource.mutate({
@@ -1293,18 +1297,17 @@ export default function TimelinePage() {
                                               type="number"
                                               disabled
                                               placeholder="—"
+                                              aria-label={`End week for ${nr.name}`}
                                               className="w-full text-xs border border-gray-100 dark:border-gray-700 rounded px-1 py-0 text-right bg-gray-50 dark:bg-gray-800 text-gray-300 dark:text-gray-600 placeholder-gray-300 cursor-not-allowed"
                                             />
                                           )}
                                         </div>
                                       </div>
-
-                                      {/* Remove — visible on all screens as last grid item */}
-                                      <div className="flex justify-center items-center">
+                                      <div className="flex justify-center items-center min-w-[36px]">
                                         {nr.id ? (
                                           <button
                                             onClick={() => handleRemoveNamedResource(rt.id, nr.id!)}
-                                            className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400 text-sm leading-none"
+                                            className="w-8 h-8 flex items-center justify-center rounded text-gray-300 hover:text-red-400 hover:bg-red-50 dark:text-gray-600 dark:hover:text-red-400 dark:hover:bg-red-900/20 transition-colors"
                                             title="Remove person"
                                             aria-label={`Remove ${nr.name}`}
                                           >×</button>

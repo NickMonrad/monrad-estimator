@@ -625,26 +625,16 @@ describe('TimelinePage — resource-counts layout', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders resource type section with Count and Hrs/day labels grouped together', async () => {
+  it('hours input is discoverable by contextual accessible name', async () => {
     mockResourceTypes = [baseResourceType]
     mockTimeline = createTimeline({
       weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
     })
     renderPage()
 
-    // The panel should be open by default
-    // Resource type name is visible (await data loading)
-    const rtNames = await screen.findAllByText('LayoutTester')
-    expect(rtNames.length).toBeGreaterThanOrEqual(1)
-    expect(rtNames[0]).toBeInTheDocument()
-
-    // Count label and value are visible near the resource type name
-    expect(screen.getByText('Count')).toBeInTheDocument()
-    expect(screen.getByText('3')).toBeInTheDocument()
-
-    // Hrs/day label and input are visible near the resource type name
-    expect(screen.getByText('Hrs/day')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('7.6')).toBeInTheDocument()
+    const hoursInput = await screen.findByRole('spinbutton', { name: /hours per day for layouttester/i })
+    expect(hoursInput).toBeInTheDocument()
+    expect(hoursInput).toHaveValue(7.6)
   })
 
   it('renders + Add named resource button with accessible name within resource type', async () => {
@@ -679,18 +669,117 @@ describe('TimelinePage — resource-counts layout', () => {
     // Named resource name is rendered (may appear in multiple panels)
     const bobNames = await screen.findAllByText('Bob')
     expect(bobNames.length).toBeGreaterThanOrEqual(1)
-    expect(bobNames[0]).toBeInTheDocument()
 
-    // Remove button has an accessible name
+    // Planning basis select has contextual accessible name
+    const basisSelect = screen.getByRole('combobox', { name: /planning basis for bob/i })
+    expect(basisSelect).toBeInTheDocument()
+    expect(basisSelect).toHaveValue('EFFORT')
+
+    // Remove button has an accessible name and adequate target size classes
     const removeBtn = screen.getByRole('button', { name: /remove bob/i })
     expect(removeBtn).toBeInTheDocument()
     expect(removeBtn).toHaveAttribute('title', 'Remove person')
+    expect(removeBtn.className).toMatch(/w-8/)
+    expect(removeBtn.className).toMatch(/h-8/)
   })
 
-  it('renders conditional planning fields correctly for each planning mode', async () => {
+  it('allocation percentage input has contextual accessible name', async () => {
     mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{
+        ...baseNamedResource,
+        allocationMode: 'FULL_PROJECT',
+        allocationPercent: 75,
+      }],
+    })
+    renderPage()
 
-    // Test with TIMELINE mode so start/end fields are active
+    await screen.findAllByText('Bob')
+
+    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    expect(pctInput).toBeInTheDocument()
+    expect(pctInput).toHaveValue(75)
+
+    // Start/end inputs have contextual accessible names and are disabled in non-TIMELINE mode
+    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    expect(startInput).toBeDisabled()
+
+    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    expect(endInput).toBeDisabled()
+  })
+
+  it('start/end inputs have contextual accessible names and remain labeled when disabled', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource, allocationMode: 'FULL_PROJECT' }],
+    })
+    renderPage()
+
+    await screen.findAllByText('Bob')
+
+    // Both start/end inputs are disabled for non-TIMELINE mode
+    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    expect(startInput).toBeDisabled()
+    expect(startInput).toHaveAttribute('aria-label', 'Start week for Bob')
+
+    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    expect(endInput).toBeDisabled()
+    expect(endInput).toHaveAttribute('aria-label', 'End week for Bob')
+  })
+
+  it('preserves existing mutation behaviour when hours change', async () => {
+    mockResourceTypes = [{
+      ...baseResourceType,
+      hoursPerDay: 8,
+    }]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+    })
+    renderPage()
+
+    const hoursInput = (await screen.findByRole('spinbutton', { name: /hours per day for layouttester/i })) as HTMLInputElement
+
+    fireEvent.change(hoursInput, { target: { value: '6.5' } })
+    fireEvent.blur(hoursInput)
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}`,
+        { hoursPerDay: 6.5 },
+      )
+    })
+  })
+
+  it('planning basis change submits exact mutation payload', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource }],
+    })
+    renderPage()
+
+    await screen.findAllByText('Bob')
+
+    const select = screen.getByRole('combobox', { name: /planning basis for bob/i })
+    fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        expect.objectContaining({
+          allocationMode: 'FULL_PROJECT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        }),
+      )
+    })
+  })
+
+  it('allocation/start/end onBlur behaviour is preserved', async () => {
+    mockResourceTypes = [baseResourceType]
     mockTimeline = createTimeline({
       weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
       namedResources: [{
@@ -705,41 +794,27 @@ describe('TimelinePage — resource-counts layout', () => {
 
     await screen.findAllByText('Bob')
 
-    // Planning basis select has the correct value
-    const select = screen.getByRole('combobox')
-    expect(select).toHaveValue('TIMELINE')
-
-    // Allocation % input shows correct value
-    const pctInput = screen.getByDisplayValue('80') as HTMLInputElement
-    expect(pctInput).toBeInTheDocument()
-
-    // Start/end inputs show correct values (same as stored allocationStartWeek)
-    const startInput = screen.getByPlaceholderText('W1') as HTMLInputElement
-    expect(startInput).toHaveValue(2)
-
-    const endInput = screen.getByPlaceholderText('W∞') as HTMLInputElement
-    expect(endInput).toHaveValue(10)
-  })
-
-  it('preserves existing mutation behaviour when hours change', async () => {
-    mockResourceTypes = [{
-      ...baseResourceType,
-      hoursPerDay: 8,
-    }]
-    mockTimeline = createTimeline({
-      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
-    })
-    renderPage()
-
-    const hoursInput = (await screen.findByDisplayValue('8')) as HTMLInputElement
-
-    fireEvent.change(hoursInput, { target: { value: '6.5' } })
-    fireEvent.blur(hoursInput)
+    // Change allocation percent
+    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    fireEvent.change(pctInput, { target: { value: '60' } })
+    fireEvent.blur(pctInput)
 
     await waitFor(() => {
-      expect(mockPut).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}`,
-        { hoursPerDay: 6.5 },
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        expect.objectContaining({ allocationPercent: 60 }),
+      )
+    })
+
+    // Change start week
+    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    fireEvent.change(startInput, { target: { value: '5' } })
+    fireEvent.blur(startInput)
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        expect.objectContaining({ allocationStartWeek: 5 }),
       )
     })
   })
@@ -782,5 +857,5 @@ describe('TimelinePage — resource-counts layout', () => {
         `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
       )
     })
-})
+  })
 })

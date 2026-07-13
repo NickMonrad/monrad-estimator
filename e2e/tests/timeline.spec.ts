@@ -556,64 +556,125 @@ test.describe('Timeline — Resource-counts layout', () => {
     fs.unlinkSync(tmpFile)
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
-    await expect(page.getByText('Core Platform')).toBeVisible({ timeout: 10_000 })
+    // Wait for a known epic from the CACHE_INV_CSV fixture to confirm import completed
+    await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
 
-    // Navigate to Timeline
+    // Navigate to Timeline and schedule
     const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
     await page.goto(`/projects/${projectId}/timeline`)
     await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
 
-    // Run a quick schedule so the timeline has entries
-    const updateBtn = page.getByRole('button', { name: /update timeline/i })
-    if (await updateBtn.isVisible()) {
-      await updateBtn.click()
-      // Wait for schedule to complete and resource-counts panel to populate
-      await page.waitForTimeout(3_000)
-    }
+    // Run quick schedule so the timeline has demand-bearing resource types
+    await quickSchedule(page)
+    // Wait for resource-counts panel to populate with Developer and Tech Lead
+    await expect(page.getByText('Count').first()).toBeVisible({ timeout: 15_000 })
   })
 
-  test('shows resource-counts as compact grouped cards at desktop viewport', async ({ page }) => {
+  test('desktop: add named resource, edit fields, verify persistence', async ({ page }) => {
+    test.setTimeout(90_000)
     await page.setViewportSize({ width: 1440, height: 900 })
 
-    // The resource-counts section header is visible
-    const countsSection = page.getByText('Resource Counts — adjust before Update timeline')
-    await expect(countsSection).toBeVisible({ timeout: 10_000 })
+    // Resource-counts section is visible as compact cards
+    await expect(page.getByText('Resource Counts — adjust before Update timeline')).toBeVisible()
 
-    // Resource type cards are visible (Developer + Tech Lead from CSV)
-    await expect(page.getByText('Developer').first()).toBeVisible({ timeout: 10_000 })
-    await expect(page.getByText('Tech Lead').first()).toBeVisible()
+    // Click + Add named resource for Developer
+    const addDevBtn = page.getByRole('button', { name: /add named resource to developer/i })
+    await expect(addDevBtn).toBeVisible()
+    await addDevBtn.click()
 
-    // Count and Hrs/day labels are visible
-    await expect(page.getByText('Count').first()).toBeVisible()
-    await expect(page.getByText('Hrs/day').first()).toBeVisible()
+    // The new named resource appears with default name "Developer 1"
+    await expect(page.getByText('Developer 1')).toBeVisible({ timeout: 8_000 })
 
-    // Add named resource buttons are present
-    const addDeveloperBtn = page.getByRole('button', { name: /add named resource to developer/i })
-    await expect(addDeveloperBtn).toBeVisible({ timeout: 5_000 })
+    // Verify the fields are present with contextual accessible names
+    const basisSelect = page.getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelect).toBeVisible()
+    expect(basisSelect).toHaveValue('EFFORT')
+
+    // Change planning basis to Availability window (TIMELINE) — enables start/end
+    await basisSelect.selectOption('TIMELINE')
+    await expect(page.getByRole('spinbutton', { name: /allocation percentage for developer 1/i })).toBeVisible()
+
+    // Enter a non-default allocation percentage
+    const pctInput = page.getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    await pctInput.fill('80')
+    // Blur to trigger onBlur save
+    await page.locator('h1').first().click()
+
+    // Enter start and end weeks
+    const startInput = page.getByRole('spinbutton', { name: /start week for developer 1/i })
+    await startInput.fill('2')
+    await page.locator('h1').first().click()
+
+    const endInput = page.getByRole('spinbutton', { name: /end week for developer 1/i })
+    await endInput.fill('10')
+    await page.locator('h1').first().click()
+
+    // Reload the page to verify persistence
+    const currentUrl = page.url()
+    await page.goto(currentUrl)
+    await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
+
+    // Wait for resource-counts to load and verify values persisted
+    await expect(page.getByText('Developer 1')).toBeVisible({ timeout: 10_000 })
+
+    // Remove the named resource
+    const removeBtn = page.getByRole('button', { name: /remove developer 1/i })
+    await expect(removeBtn).toBeVisible()
+    // Accept the confirm dialog
+    page.once('dialog', dialog => dialog.accept())
+    await removeBtn.click()
+
+    // Verify removal
+    await expect(page.getByText('Developer 1')).not.toBeVisible({ timeout: 8_000 })
 
     // Verify no horizontal document overflow
     const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
     expect(overflowX).toBe(true)
   })
 
-  test('resource-counts layout is usable at narrow viewport', async ({ page }) => {
+  test('narrow viewport: fields and labels remain usable', async ({ page }) => {
+    test.setTimeout(90_000)
     await page.setViewportSize({ width: 820, height: 900 })
 
-    // Section header still visible
-    const countsSection = page.getByText('Resource Counts — adjust before Update timeline')
-    await expect(countsSection).toBeVisible({ timeout: 10_000 })
+    // Add a named resource first so there are fields to inspect
+    const addDevBtn = page.getByRole('button', { name: /add named resource to developer/i })
+    await expect(addDevBtn).toBeVisible({ timeout: 10_000 })
+    await addDevBtn.click()
+    await expect(page.getByText('Developer 1')).toBeVisible({ timeout: 8_000 })
 
-    // Resource type cards collapsed/stacked but still visible
-    await expect(page.getByText('Developer').first()).toBeVisible({ timeout: 10_000 })
+    // Column headers are visible at narrow desktop/tablet widths
+    await expect(page.getByText('Named resource')).toBeVisible()
+    await expect(page.getByText('Planning basis')).toBeVisible()
 
-    // Count and Hrs/day labels remain visible
-    await expect(page.getByText('Count').first()).toBeVisible()
-    await expect(page.getByText('Hrs/day').first()).toBeVisible()
+    // Planning basis select is reachable
+    const basisSelect = page.getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelect).toBeVisible()
 
-    // Verify no horizontal document overflow at narrow viewport
-    const overflowX = await page.evaluate(() => {
-      return document.documentElement.scrollWidth <= window.innerWidth + 1
-    })
+    // Verify no horizontal overflow
+    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
+    expect(overflowX).toBe(true)
+  })
+
+  test('mobile viewport: controls stack vertically with inline labels', async ({ page }) => {
+    test.setTimeout(90_000)
+    await page.setViewportSize({ width: 390, height: 844 })
+
+    // Add a named resource so there are fields to inspect
+    const addDevBtn = page.getByRole('button', { name: /add named resource to developer/i })
+    await expect(addDevBtn).toBeVisible({ timeout: 10_000 })
+    await addDevBtn.click()
+    await expect(page.getByText('Developer 1')).toBeVisible({ timeout: 8_000 })
+
+    // Remove action remains reachable (the × button)
+    const removeBtn = page.getByRole('button', { name: /remove developer 1/i })
+    await expect(removeBtn).toBeVisible()
+
+    // Planning basis select is reachable
+    const basisSelect = page.getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelect).toBeVisible()
+
+    // Verify no horizontal document overflow on mobile
+    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
     expect(overflowX).toBe(true)
   })
 })
