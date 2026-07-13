@@ -800,3 +800,4 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(overflowX).toBe(true)
   })
 })
+})
