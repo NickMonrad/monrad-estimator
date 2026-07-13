@@ -580,7 +580,7 @@ test.describe('Timeline — Resource-counts layout', () => {
   }
 
   // Change 2: request-event eligibility set replacing boolean-only gate
-  function createEligibleMatcher(page: Page, method: string, pathSuffix: string) {
+  function createEligibleMatcher(page: Page, method: string, pathSuffix: string, timeout = 15_000) {
     const eligible = new Set<string>()
     let started = false
     const handler = (req: Request) => {
@@ -592,13 +592,12 @@ test.describe('Timeline — Resource-counts layout', () => {
       } catch { /* ignore invalid URLs */ }
     }
     page.on('request', handler)
+    const promise = page.waitForResponse(
+      resp => resp.ok() && eligible.has(resp.request().url()),
+      { timeout },
+    )
     return {
-      eligible,
-      waitForResponse: (timeout?: number) =>
-        page.waitForResponse(
-          resp => resp.ok() && eligible.has(resp.request().url()),
-          { timeout },
-        ),
+      promise,
       gate: () => { started = true },
       cleanup: () => page.off('request', handler),
     }
@@ -615,50 +614,61 @@ test.describe('Timeline — Resource-counts layout', () => {
     // Derive resource type ID from the card's data-testid (resource-type-card-<UUID>)
     const cardTestId = await locator.getAttribute('data-testid')
     const resourceTypeId = cardTestId!.replace('resource-type-card-', '')
+    // Timeline matcher first, eager promise
+    const tlMatcher = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 15_000)
+    // POST waiter: exact predicate gates tlMatcher when POST response matches
     const addResp = page.waitForResponse(
       resp => {
         if (resp.request().method() !== 'POST' || !resp.ok()) return false
         try {
           const u = new URL(resp.request().url())
-          return u.pathname.endsWith(`/projects/${projectId}/resource-types/${resourceTypeId}/named-resources`)
+          if (u.pathname.endsWith(`/projects/${projectId}/resource-types/${resourceTypeId}/named-resources`)) {
+            tlMatcher.gate()
+            return true
+          }
         } catch { return false }
+        return false
       },
       { timeout: 15_000 },
     )
-    const tlMatcher = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`)
-    tlMatcher.gate()
+    // Both waiters exist before click
     await locator.getByRole('button', { name: /add named resource to developer/i }).click()
-    const addBody = await (await addResp).json()
-    // json() returns unknown; NR shape is known from POST /named-resources
-    const nr = addBody as { id: string; resourceTypeId: string }
-    await tlMatcher.waitForResponse(15_000)
+    // Await POST and Timeline promises together
+    const [addResponse] = await Promise.all([addResp, tlMatcher.promise])
     tlMatcher.cleanup()
-    return nr
+    return await addResponse.json() as { id: string; resourceTypeId: string }
   }
 
   // Change 4: unified deletion helper — DELETE waiter + Timeline GET + dialog validation, accepts before/while click
   async function removeNamedResource(page: Page, devCardLocator: Locator, nrId: string) {
+    // Timeline matcher first, eager promise
+    const tlMatcher = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
+    // DELETE waiter: exact predicate gates tlMatcher on matching DELETE response
     const delResp = page.waitForResponse(
       resp => {
         if (resp.request().method() !== 'DELETE' || !resp.ok()) return false
         try {
           const u = new URL(resp.request().url())
-          return u.pathname.endsWith(`/named-resources/${nrId}`)
+          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+            tlMatcher.gate()
+            return true
+          }
         } catch { return false }
+        return false
       },
       { timeout: 10_000 },
     )
-    const tlMatcher = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`)
+    // Dialog promise accepting asynchronously before/while click
     const dialogPromise = page.waitForEvent('dialog', { timeout: 10_000 }).then(async d => {
       expect(d.message()).toMatch(/remove this person/i)
       await d.accept()
     })
-    tlMatcher.gate()
+    // Await click/dialog/DELETE/Timeline in one Promise.all
     await Promise.all([
       devCardLocator.getByRole('button', { name: /remove developer 1/i }).click(),
       dialogPromise,
       delResp,
-      tlMatcher.waitForResponse(10_000),
+      tlMatcher.promise,
     ])
     tlMatcher.cleanup()
     // Assert exact row test ID count zero rather than broad prefix
@@ -681,39 +691,49 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(basisSelect).toHaveValue('EFFORT')
 
     // PATCH basis to TIMELINE
+    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchBasis = page.waitForResponse(
       resp => {
         if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try { return new URL(resp.request().url()).pathname.endsWith(`/named-resources/${nrId}`) }
-        catch { return false }
+        try {
+          const u = new URL(resp.request().url())
+          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+            tlBasis.gate()
+            return true
+          }
+        } catch { return false }
+        return false
       },
       { timeout: 10_000 },
     )
-    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`)
-    tlBasis.gate()
     await basisSelect.selectOption('TIMELINE')
-    expect((await patchBasis).status()).toBe(200)
-    await tlBasis.waitForResponse(10_000)
+    const [patchBasisResp] = await Promise.all([patchBasis, tlBasis.promise])
+    expect(patchBasisResp.status()).toBe(200)
     tlBasis.cleanup()
     // Re-run devCard and re-acquire basis combobox after refresh
     await expect(devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })).toHaveValue('TIMELINE')
     // PATCH allocation to 80%
     const pctInput = devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
     await expect(pctInput).toBeVisible()
+    const tlPct = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchPct = page.waitForResponse(
       resp => {
         if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try { return new URL(resp.request().url()).pathname.endsWith(`/named-resources/${nrId}`) }
-        catch { return false }
+        try {
+          const u = new URL(resp.request().url())
+          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+            tlPct.gate()
+            return true
+          }
+        } catch { return false }
+        return false
       },
       { timeout: 10_000 },
     )
-    const tlPct = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`)
-    tlPct.gate()
     await pctInput.fill('80')
     await pctInput.blur()
-    expect((await patchPct).status()).toBe(200)
-    await tlPct.waitForResponse(10_000)
+    const [patchPctResp] = await Promise.all([patchPct, tlPct.promise])
+    expect(patchPctResp.status()).toBe(200)
     tlPct.cleanup()
     const pctAfter = devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
     await expect(pctAfter).toHaveValue('80')
@@ -721,20 +741,25 @@ test.describe('Timeline — Resource-counts layout', () => {
     // PATCH start week to 2
     const startInput = devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })
     await expect(startInput).toBeEnabled()
+    const tlStart = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchStart = page.waitForResponse(
       resp => {
         if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try { return new URL(resp.request().url()).pathname.endsWith(`/named-resources/${nrId}`) }
-        catch { return false }
+        try {
+          const u = new URL(resp.request().url())
+          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+            tlStart.gate()
+            return true
+          }
+        } catch { return false }
+        return false
       },
       { timeout: 10_000 },
     )
-    const tlStart = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`)
-    tlStart.gate()
     await startInput.fill('2')
     await startInput.blur()
-    expect((await patchStart).status()).toBe(200)
-    await tlStart.waitForResponse(10_000)
+    const [patchStartResp] = await Promise.all([patchStart, tlStart.promise])
+    expect(patchStartResp.status()).toBe(200)
     tlStart.cleanup()
     const startAfter = devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })
     await expect(startAfter).toHaveValue('2')
@@ -742,20 +767,25 @@ test.describe('Timeline — Resource-counts layout', () => {
     // PATCH end week to 10
     const endInput = devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })
     await expect(endInput).toBeEnabled()
+    const tlEnd = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchEnd = page.waitForResponse(
       resp => {
         if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try { return new URL(resp.request().url()).pathname.endsWith(`/named-resources/${nrId}`) }
-        catch { return false }
+        try {
+          const u = new URL(resp.request().url())
+          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+            tlEnd.gate()
+            return true
+          }
+        } catch { return false }
+        return false
       },
       { timeout: 10_000 },
     )
-    const tlEnd = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`)
-    tlEnd.gate()
     await endInput.fill('10')
     await endInput.blur()
-    expect((await patchEnd).status()).toBe(200)
-    await tlEnd.waitForResponse(10_000)
+    const [patchEndResp] = await Promise.all([patchEnd, tlEnd.promise])
+    expect(patchEndResp.status()).toBe(200)
     tlEnd.cleanup()
     const endAfter = devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })
     await expect(endAfter).toHaveValue('10')
@@ -812,19 +842,24 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(headers.getByText('Allocation %', { exact: true })).toBeVisible()
     await expect(headers.getByText('Start', { exact: true })).toBeVisible()
     await expect(headers.getByText('End', { exact: true })).toBeVisible()
+    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchBasis = page.waitForResponse(
       resp => {
         if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try { return new URL(resp.request().url()).pathname.endsWith(`/named-resources/${nrId}`) }
-        catch { return false }
+        try {
+          const u = new URL(resp.request().url())
+          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+            tlBasis.gate()
+            return true
+          }
+        } catch { return false }
+        return false
       },
       { timeout: 10_000 },
     )
-    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`)
-    tlBasis.gate()
     await basisSelect.selectOption('TIMELINE')
-    expect((await patchBasis).status()).toBe(200)
-    await tlBasis.waitForResponse(10_000)
+    const [patchBasisResp] = await Promise.all([patchBasis, tlBasis.promise])
+    expect(patchBasisResp.status()).toBe(200)
     tlBasis.cleanup()
     // Re-run devCard and re-acquire basis combobox after refresh
     await expect(devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })).toHaveValue('TIMELINE')
@@ -869,19 +904,24 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
     await expect(basisSelect).toHaveValue('EFFORT')
 
+    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchBasis = page.waitForResponse(
       resp => {
         if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try { return new URL(resp.request().url()).pathname.endsWith(`/named-resources/${nrId}`) }
-        catch { return false }
+        try {
+          const u = new URL(resp.request().url())
+          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+            tlBasis.gate()
+            return true
+          }
+        } catch { return false }
+        return false
       },
       { timeout: 10_000 },
     )
-    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`)
-    tlBasis.gate()
     await basisSelect.selectOption('TIMELINE')
-    expect((await patchBasis).status()).toBe(200)
-    await tlBasis.waitForResponse(10_000)
+    const [patchBasisResp] = await Promise.all([patchBasis, tlBasis.promise])
+    expect(patchBasisResp.status()).toBe(200)
     tlBasis.cleanup()
     // Re-run devCard and re-acquire basis combobox after refresh
     await expect(devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })).toHaveValue('TIMELINE')
