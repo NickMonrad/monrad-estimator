@@ -108,7 +108,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (8 tests)
+### `timeline.spec.ts` — Timeline (14 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -134,11 +134,34 @@ API-level tests using the `request` fixture. No browser UI involved.
 | run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
 | apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts the exact `Starting team options` section label and that candidate cards expose `Apply directly` buttons, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
 
+#### `Timeline — Resource-counts layout` describe block (3 tests — issue #369)
+
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Timeline, and runs Quick schedule via the `quickSchedule(page)` helper (clicks "Update timeline"). After scheduling, it waits for the `\d+ features scheduled` completion signal, asserts one unique Developer-type resource card via the `devCard(page)` helper (`filter({ has: addButton })` with `toHaveCount(1)`), and waits for the `Add named resource to Developer` button. All mutations install both a response waiter for the mutation's HTTP method and a gated `createEligibleMatcher` Timeline GET watcher before each action; `gate()` enables Timeline-request eligibility immediately before the action. Tests have a 90–120 s timeout.
+
+| Test | Description |
+|------|-------------|
+| desktop: add named resource, change basis, edit values, verify persistence after reload, remove | At 1440×900, calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts server-default planning basis is **TIMELINE**. Uses `setNamedResourceBasisAndWait` (PATCH + gated Timeline GET) to transition to EFFORT, re-acquires and asserts EFFORT, then same helper transitions back to TIMELINE. Each subsequent PATCH (allocation % → 80, start week → 2, end week → 10) installs both PATCH response and gated-Timeline-GET waiters before the action, then waits for both responses and re-acquires locators. Reloads the page, re-acquires controls, and asserts all four values persisted (TIMELINE, 80, 2, 10) via string `toHaveValue`. Before removal: asserts document scroll-fit + `expectElementToFit` on `resource-counts` panel and `named-resource-row-{nrId}`. Calls `removeNamedResource` (concurrent dialog acceptance, DELETE response, gated Timeline GET); asserts `named-resource-row-{id}` count zero. Post-delete: document fit + `expectElementToFit` on panel only. |
+| narrow viewport: column headers and named-resource controls visible, no overflow | At 820×900, verifies column headers (Named resource, Planning basis, Allocation %, Start, End) remain visible above `sm` breakpoint via `named-resource-headers` test ID. Calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts server-default basis is **TIMELINE**, uses `setNamedResourceBasisAndWait` to transition to EFFORT then back to TIMELINE. Verifies allocation/start/end controls become enabled. Before removal: `expectElementToFit` on panel and `named-resource-row-{nrId}`. Calls `removeNamedResource` (concurrent dialog/DELETE/Timeline GET); asserts row test ID count zero. Post-delete: document fit + `expectElementToFit` on panel. |
+| mobile viewport: desktop column headers hidden, inline labels visible, controls reachable, resource-counts panel and rows fit | At 390×844, verifies desktop column headers are **not** visible via stable `named-resource-headers` test ID (below `sm` breakpoint). Calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts inline mobile labels (Basis:, Alloc:, Start:, End:) via row-scoped `named-resource-row-{id}` test ID. Asserts server-default basis is **TIMELINE**, uses `setNamedResourceBasisAndWait` to transition to EFFORT then back to TIMELINE. Verifies allocation/start/end controls become enabled. Before removal: `expectElementToFit` on panel and `named-resource-row-{nrId}`. Proves vertical stacking order using parent-group bounding boxes (`locator('..')` from each label to its field-group `div`) with 2 px bottom-based group-tolerance (alloc `y ≥ basis·bottom − 2`, start `y ≥ alloc·bottom − 2`, end `y ≥ start·bottom − 2`). Calls `removeNamedResource` (concurrent dialog/DELETE/Timeline GET); asserts row test ID count zero. Post-delete: `expectElementToFit` on panel. |
+
 #### `Timeline — cache invalidation` describe block (1 test)
+
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Timeline, and runs Quick schedule via the `quickSchedule(page)` helper.
 
 | Test | Description |
 |------|-------------|
 | manual feature override clears demand cache | Seeds Developer + Tech Lead tasks via CSV, schedules, manually overrides a feature's start week, navigates to Resource Profile — asserts both resource type rows render with formatted person-day values and Commercial tab cost summary loads (regression: stale `weeklyDemandCache` would cause error/blank page) |
+
+#### `Resource Profile allocation` describe block (3 tests — issue #311)
+
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Resource Profile, and verifies the Resource Profile page heading.
+
+| Test | Description |
+|------|-------------|
+| allocation mode dropdown changes from Timeline to Whole-project allocation | Clicks the allocation badge for the Developer row to open the inline editor; changes mode to `FULL_PROJECT` and sets FTE % to 50; clicks Save |
+| Availability window mode shows start/end week inputs and persists | Opens the Developer allocation editor; selects Availability window (TIMELINE); fills start week 2 and end week 10; clicks Save |
+| allocation % input persists independently | Opens the Developer allocation editor; changes to Whole-project allocation (FULL_PROJECT); sets FTE % to 75; saves and re-opens to verify the 75% value persists |
+
 
 ---
 
