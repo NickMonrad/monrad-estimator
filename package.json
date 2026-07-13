@@ -13,12 +13,15 @@
     "build": "npm run build --workspace=server && npm run build --workspace=client",
     "lint": "npm run lint --workspace=client && npm run lint --workspace=server",
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
+    "test": "npm run test:backup && npm test --workspace=server && npm test --workspace=client",
+    "validate": "npm run lint && npm run typecheck && npm run build && npm test",
     "test:e2e": "npm run test --workspace=e2e",
     "test:e2e:local": "node scripts/run-e2e-local.mjs",
     "test:e2e:headed": "npm run test:headed --workspace=e2e",
     "test:e2e:report": "npm run report --workspace=e2e",
     "screenshots": "npm run screenshots --workspace=e2e",
-    "db:backup": "mkdir -p backups && docker exec monrad-pg pg_dump -U postgres -d monrad_estimator --format=custom -f /tmp/monrad-backup.dump && docker cp monrad-pg:/tmp/monrad-backup.dump \"backups/backup-$(date +%Y%m%d-%H%M%S).dump\" && echo 'Backup saved to backups/'"
+    "db:backup": "node scripts/db-backup.mjs",
+    "test:backup": "node --test scripts/db-backup.test.mjs"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
