@@ -117,7 +117,7 @@ Run the repository backup command before any Prisma migration or other destructi
 npm run db:backup
 ```
 
-The command reads `DATABASE_URL` from the process environment first, then `server/.env`, and writes a verified non-empty custom-format dump to `backups/`. The password is extracted from the URL and delivered to `pg_dump` through the `PGPASSWORD` environment variable; `--dbname` receives the URL with the password portion stripped. Automatic mode uses the host `pg_dump` (conservative default — no Docker endpoint guessing). For Docker-based PostgreSQL, set `MONRAD_DB_MODE=docker` explicitly; `MONRAD_DB_CONTAINER` overrides the container name (default `monrad-pg`) when Docker mode is active. Use `MONRAD_DB_MODE=host` to force host mode. Set `MONRAD_ENV_FILE` to override the `.env` path for testing or non-standard layouts. Backup command failures identify the host or Docker executable and exit status without printing the database URL or password. The command fails instead of silently backing up an unconfigured or different database. Backup regression tests cover mode selection, configuration precedence, write atomicity, verification, credential safety, cleanup, and all failure paths. They run as part of `npm test`, `npm run validate`, and on both Linux and Windows CI.
+The command reads `DATABASE_URL` from the process environment first, then `server/.env`, and writes a verified non-empty custom-format dump to `backups/`. Automatic mode uses the host `pg_dump` (conservative default — no Docker endpoint guessing). For Docker-based PostgreSQL, set `MONRAD_DB_MODE=docker` explicitly; `MONRAD_DB_CONTAINER` overrides the container name (default `monrad-pg`) when Docker mode is active. Use `MONRAD_DB_MODE=host` to force host mode. Set `MONRAD_ENV_FILE` to override the `.env` path for testing or non-standard layouts. Backup command failures identify the host or Docker executable and exit status without printing the database URL or password. The command fails instead of silently backing up an unconfigured or different database. Backup regression tests cover mode selection, configuration precedence, write atomicity, verification, cleanup, and all failure paths. They run as part of `npm test`, `npm run validate`, and CI.
 
 ### 5. Run database migrations
 
@@ -156,7 +156,7 @@ Server logs are written to `logs/dev-servers.log` when running in the background
 npm run validate
 
 # E2E (preferred — local runner starts isolated API/Vite servers, chooses free ports)
-# Loads server/.env, runs e2e-cleanup before seed, passes resolved env to all processes; works on Windows, macOS, and Linux
+# Loads server/.env, runs e2e-cleanup before seed, passes resolved env to all processes
 npm run test:e2e:local
 
 # E2E (requires both dev servers already running)

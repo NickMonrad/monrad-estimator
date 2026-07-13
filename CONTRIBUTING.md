@@ -88,7 +88,7 @@ When Playwright tests change, update `e2e/TESTS.md`.
 
 Before a Prisma schema migration or other operation that may alter persistent development data:
 
-1. Confirm the configured database in `DATABASE_URL` or the selected environment file (`MONRAD_ENV_FILE`, default `server/.env`) and whether it runs in the default Docker container or directly on the host.
+1. Confirm the configured database in `server/.env` or `DATABASE_URL` and whether it runs in the default Docker container or directly on the host.
 2. Run:
 
    ```bash
@@ -101,7 +101,7 @@ Before a Prisma schema migration or other operation that may alter persistent de
 
 `npm run db:backup` is the required repository entry point. It must work on Windows, macOS, and Linux and support both documented local PostgreSQL setups:
 
-- automatic mode uses host `pg_dump` for the exact configured `DATABASE_URL`; the password is extracted and delivered through `PGPASSWORD` rather than appearing on the command line
+- automatic mode uses host `pg_dump` for the exact configured `DATABASE_URL`
 - explicit `MONRAD_DB_MODE=docker` uses the named Docker container (default `monrad-pg`)
 - explicit `MONRAD_DB_MODE=host` uses host `pg_dump`
 
