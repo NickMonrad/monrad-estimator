@@ -641,6 +641,7 @@ export default function TimelinePage() {
       }).then(r => r.data),
     onSuccess: () => {
       invalidateProjectResourceProfile(qc, projectId)
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
       setScheduleStale(true)
     },
   })
@@ -650,6 +651,7 @@ export default function TimelinePage() {
       api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`).then(r => r.data),
     onSuccess: () => {
       invalidateProjectResourceProfile(qc, projectId)
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
       setScheduleStale(true)
     },
   })
@@ -659,6 +661,7 @@ export default function TimelinePage() {
       api.patch(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`, { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }).then(r => r.data),
     onSuccess: () => {
       invalidateProjectResourceProfile(qc, projectId)
+      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
       setScheduleStale(true)
     },
   })
