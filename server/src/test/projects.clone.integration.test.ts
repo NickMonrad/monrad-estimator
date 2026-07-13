@@ -1084,6 +1084,8 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       dayRate: number | null; totalHours: number; effortDays: number
       totalDays: number; allocatedDays: number; estimatedCost: number | null
       allocationMode: string; allocationPercent: number
+      namedResources: Array<{ id: string; name: string }>
+      capacityProfile?: { planningBasis: string; source: string }
     }>
     const cloneRows = cloneBody.resourceRows as typeof srcRows
     expect(cloneRows.length).toBe(srcRows.length)
@@ -1125,10 +1127,23 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       expect(cloneOh.requiredFTE).toBe(srcOh!.requiredFTE)
     }
 
-    // Role profiles and named resource profiles: count parity already proves
-    // the production calculator produces the same sets
-    expect(cloneBody.roleProfiles.length).toBe(srcBody.roleProfiles.length)
-    expect(cloneBody.namedResourceProfiles.length).toBe(srcBody.namedResourceProfiles.length)
+    // Named resources per-row: real response parity (equivalent to removed
+    // roleProfiles/namedResourceProfiles internal-map count check).
+    // The production calculator folds those maps into each resourceRow's
+    // namedResources and capacityProfile fields.
+    for (const cloneRow of cloneRows) {
+      const srcRow = srcRowByName.get(cloneRow.name)
+      // Named resources count matches (proves namedResourceProfiles parity)
+      expect(cloneRow.namedResources.length).toBe(srcRow!.namedResources.length)
+      // capacityProfile field — exists in both or neither (proves roleProfiles parity)
+      if (srcRow!.capacityProfile) {
+        expect(cloneRow.capacityProfile).toBeDefined()
+        expect(cloneRow.capacityProfile!.planningBasis).toBe(srcRow!.capacityProfile!.planningBasis)
+        expect(cloneRow.capacityProfile!.source).toBe(srcRow!.capacityProfile!.source)
+      } else {
+        expect(cloneRow.capacityProfile).toBeUndefined()
+      }
+    }
   })
 
   // ── Test A13: Commercial parity — tax, overhead endpoint, grand total ──
