@@ -251,19 +251,19 @@ test('fails with invalid MONRAD_DB_MODE', (t) => {
 test('does not expose database password in error output', (t) => {
   const directory = createTempDirectory()
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
-  const pgDump = createExecutable(directory, 'failing-pg-dump', 'process.exit(1)')
+  const password = 'sentinel-password-never-print'
+  const pgDump = createExecutable(directory, 'failing-pg-dump', 'process.exit(23)')
 
   const result = runBackup({
-    DATABASE_URL: 'postgresql://leaker:s3kr3t-p@ss@localhost:5432/leak_db',
+    DATABASE_URL: `postgresql://leaker:${password}@localhost:5432/leak_db`,
     MONRAD_DB_MODE: 'host',
     MONRAD_PG_DUMP_COMMAND: pgDump,
     MONRAD_BACKUP_DIR: path.join(directory, 'backups'),
   })
 
   assert.notEqual(result.status, 0)
-  // The password must never appear in stderr (or anywhere in output)
-  assert.doesNotMatch(result.stderr, /s3kr3t-p@ss/)
-  assert.doesNotMatch(result.stdout, /s3kr3t-p@ss/)
+  assert.match(result.stderr, /host backup command .*failing-pg-dump.*failed with exit code 23/)
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, new RegExp(password))
 })
 
 // ── automatic mode ───────────────────────────────────────────────────────
