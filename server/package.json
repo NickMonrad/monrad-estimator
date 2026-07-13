@@ -62,7 +62,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^26.1.1",
+    "@types/node": "^24.13.3",
     "@types/nodemailer": "^8.0.0",
     "@types/pino-http": "^6.1.0",
     "@types/supertest": "^7.2.0",
