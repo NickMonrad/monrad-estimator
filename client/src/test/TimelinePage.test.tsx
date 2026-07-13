@@ -683,6 +683,42 @@ describe('TimelinePage — resource-counts layout', () => {
     expect(removeBtn.className).toMatch(/h-8/)
   })
 
+  it('desktop column headers are hidden on mobile via CSS class', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource }],
+    })
+    renderPage()
+
+    // The column header div has 'hidden' class (hidden on mobile, visible on sm+)
+    const headersDiv = (await screen.findByText('Named resource')).closest('div')
+    expect(headersDiv).toBeInTheDocument()
+    expect(headersDiv?.className).toMatch(/\bhidden\b/)
+    expect(headersDiv?.className).toMatch(/\bsm:grid\b/)
+  })
+
+  it('renders mobile inline labels (Basis:, Alloc:, Start:, End:) for each named resource', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource, allocationMode: 'TIMELINE' }],
+    })
+    renderPage()
+
+    await screen.findAllByText('Bob')
+
+    // Mobile inline labels exist for each control
+    expect(screen.getByText('Basis:')).toBeInTheDocument()
+    expect(screen.getByText('Alloc:')).toBeInTheDocument()
+    expect(screen.getByText('Start:')).toBeInTheDocument()
+    expect(screen.getByText('End:')).toBeInTheDocument()
+
+    // Inline label spans have sm:hidden class
+    const basisLabel = screen.getByText('Basis:')
+    expect(basisLabel.className).toMatch(/\bsm:hidden\b/)
+  })
+
   it('allocation percentage input has contextual accessible name', async () => {
     mockResourceTypes = [baseResourceType]
     mockTimeline = createTimeline({

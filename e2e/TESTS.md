@@ -134,15 +134,15 @@ API-level tests using the `request` fixture. No browser UI involved.
 | run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
 | apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts the exact `Starting team options` section label and that candidate cards expose `Apply directly` buttons, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
 
-#### `Timeline — Resource-counts layout` describe block (4 tests — issue #369)
+#### `Timeline — Resource-counts layout` describe block (3 tests — issue #369)
 
-`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Timeline, and runs Quick schedule via the `quickSchedule(page)` helper. Tests have a 90 s timeout.
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Timeline, and runs Quick schedule via the `quickSchedule(page)` helper. All locators are scoped to the resource-counts section via `data-testid="resource-counts"`. Tests have a 90 s timeout.
 
 | Test | Description |
 |------|-------------|
-| desktop: add named resource, edit fields, verify persistence | At 1440×900, adds a named resource to Developer, changes planning basis to Availability window, sets allocation % and start/end weeks, reloads to verify persistence, removes the named resource, asserts no horizontal overflow |
-| narrow viewport: fields and labels remain usable | At 820×900, adds a named resource, verifies column headers and planning basis select are visible, asserts no horizontal overflow |
-| mobile viewport: controls stack vertically with inline labels | At 390×844, adds a named resource, verifies remove action and planning basis select are reachable, asserts no horizontal overflow |
+| desktop: add named resource, edit fields, verify persistence | At 1440×900, adds a named resource to Developer, changes planning basis to TIMELINE (waiting for each PATCH response), sets allocation % to 80, start week 2, end week 10, reloads page, asserts all four persisted values (TIMELINE/80/2/10), removes the named resource, asserts no horizontal overflow |
+| narrow viewport: fields and labels remain usable | At 820×900, adds a named resource, asserts desktop column headers are visible (above `sm` breakpoint), changes to TIMELINE mode, asserts allocation/start/end controls all visible, asserts remove action reachable, asserts no horizontal overflow |
+| mobile viewport: controls stack vertically with inline labels | At 390×844, adds a named resource, asserts desktop column headers are hidden, asserts mobile inline labels (`Basis:`, `Alloc:`, `Start:`, `End:`) are visible, changes to TIMELINE mode, asserts allocation/start/end/reach controls, asserts no horizontal overflow |
 #### `Timeline — cache invalidation` describe block (1 test)
 
 | Test | Description |

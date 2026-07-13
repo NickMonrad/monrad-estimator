@@ -570,62 +570,101 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(page.getByText('Count').first()).toBeVisible({ timeout: 15_000 })
   })
 
+  /** Scope all resource-counts assertions within the section container */
+  function countsSection(page: import('@playwright/test').Page) {
+    return page.getByTestId('resource-counts')
+  }
+
   test('desktop: add named resource, edit fields, verify persistence', async ({ page }) => {
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 1440, height: 900 })
 
-    // Resource-counts section is visible as compact cards
-    await expect(page.getByText('Resource Counts — adjust before Update timeline')).toBeVisible()
+    // Resource-counts section is visible grouped as compact cards
+    await expect(countsSection(page)).toBeVisible()
 
     // Click + Add named resource for Developer
-    const addDevBtn = page.getByRole('button', { name: /add named resource to developer/i })
-    await expect(addDevBtn).toBeVisible()
-    await addDevBtn.click()
+    const addBtn = countsSection(page).getByRole('button', { name: /add named resource to developer/i })
+    await expect(addBtn).toBeVisible()
+    await addBtn.click()
 
-    // The new named resource appears with default name "Developer 1"
-    await expect(page.getByText('Developer 1')).toBeVisible({ timeout: 8_000 })
+    // The new named resource is discoverable via its unique contextual controls
+    const basisSelect = countsSection(page).getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelect).toBeVisible({ timeout: 8_000 })
+    await expect(basisSelect).toHaveValue('EFFORT')
 
-    // Verify the fields are present with contextual accessible names
-    const basisSelect = page.getByRole('combobox', { name: /planning basis for developer 1/i })
-    await expect(basisSelect).toBeVisible()
-    expect(basisSelect).toHaveValue('EFFORT')
-
-    // Change planning basis to Availability window (TIMELINE) — enables start/end
+    // Change planning basis to TIMELINE — wait for the PATCH response before proceeding
+    const patchNR = page.waitForResponse(response =>
+      response.request().method() === 'PATCH' &&
+      response.url().includes('/named-resources/') &&
+      response.ok()
+    )
     await basisSelect.selectOption('TIMELINE')
-    await expect(page.getByRole('spinbutton', { name: /allocation percentage for developer 1/i })).toBeVisible()
+    await patchNR
 
-    // Enter a non-default allocation percentage
-    const pctInput = page.getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    // Verify the allocation % input appeared
+    const pctInput = countsSection(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    await expect(pctInput).toBeVisible()
+
+    // Enter allocation percentage — wait for PATCH response
+    const patchPct = page.waitForResponse(response =>
+      response.request().method() === 'PATCH' &&
+      response.url().includes('/named-resources/') &&
+      response.ok()
+    )
     await pctInput.fill('80')
-    // Blur to trigger onBlur save
-    await page.locator('h1').first().click()
+    await pctInput.blur()
+    await patchPct
 
-    // Enter start and end weeks
-    const startInput = page.getByRole('spinbutton', { name: /start week for developer 1/i })
+    // Enter start week
+    const startInput = countsSection(page).getByRole('spinbutton', { name: /start week for developer 1/i })
+    const patchStart = page.waitForResponse(response =>
+      response.request().method() === 'PATCH' &&
+      response.url().includes('/named-resources/') &&
+      response.ok()
+    )
     await startInput.fill('2')
-    await page.locator('h1').first().click()
+    await startInput.blur()
+    await patchStart
 
-    const endInput = page.getByRole('spinbutton', { name: /end week for developer 1/i })
+    // Enter end week
+    const endInput = countsSection(page).getByRole('spinbutton', { name: /end week for developer 1/i })
+    const patchEnd = page.waitForResponse(response =>
+      response.request().method() === 'PATCH' &&
+      response.url().includes('/named-resources/') &&
+      response.ok()
+    )
     await endInput.fill('10')
-    await page.locator('h1').first().click()
+    await endInput.blur()
+    await patchEnd
 
-    // Reload the page to verify persistence
+    // Reload and verify ALL persisted values
     const currentUrl = page.url()
     await page.goto(currentUrl)
     await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
+    await expect(countsSection(page).getByText('Count').first()).toBeVisible({ timeout: 15_000 })
 
-    // Wait for resource-counts to load and verify values persisted
-    await expect(page.getByText('Developer 1')).toBeVisible({ timeout: 10_000 })
+    // Re-find controls within the counts section after reload
+    const basisSelectReloaded = countsSection(page).getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelectReloaded).toBeVisible({ timeout: 10_000 })
+    await expect(basisSelectReloaded).toHaveValue('TIMELINE')
+
+    const pctInputReloaded = countsSection(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    await expect(pctInputReloaded).toHaveValue('80')
+
+    const startInputReloaded = countsSection(page).getByRole('spinbutton', { name: /start week for developer 1/i })
+    await expect(startInputReloaded).toHaveValue('2')
+
+    const endInputReloaded = countsSection(page).getByRole('spinbutton', { name: /end week for developer 1/i })
+    await expect(endInputReloaded).toHaveValue('10')
 
     // Remove the named resource
-    const removeBtn = page.getByRole('button', { name: /remove developer 1/i })
+    const removeBtn = countsSection(page).getByRole('button', { name: /remove developer 1/i })
     await expect(removeBtn).toBeVisible()
-    // Accept the confirm dialog
     page.once('dialog', dialog => dialog.accept())
     await removeBtn.click()
 
     // Verify removal
-    await expect(page.getByText('Developer 1')).not.toBeVisible({ timeout: 8_000 })
+    await expect(countsSection(page).getByRole('button', { name: /remove developer 1/i })).not.toBeVisible({ timeout: 8_000 })
 
     // Verify no horizontal document overflow
     const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
@@ -637,18 +676,44 @@ test.describe('Timeline — Resource-counts layout', () => {
     await page.setViewportSize({ width: 820, height: 900 })
 
     // Add a named resource first so there are fields to inspect
-    const addDevBtn = page.getByRole('button', { name: /add named resource to developer/i })
-    await expect(addDevBtn).toBeVisible({ timeout: 10_000 })
-    await addDevBtn.click()
-    await expect(page.getByText('Developer 1')).toBeVisible({ timeout: 8_000 })
+    const addBtn = countsSection(page).getByRole('button', { name: /add named resource to developer/i })
+    await expect(addBtn).toBeVisible({ timeout: 10_000 })
+    await addBtn.click()
 
-    // Column headers are visible at narrow desktop/tablet widths
-    await expect(page.getByText('Named resource')).toBeVisible()
-    await expect(page.getByText('Planning basis')).toBeVisible()
+    // Name row is present within the resource-counts section
+    const basisSelect = countsSection(page).getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelect).toBeVisible({ timeout: 8_000 })
 
-    // Planning basis select is reachable
-    const basisSelect = page.getByRole('combobox', { name: /planning basis for developer 1/i })
-    await expect(basisSelect).toBeVisible()
+    // Desktop column headers remain visible at this width (above sm breakpoint)
+    await expect(countsSection(page).getByText('Named resource')).toBeVisible()
+    await expect(countsSection(page).getByText('Planning basis')).toBeVisible()
+    await expect(countsSection(page).getByText('Allocation %')).toBeVisible()
+    await expect(countsSection(page).getByText('Start')).toBeVisible()
+    await expect(countsSection(page).getByText('End')).toBeVisible()
+
+    // Change to TIMELINE mode to expose allocation/start/end controls
+    const patchNR = page.waitForResponse(response =>
+      response.request().method() === 'PATCH' &&
+      response.url().includes('/named-resources/') &&
+      response.ok()
+    )
+    await basisSelect.selectOption('TIMELINE')
+    await patchNR
+
+    // Allocation control is visible after selecting TIMELINE
+    const pctInput = countsSection(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    await expect(pctInput).toBeVisible()
+
+    // Start and end controls are visible
+    const startInput = countsSection(page).getByRole('spinbutton', { name: /start week for developer 1/i })
+    await expect(startInput).toBeVisible()
+
+    const endInput = countsSection(page).getByRole('spinbutton', { name: /end week for developer 1/i })
+    await expect(endInput).toBeVisible()
+
+    // Remove action is visible
+    const removeBtn = countsSection(page).getByRole('button', { name: /remove developer 1/i })
+    await expect(removeBtn).toBeVisible()
 
     // Verify no horizontal overflow
     const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
@@ -659,19 +724,46 @@ test.describe('Timeline — Resource-counts layout', () => {
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 390, height: 844 })
 
-    // Add a named resource so there are fields to inspect
-    const addDevBtn = page.getByRole('button', { name: /add named resource to developer/i })
-    await expect(addDevBtn).toBeVisible({ timeout: 10_000 })
-    await addDevBtn.click()
-    await expect(page.getByText('Developer 1')).toBeVisible({ timeout: 8_000 })
+    // Add a named resource
+    const addBtn = countsSection(page).getByRole('button', { name: /add named resource to developer/i })
+    await expect(addBtn).toBeVisible({ timeout: 10_000 })
+    await addBtn.click()
 
-    // Remove action remains reachable (the × button)
-    const removeBtn = page.getByRole('button', { name: /remove developer 1/i })
-    await expect(removeBtn).toBeVisible()
+    // Desktop column headers are hidden on mobile
+    await expect(countsSection(page).getByText('Named resource')).not.toBeVisible()
+
+    // Mobile inline labels are visible ("Basis:", "Alloc:", etc.)
+    await expect(countsSection(page).getByText('Basis:')).toBeVisible()
 
     // Planning basis select is reachable
-    const basisSelect = page.getByRole('combobox', { name: /planning basis for developer 1/i })
+    const basisSelect = countsSection(page).getByRole('combobox', { name: /planning basis for developer 1/i })
     await expect(basisSelect).toBeVisible()
+
+    // Change to TIMELINE mode to expose allocation/start/end
+    const patchNR = page.waitForResponse(response =>
+      response.request().method() === 'PATCH' &&
+      response.url().includes('/named-resources/') &&
+      response.ok()
+    )
+    await basisSelect.selectOption('TIMELINE')
+    await patchNR
+
+    // Allocation control with inline label is visible
+    await expect(countsSection(page).getByText('Alloc:')).toBeVisible()
+    const pctInput = countsSection(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    await expect(pctInput).toBeVisible()
+
+    // Start and end inline labels and controls are visible and reachable
+    await expect(countsSection(page).getByText('Start:')).toBeVisible()
+    await expect(countsSection(page).getByText('End:')).toBeVisible()
+    const startInput = countsSection(page).getByRole('spinbutton', { name: /start week for developer 1/i })
+    await expect(startInput).toBeVisible()
+    const endInput = countsSection(page).getByRole('spinbutton', { name: /end week for developer 1/i })
+    await expect(endInput).toBeVisible()
+
+    // Remove action is reachable
+    const removeBtn = countsSection(page).getByRole('button', { name: /remove developer 1/i })
+    await expect(removeBtn).toBeVisible()
 
     // Verify no horizontal document overflow on mobile
     const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)

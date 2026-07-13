@@ -1075,7 +1075,7 @@ export default function TimelinePage() {
         )}
 
         {/* Resource counts panel */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden" data-testid="resource-counts">
           <button
             onClick={() => setResourcesOpen(o => !o)}
             className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
@@ -1143,7 +1143,8 @@ export default function TimelinePage() {
                             {/* Named resources section */}
                             {nrs.length > 0 && (
                               <div className="border-t border-gray-100 dark:border-gray-700 mt-2 pt-2">
-                                <div className="grid sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
+                                {/* Desktop column headers — hidden on mobile, visible as grid on sm+ */}
+                                <div className="hidden sm:grid sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
                                   <span>Named resource</span>
                                   <span>Planning basis</span>
                                   <span className="text-right">Allocation %</span>
@@ -1151,7 +1152,6 @@ export default function TimelinePage() {
                                   <span className="text-right">End</span>
                                   <span />
                                 </div>
-
                                 {nrs.map((nr, i) => {
                                   const mode = nr.allocationMode ?? 'EFFORT'
                                   const isTimeline = mode === 'TIMELINE'
