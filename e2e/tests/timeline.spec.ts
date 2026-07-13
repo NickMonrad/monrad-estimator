@@ -582,15 +582,18 @@ test.describe('Timeline — Resource-counts layout', () => {
     const addBtn = countsSection(page).getByRole('button', { name: /add named resource to developer/i })
     await expect(addBtn).toBeVisible()
 
-    // Wait for both the POST response AND the subsequent timeline refetch (GET)
+    // First wait for POST response, THEN listen for the timeline refetch GET
+    // to avoid matching a stale GET that fires between listener creation and POST
     const postResp = page.waitForResponse(r =>
       r.request().method() === 'POST' && r.url().includes('/named-resources') && r.ok()
     )
+    await addBtn.click()
+    await postResp
+
+    // Now listen specifically for the timeline refetch triggered by onSuccess
     const getTimeline = page.waitForResponse(r =>
       r.request().method() === 'GET' && r.url().includes('/timeline') && r.ok()
     )
-    await addBtn.click()
-    await postResp
     await getTimeline
 
     // Wait for the new row to appear
@@ -705,11 +708,13 @@ test.describe('Timeline — Resource-counts layout', () => {
     const postResp = page.waitForResponse(r =>
       r.request().method() === 'POST' && r.url().includes('/named-resources') && r.ok()
     )
+    await addBtn.click()
+    await postResp
+
+    // Listen for the timeline refetch triggered by onSuccess (after POST completes)
     const getTimeline = page.waitForResponse(r =>
       r.request().method() === 'GET' && r.url().includes('/timeline') && r.ok()
     )
-    await addBtn.click()
-    await postResp
     await getTimeline
     await expect(countsSection(page).getByText('Developer 1', { exact: true })).toBeVisible({ timeout: 8_000 })
 
@@ -757,11 +762,13 @@ test.describe('Timeline — Resource-counts layout', () => {
     const postResp = page.waitForResponse(r =>
       r.request().method() === 'POST' && r.url().includes('/named-resources') && r.ok()
     )
+    await addBtn.click()
+    await postResp
+
+    // Listen for the timeline refetch triggered by onSuccess (after POST completes)
     const getTimeline = page.waitForResponse(r =>
       r.request().method() === 'GET' && r.url().includes('/timeline') && r.ok()
     )
-    await addBtn.click()
-    await postResp
     await getTimeline
     await expect(countsSection(page).getByText('Developer 1', { exact: true })).toBeVisible({ timeout: 8_000 })
 
