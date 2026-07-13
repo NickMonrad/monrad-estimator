@@ -39,7 +39,7 @@ A full-stack project estimation tool that replaces a manual spreadsheet process.
 ## Getting Started
 
 ### Prerequisites
-- Node.js 20+
+- Node.js 24+
 - Docker (recommended — easiest way to run PostgreSQL locally)
 
 ### 1. Start PostgreSQL

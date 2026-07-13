@@ -34,5 +34,8 @@
     "@rolldown/binding-win32-x64-msvc": "1.0.0-rc.13",
     "@tailwindcss/oxide-win32-x64-msvc": "4.2.1",
     "lightningcss-win32-x64-msvc": "1.31.1"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
