@@ -24,6 +24,7 @@ Use this skill when asked to:
 4. Keep setup instructions cross-platform where repository scripts already provide a cross-platform workflow.
 5. Run or statically verify documented commands when practical.
 6. Check links, headings, code fences, and referenced files.
+7. Compare README guidance with `CONTRIBUTING.md` and the canonical instructions so the repository does not publish competing workflows.
 
 ## Monrad-specific commands
 
@@ -38,6 +39,8 @@ npm run screenshots
 npm run db:backup
 ```
 
+`npm run validate` is the primary complete client/server validation command. It covers lint, type-checking, builds, and unit/integration tests for both workspaces. Workspace-specific commands may be documented for targeted troubleshooting, but must not be presented as a substitute validation checklist.
+
 For database schema development, documentation must show the safety sequence:
 
 ```bash
@@ -46,6 +49,13 @@ cd server
 npx prisma migrate dev --name <migration-name>
 npx prisma generate
 ```
+
+Before documenting the sequence, verify that `npm run db:backup` backs up the database configured by `server/.env` or `DATABASE_URL` and supports the documented local topology:
+
+- default PostgreSQL in the `monrad-pg` Docker container
+- non-Docker PostgreSQL running directly on the host
+
+Documentation must not imply that a Docker-only implementation supports non-Docker development, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit overrides, failure modes, and the generated backup path accurately.
 
 Never document `prisma migrate reset` as a routine step. It requires explicit user approval because it destroys data.
 
@@ -56,8 +66,9 @@ Never document `prisma migrate reset` as a routine step. It requires explicit us
 - Do not include real secrets, credentials, customer names, or private connection strings.
 - Do not guess the licence; reflect the repository's actual licence state.
 - Keep Windows, macOS, and Linux behaviour accurate.
-- Explain when Docker or a local PostgreSQL instance is required.
+- Explain when Docker, `pg_dump`, or a local PostgreSQL instance is required.
 - Prefer `npm run test:e2e:local` for local E2E guidance because it owns ports, server processes, seed data, and cleanup.
+- Do not describe a failing CI gate as complete or healthy.
 - Add a PR number only after the PR exists; never predict one.
 - Update screenshots only when the UI materially changed and use the screenshot skill.
 - Do not alter roadmap or shipped-enhancement tables unless the work actually changes them.
