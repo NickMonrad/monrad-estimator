@@ -25,6 +25,16 @@ import {
   type SchedulerResourceType,
 } from '../lib/scheduler.js'
 
+vi.mock('../routes/snapshots.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../routes/snapshots.js')>()
+  return {
+    ...actual,
+    buildSnapshot: vi.fn().mockResolvedValue({}),
+  }
+})
+
+import { buildSnapshot } from '../routes/snapshots.js'
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test helpers — mirrors scheduler.test.ts conventions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1013,6 +1023,30 @@ describe('POST /api/projects/:projectId/optimise — count range validation', ()
 
     expect(res.status).toBe(400)
     expect(res.body.error).toBe('Invalid constraints.countRanges')
+  })
+})
+
+describe('POST /api/projects/:projectId/optimise/apply — buildSnapshot rejection', () => {
+  beforeEach(() => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+  })
+
+  it('returns 500 when buildSnapshot rejects, preventing snapshot persistence and mutation', async () => {
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-1' }] as never)
+    vi.mocked(buildSnapshot).mockRejectedValueOnce(new Error('Snapshot null-state rejection'))
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [
+          { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 },
+        ],
+      })
+
+    expect(res.status).toBe(500)
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 })
 

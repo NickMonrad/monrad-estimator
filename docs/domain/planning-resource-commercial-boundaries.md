@@ -96,7 +96,7 @@ It owns:
 
 Resource Profile can display estimated effort and planning-derived information, such as actual assigned days, but should not independently calculate a separate version of the effort or planning result.
 
-PR #356 (open, pending merge) introduces capacity-profile read adoption in Resource
+PR #356 (merged) introduced capacity-profile read adoption in Resource
 Profile, making it authoritative for displaying and exporting capacity-profile data
 from the persisted `CapacityProfile`/`CapacitySegment` read model. The adapter in
 `capacityProfileResourceAdapter.ts` resolves profiles with profile-first precedence:
@@ -316,8 +316,8 @@ Prefer fast integration/unit coverage around the shared planning model and API b
 
 ## Follow-up implementation sequence
 
-> **Note:** PR #356 (open, pending merge) introduces capacity-profile read adoption in
-> Resource Profile, as part of the #340 source-of-truth epic. It introduces profile-first
+> **Note:** PR #356 (merged) introduced capacity-profile read adoption in
+> Resource Profile, as part of the #340 source-of-truth epic. It introduced profile-first
 > read precedence in the Resource Profile route and export hook, ahead of the #263
 > sequence above. This means Resource Profile display and export fields will resolve from
 > `CapacityProfile`/`CapacitySegment` when a persisted profile exists, rather than
@@ -361,12 +361,12 @@ The implementation work belongs in the follow-up issues under #263, especially #
 
 ## Implementation status
 
-### Pending: Capacity-profile read adoption in Resource Profile (PR #356, open)
+### Capacity-profile read adoption in Resource Profile (PR #356, merged)
 
-PR #356 (open, pending merge) would make the persisted `CapacityProfile`/`CapacitySegment`
+PR #356 (merged) made the persisted `CapacityProfile`/`CapacitySegment`
 read model authoritative for display and export in Resource Profile, using profile-first
-precedence. These changes are currently on the `feature/capacity-profile-resource-profile-reads`
-branch and will land when PR #356 merges.
+precedence. These changes were on the `feature/capacity-profile-resource-profile-reads`
+branch and landed when PR #356 merged.
 
 **Key changes:**
 
@@ -419,3 +419,64 @@ branch and will land when PR #356 merges.
 | `server/src/test/capacityProfileResourceAdapter.test.ts` | 7 unit tests for adapter |
 
 See `capacity-profile-design.md#resource-profile-and-export-adoption` for details.
+
+### Pending: Snapshot v3 capacity-profile preservation (PR #367, open)
+
+PR #367 (open, branch `feature/snapshot-v3-capacity-profiles`) extends the
+BacklogSnapshot schema to version 3 so that rollback preserves capacity profile data.
+This affects the ownership model by ensuring that Resource Profile-owned capacity
+data survives rollback:
+
+**Resource Profile boundary strengthened.** Since `CapacityProfile` / `CapacitySegment`
+data is owned by Resource Profile (capacity inputs), V3 snapshots preserve this
+data exactly. A rollback no longer reconstructs profiles from legacy compatibility
+fields (V2 behaviour) or leaves them untouched (V1 behaviour). Capacity profile
+configuration chosen in Resource Profile is replaced exactly on rollback.
+
+**Owner metadata is non-destructive.** V3's profile replacement is intentionally
+scoped to `CapacityProfile` and `CapacitySegment` rows. The common restore upserts
+captured `ResourceType` and `NamedResource` metadata so mutations to captured
+owners are restored, but it does not delete owners created after the snapshot.
+Those post-snapshot owners, their compatibility fields, `TemplateTask.resourceTypeId`
+links, and `ProjectDiscount` rows remain intact. A post-snapshot capacity profile
+for such an owner is removed because profiles are the V3 snapshot boundary; the
+owner itself is not pruned.
+
+**Null-legacy discrimination via `SnapshotJsonValue`:** The
+`CapacityProfile.legacy` column is a nullable PostgreSQL `Json?` field. Prisma
+distinguishes database NULL (untouched column) from JSON `null` (explicitly-set
+JSON null), but both read back as JavaScript `null`. PR #367 introduces the
+`SnapshotJsonValue` discriminator type (`projectSnapshotTypes.ts`) with three
+variants — `{ kind: 'DB_NULL' }`, `{ kind: 'JSON_NULL' }`, and
+`{ kind: 'VALUE'; value: ... }` — so that the snapshot serialiser can capture and
+restore the exact Prisma sentinel on rollback. This ensures profile rows where
+`legacy` was never written (typical for profile-first profiles) are restored as
+database NULL, not JSON null.
+
+**Snapshot/rollback:**
+`buildSnapshot` produces `schemaVersion: 3` for all new application snapshots,
+including `capacityProfiles: SnapshotCapacityProfile[]` with full segment data.
+Pre-rollback auto-snapshots capture current capacity profiles alongside the full
+project state inside the same transaction — any rollback is reversible.
+V3 restore replaces all existing project profiles/segments with the exact
+snapshot state (same transaction as epic/resource restoration).
+V1 snapshots (epic-only) leave capacity profiles untouched on rollback.
+V2 snapshots reconstruct profiles from every `ResourceType` (ROLE-kind, synthetic IDs)
+and every `NamedResource` (NAMED_PERSON-kind, synthetic IDs) using legacy
+compatibility fields (`allocationMode`, `allocationPercent`, etc.) with no segment
+fidelity.
+
+**Domain boundaries respected:**
+- Capacity profile data (Resource Profile ownership) is snapshotted and restored
+  as-is — no Timeline/Planning derivation or Commercial interpolation occurs.
+- Commercial billing basis (`pricingModel`) is snapshotted via V2/V3
+  `namedResources` and remains Commercial-owned; V3 does not introduce a separate
+  billing-basis snapshot field.
+- `ProjectDiscount` rows remain Commercial-owned and are not serialized into V3
+  snapshots. Rollback leaves project-wide, target-role, and post-snapshot discounts
+  unchanged; no discount is promoted to project-wide scope.
+- Capacity Plan history (Capacity Plan periods/entries) is **not** part of PR #367;
+  it is tracked by #359 separately.
+
+See [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md#phase-2b-—-snapshot-v3-capacity-profile-preservation)
+and [`capacity-profile-design.md`](capacity-profile-design.md#snapshot-schema-v3--snapshot-rollback-capacity-safety) for details.
