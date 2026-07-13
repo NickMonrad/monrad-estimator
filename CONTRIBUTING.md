@@ -88,7 +88,7 @@ When Playwright tests change, update `e2e/TESTS.md`.
 
 Before a Prisma schema migration or other operation that may alter persistent development data:
 
-1. Confirm the configured database in `server/.env` or `DATABASE_URL` and whether it runs in the default Docker container or directly on the host.
+1. Confirm the configured database in `DATABASE_URL` or the selected environment file (`MONRAD_ENV_FILE`, default `server/.env`) and whether it runs in the default Docker container or directly on the host.
 2. Run:
 
    ```bash

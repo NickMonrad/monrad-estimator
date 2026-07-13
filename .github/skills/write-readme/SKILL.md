@@ -50,12 +50,12 @@ npx prisma migrate dev --name <migration-name>
 npx prisma generate
 ```
 
-Before documenting the sequence, verify that `npm run db:backup` backs up the database configured by `server/.env` or `DATABASE_URL` and supports the documented local topology:
+Before documenting the sequence, verify that `npm run db:backup` backs up the database configured by `DATABASE_URL` or the selected environment file (`MONRAD_ENV_FILE`, default `server/.env`) and supports the documented local topology:
 
 - Docker-based PostgreSQL via explicit `MONRAD_DB_MODE=docker` (default container `monrad-pg`, overridable via `MONRAD_DB_CONTAINER`)
 - non-Docker PostgreSQL running directly on the host (default mode — conservative, no automatic Docker detection)
 
-Documentation must not imply that a Docker-only implementation supports non-Docker development, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit overrides, failure modes, and the generated backup path accurately.
+Documentation must not imply that a Docker-only implementation supports non-Docker development, that automatic container detection proves endpoint identity, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit overrides, credential-redacted failure modes, and the generated backup path accurately.
 
 Never document `prisma migrate reset` as a routine step. It requires explicit user approval because it destroys data.
 
