@@ -26,25 +26,13 @@ function createTempDirectory() {
 
 /** Create a cross-platform test helper executable.
  *
- *  Writes an .mjs implementation file; on Windows produces a .cmd
- *  wrapper so spawnSync can invoke it directly; on POSIX adds shebang
- *  via process.execPath with executable mode.  No chmodSync call,
- *  no POSIX-only shebang literal, no shell script.
+ * Writes a JavaScript implementation file.  The backup runner invokes .mjs
+ * helpers through process.execPath, so this works on Windows without relying
+ * on Unix shebangs, chmod, or shell wrappers.
  */
 function createTestHelper(directory, name, source) {
   const mjsPath = path.join(directory, `${name}.mjs`)
-
-  if (process.platform === 'win32') {
-    fs.writeFileSync(mjsPath, source)
-    const cmdPath = path.join(directory, `${name}.cmd`)
-    const node = process.execPath.replace(/\\/g, '/')
-    const scriptPath = mjsPath.replace(/\\/g, '/')
-    fs.writeFileSync(cmdPath, `@"${node}" "${scriptPath}" %*\r\n`)
-    return cmdPath
-  }
-
-  // POSIX: write shebang + source once with executable mode
-  fs.writeFileSync(mjsPath, `#!${process.execPath}\n${source}`, { mode: 0o755 })
+  fs.writeFileSync(mjsPath, source)
   return mjsPath
 }
 
