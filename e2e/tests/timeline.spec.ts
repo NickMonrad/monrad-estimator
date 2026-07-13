@@ -610,7 +610,7 @@ test.describe('Timeline — Resource-counts layout', () => {
   }
 
   // Change 3: focused helper — adds named resource with POST+Timeline GET waiters before click
-  async function addNamedResourceAndWait(page: Page, locator: Locator): Promise<{ id: string; resourceTypeId: string }> {
+  async function addNamedResourceAndWait(page: Page, locator: Locator): Promise<{ id: string; resourceTypeId: string; name: string }> {
     // Derive resource type ID from the card's data-testid (resource-type-card-<UUID>)
     const cardTestId = await locator.getAttribute('data-testid')
     const resourceTypeId = cardTestId!.replace('resource-type-card-', '')
@@ -636,11 +636,11 @@ test.describe('Timeline — Resource-counts layout', () => {
     // Await POST and Timeline promises together
     const [addResponse] = await Promise.all([addResp, tlMatcher.promise])
     tlMatcher.cleanup()
-    return await addResponse.json() as { id: string; resourceTypeId: string }
+    return await addResponse.json() as { id: string; resourceTypeId: string; name: string }
   }
 
   // Change 4: unified deletion helper — DELETE waiter + Timeline GET + dialog validation, accepts before/while click
-  async function removeNamedResource(page: Page, devCardLocator: Locator, nrId: string) {
+  async function removeNamedResource(page: Page, devCardLocator: Locator, nrId: string, nrName: string) {
     // Timeline matcher first, eager promise
     const tlMatcher = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     // DELETE waiter: exact predicate gates tlMatcher on matching DELETE response
@@ -665,7 +665,7 @@ test.describe('Timeline — Resource-counts layout', () => {
     })
     // Await click/dialog/DELETE/Timeline in one Promise.all
     await Promise.all([
-      devCardLocator.getByRole('button', { name: /remove developer 1/i }).click(),
+      devCardLocator.getByRole('button', { name: new RegExp(`remove ${nrName}`, 'i') }).click(),
       dialogPromise,
       delResp,
       tlMatcher.promise,
@@ -684,9 +684,11 @@ test.describe('Timeline — Resource-counts layout', () => {
 
     const addBody = await addNamedResourceAndWait(page, devCard(page))
     const nrId = addBody.id
+    const nrName = addBody.name
+    expect(nrName).toBeTruthy()
 
     // Re-acquire devCard controls after mutation
-    const basisSelect = devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })
+    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
     await expect(basisSelect).toHaveValue('EFFORT')
 
@@ -711,9 +713,9 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(patchBasisResp.status()).toBe(200)
     tlBasis.cleanup()
     // Re-run devCard and re-acquire basis combobox after refresh
-    await expect(devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })).toHaveValue('TIMELINE')
+    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
     // PATCH allocation to 80%
-    const pctInput = devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    const pctInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })
     await expect(pctInput).toBeVisible()
     const tlPct = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchPct = page.waitForResponse(
@@ -735,11 +737,11 @@ test.describe('Timeline — Resource-counts layout', () => {
     const [patchPctResp] = await Promise.all([patchPct, tlPct.promise])
     expect(patchPctResp.status()).toBe(200)
     tlPct.cleanup()
-    const pctAfter = devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    const pctAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })
     await expect(pctAfter).toHaveValue('80')
 
     // PATCH start week to 2
-    const startInput = devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })
+    const startInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })
     await expect(startInput).toBeEnabled()
     const tlStart = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchStart = page.waitForResponse(
@@ -761,11 +763,11 @@ test.describe('Timeline — Resource-counts layout', () => {
     const [patchStartResp] = await Promise.all([patchStart, tlStart.promise])
     expect(patchStartResp.status()).toBe(200)
     tlStart.cleanup()
-    const startAfter = devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })
+    const startAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })
     await expect(startAfter).toHaveValue('2')
 
     // PATCH end week to 10
-    const endInput = devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })
+    const endInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })
     await expect(endInput).toBeEnabled()
     const tlEnd = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchEnd = page.waitForResponse(
@@ -787,7 +789,7 @@ test.describe('Timeline — Resource-counts layout', () => {
     const [patchEndResp] = await Promise.all([patchEnd, tlEnd.promise])
     expect(patchEndResp.status()).toBe(200)
     tlEnd.cleanup()
-    const endAfter = devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })
+    const endAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })
     await expect(endAfter).toHaveValue('10')
 
     await page.reload()
@@ -795,13 +797,13 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(page.url()).toContain(`/projects/${projectId}/timeline`)
 
     // Re-acquire locators after reload
-    const reloadBasis = devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })
+    const reloadBasis = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
     await expect(reloadBasis).toBeVisible({ timeout: 10_000 })
     await expect(reloadBasis).toHaveValue('TIMELINE')
-    await expect(devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })).toHaveValue('80')
-    await expect(devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })).toHaveValue('2')
-    await expect(devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })).toHaveValue('10')
-    await expect(devCard(page).getByRole('button', { name: /remove developer 1/i })).toBeVisible()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })).toHaveValue('80')
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })).toHaveValue('2')
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })).toHaveValue('10')
+    await expect(devCard(page).getByRole('button', { name: new RegExp(`remove ${nrName}`, 'i') })).toBeVisible()
     await expect(devCard(page).getByRole('button', { name: /add named resource to developer/i })).toBeVisible()
 
     // Check row fit while populated
@@ -811,7 +813,7 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expectElementToFit(page.getByTestId('resource-counts'))
     await expectElementToFit(page.getByTestId(`named-resource-row-${nrId}`))
 
-    await removeNamedResource(page, devCard(page), nrId)
+    await removeNamedResource(page, devCard(page), nrId, nrName)
 
     // Post-delete fit: document and panel only
     const postDelSW = await page.evaluate(() => document.documentElement.scrollWidth)
@@ -830,13 +832,15 @@ test.describe('Timeline — Resource-counts layout', () => {
     const devCardEl = devCard(page)
     const addBody = await addNamedResourceAndWait(page, devCardEl)
     const nrId = addBody.id
+    const nrName = addBody.name
+    expect(nrName).toBeTruthy()
 
     // Re-acquire devCard controls after mutation
-    const basisSelect = devCardEl.getByRole('combobox', { name: /planning basis for developer 1/i })
+    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
     await expect(basisSelect).toHaveValue('EFFORT')
 
-    const headers = devCardEl.getByTestId('named-resource-headers')
+    const headers = devCard(page).getByTestId('named-resource-headers')
     await expect(headers.getByText('Named resource', { exact: true })).toBeVisible()
     await expect(headers.getByText('Planning basis', { exact: true })).toBeVisible()
     await expect(headers.getByText('Allocation %', { exact: true })).toBeVisible()
@@ -862,15 +866,15 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(patchBasisResp.status()).toBe(200)
     tlBasis.cleanup()
     // Re-run devCard and re-acquire basis combobox after refresh
-    await expect(devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })).toHaveValue('TIMELINE')
+    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
 
-    await expect(devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })).toBeEnabled()
-    await expect(devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })).toBeEnabled()
-    await expect(devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })).toBeEnabled()
     await expectElementToFit(page.getByTestId('resource-counts'))
     await expectElementToFit(page.getByTestId(`named-resource-row-${nrId}`))
 
-    await removeNamedResource(page, devCard(page), nrId)
+    await removeNamedResource(page, devCard(page), nrId, nrName)
 
     // Post-delete fit: document and panel only
     const postDelSW = await page.evaluate(() => document.documentElement.scrollWidth)
@@ -888,6 +892,8 @@ test.describe('Timeline — Resource-counts layout', () => {
 
     const addBody = await addNamedResourceAndWait(page, devCard(page))
     const nrId = addBody.id
+    const nrName = addBody.name
+    expect(nrName).toBeTruthy()
 
     const row = counts.getByTestId(`named-resource-row-${nrId}`)
     await expect(row.getByText('Basis:')).toBeVisible()
@@ -900,7 +906,7 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(headers.getByText('Allocation %', { exact: true })).not.toBeVisible()
 
     // Re-acquire devCard controls after mutation
-    const basisSelect = devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })
+    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
     await expect(basisSelect).toHaveValue('EFFORT')
 
@@ -924,11 +930,11 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(patchBasisResp.status()).toBe(200)
     tlBasis.cleanup()
     // Re-run devCard and re-acquire basis combobox after refresh
-    await expect(devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })).toHaveValue('TIMELINE')
+    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
 
-    await expect(devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })).toBeEnabled()
-    await expect(devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })).toBeEnabled()
-    await expect(devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })).toBeEnabled()
 
     // Check row fit while populated
     const docSW = await page.evaluate(() => document.documentElement.scrollWidth)
@@ -955,7 +961,7 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(startBox!.y).toBeGreaterThanOrEqual(allocBox!.y + allocBox!.height - 2)
     expect(endBox!.y).toBeGreaterThanOrEqual(startBox!.y + startBox!.height - 2)
 
-    await removeNamedResource(page, devCard(page), nrId)
+    await removeNamedResource(page, devCard(page), nrId, nrName)
 
     // Post-delete fit: document and panel only
     const postDelSW = await page.evaluate(() => document.documentElement.scrollWidth)
