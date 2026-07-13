@@ -134,10 +134,13 @@ Before any Prisma schema migration or other operation that can alter stored data
 The repository backup tooling is a safety boundary and must:
 
 - work on Windows, macOS, and Linux without POSIX-only shell syntax
-- support both documented local database topologies: the default `monrad-pg` Docker container and a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
+- support both documented local database topologies: a `monrad-pg` Docker container (with explicit `MONRAD_DB_MODE=docker` or `MONRAD_DB_CONTAINER`) and a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
+- default to host-mode `pg_dump` when neither `MONRAD_DB_MODE` nor `MONRAD_DB_CONTAINER` is set (conservative default — no automatic Docker endpoint detection)
 - derive the database connection from repository configuration rather than silently assuming the default database, user, or host
-- allow an explicit container override for Docker-based development
+- allow `MONRAD_DB_CONTAINER` to override the Docker container name when Docker mode is active
+- allow `MONRAD_ENV_FILE` as a test/developer override for the `.env` path
 - fail clearly when Docker, `pg_dump`, credentials, or the configured database are unavailable
+- report only the backup mode, executable, and exit/spawn status on command failure; never print a credential-bearing `DATABASE_URL`
 - never report success after backing up a different database from the one the application is configured to use
 
 If `npm run db:backup` cannot back up the configured database, stop. Do not migrate, skip the backup, or substitute an unverified empty dump. Fix the backup configuration or tooling first.
@@ -179,6 +182,7 @@ This must cover:
 - client and server type-checking
 - client and server builds
 - client and server unit/integration tests
+- backup regression tests
 
 A failure may only be described as pre-existing after reproducing the same failure on the merge base or current `main`. Unexplained failures are blockers. A new CI gate must not be merged in a permanently failing state, even when it exposes an older failure; either remediate the failure in the same PR or track and complete the prerequisite remediation before enabling the gate.
 

@@ -16,7 +16,7 @@ let mode = 'host'
 
 try {
   const config = resolveConfig(root)
-  mode = resolveMode(config, container)
+  mode = resolveMode()
   fs.mkdirSync(backupDir, { recursive: true })
 
   if (mode === 'docker') {
@@ -38,10 +38,11 @@ try {
 }
 
 function resolveConfig(repositoryRoot) {
-  const fileValues = readEnvFile(path.join(repositoryRoot, 'server', '.env'))
+  const envFile = process.env.MONRAD_ENV_FILE ?? path.join(repositoryRoot, 'server', '.env')
+  const fileValues = readEnvFile(envFile)
   const databaseUrl = process.env.DATABASE_URL ?? fileValues.DATABASE_URL
   if (!databaseUrl) {
-    throw new Error('DATABASE_URL is required; configure server/.env or the DATABASE_URL environment variable')
+    throw new Error('DATABASE_URL is required; configure server/.env (or MONRAD_ENV_FILE), or set the DATABASE_URL environment variable')
   }
 
   let parsed
@@ -82,8 +83,23 @@ function readEnvFile(filename) {
   }
   return values
 }
-
-function resolveMode(databaseConfig, containerName) {
+/**
+ * Resolves the backup mode from the environment.
+ *
+ * | MONRAD_DB_MODE | MONRAD_DB_CONTAINER | Result |
+ * |----------------|---------------------|--------|
+ * | `"docker"`     | —                   | docker |
+ * | `"host"`       | —                   | host   |
+ * | *(unset)*      | set                 | docker |
+ * | *(unset)*      | *(unset)*           | host   |
+ * | other value    | —                   | error  |
+ *
+ * Setting MONRAD_DB_CONTAINER is an explicit opt-in to Docker mode;
+ * the script never probes the Docker daemon. Automatic mode defaults
+ * to host — a local database URL does not prove that a same-named
+ * container owns the endpoint.
+ */
+function resolveMode() {
   const requested = process.env.MONRAD_DB_MODE?.toLowerCase()
   if (requested && requested !== 'docker' && requested !== 'host') {
     throw new Error('MONRAD_DB_MODE must be either docker or host')
@@ -91,12 +107,9 @@ function resolveMode(databaseConfig, containerName) {
   if (requested) return requested
   if (process.env.MONRAD_DB_CONTAINER) return 'docker'
 
-  const localHost = ['localhost', '127.0.0.1', '::1'].includes(databaseConfig.host)
-  if (!localHost) return 'host'
-
-  const docker = process.env.MONRAD_DOCKER_COMMAND ?? 'docker'
-  const result = spawnSync(docker, ['inspect', '--type', 'container', containerName], { stdio: 'ignore', shell: false })
-  return result.error || result.status !== 0 ? 'host' : 'docker'
+  // Automatic mode is deliberately conservative: a local URL does not prove
+  // that a same-named Docker container owns the configured endpoint.
+  return 'host'
 }
 
 function createDockerBackup(databaseConfig, containerName, remotePath, localPath) {
@@ -112,30 +125,31 @@ function createDockerBackup(databaseConfig, containerName, remotePath, localPath
     '--format=custom',
     '-f',
     remotePath,
-  ])
-  run(docker, ['cp', `${containerName}:${remotePath}`, localPath])
+  ], { context: 'Docker backup' })
+  run(docker, ['cp', `${containerName}:${remotePath}`, localPath], { context: 'Docker backup' })
 }
 
 function createHostBackup(databaseConfig, localPath) {
   const pgDump = process.env.MONRAD_PG_DUMP_COMMAND ?? 'pg_dump'
-  run(pgDump, ['--format=custom', '--file', localPath, '--dbname', databaseConfig.databaseUrl])
+  run(pgDump, ['--format=custom', '--file', localPath, '--dbname', databaseConfig.databaseUrl], { context: 'host backup' })
 }
 
 function runDockerCleanup(containerName, remotePath) {
   const docker = process.env.MONRAD_DOCKER_COMMAND ?? 'docker'
-  run(docker, ['exec', containerName, 'rm', '-f', remotePath], { allowFailure: true, stdio: 'ignore' })
+  run(docker, ['exec', containerName, 'rm', '-f', remotePath], { allowFailure: true, stdio: 'ignore', context: 'Docker cleanup' })
 }
 
-function run(command, args, { allowFailure = false, stdio = 'inherit' } = {}) {
+function run(command, args, { allowFailure = false, stdio = 'inherit', context = 'backup' } = {}) {
   const result = spawnSync(command, args, { cwd: root, stdio, shell: false })
   if (result.error) {
     if (allowFailure) return
-    throw new Error(`${command} is unavailable: ${result.error.message}`)
+    throw new Error(`${context} command ${command} is unavailable: ${result.error.message}`)
   }
   if (result.status !== 0 && !allowFailure) {
-    throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}`)
+    throw new Error(`${context} command ${command} failed with exit code ${result.status}`)
   }
 }
+
 
 function verifyDump(filename) {
   let stat
