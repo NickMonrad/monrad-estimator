@@ -69,6 +69,7 @@ interface PersistedProfileSummary {
   namedResourceId: string | null
   ownerKind: string
   source: string
+  planningBasis?: string
 }
 
 /** Sources that represent explicit/manual ownership and must not be replaced. */
@@ -86,6 +87,26 @@ interface NamedResourceSummary {
   createdAt: Date
   allocationMode?: string | null
 }
+
+/** Legacy planner rows may be adopted only when every planner marker agrees. */
+export function isLegacyPlannerProfile(
+  profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>,
+  namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
+): boolean {
+  return profile.ownerKind === 'NAMED_PERSON'
+    && profile.source === 'SQUAD_PLANNER'
+    && profile.planningBasis === 'CAPACITY_PROFILE'
+    && namedResource.allocationMode === 'CAPACITY_PLAN'
+}
+
+function isPlannerOwnedProfile(
+  profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>,
+  namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
+): boolean {
+  return (profile.ownerKind === 'PLANNED_RESOURCE' && profile.source === 'SQUAD_PLANNER')
+    || isLegacyPlannerProfile(profile, namedResource)
+}
+
 
 // ─── Segment mapping helper ─────────────────────────────────────────────────
 
@@ -244,12 +265,20 @@ export function classifyProfileConflicts(
       })
     }
     for (const profile of profiles) {
-      if (profile.ownerKind !== 'NAMED_PERSON' && !PROTECTED_PROFILE_SOURCES[profile.source]) continue
-      protectedNamedPersonProfiles.push({
-        resourceTypeId: profile.resourceTypeId ?? '',
-        resourceTypeName: profile.ownerKind === 'NAMED_PERSON' ? 'named-person' : 'protected',
-        namedResourceName,
-      })
+      const namedResource = usedResources.find(r => r.id === namedResourceId) ?? { allocationMode: null }
+      if (profile.ownerKind === 'NAMED_PERSON' && !isLegacyPlannerProfile(profile, namedResource)) {
+        protectedNamedPersonProfiles.push({
+          resourceTypeId: profile.resourceTypeId ?? '',
+          resourceTypeName: 'named-person',
+          namedResourceName,
+        })
+      } else if (PROTECTED_PROFILE_SOURCES[profile.source]) {
+        protectedNamedPersonProfiles.push({
+          resourceTypeId: profile.resourceTypeId ?? '',
+          resourceTypeName: 'protected',
+          namedResourceName,
+        })
+      }
     }
   }
 
@@ -301,11 +330,10 @@ export async function conflictPreflightCheck(
     }))
     const trajectories = materializeResourceTrajectories(rtPeriods)
     const trajectoryCount = trajectories.length
-
     const namedResources = (await tx.namedResource.findMany({
       where: { resourceTypeId: rtId },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true },
+      select: { id: true, name: true, allocationMode: true },
     })) ?? []
 
     const usedResources = namedResources.slice(0, trajectoryCount)
@@ -317,7 +345,7 @@ export async function conflictPreflightCheck(
           projectId,
           namedResourceId: { in: [...usedResourceIds] },
         },
-        select: { id: true, namedResourceId: true, source: true, ownerKind: true },
+        select: { id: true, namedResourceId: true, source: true, ownerKind: true, planningBasis: true },
       })) ?? []
       const profilesByNamedResource = new Map<string, typeof resourceProfiles>()
       for (const profile of resourceProfiles) {
@@ -336,12 +364,19 @@ export async function conflictPreflightCheck(
           })
         }
         for (const profile of profiles) {
-          if (profile.ownerKind !== 'NAMED_PERSON' && !PROTECTED_PROFILE_SOURCES[profile.source]) continue
-          protectedNamedPersonProfiles.push({
-            resourceTypeId: rtId,
-            resourceTypeName: profile.ownerKind === 'NAMED_PERSON' ? 'named-person' : 'protected',
-            namedResourceName: nr?.name,
-          })
+          if (profile.ownerKind === 'NAMED_PERSON' && !isLegacyPlannerProfile(profile, nr ?? { allocationMode: null })) {
+            protectedNamedPersonProfiles.push({
+              resourceTypeId: rtId,
+              resourceTypeName: 'named-person',
+              namedResourceName: nr?.name,
+            })
+          } else if (PROTECTED_PROFILE_SOURCES[profile.source]) {
+            protectedNamedPersonProfiles.push({
+              resourceTypeId: rtId,
+              resourceTypeName: 'protected',
+              namedResourceName: nr?.name,
+            })
+          }
         }
       }
     }
@@ -386,7 +421,7 @@ export async function findOrCreatePlannedResources(
     ? []
     : await tx.capacityProfile.findMany({
       where: { namedResourceId: { in: existingNRs.map(nr => nr.id) } },
-      select: { namedResourceId: true, ownerKind: true, source: true },
+      select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
     })
   const profilesByResource = new Map<string, typeof existingProfiles>()
   for (const profile of existingProfiles) {
@@ -397,9 +432,8 @@ export async function findOrCreatePlannedResources(
   }
   const isPlannerManaged = (nr: { id: string; allocationMode?: string | null }) => {
     const profiles = profilesByResource.get(nr.id) ?? []
-    return profiles.some(profile => (
-      profile.ownerKind === 'PLANNED_RESOURCE' && profile.source === 'SQUAD_PLANNER'
-    )) || (profiles.length === 0 && nr.allocationMode === 'CAPACITY_PLAN')
+    return profiles.some(profile => isPlannerOwnedProfile(profile, nr))
+      || (profiles.length === 0 && nr.allocationMode === 'CAPACITY_PLAN')
   }
   const plannerResources = existingNRs.filter(isPlannerManaged)
 
@@ -415,7 +449,6 @@ export async function findOrCreatePlannedResources(
     await tx.namedResource.createMany({ data: newNRs })
   }
 
-  // Re-fetch with stable ordering, then retain only planner-managed identities.
   const allNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -425,7 +458,7 @@ export async function findOrCreatePlannedResources(
     ? []
     : await tx.capacityProfile.findMany({
       where: { namedResourceId: { in: allNRs.map(nr => nr.id) } },
-      select: { namedResourceId: true, ownerKind: true, source: true },
+      select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
     })
   const allProfilesByResource = new Map<string, typeof allProfiles>()
   for (const profile of allProfiles) {
@@ -436,9 +469,8 @@ export async function findOrCreatePlannedResources(
   }
   const retained = allNRs.filter(nr => {
     const profiles = allProfilesByResource.get(nr.id) ?? []
-    return profiles.some(profile => (
-      profile.ownerKind === 'PLANNED_RESOURCE' && profile.source === 'SQUAD_PLANNER'
-    )) || (profiles.length === 0 && nr.allocationMode === 'CAPACITY_PLAN')
+    return profiles.some(profile => isPlannerOwnedProfile(profile, nr))
+      || (profiles.length === 0 && nr.allocationMode === 'CAPACITY_PLAN')
   })
 
   return { namedResources: retained, created: missing }
@@ -474,175 +506,121 @@ export async function writePlannerProfiles(
   let surplusProfilesWritten = 0
   const prismaSource = source as CapacityProfileSource
 
-  // ── Write ROLE profiles ─────────────────────────────────────────────────
   for (const rp of roleProfiles) {
-    // Find existing ROLE profile for this resource type
     const existing = await tx.capacityProfile.findFirst({
       where: { projectId, resourceTypeId: rp.resourceTypeId, ownerKind: 'ROLE' },
       select: { id: true },
     })
-
-    if (existing) {
-      // Update existing profile
-      await tx.capacitySegment.deleteMany({
-        where: { capacityProfileId: existing.id },
-      })
-
-      await tx.capacityProfile.update({
-        where: { id: existing.id },
-        data: {
-          planningBasis: 'CAPACITY_PROFILE',
-          source: prismaSource,
-          defaultPercent: rp.defaultPercent,
-          startWeek: rp.startWeek,
-          endWeek: rp.endWeek,
-        },
-      })
-
-      if (rp.segments.length > 0) {
-        await tx.capacitySegment.createMany({
-          data: rp.segments.map(s => ({
-            capacityProfileId: existing.id,
-            startWeek: s.startWeek,
-            endWeek: s.endWeek,
-            capacityPercent: s.capacityPercent,
+    const profile = existing
+      ? await tx.capacityProfile.update({
+          where: { id: existing.id },
+          data: {
+            resourceTypeId: rp.resourceTypeId,
+            namedResourceId: null,
+            ownerKind: 'ROLE',
+            planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
-          })),
+            defaultPercent: rp.defaultPercent,
+            startWeek: rp.startWeek,
+            endWeek: rp.endWeek,
+          },
         })
-        segmentsWritten += rp.segments.length
-      }
-    } else {
-      // Create new profile with segments
-      const profile = await tx.capacityProfile.create({
-        data: {
-          projectId,
-          resourceTypeId: rp.resourceTypeId,
-          ownerKind: 'ROLE',
-          planningBasis: 'CAPACITY_PROFILE',
-          source: prismaSource,
-          defaultPercent: rp.defaultPercent,
-          startWeek: rp.startWeek,
-          endWeek: rp.endWeek,
-        },
-      })
-
-      if (rp.segments.length > 0) {
-        await tx.capacitySegment.createMany({
-          data: rp.segments.map(s => ({
-            capacityProfileId: profile.id,
-            startWeek: s.startWeek,
-            endWeek: s.endWeek,
-            capacityPercent: s.capacityPercent,
+      : await tx.capacityProfile.create({
+          data: {
+            projectId,
+            resourceTypeId: rp.resourceTypeId,
+            namedResourceId: null,
+            ownerKind: 'ROLE',
+            planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
-          })),
+            defaultPercent: rp.defaultPercent,
+            startWeek: rp.startWeek,
+            endWeek: rp.endWeek,
+          },
         })
-        segmentsWritten += rp.segments.length
-      }
+    await tx.capacitySegment.deleteMany({ where: { capacityProfileId: profile.id } })
+    if (rp.segments.length > 0) {
+      await tx.capacitySegment.createMany({
+        data: rp.segments.map(s => ({
+          capacityProfileId: profile.id,
+          startWeek: s.startWeek,
+          endWeek: s.endWeek,
+          capacityPercent: s.capacityPercent,
+          source: prismaSource,
+        })),
+      })
+      segmentsWritten += rp.segments.length
     }
-
     roleProfilesWritten++
   }
 
-  // ── Write PLANNED_RESOURCE profiles ─────────────────────────────────────
   for (const pp of plannedProfiles) {
-    // Find existing profile for this named resource
     const existing = await tx.capacityProfile.findFirst({
-      where: { projectId, namedResourceId: pp.namedResourceId, ownerKind: 'PLANNED_RESOURCE' },
+      where: { projectId, namedResourceId: pp.namedResourceId },
       select: { id: true },
     })
-
-    if (existing) {
-      await tx.capacitySegment.deleteMany({
-        where: { capacityProfileId: existing.id },
-      })
-
-      await tx.capacityProfile.update({
-        where: { id: existing.id },
-        data: {
-          planningBasis: 'CAPACITY_PROFILE',
-          source: prismaSource,
-          defaultPercent: pp.defaultPercent,
-          startWeek: pp.startWeek,
-          endWeek: pp.endWeek,
-        },
-      })
-
-      if (pp.segments.length > 0) {
-        await tx.capacitySegment.createMany({
-          data: pp.segments.map(s => ({
-            capacityProfileId: existing.id,
-            startWeek: s.startWeek,
-            endWeek: s.endWeek,
-            capacityPercent: s.capacityPercent,
+    const profile = existing
+      ? await tx.capacityProfile.update({
+          where: { id: existing.id },
+          data: {
+            resourceTypeId: null,
+            namedResourceId: pp.namedResourceId,
+            ownerKind: 'PLANNED_RESOURCE',
+            planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
-          })),
+            defaultPercent: pp.defaultPercent,
+            startWeek: pp.startWeek,
+            endWeek: pp.endWeek,
+          },
         })
-        segmentsWritten += pp.segments.length
-      }
-    } else {
-      const profile = await tx.capacityProfile.create({
-        data: {
-          projectId,
-          namedResourceId: pp.namedResourceId,
-          ownerKind: 'PLANNED_RESOURCE',
-          planningBasis: 'CAPACITY_PROFILE',
-          source: prismaSource,
-          defaultPercent: pp.defaultPercent,
-          startWeek: pp.startWeek,
-          endWeek: pp.endWeek,
-        },
-      })
-
-      if (pp.segments.length > 0) {
-        await tx.capacitySegment.createMany({
-          data: pp.segments.map(s => ({
-            capacityProfileId: profile.id,
-            startWeek: s.startWeek,
-            endWeek: s.endWeek,
-            capacityPercent: s.capacityPercent,
+      : await tx.capacityProfile.create({
+          data: {
+            projectId,
+            resourceTypeId: null,
+            namedResourceId: pp.namedResourceId,
+            ownerKind: 'PLANNED_RESOURCE',
+            planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
-          })),
+            defaultPercent: pp.defaultPercent,
+            startWeek: pp.startWeek,
+            endWeek: pp.endWeek,
+          },
         })
-        segmentsWritten += pp.segments.length
-      }
-
-      plannedResourceProfilesWritten++
+    await tx.capacitySegment.deleteMany({ where: { capacityProfileId: profile.id } })
+    if (pp.segments.length > 0) {
+      await tx.capacitySegment.createMany({
+        data: pp.segments.map(s => ({
+          capacityProfileId: profile.id,
+          startWeek: s.startWeek,
+          endWeek: s.endWeek,
+          capacityPercent: s.capacityPercent,
+          source: prismaSource,
+        })),
+      })
+      segmentsWritten += pp.segments.length
     }
+    plannedResourceProfilesWritten++
   }
 
-  // ── Write zero-capacity profiles for surplus resources ──────────────────
   for (const surplusId of surplusResourceIds) {
     const existing = await tx.capacityProfile.findFirst({
-      where: { projectId, namedResourceId: surplusId, ownerKind: 'PLANNED_RESOURCE' },
+      where: { projectId, namedResourceId: surplusId },
       select: { id: true },
     })
-
-    if (existing) {
-      await tx.capacitySegment.deleteMany({
-        where: { capacityProfileId: existing.id },
-      })
-      await tx.capacityProfile.update({
-        where: { id: existing.id },
-        data: {
-          defaultPercent: 0,
-          startWeek: null,
-          endWeek: null,
-        },
-      })
-    } else {
-      await tx.capacityProfile.create({
-        data: {
-          projectId,
-          namedResourceId: surplusId,
-          ownerKind: 'PLANNED_RESOURCE',
-          planningBasis: 'CAPACITY_PROFILE',
-          source: prismaSource,
-          defaultPercent: 0,
-          startWeek: null,
-          endWeek: null,
-        },
-      })
+    const data = {
+      resourceTypeId: null,
+      namedResourceId: surplusId,
+      ownerKind: 'PLANNED_RESOURCE' as const,
+      planningBasis: 'CAPACITY_PROFILE' as const,
+      source: prismaSource,
+      defaultPercent: 0,
+      startWeek: null,
+      endWeek: null,
     }
+    const profile = existing
+      ? await tx.capacityProfile.update({ where: { id: existing.id }, data })
+      : await tx.capacityProfile.create({ data: { projectId, ...data } })
+    await tx.capacitySegment.deleteMany({ where: { capacityProfileId: profile.id } })
     surplusProfilesWritten++
   }
 
@@ -670,7 +648,6 @@ export async function projectCompatibilityFields(
   roleProfiles: RoleProfileWriteSet[],
   plannedProfiles: PlannedResourceProfileWriteSet[],
 ): Promise<void> {
-  // Project ROLE → ResourceType
   for (const rp of roleProfiles) {
     const projection = projectCapacityProfileToLegacyAllocation({
       planningBasis: 'capacityProfile',
@@ -680,7 +657,6 @@ export async function projectCompatibilityFields(
       endWeek: rp.endWeek,
       segments: rp.segments,
     })
-
     if (projection) {
       await tx.resourceType.update({
         where: { id: rp.resourceTypeId },
@@ -694,7 +670,6 @@ export async function projectCompatibilityFields(
     }
   }
 
-  // Project PLANNED_RESOURCE → NamedResource
   for (const pp of plannedProfiles) {
     const projection = projectCapacityProfileToLegacyAllocation({
       planningBasis: 'capacityProfile',
@@ -704,15 +679,17 @@ export async function projectCompatibilityFields(
       endWeek: pp.endWeek,
       segments: pp.segments,
     })
-
     if (projection) {
       await tx.namedResource.update({
         where: { id: pp.namedResourceId },
         data: {
           allocationMode: projection.allocationMode,
           allocationPercent: projection.allocationPercent ?? 0,
+          allocationPct: Math.round(projection.allocationPercent ?? 0),
           allocationStartWeek: projection.allocationStartWeek,
           allocationEndWeek: projection.allocationEndWeek,
+          startWeek: projection.allocationStartWeek,
+          endWeek: projection.allocationEndWeek,
         },
       })
     }
@@ -734,15 +711,86 @@ export async function clearSurplusCompatibilityFields(
   await tx.namedResource.updateMany({
     where: { id: { in: surplusResourceIds } },
     data: {
-      allocationMode: 'EFFORT',
+      allocationMode: 'CAPACITY_PLAN',
       allocationPercent: 0,
+      allocationPct: 0,
       allocationStartWeek: null,
       allocationEndWeek: null,
-      startWeek: 0,
-      endWeek: 0,
+      startWeek: null,
+      endWeek: null,
     },
   })
 }
+/**
+ * Clear planner-owned role/resource capacity for resource types omitted from
+ * the replacement plan while preserving explicit/manual profiles.
+ */
+export async function clearOmittedPlannerCapacity(
+  tx: PrismaTransactionClient,
+  projectId: string,
+  activeResourceTypeIds: Set<string>,
+): Promise<void> {
+  const roleProfiles = await tx.capacityProfile.findMany({
+    where: {
+      projectId,
+      ownerKind: 'ROLE',
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+    },
+    select: { resourceTypeId: true },
+  })
+  const omittedResourceTypeIds = [...new Set(
+    roleProfiles
+      .map(profile => profile.resourceTypeId)
+      .filter((id): id is string => id !== null && !activeResourceTypeIds.has(id)),
+  )]
+  if (omittedResourceTypeIds.length === 0) return
+
+  const zeroRoleProfiles: RoleProfileWriteSet[] = omittedResourceTypeIds.map(resourceTypeId => ({
+    resourceTypeId,
+    defaultPercent: 0,
+    startWeek: null,
+    endWeek: null,
+    segments: [],
+  }))
+  const zeroPlannedProfiles: PlannedResourceProfileWriteSet[] = []
+  const zeroResourceIds: string[] = []
+
+  for (const resourceTypeId of omittedResourceTypeIds) {
+    await tx.resourceType.update({
+      where: { id: resourceTypeId },
+      data: {
+        count: 0,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 0,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+    })
+    const namedResources = await tx.namedResource.findMany({
+      where: { resourceTypeId },
+      select: { id: true, allocationMode: true },
+    })
+    for (const namedResource of namedResources) {
+      const profile = await tx.capacityProfile.findFirst({
+        where: { projectId, namedResourceId: namedResource.id },
+        select: { ownerKind: true, source: true, planningBasis: true },
+      })
+      if (
+        (!profile && namedResource.allocationMode === 'CAPACITY_PLAN')
+        || (profile && isPlannerOwnedProfile(profile, namedResource))
+      ) {
+        zeroPlannedProfiles.push(buildZeroCapacityProfileData(namedResource.id))
+        zeroResourceIds.push(namedResource.id)
+      }
+    }
+  }
+
+  await writePlannerProfiles(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles, [])
+  await projectCompatibilityFields(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles)
+  await clearSurplusCompatibilityFields(tx, zeroResourceIds)
+}
+
 
 // ─── Pure: determine surplus resource IDs ────────────────────────────────────
 

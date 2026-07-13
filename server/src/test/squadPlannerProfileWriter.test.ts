@@ -5,6 +5,7 @@ import {
   buildZeroCapacityProfileData,
   classifyProfileConflicts,
   determineSurplusResourceIds,
+  isLegacyPlannerProfile,
   materializeProfilesForResourceType,
 } from '../lib/squadPlannerProfileWriter.js'
 import type { CapacityPlanPeriodInput } from '../lib/capacityPlanMaterialisation.js'
@@ -187,6 +188,22 @@ describe('buildZeroCapacityProfileData', () => {
 })
 
 // ─── Conflict classification tests ──────────────────────────────────────────
+describe('isLegacyPlannerProfile', () => {
+  const legacyProfile = {
+    ownerKind: 'NAMED_PERSON',
+    source: 'SQUAD_PLANNER',
+    planningBasis: 'CAPACITY_PROFILE',
+  }
+
+  it('requires every legacy planner marker and CAPACITY_PLAN allocation', () => {
+    expect(isLegacyPlannerProfile(legacyProfile, { allocationMode: 'CAPACITY_PLAN' })).toBe(true)
+    expect(isLegacyPlannerProfile(legacyProfile, { allocationMode: 'EFFORT' })).toBe(false)
+    expect(isLegacyPlannerProfile({ ...legacyProfile, source: 'MANUAL' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
+    expect(isLegacyPlannerProfile({ ...legacyProfile, planningBasis: 'DEMAND_FOLLOWING' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
+    expect(isLegacyPlannerProfile({ ...legacyProfile, ownerKind: 'PLANNED_RESOURCE' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
+  })
+})
+
 
 describe('classifyProfileConflicts', () => {
   it('returns no conflict for clean state', () => {
@@ -238,6 +255,26 @@ describe('classifyProfileConflicts', () => {
     expect(result.duplicateOwnerProfiles).toHaveLength(0)
     expect(result.protectedNamedPersonProfiles).toHaveLength(1)
     expect(result.protectedNamedPersonProfiles[0].namedResourceName).toBe('Alice')
+  })
+
+  it('adopts an evidence-based legacy planner NAMED_PERSON profile', () => {
+    const result = classifyProfileConflicts(
+      [],
+      [{
+        id: 'cp-legacy',
+        projectId: 'p1',
+        resourceTypeId: null,
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+      }],
+      1,
+      [{ id: 'nr-1', name: 'Planner 1', createdAt: new Date(), allocationMode: 'CAPACITY_PLAN' }],
+    )
+
+    expect(result.hasConflict).toBe(false)
+    expect(result.protectedNamedPersonProfiles).toHaveLength(0)
   })
 
   it('ignores NAMED_PERSON profiles for resources beyond trajectory range', () => {

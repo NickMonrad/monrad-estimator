@@ -34,6 +34,7 @@ import {
   writePlannerProfiles,
   projectCompatibilityFields,
   clearSurplusCompatibilityFields,
+  clearOmittedPlannerCapacity,
 } from '../lib/squadPlannerProfileWriter.js'
 
 type ApplyPeriodEntry = {
@@ -455,18 +456,20 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   // ── 1. Create pre-apply snapshot for undo ───────────────────────────────
-  const snapshotData = await buildSnapshot(projectId)
-  const dateStr = new Date().toISOString().slice(0, 10)
-  await prisma.backlogSnapshot.create({
-    data: {
-      projectId,
-      label: `Auto-saved before squad plan apply — ${dateStr}`,
-      trigger: 'optimiser_apply',
-      snapshot: snapshotData as unknown as object,
-      createdById: req.userId!,
-    },
-  })
-  await pruneSnapshots(prisma, projectId)
+  if (shouldActivate) {
+    const snapshotData = await buildSnapshot(projectId)
+    const dateStr = new Date().toISOString().slice(0, 10)
+    await prisma.backlogSnapshot.create({
+      data: {
+        projectId,
+        label: `Auto-saved before squad plan apply — ${dateStr}`,
+        trigger: 'optimiser_apply',
+        snapshot: snapshotData as unknown as object,
+        createdById: req.userId!,
+      },
+    })
+    await pruneSnapshots(prisma, projectId)
+  }
 
 
   // ── 2. Compute planner-derived values from request data (no DB) ──────────
@@ -588,6 +591,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
           await clearSurplusCompatibilityFields(tx, materialized.surplusResources)
         }
       }
+      await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()))
     }
 
     return createdPlan

@@ -416,6 +416,10 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
           return { count: filter(store().namedResources, args.where).length }
         },
         create: (args: any) => createIn('namedResources', args.data ?? args),
+        createMany: (args: any) => {
+          for (const d of args.data ?? []) createIn('namedResources', d)
+          return { count: (args.data ?? []).length }
+        },
         delete: (args: any) => { deleteOne('namedResources', args.where ?? args); return {} },
         count: (args: any) => filter(store().namedResources, args?.where ?? {}).length,
       },
@@ -437,6 +441,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
         },
       },
       capacityProfile: {
+        findFirst: (args: any) => findOne(store().capacityProfiles, args?.where ?? {}),
         findMany: (args: any) => {
           const results = findMany('capacityProfiles', args ?? {})
           if (args?.include?.segments) {
@@ -464,6 +469,10 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       capacitySegment: {
         deleteMany: (args: any) => deleteWhere('capacitySegments', args.where ?? {}),
         create: (args: any) => createIn('capacitySegments', args.data ?? args),
+        createMany: (args: any) => {
+          for (const d of args.data ?? []) createIn('capacitySegments', d)
+          return { count: (args.data ?? []).length }
+        },
       },
       epic: {
         findMany: () => [...store().epics],
@@ -878,7 +887,7 @@ describe('persisted capacity-profile DTO integration', () => {
   describe('4. Squad Planner apply persists segments', () => {
     it('apply route creates profiles with segments in shared store; GET returns them', async () => {
       addResourceType(rtId, userName, 1)
-      addNamedResource('nr-1', 'Engineer 1', rtId)
+      addNamedResource('nr-1', 'Engineer 1', rtId, { allocationMode: 'CAPACITY_PLAN' })
 
       const applyRes = await request(app)
         .post(`/api/projects/${projectId}/squad-plan/apply`)
@@ -910,7 +919,9 @@ describe('persisted capacity-profile DTO integration', () => {
       const seg = storeRef.current.capacitySegments[0]
       expect(seg.endWeek).toBe(7)
 
-      const persistedProfileId = storeRef.current.capacityProfiles[0].id
+      const persistedProfileId = storeRef.current.capacityProfiles.find(
+        (p: any) => p.ownerKind === 'PLANNED_RESOURCE',
+      )?.id
 
       // GET returns same persisted state
       const getRes = await getCapacityProfiles()

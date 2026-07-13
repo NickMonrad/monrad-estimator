@@ -175,6 +175,9 @@ export function compareCapacityProfiles(
     const key = profileKey(projectId, kind, ownerId)
 
     const persisted = persistedByKey.get(key)
+      ?? (kind === 'namedPerson'
+        ? persistedByKey.get(profileKey(projectId, 'plannedResource', ownerId))
+        : undefined)
 
     if (!persisted) {
       mismatches.push({
@@ -188,14 +191,24 @@ export function compareCapacityProfiles(
       continue
     }
 
-    // Record that we found a persisted row for this key (regardless of field match quality)
-    comparedPersistedKeys.add(key)
+    // Record the actual persisted key, including planned-resource aliases.
+    const persistedKey = profileKey(projectId, normalizeEnum(persisted.ownerKind), persisted.resourceTypeId ?? persisted.namedResourceId ?? '')
+    comparedPersistedKeys.add(persistedKey)
 
     // Compare profile fields
     const mismatchesBefore = mismatches.length
 
     const fieldMismatches = [
-      compareField(projectId, kind, ownerId, 'ownerKind', kind, normalizeEnum(persisted.ownerKind)),
+      compareField(
+        projectId,
+        kind,
+        ownerId,
+        'ownerKind',
+        kind,
+        kind === 'namedPerson' && normalizeEnum(persisted.ownerKind) === 'plannedResource'
+          ? kind
+          : normalizeEnum(persisted.ownerKind),
+      ),
       compareField(projectId, kind, ownerId, 'planningBasis', expected.planningBasis, normalizeEnum(persisted.planningBasis)),
       compareField(projectId, kind, ownerId, 'source', expected.source, normalizeEnum(persisted.source)),
       compareField(projectId, kind, ownerId, 'defaultPercent', expected.defaultPercent ?? null, persisted.defaultPercent),

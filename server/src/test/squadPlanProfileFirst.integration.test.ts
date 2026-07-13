@@ -31,7 +31,11 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
 import type { $Enums } from '@prisma/client'
 import { app } from '../app.js'
-
+import { getWeeklyCapacity } from '../lib/scheduler.js'
+import {
+  writePlannerProfiles,
+  type RoleProfileWriteSet,
+} from '../lib/squadPlannerProfileWriter.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async (importOriginal) => {
   return await importOriginal()
@@ -341,21 +345,72 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     const rp = roleProfiles[0]
     expect(rp.resourceTypeId).toBe(rtId)
     expect(rp.namedResourceId).toBeNull()
-    expect(rp.planningBasis).toBe('CAPACITY_PROFILE')
-    expect(rp.source).toBe('SQUAD_PLANNER')
   })
 
-  it('creates at least one PLANNED_RESOURCE profile per trajectory', async () => {
+  it('creates at least one PLANNED_RESOURCE profile per trajectory with persisted owner shape', async () => {
     const profiles = await fetchProfiles(projectId)
     const prProfiles = profiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE')
-    // 1.5 headcount → at least 1 trajectory (could be 2); 0.5 in second period → at least 1
-    expect(prProfiles.length).toBeGreaterThanOrEqual(1)
+    expect(prProfiles).toHaveLength(2)
     prProfiles.forEach(p => {
-      expect(p.resourceTypeId).toBe(rtId)
+      expect(p.resourceTypeId).toBeNull()
       expect(p.namedResourceId).not.toBeNull()
       expect(p.planningBasis).toBe('CAPACITY_PROFILE')
       expect(p.source).toBe('SQUAD_PLANNER')
     })
+  })
+
+  it('writes exact role and trajectory segments', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const roleProfile = profiles.find(p => p.ownerKind === 'ROLE')
+    expect(roleProfile).toBeDefined()
+    expect(await fetchSegments(roleProfile!.id)).toEqual([
+      expect.objectContaining({ startWeek: 0, endWeek: 7, capacityPercent: 150, source: 'SQUAD_PLANNER' }),
+      expect.objectContaining({ startWeek: 8, endWeek: 11, capacityPercent: 50, source: 'SQUAD_PLANNER' }),
+    ])
+
+    const prProfiles = profiles
+      .filter(p => p.ownerKind === 'PLANNED_RESOURCE')
+      .sort((a, b) => (a.namedResourceId ?? '').localeCompare(b.namedResourceId ?? ''))
+    expect(await fetchSegments(prProfiles[0].id)).toEqual([
+      expect.objectContaining({ startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' }),
+      expect.objectContaining({ startWeek: 8, endWeek: 11, capacityPercent: 50, source: 'SQUAD_PLANNER' }),
+    ])
+    expect(await fetchSegments(prProfiles[1].id)).toEqual([
+      expect.objectContaining({ startWeek: 0, endWeek: 7, capacityPercent: 50, source: 'SQUAD_PLANNER' }),
+    ])
+  })
+
+  it('keeps resource-profile and timeline allocation fields in parity', async () => {
+    const [resourceProfileRes, timelineRes] = await Promise.all([
+      request(app)
+        .get(`/api/projects/${projectId}/resource-profile`)
+        .set('Authorization', authHeader),
+      request(app)
+        .get(`/api/projects/${projectId}/timeline`)
+        .set('Authorization', authHeader),
+    ])
+    expect(resourceProfileRes.status).toBe(200)
+    expect(timelineRes.status).toBe(200)
+
+    const resourceRow = resourceProfileRes.body.resourceRows.find(
+      (row: { resourceTypeId: string }) => row.resourceTypeId === rtId,
+    )
+    const profileResource = resourceRow.namedResources[0]
+    const timelineResource = timelineRes.body.namedResources.find(
+      (resource: { id: string }) => resource.id === profileResource.id,
+    )
+    expect(timelineResource).toBeDefined()
+    for (const field of [
+      'allocationMode',
+      'allocationPercent',
+      'allocationPct',
+      'allocationStartWeek',
+      'allocationEndWeek',
+      'startWeek',
+      'endWeek',
+    ]) {
+      expect(timelineResource[field]).toBe(profileResource[field])
+    }
   })
 
   it('writes non-empty segments on the ROLE profile', async () => {
@@ -365,7 +420,7 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     const segments = await fetchSegments(roleProfile!.id)
     expect(segments.length).toBeGreaterThan(0)
     // Segments should not bridge zero-capacity periods (discontinuity preserved)
-    // Exact segment content depends on materialisation, but at minimum must exist
+    // Exact segment content is asserted above.
   })
 
   it('writes segments on each PLANNED_RESOURCE profile', async () => {
@@ -493,27 +548,20 @@ describeIf('Scenario 3 — Shrink clears surplus planner capacity', () => {
     expect(res2.status).toBe(201)
   })
 
-  it('reduces PLANNED_RESOURCE profiles to match new headcount', async () => {
+  it('writes exactly one active trajectory and one zero-capacity surplus profile', async () => {
     const profiles = await fetchProfiles(projectId)
     const prProfiles = profiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE')
-    // After shrink to 1 headcount, should have at most 1 active trajectory
-    // The surplus resource may still exist with a zero-capacity profile
-    expect(prProfiles.length).toBeGreaterThanOrEqual(1)
-    expect(prProfiles.length).toBeLessThanOrEqual(2)
-  })
+    expect(prProfiles).toHaveLength(2)
 
-  it('surplus planner profile has zero-capacity or inactive segments', async () => {
-    const profiles = await fetchProfiles(projectId)
-    const prProfiles = profiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE')
-    // If 2 profiles exist, one is the surplus with zero capacity
-    if (prProfiles.length === 2) {
-      const allSegments = await Promise.all(prProfiles.map(p => fetchSegments(p.id)))
-      // At least one profile should have no segments or zero-capacity segments
-      const zeroCapacity = allSegments.some(
-        segs => segs.length === 0 || segs.every(s => s.capacityPercent === 0)
-      )
-      expect(zeroCapacity).toBe(true)
-    }
+    const surplusProfile = prProfiles.find(p => p.defaultPercent === 0)
+    expect(surplusProfile).toBeDefined()
+    expect(surplusProfile!.resourceTypeId).toBeNull()
+    expect(surplusProfile!.namedResourceId).not.toBeNull()
+    expect(surplusProfile!.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(surplusProfile!.source).toBe('SQUAD_PLANNER')
+    expect(surplusProfile!.startWeek).toBeNull()
+    expect(surplusProfile!.endWeek).toBeNull()
+    expect(await fetchSegments(surplusProfile!.id)).toHaveLength(0)
   })
 
   it('does not delete the surplus named resource entity', async () => {
@@ -521,21 +569,63 @@ describeIf('Scenario 3 — Shrink clears surplus planner capacity', () => {
       where: { resourceType: { projectId } },
       orderBy: { name: 'asc' },
     })
-    // There should still be 2 named resources (1 active + 1 surplus)
-    expect(nrs.length).toBe(2)
+    expect(nrs).toHaveLength(2)
   })
 
-  it('surplus resource compatibility fields are zeroed', async () => {
-    // The surplus named resource's allocation fields should not show stale capacity
-    const nrs = await prisma.namedResource.findMany({
-      where: { resourceType: { projectId } },
-      orderBy: { name: 'asc' },
+  it('zeroes every named-resource compatibility alias and production capacity', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const surplusProfile = profiles.find(
+      p => p.ownerKind === 'PLANNED_RESOURCE' && p.defaultPercent === 0,
+    )
+    expect(surplusProfile?.namedResourceId).toBeDefined()
+
+    const surplus = await prisma.namedResource.findUnique({
+      where: { id: surplusProfile!.namedResourceId! },
     })
-    if (nrs.length >= 2) {
-      const surplus = nrs[1] // second NR is the surplus
-      // Allocation should show inactive or zero
-      expect(surplus.allocationPercent).toBeLessThanOrEqual(100)
-    }
+    expect(surplus).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 0,
+      allocationPct: 0,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+
+    const resourceProfileRes = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    expect(resourceProfileRes.status).toBe(200)
+    const resourceRow = resourceProfileRes.body.resourceRows.find(
+      (row: { resourceTypeId: string }) => row.resourceTypeId === rtId,
+    )
+    const projectedSurplus = resourceRow.namedResources.find(
+      (resource: { id: string }) => resource.id === surplus!.id,
+    )
+    expect(projectedSurplus).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 0,
+      allocationPct: 0,
+    })
+    expect(projectedSurplus.actualAllocatedDays).toBe(0)
+
+    expect(getWeeklyCapacity({
+      id: rtId,
+      name: 'Engineer',
+      count: 1,
+      hoursPerDay: 8,
+      namedResources: [{
+        id: surplus!.id,
+        name: surplus!.name,
+        startWeek: surplus!.startWeek,
+        endWeek: surplus!.endWeek,
+        allocationPct: surplus!.allocationPct,
+        allocationMode: surplus!.allocationMode,
+        allocationPercent: surplus!.allocationPercent,
+        allocationStartWeek: surplus!.allocationStartWeek,
+        allocationEndWeek: surplus!.allocationEndWeek,
+      }],
+    }, 0, 8)).toBe(0)
   })
 })
 
@@ -560,6 +650,10 @@ describeIf('Scenario 4 — setActive:false does not mutate capacity profiles', (
         { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 2 },
       ], { setActive: false }))
     expect(res.status).toBe(201)
+  })
+  it('does not create a pre-apply snapshot', async () => {
+    const snapshots = await prisma.backlogSnapshot.findMany({ where: { projectId } })
+    expect(snapshots).toHaveLength(0)
   })
 
   it('saves a capacity plan with isActive=false', async () => {
@@ -662,6 +756,186 @@ describeIf('Scenario 5 — Explicit NAMED_PERSON conflict returns 409 before sna
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Test count: 23 assertions across 5 scenarios
-// All under describeIf — skipped when INTEGRATION_TEST is not 'true'.
+// Scenario 6 — Evidence-based adoption of legacy planner profiles
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario 6 — Legacy planner profiles are adopted only with all markers', () => {
+  let projectId: string
+  let rtId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    rtId = await createResourceType(projectId, 'rt-eng-s6', 'Engineer')
+    await createEpicBacklog(projectId, rtId)
+    await createNamedResource(projectId, rtId, 'nr-legacy', 'Engineer 1', {
+      allocationMode: 'CAPACITY_PLAN',
+    })
+    await createProfile(
+      projectId,
+      'cp-legacy',
+      'NAMED_PERSON',
+      null,
+      'nr-legacy',
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER' },
+    )
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ]))
+    expect(res.status).toBe(201)
+  })
+
+  it('reuses the legacy profile and converts it to the persisted owner shape', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const planned = profiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE')
+    expect(planned).toHaveLength(1)
+    expect(planned[0]).toMatchObject({
+      id: 'cp-legacy',
+      resourceTypeId: null,
+      namedResourceId: 'nr-legacy',
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+    })
+    expect(profiles.some(p => p.ownerKind === 'NAMED_PERSON')).toBe(false)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 7 — Omitted roles are cleared without touching explicit profiles
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario 7 — Omitted planner roles lose capacity on replacement', () => {
+  let projectId: string
+  let firstRtId: string
+  let omittedRtId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    firstRtId = await createResourceType(projectId, 'rt-eng-s7', 'Engineer')
+    omittedRtId = await createResourceType(projectId, 'rt-qa-s7', 'QA')
+    await createEpicBacklog(projectId, firstRtId)
+
+    const first = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        ...buildApplyPayload(firstRtId, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ]),
+        periods: [{
+          periodIndex: 0,
+          startWeek: 0,
+          endWeek: 8,
+          entries: [
+            { resourceTypeId: firstRtId, headcount: 1, demandFTE: 0.5, utilisationPct: 50 },
+            { resourceTypeId: omittedRtId, headcount: 1, demandFTE: 0.5, utilisationPct: 50 },
+          ],
+        }],
+      })
+    expect(first.status).toBe(201)
+
+    const second = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(firstRtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ]))
+    expect(second.status).toBe(201)
+  })
+
+  it('keeps omitted role and planned-resource profiles with zero capacity', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const omittedRole = profiles.find(
+      p => p.ownerKind === 'ROLE' && p.resourceTypeId === omittedRtId,
+    )
+    expect(omittedRole).toMatchObject({
+      defaultPercent: 0,
+      startWeek: null,
+      endWeek: null,
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+    })
+    expect(await fetchSegments(omittedRole!.id)).toHaveLength(0)
+
+    const omittedResourceType = await prisma.resourceType.findUnique({
+      where: { id: omittedRtId },
+    })
+    expect(omittedResourceType).toMatchObject({
+      count: 0,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 0,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    const omittedNamedResources = await prisma.namedResource.findMany({
+      where: { resourceTypeId: omittedRtId },
+    })
+    expect(omittedNamedResources).toHaveLength(1)
+    expect(omittedNamedResources[0]).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 0,
+      allocationPct: 0,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+    const omittedProfile = profiles.find(
+      p => p.ownerKind === 'PLANNED_RESOURCE'
+        && p.namedResourceId === omittedNamedResources[0].id,
+    )
+    expect(omittedProfile).toMatchObject({ defaultPercent: 0, startWeek: null, endWeek: null })
+    expect(await fetchSegments(omittedProfile!.id)).toHaveLength(0)
+    expect(getWeeklyCapacity({
+      id: omittedRtId,
+      name: 'QA',
+      count: 0,
+      hoursPerDay: 8,
+      namedResources: omittedNamedResources.map(nr => ({
+        ...nr,
+        allocationPct: nr.allocationPct,
+      })),
+    }, 0, 8)).toBe(0)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 8 — Capacity writes roll back atomically on a failure seam
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario 8 — Profile writes roll back atomically', () => {
+  it('does not leak profile or segment rows when the transaction fails', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-eng-s8', 'Engineer')
+    const roleProfile: RoleProfileWriteSet = {
+      resourceTypeId: rtId,
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 7,
+      segments: [{ startWeek: 0, endWeek: 7, capacityPercent: 100 }],
+    }
+
+    await expect(prisma.$transaction(async tx => {
+      await writePlannerProfiles(tx, projectId, [roleProfile], [], [])
+      throw new Error('injected capacity write failure')
+    })).rejects.toThrow('injected capacity write failure')
+
+    expect(await fetchProfiles(projectId)).toHaveLength(0)
+    expect(await prisma.capacitySegment.count({
+      where: { capacityProfile: { projectId } },
+    })).toBe(0)
+    expect(await prisma.resourceType.findUnique({ where: { id: rtId } }))
+      .toMatchObject({ allocationMode: 'TIMELINE' })
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Test coverage is skipped when INTEGRATION_TEST is not 'true'.
 // ═════════════════════════════════════════════════════════════════════════════
