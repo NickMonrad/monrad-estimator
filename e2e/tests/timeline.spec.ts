@@ -591,51 +591,30 @@ test.describe('Timeline — Resource-counts layout', () => {
     const basisSelect = countsSection(page).getByRole('combobox', { name: /planning basis for developer 1/i })
     await expect(basisSelect).toBeVisible({ timeout: 8_000 })
     await expect(basisSelect).toHaveValue('EFFORT')
-
-    // Change planning basis to TIMELINE — wait for the PATCH response before proceeding
-    const patchNR = page.waitForResponse(response =>
-      response.request().method() === 'PATCH' &&
-      response.url().includes('/named-resources/') &&
-      response.ok()
-    )
+    // Change planning basis to TIMELINE — toHaveValue auto-waits for mutation+refetch
     await basisSelect.selectOption('TIMELINE')
-    await patchNR
+    await expect(basisSelect).toHaveValue('TIMELINE')
 
     // Verify the allocation % input appeared
     const pctInput = countsSection(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
     await expect(pctInput).toBeVisible()
 
-    // Enter allocation percentage — wait for PATCH response
-    const patchPct = page.waitForResponse(response =>
-      response.request().method() === 'PATCH' &&
-      response.url().includes('/named-resources/') &&
-      response.ok()
-    )
+    // Enter allocation percentage — onBlur triggers mutation; toHaveValue waits for refetch
     await pctInput.fill('80')
-    await pctInput.blur()
-    await patchPct
+    await page.keyboard.press('Tab')
+    await expect(pctInput).toHaveValue('80')
 
     // Enter start week
     const startInput = countsSection(page).getByRole('spinbutton', { name: /start week for developer 1/i })
-    const patchStart = page.waitForResponse(response =>
-      response.request().method() === 'PATCH' &&
-      response.url().includes('/named-resources/') &&
-      response.ok()
-    )
     await startInput.fill('2')
-    await startInput.blur()
-    await patchStart
+    await page.keyboard.press('Tab')
+    await expect(startInput).toHaveValue('2')
 
     // Enter end week
     const endInput = countsSection(page).getByRole('spinbutton', { name: /end week for developer 1/i })
-    const patchEnd = page.waitForResponse(response =>
-      response.request().method() === 'PATCH' &&
-      response.url().includes('/named-resources/') &&
-      response.ok()
-    )
     await endInput.fill('10')
-    await endInput.blur()
-    await patchEnd
+    await page.keyboard.press('Tab')
+    await expect(endInput).toHaveValue('10')
 
     // Reload and verify ALL persisted values
     const currentUrl = page.url()
@@ -684,21 +663,17 @@ test.describe('Timeline — Resource-counts layout', () => {
     const basisSelect = countsSection(page).getByRole('combobox', { name: /planning basis for developer 1/i })
     await expect(basisSelect).toBeVisible({ timeout: 8_000 })
 
-    // Desktop column headers remain visible at this width (above sm breakpoint)
-    await expect(countsSection(page).getByText('Named resource')).toBeVisible()
-    await expect(countsSection(page).getByText('Planning basis')).toBeVisible()
-    await expect(countsSection(page).getByText('Allocation %')).toBeVisible()
-    await expect(countsSection(page).getByText('Start')).toBeVisible()
-    await expect(countsSection(page).getByText('End')).toBeVisible()
+    // Desktop column headers remain visible at this width (above sm breakpoint).
+    // Use exact text match to avoid matching "+ Add named resource" button text.
+    await expect(countsSection(page).getByText('Named resource', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Planning basis', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Allocation %', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Start', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('End', { exact: true }).first()).toBeVisible()
 
     // Change to TIMELINE mode to expose allocation/start/end controls
-    const patchNR = page.waitForResponse(response =>
-      response.request().method() === 'PATCH' &&
-      response.url().includes('/named-resources/') &&
-      response.ok()
-    )
     await basisSelect.selectOption('TIMELINE')
-    await patchNR
+    await expect(basisSelect).toHaveValue('TIMELINE')
 
     // Allocation control is visible after selecting TIMELINE
     const pctInput = countsSection(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
@@ -729,8 +704,10 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(addBtn).toBeVisible({ timeout: 10_000 })
     await addBtn.click()
 
-    // Desktop column headers are hidden on mobile
-    await expect(countsSection(page).getByText('Named resource')).not.toBeVisible()
+    // The header row element has 'hidden' class (display: none on mobile).
+    // Locate it by matching the parent div that contains both 'Named resource' and 'Planning basis' texts.
+    const headerRow = countsSection(page).locator('div').filter({ hasText: 'Named resource' }).filter({ hasText: 'Planning basis' }).first()
+    await expect(headerRow).toHaveAttribute('class', /hidden/)
 
     // Mobile inline labels are visible ("Basis:", "Alloc:", etc.)
     await expect(countsSection(page).getByText('Basis:')).toBeVisible()
@@ -740,13 +717,8 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(basisSelect).toBeVisible()
 
     // Change to TIMELINE mode to expose allocation/start/end
-    const patchNR = page.waitForResponse(response =>
-      response.request().method() === 'PATCH' &&
-      response.url().includes('/named-resources/') &&
-      response.ok()
-    )
     await basisSelect.selectOption('TIMELINE')
-    await patchNR
+    await expect(basisSelect).toHaveValue('TIMELINE')
 
     // Allocation control with inline label is visible
     await expect(countsSection(page).getByText('Alloc:')).toBeVisible()
