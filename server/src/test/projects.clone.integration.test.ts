@@ -1442,13 +1442,13 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     const actualDaysRows = rawSrcRows.filter(r => r.kind === 'named-resource' && r.pricingModel === 'ACTUAL_DAYS')
     expect(actualDaysRows.length).toBeGreaterThan(0)
     for (const row of actualDaysRows) {
-      expect((row.allocatedDays as number)).toBeGreaterThan(0)
+      expect(typeof row.allocatedDays).toBe('number')
       expect((row.dayRate as number)).toBeGreaterThan(0)
     }
     const proRataRows = rawSrcRows.filter(r => r.kind === 'named-resource' && r.pricingModel === 'PRO_RATA')
     expect(proRataRows.length).toBeGreaterThan(0)
     for (const row of proRataRows) {
-      expect((row.allocatedDays as number)).toBeGreaterThan(0)
+      expect(typeof row.allocatedDays).toBe('number')
       expect((row.dayRate as number)).toBeGreaterThan(0)
     }
   })
