@@ -186,10 +186,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Backup regression tests
         run: npm run test:backup

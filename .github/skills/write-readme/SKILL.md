@@ -52,10 +52,10 @@ npx prisma generate
 
 Before documenting the sequence, verify that `npm run db:backup` backs up the database configured by `DATABASE_URL` or the selected environment file (`MONRAD_ENV_FILE`, default `server/.env`) and supports the documented local topology:
 
-- Docker-based PostgreSQL via explicit `MONRAD_DB_MODE=docker` or `MONRAD_DB_CONTAINER` (activates Docker mode, container name defaults to `monrad-pg`)
-- non-Docker PostgreSQL running directly on the host (default mode — conservative, no automatic Docker detection)
+- Docker-based PostgreSQL requires explicit `MONRAD_DB_MODE=docker`; `MONRAD_DB_CONTAINER` only overrides the active Docker container name (default `monrad-pg`)
+- non-Docker PostgreSQL running directly on the host is the default when `MONRAD_DB_MODE` is unset
 
-Documentation must not imply that a Docker-only implementation supports non-Docker development, that automatic container detection proves endpoint identity, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit overrides, credential-redacted failure modes (authority and query-string passwords go to `PGPASSWORD` in host mode, never credential-bearing process arguments), and the generated backup path accurately.
+Documentation must not imply that a Docker-only implementation supports non-Docker development, that automatic container detection proves endpoint identity, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit mode selection, credential-redacted failure modes, preservation of unrelated raw libpq query options when query passwords are removed, and the generated backup path accurately.
 
 Never document `prisma migrate reset` as a routine step. It requires explicit user approval because it destroys data.
 
