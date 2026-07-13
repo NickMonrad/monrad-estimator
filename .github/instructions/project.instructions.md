@@ -140,6 +140,7 @@ The repository backup tooling is a safety boundary and must:
 - allow `MONRAD_DB_CONTAINER` to override the Docker container name when Docker mode is active
 - allow `MONRAD_ENV_FILE` as a test/developer override for the `.env` path
 - fail clearly when Docker, `pg_dump`, credentials, or the configured database are unavailable
+- deliver the password through the child process `PGPASSWORD` environment variable rather than on the `pg_dump` command line
 - report only the backup mode, executable, and exit/spawn status on command failure; never print a credential-bearing `DATABASE_URL`
 - never report success after backing up a different database from the one the application is configured to use
 
