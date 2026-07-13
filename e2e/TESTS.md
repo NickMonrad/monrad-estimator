@@ -142,11 +142,26 @@ API-level tests using the `request` fixture. No browser UI involved.
 |------|-------------|
 | desktop: add named resource, change basis, edit values, verify persistence after reload, remove | At 1440×900, adds a named resource (Developer 1), changes planning basis to Availability window (TIMELINE), sets allocation % to 80, start week 2, end week 10 — each autosave mutation waits for the PATCH response before proceeding. Reloads the page and asserts all four values (TIMELINE, 80, 2, 10) persisted. Removes the named resource. Asserts no horizontal overflow. |
 | narrow viewport: column headers and named-resource controls visible, no overflow | At 820×900, verifies column headers (Named resource, Planning basis, Allocation %, Start, End) remain visible above `sm` breakpoint. Adds a named resource, changes basis to TIMELINE, verifies allocation/start/end controls become reachable. Verifies remove action. Asserts no horizontal overflow. |
-| mobile viewport: desktop column headers hidden, inline labels visible, controls reachable | At 390×844, verifies desktop column headers are **not** visible (below `sm` breakpoint). Adds a named resource, asserts inline mobile labels (Basis:, Alloc:, Start:, End:) are visible. Changes basis to TIMELINE, verifies start/end controls become enabled. Verifies remove action reachable. Asserts no horizontal overflow. |
+| mobile viewport: desktop column headers hidden, inline labels visible, controls reachable, no overflow | At 390×844, verifies desktop column headers are **not** visible via stable `named-resource-headers` test ID (below `sm` breakpoint). Adds a named resource, asserts inline mobile labels (Basis:, Alloc:, Start:, End:) via `named-resource-row-{id}` test ID. Changes basis to TIMELINE, verifies start/end controls become enabled. Before remove, asserts document/panel/row fit (scrollWidth ≤ clientWidth + 1) and proves vertical stacking order via bounding-box `top` comparisons with ±4 px tolerance (Basis ≤ Alloc ≤ Start ≤ End). Verifies remove action reachable. Post-remove geometry also checked. |
+
+#### `Timeline — cache invalidation` describe block (1 test)
+
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Timeline, and runs Quick schedule via the `quickSchedule(page)` helper.
 
 | Test | Description |
 |------|-------------|
 | manual feature override clears demand cache | Seeds Developer + Tech Lead tasks via CSV, schedules, manually overrides a feature's start week, navigates to Resource Profile — asserts both resource type rows render with formatted person-day values and Commercial tab cost summary loads (regression: stale `weeklyDemandCache` would cause error/blank page) |
+
+#### `Resource Profile allocation` describe block (3 tests — issue #311)
+
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Resource Profile, and verifies the Resource Profile page heading.
+
+| Test | Description |
+|------|-------------|
+| allocation mode dropdown changes from Timeline to Whole-project allocation | Clicks the allocation badge for the Developer row to open the inline editor; changes mode to `FULL_PROJECT` and sets FTE % to 50; clicks Save |
+| Availability window mode shows start/end week inputs and persists | Opens the Developer allocation editor; selects Availability window (TIMELINE); fills start week 2 and end week 10; clicks Save |
+| allocation % input persists independently | Opens the Developer allocation editor; changes to Whole-project allocation (FULL_PROJECT); sets FTE % to 75; saves and re-opens to verify the 75% value persists |
+
 
 ---
 

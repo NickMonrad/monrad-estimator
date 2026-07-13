@@ -532,8 +532,12 @@ test.describe('Resource Profile allocation', () => {
   })
 })
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Timeline Resource-counts layout — issue #369
+// Add named resource, change planning basis to TIMELINE, set allocation 80%,
+// start 2, end 10, verify persistence after reload, remove. Tests run at
+// desktop, narrow, and mobile viewport sizes with geometry-fit assertions.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Timeline — Resource-counts layout', () => {
@@ -564,80 +568,362 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
 
     await quickSchedule(page)
-    await expect(page.getByText('Count').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('resource-counts').getByText('Count', { exact: true })).toBeVisible({ timeout: 15_000 })
   })
 
-  /** Contextual helper scoping locators within the resource-counts container. */
-  function countsSection(page: import('@playwright/test').Page) {
-    return page.getByTestId('resource-counts')
+  /** Developer card within the resource-counts panel, located by test ID prefix + text. */
+  function devCard(page: Page) {
+    return page.getByTestId('resource-counts').locator('[data-testid^="resource-type-card-"]').filter({ hasText: 'Developer' })
   }
 
-  test('desktop: resource-counts section renders compact cards with labels and headers', async ({ page }) => {
-    test.setTimeout(90_000)
+  test('desktop: add named resource, change basis, edit values, verify persistence after reload, remove', async ({ page }) => {
+    test.setTimeout(120_000)
     await page.setViewportSize({ width: 1440, height: 900 })
 
-    await expect(countsSection(page)).toBeVisible()
+    const counts = page.getByTestId('resource-counts')
+    await expect(counts).toBeVisible()
 
-    // Card layout groups resource type name, Count, Hrs/day
-    await expect(countsSection(page).getByText('Developer', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Tech Lead', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Count').first()).toBeVisible()
-    await expect(countsSection(page).getByText('Hrs/day').first()).toBeVisible()
+    // ── Step 1: Add a named resource ───────────────────────────────────────
+    const addResp = page.waitForResponse(
+      resp => resp.url().includes('/named-resources') && resp.request().method() === 'POST' && resp.ok(),
+      { timeout: 15_000 },
+    )
+    const devCardEl = devCard(page)
+    await devCardEl.getByRole('button', { name: /add named resource to developer/i }).click()
+    const addResponse = await addResp
+    const addBody = await addResponse.json()
+    const nrId = addBody.id
 
-    // Add named resource buttons exist with accessible names
-    await expect(countsSection(page).getByRole('button', { name: /add named resource to developer/i })).toBeVisible()
-    await expect(countsSection(page).getByRole('button', { name: /add named resource to tech lead/i })).toBeVisible()
+    // Wait for the planning basis select to appear (timeline refetch after invalidation)
+    const basisSelect = devCardEl.getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelect).toBeVisible({ timeout: 10_000 })
+    await expect(basisSelect).toHaveValue('EFFORT')
 
-    // Hours input with contextual accessible name
-    await expect(countsSection(page).getByRole('spinbutton', { name: /hours per day for developer/i })).toBeVisible()
+    // ── Step 2: Change planning basis to TIMELINE ──────────────────────────
+    const patchBasis = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'PATCH' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await basisSelect.selectOption('TIMELINE')
+    const basisResp = await patchBasis
+    expect(basisResp.status()).toBe(200)
+    await expect(basisSelect).toHaveValue('TIMELINE')
 
-    // Column headers visible on desktop
-    await expect(countsSection(page).getByText('Named resource', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Planning basis', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Allocation %', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Start', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('End', { exact: true }).first()).toBeVisible()
+    // ── Step 3: Set allocation % to 80 ─────────────────────────────────────
+    const pctInput = devCardEl.getByRole('spinbutton', { name: /allocation percentage for developer 1/i })
+    await expect(pctInput).toBeVisible()
+    const patchPct = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'PATCH' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await pctInput.fill('80')
+    await pctInput.blur()
+    const pctResp = await patchPct
+    expect(pctResp.status()).toBe(200)
+    await expect(pctInput).toHaveValue(80)
 
-    // No horizontal document overflow
-    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
-    expect(overflowX).toBe(true)
+    // ── Step 4: Set start week to 2 ────────────────────────────────────────
+    const startInput = devCardEl.getByRole('spinbutton', { name: /start week for developer 1/i })
+    await expect(startInput).toBeEnabled()
+    const patchStart = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'PATCH' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await startInput.fill('2')
+    await startInput.blur()
+    const startResp = await patchStart
+    expect(startResp.status()).toBe(200)
+    await expect(startInput).toHaveValue(2)
+
+    // ── Step 5: Set end week to 10 ────────────────────────────────────────
+    const endInput = devCardEl.getByRole('spinbutton', { name: /end week for developer 1/i })
+    await expect(endInput).toBeEnabled()
+    const patchEnd = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'PATCH' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await endInput.fill('10')
+    await endInput.blur()
+    const endResp = await patchEnd
+    expect(endResp.status()).toBe(200)
+    await expect(endInput).toHaveValue(10)
+
+    // ── Step 6: Reload and assert all four values persisted ────────────────
+    await page.reload()
+    await expect(counts).toBeVisible({ timeout: 15_000 })
+    const reloadBasis = devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(reloadBasis).toHaveValue('TIMELINE')
+    await expect(devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })).toHaveValue(80)
+    await expect(devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })).toHaveValue(2)
+    await expect(devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })).toHaveValue(10)
+    await expect(devCard(page).getByRole('button', { name: /remove developer 1/i })).toBeVisible()
+    await expect(devCard(page).getByRole('button', { name: /add named resource to developer/i })).toBeVisible()
+
+    // ── Step 6A: Pre-remove geometry — content fits while row exists ────────
+    const docScrollW = await page.evaluate(() => document.documentElement.scrollWidth)
+    const docClientW = await page.evaluate(() => window.innerWidth)
+    expect(docScrollW <= docClientW + 1).toBe(true)
+
+    const rcScrollW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.scrollWidth : 0
+    })
+    const rcClientW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.clientWidth : 0
+    })
+    expect(rcScrollW <= rcClientW + 1).toBe(true)
+
+    const nrRowScrollW = await page.evaluate((id: string) => {
+      const el = document.querySelector(`[data-testid="named-resource-row-${id}"]`)
+      return el ? (el as HTMLElement).scrollWidth : 0
+    }, nrId)
+    const nrRowClientW = await page.evaluate((id: string) => {
+      const el = document.querySelector(`[data-testid="named-resource-row-${id}"]`)
+      return el ? (el as HTMLElement).clientWidth : 0
+    }, nrId)
+    expect(nrRowScrollW <= nrRowClientW + 1).toBe(true)
+
+    // ── Step 7: Remove the named resource ──────────────────────────────────
+    const removeBtn = devCard(page).getByRole('button', { name: /remove developer 1/i })
+    await expect(removeBtn).toBeVisible()
+    const dialogPromise = page.waitForEvent('dialog')
+    const delResp = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'DELETE' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await removeBtn.click()
+    const dialog = await dialogPromise
+    await dialog.accept()
+    await delResp
+
+    await expect(devCard(page).getByRole('button', { name: /remove developer 1/i })).not.toBeVisible({ timeout: 10_000 })
+    await expect(devCard(page).getByRole('button', { name: /add named resource to developer/i })).toBeVisible()
+
+    // ── Step 8: Post-remove geometry — no horizontal overflow ─────────────
+    const remScrollW = await page.evaluate(() => document.documentElement.scrollWidth)
+    const remClientW = await page.evaluate(() => window.innerWidth)
+    expect(remScrollW <= remClientW + 1).toBe(true)
+
+    const remRcScrollW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.scrollWidth : 0
+    })
+    const remRcClientW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.clientWidth : 0
+    })
+    expect(remRcScrollW <= remRcClientW + 1).toBe(true)
   })
 
-  test('narrow viewport: desktop column headers remain visible, no overflow', async ({ page }) => {
+  test('narrow viewport: column headers and named-resource controls visible, no overflow', async ({ page }) => {
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 820, height: 900 })
 
-    await expect(countsSection(page)).toBeVisible()
+    const counts = page.getByTestId('resource-counts')
+    await expect(counts).toBeVisible()
 
-    // Resource type cards and labels visible
-    await expect(countsSection(page).getByText('Developer', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Count').first()).toBeVisible()
+    // ── Step 1: Add a named resource ───────────────────────────────────────
+    const addResp = page.waitForResponse(
+      resp => resp.url().includes('/named-resources') && resp.request().method() === 'POST' && resp.ok(),
+      { timeout: 15_000 },
+    )
+    const devCardEl = devCard(page)
+    await devCardEl.getByRole('button', { name: /add named resource to developer/i }).click()
+    const addResponse = await addResp
+    const addBody = await addResponse.json()
+    const nrId = addBody.id
 
-    // Column headers visible at ≥sm breakpoint (820 > 640)
-    await expect(countsSection(page).getByText('Named resource', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Planning basis', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Allocation %', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('Start', { exact: true }).first()).toBeVisible()
-    await expect(countsSection(page).getByText('End', { exact: true }).first()).toBeVisible()
+    const basisSelect = devCardEl.getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelect).toBeVisible({ timeout: 10_000 })
 
-    // No horizontal overflow
-    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
-    expect(overflowX).toBe(true)
+    // Column headers visible at ≥sm breakpoint (820 > 640) — scoped via stable test ID
+    const headers = counts.getByTestId('named-resource-headers')
+    await expect(headers.getByText('Named resource', { exact: true })).toBeVisible()
+    await expect(headers.getByText('Planning basis', { exact: true })).toBeVisible()
+    await expect(headers.getByText('Allocation %', { exact: true })).toBeVisible()
+    await expect(headers.getByText('Start', { exact: true })).toBeVisible()
+    await expect(headers.getByText('End', { exact: true })).toBeVisible()
+
+    // ── Step 2: Switch to TIMELINE — controls reachable ────────────────────
+    const patchBasis = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'PATCH' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await basisSelect.selectOption('TIMELINE')
+    expect((await patchBasis).status()).toBe(200)
+    await expect(basisSelect).toHaveValue('TIMELINE')
+
+    await expect(devCardEl.getByRole('spinbutton', { name: /allocation percentage for developer 1/i })).toBeEnabled()
+    await expect(devCardEl.getByRole('spinbutton', { name: /start week for developer 1/i })).toBeEnabled()
+    await expect(devCardEl.getByRole('spinbutton', { name: /end week for developer 1/i })).toBeEnabled()
+
+    // ── Step 2A: Pre-remove geometry — content fits while row exists ────────
+    const docScrollW = await page.evaluate(() => document.documentElement.scrollWidth)
+    const docClientW = await page.evaluate(() => window.innerWidth)
+    expect(docScrollW <= docClientW + 1).toBe(true)
+
+    const rcScrollW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.scrollWidth : 0
+    })
+    const rcClientW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.clientWidth : 0
+    })
+    expect(rcScrollW <= rcClientW + 1).toBe(true)
+
+    const nrRowScrollW = await page.evaluate((id: string) => {
+      const el = document.querySelector(`[data-testid="named-resource-row-${id}"]`)
+      return el ? (el as HTMLElement).scrollWidth : 0
+    }, nrId)
+    const nrRowClientW = await page.evaluate((id: string) => {
+      const el = document.querySelector(`[data-testid="named-resource-row-${id}"]`)
+      return el ? (el as HTMLElement).clientWidth : 0
+    }, nrId)
+    expect(nrRowScrollW <= nrRowClientW + 1).toBe(true)
+
+    // ── Step 3: Remove the named resource ──────────────────────────────────
+    const removeBtn = devCardEl.getByRole('button', { name: /remove developer 1/i })
+    await expect(removeBtn).toBeVisible()
+    const dialogPromise = page.waitForEvent('dialog')
+    const delResp = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'DELETE' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await removeBtn.click()
+    await (await dialogPromise).accept()
+    await delResp
+    await expect(devCardEl.getByRole('button', { name: /remove developer 1/i })).not.toBeVisible({ timeout: 10_000 })
+
+    // ── Step 4: Post-remove geometry — no horizontal overflow ─────────────
+    const remScrollW = await page.evaluate(() => document.documentElement.scrollWidth)
+    const remClientW = await page.evaluate(() => window.innerWidth)
+    expect(remScrollW <= remClientW + 1).toBe(true)
+
+    const remRcScrollW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.scrollWidth : 0
+    })
+    const remRcClientW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.clientWidth : 0
+    })
+    expect(remRcScrollW <= remRcClientW + 1).toBe(true)
   })
 
-  test('mobile viewport: desktop column headers hidden', async ({ page }) => {
+  test('mobile viewport: desktop column headers hidden, inline labels visible, controls reachable, no overflow', async ({ page }) => {
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 390, height: 844 })
 
-    await expect(countsSection(page)).toBeVisible()
+    const counts = page.getByTestId('resource-counts')
+    await expect(counts).toBeVisible()
 
-    // Desktop column header row is hidden below sm breakpoint — text not visible
-    await expect(countsSection(page).getByText('Named resource', { exact: true }).first()).not.toBeVisible()
-    await expect(countsSection(page).getByText('Planning basis', { exact: true }).first()).not.toBeVisible()
-    await expect(countsSection(page).getByText('Allocation %', { exact: true }).first()).not.toBeVisible()
 
-    // Resource counts container uses overflow-hidden, so content is clipped
-    // rather than overflowing the document. No overflow check on mobile to
-    // avoid flakiness from 1px scrollWidth differences in CI.
+    // ── Step 1: Add a named resource ──────────────────────────────────────
+    const addResp = page.waitForResponse(
+      resp => resp.url().includes('/named-resources') && resp.request().method() === 'POST' && resp.ok(),
+      { timeout: 15_000 },
+    )
+    await devCard(page).getByRole('button', { name: /add named resource to developer/i }).click()
+    const addResponse = await addResp
+    const addBody = await addResponse.json()
+    const nrId = addBody.id
+
+    // Inline mobile labels visible (sm:hidden elements) — scoped via row test ID
+    const row = counts.getByTestId(`named-resource-row-${nrId}`)
+    await expect(row.getByText('Basis:')).toBeVisible()
+    await expect(row.getByText('Alloc:')).toBeVisible()
+    await expect(row.getByText('Start:')).toBeVisible()
+    await expect(row.getByText('End:')).toBeVisible()
+    // Desktop column headers are hidden below sm breakpoint — scoped via stable test ID
+    const headers = counts.getByTestId('named-resource-headers')
+    await expect(headers.getByText('Named resource', { exact: true })).not.toBeVisible()
+    await expect(headers.getByText('Planning basis', { exact: true })).not.toBeVisible()
+    await expect(headers.getByText('Allocation %', { exact: true })).not.toBeVisible()
+
+    const basisSelect = devCard(page).getByRole('combobox', { name: /planning basis for developer 1/i })
+    await expect(basisSelect).toBeVisible({ timeout: 10_000 })
+
+    // ── Step 2: Switch to TIMELINE ─────────────────────────────────────────
+    const patchBasis = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'PATCH' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await basisSelect.selectOption('TIMELINE')
+    expect((await patchBasis).status()).toBe(200)
+    await expect(basisSelect).toHaveValue('TIMELINE')
+
+    // Controls reachable
+    await expect(devCard(page).getByRole('spinbutton', { name: /allocation percentage for developer 1/i })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: /start week for developer 1/i })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: /end week for developer 1/i })).toBeEnabled()
+
+    // ── Step 2A: Pre-remove geometry & vertical stacking — row still exists ─
+    const docScrollW = await page.evaluate(() => document.documentElement.scrollWidth)
+    const docClientW = await page.evaluate(() => window.innerWidth)
+    expect(docScrollW <= docClientW + 1).toBe(true)
+
+    const rcScrollW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.scrollWidth : 0
+    })
+    const rcClientW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.clientWidth : 0
+    })
+    expect(rcScrollW <= rcClientW + 1).toBe(true)
+
+    const nrRowScrollW = await page.evaluate((id: string) => {
+      const el = document.querySelector(`[data-testid="named-resource-row-${id}"]`)
+      return el ? (el as HTMLElement).scrollWidth : 0
+    }, nrId)
+    const nrRowClientW = await page.evaluate((id: string) => {
+      const el = document.querySelector(`[data-testid="named-resource-row-${id}"]`)
+      return el ? (el as HTMLElement).clientWidth : 0
+    }, nrId)
+    expect(nrRowScrollW <= nrRowClientW + 1).toBe(true)
+
+    // Vertical stacking: each group below the previous (grid-cols-1 layout)
+    const basisLabel = row.getByText('Basis:')
+    const allocLabel = row.getByText('Alloc:')
+    const startLabel = row.getByText('Start:')
+    const endLabel = row.getByText('End:')
+    const basisBox = await basisLabel.boundingBox()
+    const allocBox = await allocLabel.boundingBox()
+    const startBox = await startLabel.boundingBox()
+    const endBox = await endLabel.boundingBox()
+    // Each later group top >= previous top - 4 (non-pixel-perfect tolerance)
+    expect(allocBox!.y).toBeGreaterThanOrEqual(basisBox!.y - 4)
+    expect(startBox!.y).toBeGreaterThanOrEqual(allocBox!.y - 4)
+    expect(endBox!.y).toBeGreaterThanOrEqual(startBox!.y - 4)
+
+    // ── Step 3: Remove the named resource ──────────────────────────────────
+    const removeBtn = devCard(page).getByRole('button', { name: /remove developer 1/i })
+    await expect(removeBtn).toBeVisible()
+    const dialogPromise = page.waitForEvent('dialog')
+    const delResp = page.waitForResponse(
+      resp => resp.url().includes(`/named-resources/${nrId}`) && resp.request().method() === 'DELETE' && resp.ok(),
+      { timeout: 10_000 },
+    )
+    await removeBtn.click()
+    await (await dialogPromise).accept()
+    await delResp
+    await expect(devCard(page).getByRole('button', { name: /remove developer 1/i })).not.toBeVisible({ timeout: 10_000 })
+
+    // ── Step 4: Post-remove geometry — no overflow, content fits ──────────
+    const remScrollW = await page.evaluate(() => document.documentElement.scrollWidth)
+    const remClientW = await page.evaluate(() => window.innerWidth)
+    expect(remScrollW <= remClientW + 1).toBe(true)
+
+    const remRcScrollW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.scrollWidth : 0
+    })
+    const remRcClientW = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="resource-counts"]')
+      return el ? el.clientWidth : 0
+    })
+    expect(remRcScrollW <= remRcClientW + 1).toBe(true)
   })
 })

@@ -641,7 +641,6 @@ export default function TimelinePage() {
       }).then(r => r.data),
     onSuccess: () => {
       invalidateProjectResourceProfile(qc, projectId)
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
       setScheduleStale(true)
     },
   })
@@ -651,7 +650,6 @@ export default function TimelinePage() {
       api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`).then(r => r.data),
     onSuccess: () => {
       invalidateProjectResourceProfile(qc, projectId)
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
       setScheduleStale(true)
     },
   })
@@ -661,7 +659,6 @@ export default function TimelinePage() {
       api.patch(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`, { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }).then(r => r.data),
     onSuccess: () => {
       invalidateProjectResourceProfile(qc, projectId)
-      qc.invalidateQueries({ queryKey: ['timeline', projectId] })
       setScheduleStale(true)
     },
   })
@@ -1078,7 +1075,7 @@ export default function TimelinePage() {
         )}
 
         {/* Resource counts panel */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden" data-testid="resource-counts">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700" data-testid="resource-counts">
           <button
             onClick={() => setResourcesOpen(o => !o)}
             className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
@@ -1098,7 +1095,7 @@ export default function TimelinePage() {
                     {rts.map(rt => {
                       const nrs = rtNRMap.get(rt.id) ?? []
                       return (
-                        <div key={rt.id} className="border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800/50">
+                        <div key={rt.id} data-testid={`resource-type-card-${rt.id}`} className="border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800/50">
                           <div className="px-3 py-2">
                             {/* Resource type header row — groups name, count, hrs/day, + Add */}
                             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
@@ -1147,7 +1144,7 @@ export default function TimelinePage() {
                             {nrs.length > 0 && (
                               <div className="border-t border-gray-100 dark:border-gray-700 mt-2 pt-2">
                                 {/* Desktop column headers — hidden on mobile, visible as grid on sm+ */}
-                                <div className="hidden sm:grid sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
+                                <div data-testid="named-resource-headers" className="hidden sm:grid sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
                                   <span>Named resource</span>
                                   <span>Planning basis</span>
                                   <span className="text-right">Allocation %</span>
@@ -1162,7 +1159,8 @@ export default function TimelinePage() {
                                   return (
                                     <div
                                       key={nr.id ?? `${rt.id}-${i}`}
-                                      className="grid grid-cols-1 sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 gap-y-1 items-center text-xs text-gray-500 dark:text-gray-400 py-1.5 px-1 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40"
+                                      data-testid={nr.id ? `named-resource-row-${nr.id}` : undefined}
+                                      className="grid grid-cols-1 sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 gap-y-1 items-center text-xs text-gray-500 dark:text-gray-400 py-1.5 px-1 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40 min-w-0"
                                     >
                                       {/* Name — direct child so closest('div') from text finds the grid row */}
                                       <span className="truncate text-gray-600 dark:text-gray-300 font-medium min-w-0">{nr.name}</span>

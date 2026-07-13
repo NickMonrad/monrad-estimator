@@ -894,4 +894,95 @@ describe('TimelinePage — resource-counts layout', () => {
       )
     })
   })
+
+  it('resource-counts test ID is rendered on the counts panel', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+    })
+    renderPage()
+
+    const countsPanel = await screen.findByTestId('resource-counts')
+    expect(countsPanel).toBeInTheDocument()
+  })
+
+  it('resource-type-card test ID is rendered for each resource type', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+    })
+    renderPage()
+
+    const card = await screen.findByTestId(`resource-type-card-${rtId}`)
+    expect(card).toBeInTheDocument()
+    expect(card.className).toMatch(/border.*rounded-lg/)
+  })
+
+  it('named-resource mutation calls central invalidation once, no direct duplicate', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource, allocationMode: 'TIMELINE' }],
+    })
+    mockPatch.mockResolvedValue({ data: {} })
+
+    const qc = createQueryClient()
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    renderPage(qc)
+
+    await screen.findAllByText('Bob')
+
+    // Trigger update by changing allocation percent
+    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    fireEvent.change(pctInput, { target: { value: '60' } })
+    fireEvent.blur(pctInput)
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalled()
+    })
+
+    // The central helper invalidates 4 keys including ['timeline', projectId]
+    // There should be NO separate direct ['timeline', projectId] call
+    const timelineInvocations = spy.mock.calls.filter(
+      args => JSON.stringify(args[0]?.queryKey) === JSON.stringify(['timeline', projectId]),
+    )
+    // Expect exactly 1 call from invalidateProjectResourceProfile
+    expect(timelineInvocations.length).toBe(1)
+
+    spy.mockRestore()
+  })
+
+  it('renders named-resource-headers test ID on desktop header block', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource }],
+    })
+    renderPage()
+
+    await screen.findAllByText('Bob')
+
+    const headers = screen.getByTestId('named-resource-headers')
+    expect(headers).toBeInTheDocument()
+    expect(headers.className).toMatch(/\bhidden\b/)
+    expect(headers.className).toMatch(/\bsm:grid\b/)
+  })
+
+  it('renders named-resource-row test ID for each persisted named resource', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource }],
+    })
+    renderPage()
+
+    await screen.findAllByText('Bob')
+
+    const row = screen.getByTestId(`named-resource-row-${nrId}`)
+    expect(row).toBeInTheDocument()
+    expect(row.className).toMatch(/grid-cols-1/)
+    // Row should have the multi-column sm:grid-cols-[...] layout
+    expect(row.className).toMatch(/sm:grid-cols-/)
+    expect(row.getAttribute('data-testid')).toBe(`named-resource-row-${nrId}`)
+  })
 })
