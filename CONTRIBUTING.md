@@ -64,7 +64,7 @@ Run from the repository root:
 npm run validate
 ```
 
-This is the complete client/server validation workflow. It runs client and server lint, type-checking, builds, and unit/integration tests.
+This is the complete client/server validation workflow. It runs the backup regression suite first, then client and server lint, type-checking, builds, and unit/integration tests.
 
 Workspace-specific commands may be used to diagnose an individual failure, but they do not replace the root validation command.
 
@@ -101,10 +101,11 @@ Before a Prisma schema migration or other operation that may alter persistent de
 
 `npm run db:backup` is the required repository entry point. It must work on Windows, macOS, and Linux and support both documented local PostgreSQL setups:
 
-- the default `monrad-pg` Docker container
-- a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
+- automatic mode uses host `pg_dump` for the exact configured `DATABASE_URL`
+- explicit `MONRAD_DB_MODE=docker` uses the named Docker container (default `monrad-pg`)
+- explicit `MONRAD_DB_MODE=host` uses host `pg_dump`
 
-The command must fail clearly rather than silently backing up the wrong database. If it cannot back up the current configuration, stop and fix the backup tooling or configuration before migrating.
+Set `MONRAD_ENV_FILE` only when a non-standard environment-file path is required. Backup command failures identify the executable and exit status without printing credential-bearing URLs. The command must fail clearly rather than silently backing up the wrong database. If it cannot back up the current configuration, stop and fix the backup tooling or configuration before migrating.
 
 Never run `prisma migrate reset` without explicit user approval. Prefer backward-compatible migrations and explain destructive behaviour in the PR.
 

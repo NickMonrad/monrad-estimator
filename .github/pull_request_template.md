@@ -29,6 +29,7 @@ npm run validate
 - [ ] Client and server type-checking passed
 - [ ] Client and server builds passed
 - [ ] Client and server unit/integration tests passed
+- [ ] Backup regression tests passed
 - [ ] No unexplained failures were classified as pre-existing
 
 ## E2E tests

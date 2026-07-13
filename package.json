@@ -13,7 +13,7 @@
     "build": "npm run build --workspace=server && npm run build --workspace=client",
     "lint": "npm run lint --workspace=client && npm run lint --workspace=server",
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
-    "test": "npm test --workspace=server && npm test --workspace=client",
+    "test": "npm run test:backup && npm test --workspace=server && npm test --workspace=client",
     "validate": "npm run lint && npm run typecheck && npm run build && npm test",
     "test:e2e": "npm run test --workspace=e2e",
     "test:e2e:local": "node scripts/run-e2e-local.mjs",

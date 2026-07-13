@@ -39,7 +39,7 @@ npm run screenshots
 npm run db:backup
 ```
 
-`npm run validate` is the primary complete client/server validation command. It covers lint, type-checking, builds, and unit/integration tests for both workspaces. Workspace-specific commands may be documented for targeted troubleshooting, but must not be presented as a substitute validation checklist.
+`npm run validate` is the primary complete client/server validation command. It covers lint, type-checking, builds, unit/integration tests, and backup regression tests for both workspaces. Workspace-specific commands may be documented for targeted troubleshooting, but must not be presented as a substitute validation checklist.
 
 For database schema development, documentation must show the safety sequence:
 
@@ -52,8 +52,8 @@ npx prisma generate
 
 Before documenting the sequence, verify that `npm run db:backup` backs up the database configured by `server/.env` or `DATABASE_URL` and supports the documented local topology:
 
-- default PostgreSQL in the `monrad-pg` Docker container
-- non-Docker PostgreSQL running directly on the host
+- Docker-based PostgreSQL via explicit `MONRAD_DB_MODE=docker` (default container `monrad-pg`, overridable via `MONRAD_DB_CONTAINER`)
+- non-Docker PostgreSQL running directly on the host (default mode — conservative, no automatic Docker detection)
 
 Documentation must not imply that a Docker-only implementation supports non-Docker development, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit overrides, failure modes, and the generated backup path accurately.
 
