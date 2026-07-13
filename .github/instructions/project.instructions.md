@@ -125,7 +125,7 @@ When multiple screens consume the same concept, fix or extend the owning domain 
 
 Before any Prisma schema migration or other operation that can alter stored data:
 
-1. Identify the configured database from `server/.env`, `DATABASE_URL`, and any explicit backup-tool overrides. Confirm whether PostgreSQL is running in the default Docker container or directly on the host.
+1. Identify the configured database from `DATABASE_URL` or the selected environment file (`MONRAD_ENV_FILE`, default `server/.env`) and any explicit backup-tool overrides. Confirm whether PostgreSQL is running in the default Docker container or directly on the host.
 2. Run `npm run db:backup` from the repository root.
 3. Confirm the command backed up the configured database and produced a non-empty timestamped dump in `backups/`.
 4. Record the backup method and output path in the implementation handoff or PR description.

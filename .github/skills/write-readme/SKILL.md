@@ -55,7 +55,7 @@ Before documenting the sequence, verify that `npm run db:backup` backs up the da
 - Docker-based PostgreSQL via explicit `MONRAD_DB_MODE=docker` (default container `monrad-pg`, overridable via `MONRAD_DB_CONTAINER`)
 - non-Docker PostgreSQL running directly on the host (default mode — conservative, no automatic Docker detection)
 
-Documentation must not imply that a Docker-only implementation supports non-Docker development, that automatic container detection proves endpoint identity, or that a backup of default credentials protects a differently configured database. Document the `PGPASSWORD` delivery mechanism: the password is extracted from `DATABASE_URL` and passed to `pg_dump` through the environment, not on the command line. Describe required tools such as Docker or `pg_dump`, explicit overrides, credential-redacted failure modes, and the generated backup path accurately. Backup regression tests (`npm run test:backup`) run on both Linux and Windows CI.
+Documentation must not imply that a Docker-only implementation supports non-Docker development, that automatic container detection proves endpoint identity, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit overrides, credential-redacted failure modes, and the generated backup path accurately.
 
 Never document `prisma migrate reset` as a routine step. It requires explicit user approval because it destroys data.
 
