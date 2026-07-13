@@ -10,3 +10,8 @@ server/uploads/generated/*
 !server/uploads/generated/.gitkeep
 backups/
 test-results/
+
+# Playwright trace viewer artifacts
+trace/
+data/
+index.html

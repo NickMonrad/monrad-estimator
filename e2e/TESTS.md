@@ -136,13 +136,13 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 #### `Timeline — Resource-counts layout` describe block (3 tests — issue #369)
 
-`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Timeline, and runs Quick schedule via the `quickSchedule(page)` helper. All locators are scoped to the resource-counts section via `data-testid="resource-counts"`. Tests have a 90 s timeout.
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import (`CACHE_INV_CSV`), navigates to Timeline, and runs Quick schedule via the `quickSchedule(page)` helper. All locators are scoped to the resource-counts section via `data-testid="resource-counts"`. Tests have a 90–120 s timeout.
 
 | Test | Description |
 |------|-------------|
-| desktop: resource-counts section renders compact cards with labels and headers | At 1440×900, verifies resource type cards (Developer, Tech Lead) with Count and Hrs/day labels, add buttons, hours input with accessible name, column headers (Named resource, Planning basis, Allocation %, Start, End), and no horizontal overflow |
-| narrow viewport: desktop column headers remain visible, no overflow | At 820×900, verifies resource type names, column headers all visible (above `sm` breakpoint), and no horizontal overflow |
-| mobile viewport: desktop column headers hidden | At 390×844, verifies section content visible and column header row has `hidden` CSS class |
+| desktop: add named resource, change basis, edit values, verify persistence after reload, remove | At 1440×900, adds a named resource (Developer 1), changes planning basis to Availability window (TIMELINE), sets allocation % to 80, start week 2, end week 10 — each autosave mutation waits for the PATCH response before proceeding. Reloads the page and asserts all four values (TIMELINE, 80, 2, 10) persisted. Removes the named resource. Asserts no horizontal overflow. |
+| narrow viewport: column headers and named-resource controls visible, no overflow | At 820×900, verifies column headers (Named resource, Planning basis, Allocation %, Start, End) remain visible above `sm` breakpoint. Adds a named resource, changes basis to TIMELINE, verifies allocation/start/end controls become reachable. Verifies remove action. Asserts no horizontal overflow. |
+| mobile viewport: desktop column headers hidden, inline labels visible, controls reachable | At 390×844, verifies desktop column headers are **not** visible (below `sm` breakpoint). Adds a named resource, asserts inline mobile labels (Basis:, Alloc:, Start:, End:) are visible. Changes basis to TIMELINE, verifies start/end controls become enabled. Verifies remove action reachable. Asserts no horizontal overflow. |
 
 | Test | Description |
 |------|-------------|
