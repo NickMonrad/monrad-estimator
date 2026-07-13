@@ -549,7 +549,7 @@ test.describe('Timeline — Resource-counts layout', () => {
     await createProject(page, projectName)
 
     // Navigate to Backlog and seed CSV with resource types
-    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('heading', { name: projectName, exact: true }).click()
     await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
     await page.getByRole('button', { name: /backlog/i }).click()
 
