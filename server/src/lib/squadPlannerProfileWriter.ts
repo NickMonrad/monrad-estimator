@@ -71,11 +71,20 @@ interface PersistedProfileSummary {
   source: string
 }
 
+/** Sources that represent explicit/manual ownership and must not be replaced. */
+const PROTECTED_PROFILE_SOURCES: Record<string, true> = {
+  MANUAL: true,
+  FIXED: true,
+  AVAILABILITY_WINDOW: true,
+  IMPORTED: true,
+}
+
 /** Minimal NamedResource shape for deterministic ordering. */
 interface NamedResourceSummary {
   id: string
   name: string
   createdAt: Date
+  allocationMode?: string | null
 }
 
 // ─── Segment mapping helper ─────────────────────────────────────────────────
@@ -213,19 +222,33 @@ export function classifyProfileConflicts(
     })
   }
 
-  // Check protected NAMED_PERSON profiles within the trajectory-used range
+  // Check duplicate and protected profiles within the trajectory-used range
   const usedResources = orderedNamedResources.slice(0, trajectoryCount)
   const usedResourceIdSet = new Set(usedResources.map(r => r.id))
+  const profilesByNamedResource = new Map<string, PersistedProfileSummary[]>()
 
   for (const profile of existingResourceProfiles) {
-    if (!profile.namedResourceId) continue
-    if (!usedResourceIdSet.has(profile.namedResourceId)) continue
+    if (!profile.namedResourceId || !usedResourceIdSet.has(profile.namedResourceId)) continue
+    const profiles = profilesByNamedResource.get(profile.namedResourceId) ?? []
+    profiles.push(profile)
+    profilesByNamedResource.set(profile.namedResourceId, profiles)
+  }
 
-    if (profile.ownerKind === 'NAMED_PERSON') {
+  for (const [namedResourceId, profiles] of profilesByNamedResource) {
+    const namedResourceName = usedResources.find(r => r.id === namedResourceId)?.name
+    if (profiles.length > 1) {
+      duplicateOwnerProfiles.push({
+        resourceTypeId: profiles[0].resourceTypeId ?? '',
+        resourceTypeName: 'named-resource',
+        namedResourceName,
+      })
+    }
+    for (const profile of profiles) {
+      if (profile.ownerKind !== 'NAMED_PERSON' && !PROTECTED_PROFILE_SOURCES[profile.source]) continue
       protectedNamedPersonProfiles.push({
         resourceTypeId: profile.resourceTypeId ?? '',
-        resourceTypeName: 'named-person',
-        namedResourceName: usedResources.find(r => r.id === profile.namedResourceId)?.name,
+        resourceTypeName: profile.ownerKind === 'NAMED_PERSON' ? 'named-person' : 'protected',
+        namedResourceName,
       })
     }
   }
@@ -296,12 +319,27 @@ export async function conflictPreflightCheck(
         },
         select: { id: true, namedResourceId: true, source: true, ownerKind: true },
       })) ?? []
+      const profilesByNamedResource = new Map<string, typeof resourceProfiles>()
       for (const profile of resourceProfiles) {
-        if (profile.ownerKind === 'NAMED_PERSON') {
-          const nr = usedResources.find(r => r.id === profile.namedResourceId)
+        if (!profile.namedResourceId) continue
+        const profiles = profilesByNamedResource.get(profile.namedResourceId) ?? []
+        profiles.push(profile)
+        profilesByNamedResource.set(profile.namedResourceId, profiles)
+      }
+      for (const [namedResourceId, profiles] of profilesByNamedResource) {
+        const nr = usedResources.find(resource => resource.id === namedResourceId)
+        if (profiles.length > 1) {
+          conflicts.push({
+            resourceTypeId: rtId,
+            resourceTypeName: 'named-resource',
+            namedResourceName: nr?.name,
+          })
+        }
+        for (const profile of profiles) {
+          if (profile.ownerKind !== 'NAMED_PERSON' && !PROTECTED_PROFILE_SOURCES[profile.source]) continue
           protectedNamedPersonProfiles.push({
             resourceTypeId: rtId,
-            resourceTypeName: nr?.name ?? 'unknown',
+            resourceTypeName: profile.ownerKind === 'NAMED_PERSON' ? 'named-person' : 'protected',
             namedResourceName: nr?.name,
           })
         }
@@ -342,10 +380,30 @@ export async function findOrCreatePlannedResources(
   const existingNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, name: true, createdAt: true },
+    select: { id: true, name: true, createdAt: true, allocationMode: true },
   })
+  const existingProfiles = existingNRs.length === 0
+    ? []
+    : await tx.capacityProfile.findMany({
+      where: { namedResourceId: { in: existingNRs.map(nr => nr.id) } },
+      select: { namedResourceId: true, ownerKind: true, source: true },
+    })
+  const profilesByResource = new Map<string, typeof existingProfiles>()
+  for (const profile of existingProfiles) {
+    if (!profile.namedResourceId) continue
+    const profiles = profilesByResource.get(profile.namedResourceId) ?? []
+    profiles.push(profile)
+    profilesByResource.set(profile.namedResourceId, profiles)
+  }
+  const isPlannerManaged = (nr: { id: string; allocationMode?: string | null }) => {
+    const profiles = profilesByResource.get(nr.id) ?? []
+    return profiles.some(profile => (
+      profile.ownerKind === 'PLANNED_RESOURCE' && profile.source === 'SQUAD_PLANNER'
+    )) || (profiles.length === 0 && nr.allocationMode === 'CAPACITY_PLAN')
+  }
+  const plannerResources = existingNRs.filter(isPlannerManaged)
 
-  const missing = Math.max(0, requiredCount - existingNRs.length)
+  const missing = Math.max(0, requiredCount - plannerResources.length)
   if (missing > 0) {
     const startIndex = existingNRs.length + 1
     const newNRs = Array.from({ length: missing }, (_, i) => ({
@@ -357,14 +415,33 @@ export async function findOrCreatePlannedResources(
     await tx.namedResource.createMany({ data: newNRs })
   }
 
-  // Re-fetch with stable ordering to get deterministic IDs
+  // Re-fetch with stable ordering, then retain only planner-managed identities.
   const allNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, name: true },
+    select: { id: true, name: true, createdAt: true, allocationMode: true },
+  })
+  const allProfiles = allNRs.length === 0
+    ? []
+    : await tx.capacityProfile.findMany({
+      where: { namedResourceId: { in: allNRs.map(nr => nr.id) } },
+      select: { namedResourceId: true, ownerKind: true, source: true },
+    })
+  const allProfilesByResource = new Map<string, typeof allProfiles>()
+  for (const profile of allProfiles) {
+    if (!profile.namedResourceId) continue
+    const profiles = allProfilesByResource.get(profile.namedResourceId) ?? []
+    profiles.push(profile)
+    allProfilesByResource.set(profile.namedResourceId, profiles)
+  }
+  const retained = allNRs.filter(nr => {
+    const profiles = allProfilesByResource.get(nr.id) ?? []
+    return profiles.some(profile => (
+      profile.ownerKind === 'PLANNED_RESOURCE' && profile.source === 'SQUAD_PLANNER'
+    )) || (profiles.length === 0 && nr.allocationMode === 'CAPACITY_PLAN')
   })
 
-  return { namedResources: allNRs, created: missing }
+  return { namedResources: retained, created: missing }
 }
 
 // ─── Async: write profiles and segments ─────────────────────────────────────
@@ -395,6 +472,7 @@ export async function writePlannerProfiles(
   let plannedResourceProfilesWritten = 0
   let segmentsWritten = 0
   let surplusProfilesWritten = 0
+  const prismaSource = source as CapacityProfileSource
 
   // ── Write ROLE profiles ─────────────────────────────────────────────────
   for (const rp of roleProfiles) {
@@ -403,8 +481,6 @@ export async function writePlannerProfiles(
       where: { projectId, resourceTypeId: rp.resourceTypeId, ownerKind: 'ROLE' },
       select: { id: true },
     })
-
-    const prismaSource = source as CapacityProfileSource
 
     if (existing) {
       // Update existing profile
@@ -469,8 +545,6 @@ export async function writePlannerProfiles(
 
   // ── Write PLANNED_RESOURCE profiles ─────────────────────────────────────
   for (const pp of plannedProfiles) {
-    const prismaSource = source as CapacityProfileSource
-
     // Find existing profile for this named resource
     const existing = await tx.capacityProfile.findFirst({
       where: { projectId, namedResourceId: pp.namedResourceId, ownerKind: 'PLANNED_RESOURCE' },
@@ -592,7 +666,7 @@ export async function writePlannerProfiles(
  */
 export async function projectCompatibilityFields(
   tx: PrismaTransactionClient,
-  projectId: string,
+  _projectId: string,
   roleProfiles: RoleProfileWriteSet[],
   plannedProfiles: PlannedResourceProfileWriteSet[],
 ): Promise<void> {
@@ -600,6 +674,7 @@ export async function projectCompatibilityFields(
   for (const rp of roleProfiles) {
     const projection = projectCapacityProfileToLegacyAllocation({
       planningBasis: 'capacityProfile',
+      source: 'SQUAD_PLANNER',
       defaultPercent: rp.defaultPercent,
       startWeek: rp.startWeek,
       endWeek: rp.endWeek,
@@ -611,7 +686,7 @@ export async function projectCompatibilityFields(
         where: { id: rp.resourceTypeId },
         data: {
           allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent,
+          allocationPercent: projection.allocationPercent ?? 0,
           allocationStartWeek: projection.allocationStartWeek,
           allocationEndWeek: projection.allocationEndWeek,
         },
@@ -623,6 +698,7 @@ export async function projectCompatibilityFields(
   for (const pp of plannedProfiles) {
     const projection = projectCapacityProfileToLegacyAllocation({
       planningBasis: 'capacityProfile',
+      source: 'SQUAD_PLANNER',
       defaultPercent: pp.defaultPercent,
       startWeek: pp.startWeek,
       endWeek: pp.endWeek,
@@ -634,7 +710,7 @@ export async function projectCompatibilityFields(
         where: { id: pp.namedResourceId },
         data: {
           allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent,
+          allocationPercent: projection.allocationPercent ?? 0,
           allocationStartWeek: projection.allocationStartWeek,
           allocationEndWeek: projection.allocationEndWeek,
         },
@@ -698,7 +774,7 @@ export interface WriterResourceTypeApplyResult {
  */
 export function materializeProfilesForResourceType(
   resourceTypeId: string,
-  resourceTypeName: string,
+  _resourceTypeName: string,
   normalisedPeriods: CapacityPlanPeriodInput[],
   orderedNamedResources: Array<{ id: string; name: string }>,
 ): WriterResourceTypeApplyResult {

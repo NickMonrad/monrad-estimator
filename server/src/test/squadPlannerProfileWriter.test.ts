@@ -6,8 +6,6 @@ import {
   classifyProfileConflicts,
   determineSurplusResourceIds,
   materializeProfilesForResourceType,
-  type RoleProfileWriteSet,
-  type PlannedResourceProfileWriteSet,
 } from '../lib/squadPlannerProfileWriter.js'
 import type { CapacityPlanPeriodInput } from '../lib/capacityPlanMaterialisation.js'
 

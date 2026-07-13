@@ -383,7 +383,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const projectResourceTypes = await prisma.resourceType.findMany({
     where: { projectId },
-    select: { id: true },
+    select: { id: true, name: true },
   })
   const projectResourceTypeIds = new Set(projectResourceTypes.map(rt => rt.id))
 
@@ -441,7 +441,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     if (conflictResult?.hasConflict) {
       const messages: string[] = []
       if (conflictResult.duplicateOwnerProfiles.length > 0) {
-        messages.push('Duplicate role profiles exist for one or more resource types. Repair required before applying.')
+        messages.push('Duplicate owner profiles exist for one or more affected resources. Repair required before applying.')
       }
       if (conflictResult.protectedNamedPersonProfiles.length > 0) {
         for (const p of conflictResult.protectedNamedPersonProfiles) {
@@ -534,24 +534,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         })
       }
 
-      // Also set ALL other project RTs to CAPACITY_PLAN
-      await tx.resourceType.updateMany({
-        where: { projectId, id: { notIn: [...maxHeadcountByRt.keys()] } },
-        data: { allocationMode: 'CAPACITY_PLAN' },
-      })
-
-      // Update ALL named resources allocation mode
-      await tx.namedResource.updateMany({
-        where: { resourceType: { projectId } },
-        data: { allocationMode: 'CAPACITY_PLAN' },
-      })
-
-      // Fetch resource type names for materialisation
-      const rtNames = await tx.resourceType.findMany({
-        where: { projectId, id: { in: [...maxHeadcountByRt.keys()] } },
-        select: { id: true, name: true },
-      })
-      const rtNameById = new Map(rtNames.map(rt => [rt.id, rt.name]))
+      // Reuse the validated project resource types for materialisation
+      const rtNameById = new Map(projectResourceTypes.map(rt => [rt.id, rt.name]))
 
       // Write authoritative profiles per resource type
       for (const [rtId] of maxHeadcountByRt) {
