@@ -35,10 +35,23 @@ function pgDumpEnv(fixture) {
 }
 
 function sanitizedDatabaseUrl(databaseUrl) {
-  const sanitized = new URL(databaseUrl)
-  sanitized.password = ''
-  sanitized.searchParams.delete('password')
-  return sanitized.href
+  const parsed = new URL(databaseUrl)
+  parsed.password = ''
+  const fragmentIndex = databaseUrl.indexOf('#')
+  const withoutFragment = fragmentIndex >= 0 ? databaseUrl.slice(0, fragmentIndex) : databaseUrl
+  const queryIndex = withoutFragment.indexOf('?')
+  const rawQuery = queryIndex >= 0 ? withoutFragment.slice(queryIndex + 1) : ''
+  const retainedQuery = rawQuery.split('&').filter(component => {
+    const separatorIndex = component.indexOf('=')
+    const rawKey = separatorIndex >= 0 ? component.slice(0, separatorIndex) : component
+    return decodeURIComponent(rawKey) !== 'password'
+  })
+  const queryOrFragmentIndex = [parsed.href.indexOf('?'), parsed.href.indexOf('#')]
+    .filter(index => index >= 0)
+    .sort((a, b) => a - b)[0]
+  const base = queryOrFragmentIndex === undefined ? parsed.href : parsed.href.slice(0, queryOrFragmentIndex)
+  const rawFragment = fragmentIndex >= 0 ? databaseUrl.slice(fragmentIndex) : ''
+  return `${base}${retainedQuery.length ? `?${retainedQuery.join('&')}` : ''}${rawFragment}`
 }
 
 function credentialPgDump(directory, expectedUrl, expectedPassword, output = 'credential dump') {
@@ -57,6 +70,14 @@ function dockerEnv(fixture) {
     MONRAD_DOCKER_COMMAND: process.execPath,
     MONRAD_DOCKER_ARGS: JSON.stringify([fixture]),
   }
+}
+
+function markerPgDump(directory, marker) {
+  const fixture = writeFixture(directory, 'marker-pg-dump', `
+    require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'invoked')
+    process.exit(0)
+  `)
+  return pgDumpEnv(fixture)
 }
 
 function runBackup(env) {
@@ -230,10 +251,15 @@ test('backs up through explicit Docker container and cleans remote dump', (t) =>
   const directory = createTempDirectory()
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const backupDir = path.join(directory, 'backups')
+  const invocationLog = path.join(directory, 'docker-invocations.json')
   const docker = writeFixture(directory, 'fake-docker', `
     const fs = require('node:fs')
     const path = require('node:path')
     const args = process.argv.slice(2)
+    const invocationLog = ${JSON.stringify(invocationLog)}
+    const invocations = fs.existsSync(invocationLog) ? JSON.parse(fs.readFileSync(invocationLog, 'utf8')) : []
+    invocations.push(args)
+    fs.writeFileSync(invocationLog, JSON.stringify(invocations))
     const remoteFile = (value) => path.join(${JSON.stringify(directory)}, path.posix.basename(value))
     if (args[0] === 'exec' && args[1] !== 'custom-postgres') process.exit(10)
     if (args[0] === 'exec' && args.includes('pg_dump')) {
@@ -241,6 +267,7 @@ test('backs up through explicit Docker container and cleans remote dump', (t) =>
       process.exit(0)
     }
     if (args[0] === 'cp') {
+      if (!args[1].startsWith('custom-postgres:')) process.exit(10)
       fs.copyFileSync(remoteFile(args[1].split(':').slice(1).join(':')), args[2])
       process.exit(0)
     }
@@ -263,7 +290,70 @@ test('backs up through explicit Docker container and cleans remote dump', (t) =>
   const files = fs.readdirSync(backupDir)
   assert.equal(files.length, 1)
   assert.deepEqual(fs.readFileSync(path.join(backupDir, files[0])), Buffer.from('docker dump'))
+  const invocations = JSON.parse(fs.readFileSync(invocationLog, 'utf8'))
+  assert.deepEqual(invocations.map(args => args[0]), ['exec', 'cp', 'exec'])
+  for (const args of invocations) {
+    if (args[0] === 'cp') assert.match(args[1], /^custom-postgres:/)
+    else assert.equal(args[1], 'custom-postgres')
+  }
 })
+test('container override alone keeps the conservative host mode', (t) => {
+  const directory = createTempDirectory()
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const backupDir = path.join(directory, 'backups')
+  const dockerMarker = path.join(directory, 'docker.marker')
+  const docker = writeFixture(directory, 'unexpected-docker', `
+    require('node:fs').writeFileSync(${JSON.stringify(dockerMarker)}, 'invoked')
+    process.exit(1)
+  `)
+  const pgDump = writeFixture(directory, 'host-pg-dump', `
+    require('node:fs').writeFileSync(process.argv[process.argv.indexOf('--file') + 1], Buffer.from('host fixture'))
+  `)
+
+  const result = runBackup({
+    DATABASE_URL: 'postgresql://postgres@localhost:5432/host_default_db',
+    MONRAD_DB_CONTAINER: 'custom-postgres',
+    ...dockerEnv(docker),
+    ...pgDumpEnv(pgDump),
+    MONRAD_BACKUP_DIR: backupDir,
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  const files = fs.readdirSync(backupDir)
+  assert.equal(files.length, 1)
+  assert.deepEqual(fs.readFileSync(path.join(backupDir, files[0])), Buffer.from('host fixture'))
+  assert.equal(fs.existsSync(dockerMarker), false)
+})
+
+test('explicit host mode ignores the Docker container override', (t) => {
+  const directory = createTempDirectory()
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const backupDir = path.join(directory, 'backups')
+  const dockerMarker = path.join(directory, 'docker.marker')
+  const docker = writeFixture(directory, 'unexpected-docker', `
+    require('node:fs').writeFileSync(${JSON.stringify(dockerMarker)}, 'invoked')
+    process.exit(1)
+  `)
+  const pgDump = writeFixture(directory, 'host-pg-dump', `
+    require('node:fs').writeFileSync(process.argv[process.argv.indexOf('--file') + 1], Buffer.from('explicit host fixture'))
+  `)
+
+  const result = runBackup({
+    DATABASE_URL: 'postgresql://postgres@localhost:5432/host_explicit_db',
+    MONRAD_DB_MODE: 'host',
+    MONRAD_DB_CONTAINER: 'custom-postgres',
+    ...dockerEnv(docker),
+    ...pgDumpEnv(pgDump),
+    MONRAD_BACKUP_DIR: backupDir,
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  const files = fs.readdirSync(backupDir)
+  assert.equal(files.length, 1)
+  assert.deepEqual(fs.readFileSync(path.join(backupDir, files[0])), Buffer.from('explicit host fixture'))
+  assert.equal(fs.existsSync(dockerMarker), false)
+})
+
 
 test('failed Docker backup removes the local dump and attempts remote cleanup', (t) => {
   const directory = createTempDirectory()
@@ -303,34 +393,63 @@ test('failed Docker backup removes the local dump and attempts remote cleanup', 
   assert.equal(fs.existsSync(fs.readFileSync(cleanupMarker, 'utf8')), false)
 })
 
-test('fails clearly when the Docker executable is unavailable', (t) => {
+test('fails safely when the Docker executable is unavailable', (t) => {
   const directory = createTempDirectory()
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const backupDir = path.join(directory, 'backups')
+  const databaseUrl = 'postgresql://postgres:missing-docker-secret@localhost:5432/docker_missing_db'
   const result = runBackup({
-    DATABASE_URL: 'postgresql://postgres@localhost:5432/docker_missing_db',
+    DATABASE_URL: databaseUrl,
     MONRAD_DB_CONTAINER: 'monrad-pg',
     MONRAD_DB_MODE: 'docker',
     MONRAD_DOCKER_COMMAND: path.join(directory, 'missing-docker'),
-    MONRAD_BACKUP_DIR: path.join(directory, 'backups'),
+    MONRAD_BACKUP_DIR: backupDir,
   })
 
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /Docker backup command .* is unavailable/)
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, new RegExp(databaseUrl))
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /missing-docker-secret/)
+  assert.deepEqual(fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [], [])
 })
 
-test('reports a Docker pg_dump failure without creating a local backup', (t) => {
+test('Docker pg_dump failure skips copy, cleans remotely, and leaves no local dump', (t) => {
   const directory = createTempDirectory()
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const backupDir = path.join(directory, 'backups')
+  const invocationLog = path.join(directory, 'docker-invocations.json')
+  const dumpMarker = path.join(directory, 'dump.marker')
+  const copyMarker = path.join(directory, 'copy.marker')
+  const cleanupMarker = path.join(directory, 'cleanup.marker')
   const docker = writeFixture(directory, 'docker-pg-dump-failure', `
+    const fs = require('node:fs')
+    const path = require('node:path')
     const args = process.argv.slice(2)
-    if (args[0] === 'exec' && args.includes('pg_dump')) process.exit(29)
-    if (args[0] === 'exec' && args[2] === 'rm') process.exit(0)
+    const invocationLog = ${JSON.stringify(invocationLog)}
+    const invocations = fs.existsSync(invocationLog) ? JSON.parse(fs.readFileSync(invocationLog, 'utf8')) : []
+    invocations.push(args)
+    fs.writeFileSync(invocationLog, JSON.stringify(invocations))
+    const remoteFile = (value) => path.join(${JSON.stringify(directory)}, path.posix.basename(value))
+    if (args[0] === 'exec' && args.includes('pg_dump')) {
+      fs.writeFileSync(${JSON.stringify(dumpMarker)}, 'invoked')
+      fs.writeFileSync(remoteFile(args.at(-1)), Buffer.from('partial remote dump'))
+      process.exit(29)
+    }
+    if (args[0] === 'cp') {
+      fs.writeFileSync(${JSON.stringify(copyMarker)}, 'invoked')
+      process.exit(0)
+    }
+    if (args[0] === 'exec' && args[2] === 'rm') {
+      fs.writeFileSync(${JSON.stringify(cleanupMarker)}, args.at(-1))
+      fs.rmSync(remoteFile(args.at(-1)), { force: true })
+      process.exit(0)
+    }
     process.exit(12)
   `)
-  const backupDir = path.join(directory, 'backups')
+  const databaseUrl = 'postgresql://postgres:docker-secret@localhost:5432/docker_failure_db'
   const result = runBackup({
-    DATABASE_URL: 'postgresql://postgres@localhost:5432/docker_failure_db',
-    MONRAD_DB_CONTAINER: 'monrad-pg',
+    DATABASE_URL: databaseUrl,
+    MONRAD_DB_CONTAINER: 'custom-postgres',
     MONRAD_DB_MODE: 'docker',
     ...dockerEnv(docker),
     MONRAD_BACKUP_DIR: backupDir,
@@ -338,7 +457,16 @@ test('reports a Docker pg_dump failure without creating a local backup', (t) => 
 
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /Docker backup command .*failed with exit code 29/)
-  assert.equal(fs.existsSync(backupDir) ? fs.readdirSync(backupDir).length : 0, 0)
+  assert.equal(fs.existsSync(dumpMarker), true)
+  assert.equal(fs.existsSync(copyMarker), false)
+  assert.equal(fs.existsSync(cleanupMarker), true)
+  const invocations = JSON.parse(fs.readFileSync(invocationLog, 'utf8'))
+  assert.deepEqual(invocations.map(args => args[0]), ['exec', 'exec'])
+  assert.ok(invocations[0].includes('pg_dump'))
+  assert.equal(invocations[1][2], 'rm')
+  assert.deepEqual(fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [], [])
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, new RegExp(databaseUrl))
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /docker-secret/)
 })
 
 // ── validation ───────────────────────────────────────────────────────────
@@ -531,7 +659,7 @@ test('concurrent backups both succeed and produce intact files', async (t) => {
   const backupDir = path.join(directory, 'backups')
   const pgDump = writeFixture(directory, 'fake-pg-dump', `
     const fileIndex = process.argv.indexOf('--file')
-    require('node:fs').writeFileSync(process.argv[fileIndex + 1], Buffer.from('dump'))
+    require('node:fs').writeFileSync(process.argv[fileIndex + 1], Buffer.from(process.env.BACKUP_MARKER))
   `)
 
   const env = {
@@ -542,8 +670,8 @@ test('concurrent backups both succeed and produce intact files', async (t) => {
   }
 
   const [r1, r2] = await Promise.all([
-    runBackupAsync(env),
-    runBackupAsync(env),
+    runBackupAsync({ ...env, BACKUP_MARKER: 'first dump' }),
+    runBackupAsync({ ...env, BACKUP_MARKER: 'second dump' }),
   ])
 
   assert.equal(r1.status, 0, r1.stderr)
@@ -554,11 +682,9 @@ test('concurrent backups both succeed and produce intact files', async (t) => {
   assert.equal(dumpFiles.length, 2, `expected 2 dump files, got: ${dumpFiles.join(', ')}`)
   assert.notEqual(dumpFiles[0], dumpFiles[1])
 
-  for (const file of dumpFiles) {
-    const content = fs.readFileSync(path.join(backupDir, file))
-    assert.ok(content.length > 0, `${file} is empty`)
-    assert.equal(content.toString(), 'dump', `${file} content mismatch`)
-  }
+  const contents = dumpFiles.map((file) => fs.readFileSync(path.join(backupDir, file), 'utf8')).sort()
+  assert.deepEqual(contents, ['first dump', 'second dump'])
+  assert.equal(files.some((file) => file.includes('.tmp-')), false, `temporary files remain: ${files.join(', ')}`)
 })
 
 // ── credential portability ───────────────────────────────────────────────
@@ -591,31 +717,35 @@ test('handles URL-encoded credentials and decodes password for PGPASSWORD', (t) 
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /pass%23word|pass#word/)
 })
 
-test('preserves query parameters in sanitized database URL', (t) => {
+test('preserves raw non-password query components while removing query passwords', (t) => {
   const directory = createTempDirectory()
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
-  const backupDir = path.join(directory, 'backups')
-  const urlWithQuery = 'postgresql://qry:secret@db.example.test:5432/qry_db?sslmode=require&connect_timeout=10'
-  const sanitizedUrl = new URL(urlWithQuery)
-  sanitizedUrl.password = ''
-  const pgDump = writeFixture(directory, 'fake-pg-dump', `
-    const args = process.argv.slice(2)
-    const dbname = args[args.indexOf('--dbname') + 1]
-    if (dbname !== ${JSON.stringify(sanitizedUrl.href)}) process.exit(11)
-    if (process.env.PGPASSWORD !== 'secret') process.exit(13)
-    const fileIndex = args.indexOf('--file')
-    require('node:fs').writeFileSync(args[fileIndex + 1], Buffer.from('query dump'))
-  `)
+  const cases = [
+    ['password=secret&options=-c%20search_path%3Dfoo', 'options=-c%20search_path%3Dfoo'],
+    ['application_name=a+b&password=secret', 'application_name=a+b'],
+    ['application_name=a%2Bb&password=secret', 'application_name=a%2Bb'],
+    ['value=~&password=secret', 'value=~'],
+    ['password=secret&sslmode=require&connect_timeout=10', 'sslmode=require&connect_timeout=10'],
+    ['one=1&password=secret&one=2', 'one=1&one=2'],
+    ['empty=&password=secret&flag', 'empty=&flag'],
+  ]
 
-  const result = runBackup({
-    DATABASE_URL: urlWithQuery,
-    MONRAD_DB_MODE: 'host',
-    ...pgDumpEnv(pgDump),
-    MONRAD_BACKUP_DIR: backupDir,
-  })
+  for (const [index, [rawQuery, expectedQuery]] of cases.entries()) {
+    const backupDir = path.join(directory, `backups-${index}`)
+    const databaseUrl = `postgresql://qry:secret@db.example.test:5432/qry_db?${rawQuery}`
+    const expectedUrl = `postgresql://qry@db.example.test:5432/qry_db?${expectedQuery}`
+    const result = runBackup({
+      DATABASE_URL: databaseUrl,
+      MONRAD_DB_MODE: 'host',
+      ...credentialPgDump(directory, expectedUrl, 'secret', `raw query dump ${index}`),
+      MONRAD_BACKUP_DIR: backupDir,
+    })
 
-  assert.equal(result.status, 0, result.stderr)
-  assert.equal(fs.readdirSync(backupDir).length, 1)
+    assert.equal(result.status, 0, `${rawQuery}: ${result.stderr}`)
+    const files = fs.readdirSync(backupDir)
+    assert.equal(files.length, 1, rawQuery)
+    assert.deepEqual(fs.readFileSync(path.join(backupDir, files[0])), Buffer.from(`raw query dump ${index}`))
+  }
 })
 
 test('takes a query-string password out of argv and passes it through PGPASSWORD', (t) => {
@@ -650,6 +780,22 @@ test('decodes a URL-encoded query-string password for PGPASSWORD', (t) => {
   assert.equal(fs.readdirSync(backupDir).length, 1)
 })
 
+test('preserves a literal plus in a query-string password', (t) => {
+  const directory = createTempDirectory()
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const backupDir = path.join(directory, 'backups')
+  const databaseUrl = 'postgresql://query-user@localhost:5432/query_db?password=a+b'
+  const result = runBackup({
+    DATABASE_URL: databaseUrl,
+    MONRAD_DB_MODE: 'host',
+    ...credentialPgDump(directory, sanitizedDatabaseUrl(databaseUrl), 'a+b'),
+    MONRAD_BACKUP_DIR: backupDir,
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(fs.readdirSync(backupDir).length, 1)
+})
+
 test('accepts matching authority and query-string passwords', (t) => {
   const directory = createTempDirectory()
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -666,34 +812,50 @@ test('accepts matching authority and query-string passwords', (t) => {
   assert.equal(fs.readdirSync(backupDir).length, 1)
 })
 
-test('rejects conflicting authority and query-string passwords', (t) => {
+test('rejects conflicting authority and query-string passwords before invoking pg_dump', (t) => {
   const directory = createTempDirectory()
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const backupDir = path.join(directory, 'backups')
+  const marker = path.join(directory, 'pg-dump.marker')
+  const databaseUrl = 'postgresql://query-user:authority%23secret@localhost:5432/query_db?password=query%2Bsecret'
   const result = runBackup({
-    DATABASE_URL: 'postgresql://query-user:authority-secret@localhost:5432/query_db?password=query-secret',
+    DATABASE_URL: databaseUrl,
     MONRAD_DB_MODE: 'host',
+    ...markerPgDump(directory, marker),
     MONRAD_BACKUP_DIR: backupDir,
   })
+  const output = `${result.stdout}\n${result.stderr}`
 
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /authority and query passwords conflict/)
-  assert.equal(fs.existsSync(backupDir) ? fs.readdirSync(backupDir).length : 0, 0)
+  assert.equal(fs.existsSync(marker), false)
+  assert.deepEqual(fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [], [])
+  for (const value of ['authority%23secret', 'authority#secret', 'query%2Bsecret', 'query+secret', databaseUrl]) {
+    assert.equal(output.includes(value), false, `credential leaked: ${value}`)
+  }
 })
 
-test('rejects multiple query-string passwords', (t) => {
+test('rejects multiple query-string passwords before invoking pg_dump', (t) => {
   const directory = createTempDirectory()
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const backupDir = path.join(directory, 'backups')
+  const marker = path.join(directory, 'pg-dump.marker')
+  const databaseUrl = 'postgresql://query-user@localhost:5432/query_db?password=one%23&password=two%2B'
   const result = runBackup({
-    DATABASE_URL: 'postgresql://query-user@localhost:5432/query_db?password=one&password=two',
+    DATABASE_URL: databaseUrl,
     MONRAD_DB_MODE: 'host',
+    ...markerPgDump(directory, marker),
     MONRAD_BACKUP_DIR: backupDir,
   })
+  const output = `${result.stdout}\n${result.stderr}`
 
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /at most one password query parameter/)
-  assert.equal(fs.existsSync(backupDir) ? fs.readdirSync(backupDir).length : 0, 0)
+  assert.equal(fs.existsSync(marker), false)
+  assert.deepEqual(fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [], [])
+  for (const value of ['one%23', 'one#', 'two%2B', 'two+', databaseUrl]) {
+    assert.equal(output.includes(value), false, `credential leaked: ${value}`)
+  }
 })
 
 test('does not set PGPASSWORD when URL has no password', (t) => {

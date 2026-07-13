@@ -134,14 +134,17 @@ Before any Prisma schema migration or other operation that can alter stored data
 The repository backup tooling is a safety boundary and must:
 
 - work on Windows, macOS, and Linux without POSIX-only shell syntax
-- support both documented local database topologies: a `monrad-pg` Docker container (with explicit `MONRAD_DB_MODE=docker` or `MONRAD_DB_CONTAINER`) and a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
-- default to host-mode `pg_dump` when neither `MONRAD_DB_MODE` nor `MONRAD_DB_CONTAINER` is set (conservative default — no automatic Docker endpoint detection)
+- support host PostgreSQL and Docker PostgreSQL via the documented explicit mode
+- default to host-mode `pg_dump` when `MONRAD_DB_MODE` is unset
+- select Docker mode only when `MONRAD_DB_MODE=docker`; any other non-empty mode is a safe configuration error
 - derive the database connection from repository configuration rather than silently assuming the default database, user, or host
-- allow `MONRAD_DB_CONTAINER` to override the Docker container name when Docker mode is active
+- allow `MONRAD_DB_CONTAINER` to override only the Docker container name after Docker mode is selected
 - allow `MONRAD_ENV_FILE` as a test/developer override for the `.env` path
 - fail clearly when Docker, `pg_dump`, credentials, or the configured database are unavailable
 - pass authority and query-string database passwords through the `PGPASSWORD` environment variable in host mode rather than through process arguments
+- remove query-string password fields without reserialising unrelated libpq query options
 - report only the backup mode, executable, and exit/spawn status on command failure; never print a credential-bearing `DATABASE_URL`
+- finalize verified dumps with an exclusive no-overwrite operation so concurrent runs cannot replace an existing backup
 - never report success after backing up a different database from the one the application is configured to use
 
 If `npm run db:backup` cannot back up the configured database, stop. Do not migrate, skip the backup, or substitute an unverified empty dump. Fix the backup configuration or tooling first.

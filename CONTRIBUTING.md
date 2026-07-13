@@ -101,11 +101,11 @@ Before a Prisma schema migration or other operation that may alter persistent de
 
 `npm run db:backup` is the required repository entry point. It must work on Windows, macOS, and Linux and support both documented local PostgreSQL setups:
 
-- host mode (default) uses the host `pg_dump` for the exact configured `DATABASE_URL`; authority and query-string database passwords are removed from process arguments and passed through the `PGPASSWORD` environment variable
-- explicit `MONRAD_DB_MODE=docker` or `MONRAD_DB_CONTAINER` (activates Docker mode implicitly) runs `pg_dump` inside the named Docker container (default `monrad-pg`)
-- explicit `MONRAD_DB_MODE=host` forces host `pg_dump` explicitly
+- host mode is the default and uses the host `pg_dump` for the exact configured `DATABASE_URL`
+- Docker mode requires `MONRAD_DB_MODE=docker`; `MONRAD_DB_CONTAINER` only overrides the container name (default `monrad-pg`) after Docker mode is selected
+- `MONRAD_DB_MODE=host` explicitly selects host `pg_dump`
 
-Set `MONRAD_ENV_FILE` only when a non-standard environment-file path is required. Backup command failures identify the executable and exit status without revealing the database URL or password. The command must fail clearly rather than silently backing up the wrong database. If it cannot back up the current configuration, stop and fix the backup tooling or configuration before migrating.
+Authority passwords are removed from the URI, raw query-string password fields are removed without reserialising unrelated libpq options, and the effective credential is passed through child-process `PGPASSWORD` rather than command arguments. Final dump names are reserved with an exclusive filesystem operation so concurrent backups cannot overwrite one another. Conflicting or ambiguous password representations fail before invoking `pg_dump`. Set `MONRAD_ENV_FILE` only when a non-standard environment-file path is required. Backup command failures identify the executable and exit status without revealing the database URL or password. The command must fail clearly rather than silently backing up the wrong database. If it cannot back up the current configuration, stop and fix the backup tooling or configuration before migrating.
 
 Never run `prisma migrate reset` without explicit user approval. Prefer backward-compatible migrations and explain destructive behaviour in the PR.
 
