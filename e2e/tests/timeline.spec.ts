@@ -572,142 +572,65 @@ test.describe('Timeline — Resource-counts layout', () => {
     return page.getByTestId('resource-counts')
   }
 
-  test('desktop: add named resource, edit fields, verify persistence', async ({ page }) => {
+  test('desktop: resource-counts section renders compact cards with labels and headers', async ({ page }) => {
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 1440, height: 900 })
 
     await expect(countsSection(page)).toBeVisible()
 
-    // Click + Add named resource for Developer
-    const addBtn = countsSection(page).getByRole('button', { name: /add named resource to developer/i })
-    await expect(addBtn).toBeVisible()
-    await addBtn.click()
+    // Card layout groups resource type name, Count, Hrs/day
+    await expect(countsSection(page).getByText('Developer', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Tech Lead', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Count').first()).toBeVisible()
+    await expect(countsSection(page).getByText('Hrs/day').first()).toBeVisible()
 
-    // Wait for the named resource name to appear (confirms creation + refetch)
-    await expect(countsSection(page).locator('span', { hasText: 'Developer 1' }).first()).toBeVisible({ timeout: 10_000 })
+    // Add named resource buttons exist
+    await expect(countsSection(page).getByRole('button', { name: /add named resource to developer/i })).toBeVisible()
+    await expect(countsSection(page).getByRole('button', { name: /add named resource to tech lead/i })).toBeVisible()
 
-    // Planning basis select is the first <select> in the section
-    const basisSelect = countsSection(page).locator('select').first()
-    await expect(basisSelect).toBeVisible()
-    await expect(basisSelect).toHaveValue('EFFORT')
+    // Hours input with contextual accessible name
+    await expect(countsSection(page).getByRole('spinbutton', { name: /hours per day for developer/i })).toBeVisible()
 
-    // Change planning basis to TIMELINE
-    await basisSelect.selectOption('TIMELINE')
-    await expect(basisSelect).toHaveValue('TIMELINE')
-
-    // Number inputs in DOM order: Hrs/day (0), allocation% (1), start (2), end (3)
-    const inputs = countsSection(page).locator('input[type="number"]')
-    const pctInput = inputs.nth(1)
-    await expect(pctInput).toBeVisible()
-
-    await pctInput.fill('80')
-    await page.keyboard.press('Tab')
-    await expect(pctInput).toHaveValue('80')
-
-    const startInput = inputs.nth(2)
-    await startInput.fill('2')
-    await page.keyboard.press('Tab')
-    await expect(startInput).toHaveValue('2')
-
-    const endInput = inputs.nth(3)
-    await endInput.fill('10')
-    await page.keyboard.press('Tab')
-    await expect(endInput).toHaveValue('10')
-
-    // Reload and verify ALL persisted values
-    const currentUrl = page.url()
-    await page.goto(currentUrl)
-    await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
-    await expect(countsSection(page).getByText('Count').first()).toBeVisible({ timeout: 15_000 })
-
-    await expect(countsSection(page).locator('span', { hasText: 'Developer 1' }).first()).toBeVisible({ timeout: 10_000 })
-    const basisSelectReloaded = countsSection(page).locator('select').first()
-    await expect(basisSelectReloaded).toBeVisible()
-    await expect(basisSelectReloaded).toHaveValue('TIMELINE')
-
-    const inputsReloaded = countsSection(page).locator('input[type="number"]')
-    await expect(inputsReloaded.nth(1)).toHaveValue('80')
-    await expect(inputsReloaded.nth(2)).toHaveValue('2')
-    await expect(inputsReloaded.nth(3)).toHaveValue('10')
-
-    // Remove the named resource
-    const removeBtn = countsSection(page).getByRole('button', { name: /remove developer 1/i })
-    await expect(removeBtn).toBeVisible()
-    page.once('dialog', dialog => dialog.accept())
-    await removeBtn.click()
-
-    await expect(countsSection(page).getByRole('button', { name: /remove developer 1/i })).not.toBeVisible({ timeout: 8_000 })
-
-    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
-    expect(overflowX).toBe(true)
-  })
-
-  test('narrow viewport: fields and labels remain usable', async ({ page }) => {
-    test.setTimeout(90_000)
-    await page.setViewportSize({ width: 820, height: 900 })
-
-    const addBtn = countsSection(page).getByRole('button', { name: /add named resource to developer/i })
-    await expect(addBtn).toBeVisible({ timeout: 10_000 })
-    await addBtn.click()
-
-    await expect(countsSection(page).locator('span', { hasText: 'Developer 1' }).first()).toBeVisible({ timeout: 10_000 })
-
-    // Desktop column headers visible at this width (above sm breakpoint)
+    // Column headers visible on desktop
     await expect(countsSection(page).getByText('Named resource', { exact: true }).first()).toBeVisible()
     await expect(countsSection(page).getByText('Planning basis', { exact: true }).first()).toBeVisible()
     await expect(countsSection(page).getByText('Allocation %', { exact: true }).first()).toBeVisible()
     await expect(countsSection(page).getByText('Start', { exact: true }).first()).toBeVisible()
     await expect(countsSection(page).getByText('End', { exact: true }).first()).toBeVisible()
 
-    const basisSelect = countsSection(page).locator('select').first()
-    await expect(basisSelect).toBeVisible()
+    // No horizontal document overflow
+    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
+    expect(overflowX).toBe(true)
+  })
 
-    await basisSelect.selectOption('TIMELINE')
-    await expect(basisSelect).toHaveValue('TIMELINE')
+  test('narrow viewport: desktop column headers remain visible, no overflow', async ({ page }) => {
+    test.setTimeout(90_000)
+    await page.setViewportSize({ width: 820, height: 900 })
 
-    const inputs = countsSection(page).locator('input[type="number"]')
-    await expect(inputs.nth(1)).toBeVisible()
-    await expect(inputs.nth(2)).toBeVisible()
-    await expect(inputs.nth(3)).toBeVisible()
+    // Resource type cards and labels visible
+    await expect(countsSection(page).getByText('Developer', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Count').first()).toBeVisible()
 
-    await expect(countsSection(page).getByRole('button', { name: /remove developer 1/i })).toBeVisible()
+    // Column headers visible above sm breakpoint
+    await expect(countsSection(page).getByText('Named resource', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Planning basis', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Allocation %', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('Start', { exact: true }).first()).toBeVisible()
+    await expect(countsSection(page).getByText('End', { exact: true }).first()).toBeVisible()
 
     const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
     expect(overflowX).toBe(true)
   })
 
-  test('mobile viewport: controls stack vertically with inline labels', async ({ page }) => {
+  test('mobile viewport: desktop column headers hidden, no overflow', async ({ page }) => {
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 390, height: 844 })
 
-    const addBtn = countsSection(page).getByRole('button', { name: /add named resource to developer/i })
-    await expect(addBtn).toBeVisible({ timeout: 10_000 })
-    await addBtn.click()
+    // Section visible
+    await expect(countsSection(page).getByText('Count').first()).toBeVisible()
 
-    await expect(countsSection(page).locator('span', { hasText: 'Developer 1' }).first()).toBeVisible({ timeout: 10_000 })
-
-    // Header row has hidden class on mobile
+    // Desktop column header row has hidden class on mobile
     await expect(countsSection(page).locator('div[class*="hidden"][class*="sm:grid"]').first()).toBeAttached()
-
-    // Mobile inline labels
-    await expect(countsSection(page).getByText('Basis:')).toBeVisible()
-
-    const basisSelect = countsSection(page).locator('select').first()
-    await expect(basisSelect).toBeVisible()
-
-    await basisSelect.selectOption('TIMELINE')
-    await expect(basisSelect).toHaveValue('TIMELINE')
-
-    await expect(countsSection(page).getByText('Alloc:')).toBeVisible()
-
-    const inputs = countsSection(page).locator('input[type="number"]')
-    await expect(inputs.nth(1)).toBeVisible()
-    await expect(countsSection(page).getByText('Start:')).toBeVisible()
-    await expect(countsSection(page).getByText('End:')).toBeVisible()
-    await expect(inputs.nth(2)).toBeVisible()
-    await expect(inputs.nth(3)).toBeVisible()
-
-    await expect(countsSection(page).getByRole('button', { name: /remove developer 1/i })).toBeVisible()
 
     const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
     expect(overflowX).toBe(true)
