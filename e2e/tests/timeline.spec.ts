@@ -535,9 +535,10 @@ test.describe('Resource Profile allocation', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Timeline Resource-counts layout — issue #369
-// Add named resource, change planning basis to TIMELINE, set allocation 80%,
-// start 2, end 10, verify persistence after reload, remove. Tests run at
-// desktop, narrow, and mobile viewport sizes with geometry-fit assertions.
+// Add named resource (server-default planning basis is TIMELINE), exercise
+// explicit basis transitions EFFORT→TIMELINE, set allocation 80%, start 2,
+// end 10, verify persistence after reload, remove. Tests run at desktop,
+// narrow, and mobile viewport sizes with geometry-fit assertions.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Timeline — Resource-counts layout', () => {
@@ -675,6 +676,34 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(devCardLocator.getByTestId(`named-resource-row-${nrId}`)).toHaveCount(0)
   }
 
+  /**
+   * Transition a named resource's planning basis with exact PATCH + Timeline GET
+   * synchronization. Server returns TIMELINE as the default for new named
+   * resources; use this helper to switch to EFFORT and back.
+   * @param basisLocator - the specific combobox Locator for this named resource's basis
+   */
+  async function setNamedResourceBasisAndWait(page: Page, nrId: string, basisLocator: Locator, basis: 'EFFORT' | 'TIMELINE') {
+    const tlMatcher = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
+    const patchResp = page.waitForResponse(
+      resp => {
+        if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
+        try {
+          const u = new URL(resp.request().url())
+          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+            tlMatcher.gate()
+            return true
+          }
+        } catch { return false }
+        return false
+      },
+      { timeout: 10_000 },
+    )
+    await basisLocator.selectOption(basis)
+    const [patchRespResolved] = await Promise.all([patchResp, tlMatcher.promise])
+    expect(patchRespResolved.status()).toBe(200)
+    tlMatcher.cleanup()
+  }
+
   test('desktop: add named resource, change basis, edit values, verify persistence after reload, remove', async ({ page }) => {
     test.setTimeout(120_000)
     await page.setViewportSize({ width: 1440, height: 900 })
@@ -687,32 +716,18 @@ test.describe('Timeline — Resource-counts layout', () => {
     const nrName = addBody.name
     expect(nrName).toBeTruthy()
 
-    // Re-acquire devCard controls after mutation
+    // Assert initial basis is TIMELINE (server default for new named resources)
     const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
-    await expect(basisSelect).toHaveValue('EFFORT')
+    await expect(basisSelect).toHaveValue('TIMELINE')
 
-    // PATCH basis to TIMELINE
-    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
-    const patchBasis = page.waitForResponse(
-      resp => {
-        if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try {
-          const u = new URL(resp.request().url())
-          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
-            tlBasis.gate()
-            return true
-          }
-        } catch { return false }
-        return false
-      },
-      { timeout: 10_000 },
-    )
-    await basisSelect.selectOption('TIMELINE')
-    const [patchBasisResp] = await Promise.all([patchBasis, tlBasis.promise])
-    expect(patchBasisResp.status()).toBe(200)
-    tlBasis.cleanup()
-    // Re-run devCard and re-acquire basis combobox after refresh
+    // Transition to EFFORT
+    await setNamedResourceBasisAndWait(page, nrId, basisSelect, 'EFFORT')
+    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    await expect(effortBasis).toHaveValue('EFFORT')
+
+    // Transition back to TIMELINE for allocation/start/end editing
+    await setNamedResourceBasisAndWait(page, nrId, effortBasis, 'TIMELINE')
     await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
     // PATCH allocation to 80%
     const pctInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })
@@ -835,10 +850,10 @@ test.describe('Timeline — Resource-counts layout', () => {
     const nrName = addBody.name
     expect(nrName).toBeTruthy()
 
-    // Re-acquire devCard controls after mutation
+    // Assert initial basis is TIMELINE (server default for new named resources)
     const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
-    await expect(basisSelect).toHaveValue('EFFORT')
+    await expect(basisSelect).toHaveValue('TIMELINE')
 
     const headers = devCard(page).getByTestId('named-resource-headers')
     await expect(headers.getByText('Named resource', { exact: true })).toBeVisible()
@@ -846,26 +861,14 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(headers.getByText('Allocation %', { exact: true })).toBeVisible()
     await expect(headers.getByText('Start', { exact: true })).toBeVisible()
     await expect(headers.getByText('End', { exact: true })).toBeVisible()
-    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
-    const patchBasis = page.waitForResponse(
-      resp => {
-        if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try {
-          const u = new URL(resp.request().url())
-          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
-            tlBasis.gate()
-            return true
-          }
-        } catch { return false }
-        return false
-      },
-      { timeout: 10_000 },
-    )
-    await basisSelect.selectOption('TIMELINE')
-    const [patchBasisResp] = await Promise.all([patchBasis, tlBasis.promise])
-    expect(patchBasisResp.status()).toBe(200)
-    tlBasis.cleanup()
-    // Re-run devCard and re-acquire basis combobox after refresh
+
+    // Transition to EFFORT
+    await setNamedResourceBasisAndWait(page, nrId, basisSelect, 'EFFORT')
+    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    await expect(effortBasis).toHaveValue('EFFORT')
+
+    // Transition back to TIMELINE for full controls
+    await setNamedResourceBasisAndWait(page, nrId, effortBasis, 'TIMELINE')
     await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
 
     await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })).toBeEnabled()
@@ -905,31 +908,18 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expect(headers.getByText('Planning basis', { exact: true })).not.toBeVisible()
     await expect(headers.getByText('Allocation %', { exact: true })).not.toBeVisible()
 
-    // Re-acquire devCard controls after mutation
+    // Assert initial basis is TIMELINE (server default for new named resources)
     const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
-    await expect(basisSelect).toHaveValue('EFFORT')
+    await expect(basisSelect).toHaveValue('TIMELINE')
 
-    const tlBasis = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
-    const patchBasis = page.waitForResponse(
-      resp => {
-        if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
-        try {
-          const u = new URL(resp.request().url())
-          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
-            tlBasis.gate()
-            return true
-          }
-        } catch { return false }
-        return false
-      },
-      { timeout: 10_000 },
-    )
-    await basisSelect.selectOption('TIMELINE')
-    const [patchBasisResp] = await Promise.all([patchBasis, tlBasis.promise])
-    expect(patchBasisResp.status()).toBe(200)
-    tlBasis.cleanup()
-    // Re-run devCard and re-acquire basis combobox after refresh
+    // Transition to EFFORT
+    await setNamedResourceBasisAndWait(page, nrId, basisSelect, 'EFFORT')
+    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    await expect(effortBasis).toHaveValue('EFFORT')
+
+    // Transition back to TIMELINE for full controls
+    await setNamedResourceBasisAndWait(page, nrId, effortBasis, 'TIMELINE')
     await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
 
     await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })).toBeEnabled()
