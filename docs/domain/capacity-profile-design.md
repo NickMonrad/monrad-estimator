@@ -717,10 +717,9 @@ See the separate [`capacity-profile-source-of-truth-migration-plan.md`](capacity
 
 ## Snapshot schema v3 / snapshot rollback capacity safety
 
-> **Pending merge:** PR #357 (open, branch `feature/snapshot-v3-capacity-profiles`)
+> **Pending merge:** PR #367 (open, branch `feature/snapshot-v3-capacity-profiles`)
 > extends the BacklogSnapshot to version 3 so that rollback preserves capacity
-> profile data. This section describes the v3 design; it will become authoritative
-> when PR #357 merges to `main`.
+> profile data. This section describes the implemented v3 behaviour pending merge.
 
 ### Motivation
 
@@ -734,13 +733,19 @@ V3 makes capacity profiles a first-class citizen of the snapshot/rollback mechan
 The profile and segment data captured at snapshot time is restored exactly on
 rollback, without interpolation or reconstruction.
 
+V3 does not prune owners that are outside the profile snapshot boundary. The
+common restore upserts captured `ResourceType` and `NamedResource` metadata but
+retains post-snapshot owners, compatibility fields, `TemplateTask.resourceTypeId`
+links, and `ProjectDiscount` rows. Only `CapacityProfile` and `CapacitySegment`
+rows are replaced exactly from the v3 payload.
+
 ### Schema versions
 
 | Version | `schemaVersion` | Profile behaviour |
 |---------|-----------------|-------------------|
 | V1 | absent (bare epic array or `{ epics }` without `schemaVersion`) | Epic tree only. No RT, NR, profile, segment, timeline, or capacity-plan data. Rollback leaves profiles untouched. |
 | V2 | `2` | Full state except profiles. Rollback deletes all existing profiles/segments and reconstructs best-effort legacy profiles from V2 compatibility fields (`allocationMode`, `allocationPercent`, etc.). No segments are recreated. |
-| V3 | `3` | Full state including `capacityProfiles: SnapshotCapacityProfile[]`. Rollback deletes all existing profiles/segments and replaces them exactly from snapshot data. |
+| V3 | `3` | Full state including `capacityProfiles: SnapshotCapacityProfile[]`. Rollback replaces profiles/segments exactly; ResourceType/NamedResource rows created after the snapshot and their non-snapshot metadata remain intact. |
 
 ### V3 payload — preserved fields
 
@@ -822,8 +827,10 @@ The restore (`recreateV3CapacityProfiles` in `projectSnapshotCapacity.ts`)
 runs inside the same atomic `$transaction` as the full project state restore:
 
 1. Pre-rollback v3 capture of current state.
-2. Common state restore: upsert RTs, upsert NRs, delete-and-recreate epics (cascade),
-   update project fields, delete-and-recreate timeline/story entries/dependencies/overheads.
+2. Common state restore: upsert captured RTs and NRs, delete-and-recreate epics
+   (cascade), update project fields, and delete-and-recreate timeline/story
+   entries, dependencies, and overheads. Owners absent from the snapshot are
+   not deleted; `TemplateTask` links and `ProjectDiscount` rows are untouched.
 3. Delete ALL existing `CapacityProfile` and `CapacitySegment` rows for the project.
 4. Recreate every profile with exact snapshot IDs, `projectId` forced to the route
    project, owner IDs, enum values, nulls, and `legacy`. Every segment recreated

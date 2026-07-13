@@ -973,12 +973,28 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     const cpCreate = vi.fn().mockResolvedValue({})
     const segCreate = vi.fn().mockResolvedValue({})
     const bsCreate = vi.fn().mockResolvedValue({})
+    const resourceTypeDelete = vi.fn()
+    const namedResourceDelete = vi.fn()
+    const discountDelete = vi.fn()
+    const templateTaskUpdate = vi.fn()
 
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
       const tx = makeRouteTx({
         capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: cpDelete, create: cpCreate },
         capacitySegment: { deleteMany: segDelete, create: segCreate },
         backlogSnapshot: { create: bsCreate, findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+        resourceType: {
+          findMany: vi.fn().mockResolvedValue([]),
+          upsert: vi.fn().mockResolvedValue({}),
+          deleteMany: resourceTypeDelete,
+        },
+        namedResource: {
+          findMany: vi.fn().mockResolvedValue([]),
+          upsert: vi.fn().mockResolvedValue({}),
+          deleteMany: namedResourceDelete,
+        },
+        projectDiscount: { findMany: vi.fn().mockResolvedValue([]), deleteMany: discountDelete },
+        templateTask: { updateMany: templateTaskUpdate },
       })
       return typeof fn === 'function'
         ? (fn as (t: unknown) => Promise<unknown>)(tx)
@@ -997,6 +1013,11 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     // Existing profiles/segments deleted
     expect(cpDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
     expect(segDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
+    // V3 never prunes owners or mutates uncaptured commercial/template state.
+    expect(resourceTypeDelete).not.toHaveBeenCalled()
+    expect(namedResourceDelete).not.toHaveBeenCalled()
+    expect(discountDelete).not.toHaveBeenCalled()
+    expect(templateTaskUpdate).not.toHaveBeenCalled()
 
     // Target profiles recreated with exact IDs and fields
     expect(cpCreate.mock.calls.length).toBe(2)
@@ -1037,172 +1058,6 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     expect(seg1.source).toBe('SQUAD_PLANNER')
   })
 
-  interface PruningDiscountRow {
-    id: string
-    projectId: string
-    resourceTypeId: string | null
-  }
-
-
-  async function runPruningRollback(
-    existingResourceTypes: Array<{ id: string; projectId: string }>,
-    namedResources: Array<{ id: string; resourceType: { projectId: string } }> = [],
-    failDiscountDelete = false,
-    discountRows: PruningDiscountRow[] = [],
-  ) {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
-      resourceTypes: [{
-        id: 'rt-target', name: 'Developer', category: 'ENGINEERING', count: 1,
-        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: 0, allocationEndWeek: 10,
-      }],
-      namedResources: [],
-      timelineEntries: [], storyTimelineEntries: [],
-      epicDependencies: [], featureDependencies: [], overheadItems: [],
-      capacityProfiles: [],
-    }
-
-    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
-    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
-      id: 'snap-v3-pruning', projectId: projId, label: 'V3 pruning',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
-      createdById: userId, createdAt: new Date(),
-    } as never)
-    vi.mocked(prisma.resourceType.findMany).mockResolvedValue(existingResourceTypes as never)
-    vi.mocked(prisma.namedResource.findMany).mockResolvedValue(namedResources as never)
-
-    const remainingDiscounts = [...discountRows]
-    const discountDelete = vi.fn()
-    if (failDiscountDelete) {
-      discountDelete.mockRejectedValue(new Error('discount deletion failed'))
-    } else {
-      discountDelete.mockImplementation(async (args: {
-        where: { projectId: string; resourceTypeId: { in: string[] } }
-      }) => {
-        const deleted = remainingDiscounts.filter(discount =>
-          discount.projectId === args.where.projectId
-          && typeof discount.resourceTypeId === 'string'
-          && args.where.resourceTypeId.in.includes(discount.resourceTypeId),
-        )
-        for (const discount of deleted) {
-          const index = remainingDiscounts.indexOf(discount)
-          if (index >= 0) remainingDiscounts.splice(index, 1)
-        }
-        return { count: deleted.length }
-      })
-    }
-    const resourceTypeDelete = vi.fn().mockResolvedValue({ count: 0 })
-    const txResourceTypeFindMany = vi.fn().mockImplementation((args: {
-      where?: { id?: { notIn?: string[] } }
-    }) => {
-      const excludedIds = args.where?.id?.notIn ?? []
-      return Promise.resolve(existingResourceTypes.filter(rt => !excludedIds.includes(rt.id)))
-    })
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
-      const tx = makeRouteTx({
-        resourceType: {
-          findMany: txResourceTypeFindMany,
-          upsert: vi.fn().mockResolvedValue({}),
-          deleteMany: resourceTypeDelete,
-        },
-        namedResource: {
-          findMany: vi.fn().mockResolvedValue(namedResources),
-          upsert: vi.fn().mockResolvedValue({}),
-        },
-        projectDiscount: { findMany: vi.fn().mockResolvedValue([]), deleteMany: discountDelete },
-      })
-      return typeof fn === 'function'
-        ? (fn as (t: unknown) => Promise<unknown>)(tx)
-        : Promise.resolve(fn)
-    })
-
-    const response = await request(app)
-      .post(`/api/projects/${projId}/snapshots/snap-v3-pruning/rollback`)
-      .set('Authorization', authHeader)
-
-    return { response, discountDelete, resourceTypeDelete, remainingDiscounts }
-  }
-
-  it('V3 pruning deletes role discounts for non-target ResourceTypes', async () => {
-    const { response, discountDelete, remainingDiscounts } = await runPruningRollback([
-      { id: 'rt-target', projectId: projId },
-      { id: 'rt-extra', projectId: projId },
-    ], [], false, [
-      { id: 'discount-extra', projectId: projId, resourceTypeId: 'rt-extra' },
-      { id: 'discount-foreign', projectId: 'project-other', resourceTypeId: 'rt-extra' },
-    ])
-
-    expect(response.status).toBe(200)
-    expect(discountDelete).toHaveBeenCalledWith({
-      where: {
-        projectId: projId,
-        resourceTypeId: { in: ['rt-extra'] },
-      },
-    })
-    expect(remainingDiscounts).toEqual([
-      { id: 'discount-foreign', projectId: 'project-other', resourceTypeId: 'rt-extra' },
-    ])
-  })
-
-  it('V3 pruning preserves target-role discounts', async () => {
-    const { response, discountDelete, remainingDiscounts } = await runPruningRollback([
-      { id: 'rt-target', projectId: projId },
-    ], [], false, [
-      { id: 'discount-target', projectId: projId, resourceTypeId: 'rt-target' },
-    ])
-
-    expect(response.status).toBe(200)
-    expect(discountDelete).not.toHaveBeenCalled()
-    expect(remainingDiscounts).toEqual([
-      { id: 'discount-target', projectId: projId, resourceTypeId: 'rt-target' },
-    ])
-  })
-
-  it('V3 pruning preserves project-wide discounts', async () => {
-    const { response, discountDelete, remainingDiscounts } = await runPruningRollback([
-      { id: 'rt-target', projectId: projId },
-    ], [], false, [
-      { id: 'discount-project', projectId: projId, resourceTypeId: null },
-    ])
-
-    expect(response.status).toBe(200)
-    expect(discountDelete).not.toHaveBeenCalled()
-    expect(remainingDiscounts).toEqual([
-      { id: 'discount-project', projectId: projId, resourceTypeId: null },
-    ])
-  })
-
-  it('V3 pruning scopes discount deletion to the rolled-back project', async () => {
-    const { response, discountDelete } = await runPruningRollback([
-      { id: 'rt-target', projectId: projId },
-      { id: 'rt-extra', projectId: projId },
-    ])
-
-    expect(response.status).toBe(200)
-    expect(discountDelete.mock.calls[0][0].where.projectId).toBe(projId)
-    expect(discountDelete.mock.calls[0][0].where.resourceTypeId).toEqual({ in: ['rt-extra'] })
-  })
-
-  it('V3 pruning performs no discount deletion when no ResourceTypes are pruned', async () => {
-    const { response, discountDelete } = await runPruningRollback([
-      { id: 'rt-target', projectId: projId },
-    ])
-
-    expect(response.status).toBe(200)
-    expect(discountDelete).not.toHaveBeenCalled()
-  })
-
-  it('V3 pruning aborts the rollback when discount deletion fails', async () => {
-    const { response, resourceTypeDelete } = await runPruningRollback([
-      { id: 'rt-target', projectId: projId },
-      { id: 'rt-extra', projectId: projId },
-    ], [], true)
-
-    expect(response.status).toBe(500)
-    expect(resourceTypeDelete).not.toHaveBeenCalled()
-  })
 
   // ═════════════════════════════════════════════════════════════════════════
   // 6. Pre-flight validation (before transaction)

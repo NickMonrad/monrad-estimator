@@ -429,42 +429,52 @@ data survives rollback:
 
 **Resource Profile boundary strengthened.** Since `CapacityProfile` / `CapacitySegment`
 data is owned by Resource Profile (capacity inputs), V3 snapshots preserve this
-data exactly. A rollback would no longer reconstruct profiles from legacy compatibility
-fields (V2 behaviour) or leave them untouched (V1 behaviour). Capacity profile
-configuration chosen in Resource Profile would be restored exactly on rollback.
-**Null-legacy discrimination via `SnapshotJsonValue`:** The `CapacityProfile.legacy`
-column is a nullable PostgreSQL `Json?` field. Prisma distinguishes database NULL
-(untouched column) from JSON `null` (explicitly-set JSON null), but both read back as
-JavaScript `null`. PR #367 introduces the `SnapshotJsonValue` discriminator type
-(`projectSnapshotTypes.ts`) with three variants — `{ kind: 'DB_NULL' }`,
-`{ kind: 'JSON_NULL' }`, and `{ kind: 'VALUE'; value: ... }` — so that the snapshot
-serialiser can capture and restore the exact Prisma sentinel on rollback. This ensures
-profile rows where `legacy` was never written (typical for profile-first profiles)
-are restored as database NULL, not JSON null.
+data exactly. A rollback no longer reconstructs profiles from legacy compatibility
+fields (V2 behaviour) or leaves them untouched (V1 behaviour). Capacity profile
+configuration chosen in Resource Profile is replaced exactly on rollback.
+
+**Owner metadata is non-destructive.** V3's profile replacement is intentionally
+scoped to `CapacityProfile` and `CapacitySegment` rows. The common restore upserts
+captured `ResourceType` and `NamedResource` metadata so mutations to captured
+owners are restored, but it does not delete owners created after the snapshot.
+Those post-snapshot owners, their compatibility fields, `TemplateTask.resourceTypeId`
+links, and `ProjectDiscount` rows remain intact. A post-snapshot capacity profile
+for such an owner is removed because profiles are the V3 snapshot boundary; the
+owner itself is not pruned.
+
+**Null-legacy discrimination via `SnapshotJsonValue`:** The
+`CapacityProfile.legacy` column is a nullable PostgreSQL `Json?` field. Prisma
+distinguishes database NULL (untouched column) from JSON `null` (explicitly-set
+JSON null), but both read back as JavaScript `null`. PR #367 introduces the
+`SnapshotJsonValue` discriminator type (`projectSnapshotTypes.ts`) with three
+variants — `{ kind: 'DB_NULL' }`, `{ kind: 'JSON_NULL' }`, and
+`{ kind: 'VALUE'; value: ... }` — so that the snapshot serialiser can capture and
+restore the exact Prisma sentinel on rollback. This ensures profile rows where
+`legacy` was never written (typical for profile-first profiles) are restored as
+database NULL, not JSON null.
 
 **Snapshot/rollback:**
-`buildSnapshot` would produce `schemaVersion: 3` for all new application snapshots,
+`buildSnapshot` produces `schemaVersion: 3` for all new application snapshots,
 including `capacityProfiles: SnapshotCapacityProfile[]` with full segment data.
-Pre-rollback auto-snapshots would capture current capacity profiles alongside the
-full project state inside the same transaction — any rollback is reversible.
-V3 restore would replace all existing project profiles/segments with the exact
+Pre-rollback auto-snapshots capture current capacity profiles alongside the full
+project state inside the same transaction — any rollback is reversible.
+V3 restore replaces all existing project profiles/segments with the exact
 snapshot state (same transaction as epic/resource restoration).
 V1 snapshots (epic-only) leave capacity profiles untouched on rollback.
 V2 snapshots reconstruct profiles from every `ResourceType` (ROLE-kind, synthetic IDs)
-and every `NamedResource` (NAMED_PERSON-kind, synthetic IDs) using legacy compatibility
-fields (`allocationMode`, `allocationPercent`, etc.) with no segment fidelity.
+and every `NamedResource` (NAMED_PERSON-kind, synthetic IDs) using legacy
+compatibility fields (`allocationMode`, `allocationPercent`, etc.) with no segment
+fidelity.
 
 **Domain boundaries respected:**
-- Capacity profile data (Resource Profile ownership) would be snapshotted and restored
+- Capacity profile data (Resource Profile ownership) is snapshotted and restored
   as-is — no Timeline/Planning derivation or Commercial interpolation occurs.
-- Commercial billing basis (`pricingModel`) is snapshotted via V2/V3 `namedResources`
-  and remains Commercial-owned; V3 does not introduce a separate billing-basis
-  snapshot field.
-- ProjectDiscount rows remain Commercial-owned and are not serialized into V3 snapshots.
-  During rollback, discounts linked to pruned ResourceTypes are deleted before those
-  owners are removed; project-wide discounts and discounts for target ResourceTypes
-  are preserved. A pruned role discount is never promoted to project-wide scope by
-  setting `resourceTypeId` to `null`.
+- Commercial billing basis (`pricingModel`) is snapshotted via V2/V3
+  `namedResources` and remains Commercial-owned; V3 does not introduce a separate
+  billing-basis snapshot field.
+- `ProjectDiscount` rows remain Commercial-owned and are not serialized into V3
+  snapshots. Rollback leaves project-wide, target-role, and post-snapshot discounts
+  unchanged; no discount is promoted to project-wide scope.
 - Capacity Plan history (Capacity Plan periods/entries) is **not** part of PR #367;
   it is tracked by #359 separately.
 

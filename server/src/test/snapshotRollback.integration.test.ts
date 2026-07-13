@@ -60,6 +60,7 @@ let prisma: PrismaClient
 let userId: string
 let token: string
 let authHeader: string
+let extraTemplateId: string | undefined
 beforeAll(async () => {
   if (!runIntegration) return
   prisma = new PrismaClient({
@@ -105,6 +106,9 @@ afterAll(async () => {
   await prisma.namedResource.deleteMany({
     where: { resourceType: { project: { ownerId: userId } } },
   })
+  if (extraTemplateId) {
+    await prisma.featureTemplate.delete({ where: { id: extraTemplateId } })
+  }
   await prisma.resourceType.deleteMany({ where: { project: { ownerId: userId } } })
   await prisma.project.deleteMany({ where: { ownerId: userId } })
   await prisma.user.delete({ where: { id: userId } })
@@ -915,8 +919,8 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
   it('mutates all domains then rollback restores exact original state', async () => {
     // ── Mutate every captured domain ──────────────────────────────
 
-    // Add a post-snapshot role owner, named resource, compatibility allocation,
-    // and persisted profile. V3 rollback must remove this owner set entirely.
+    // Add post-snapshot owners, compatibility metadata, a profile, and a discount.
+    // V3 rollback must preserve these rows while replacing only captured profiles.
     extraRtId = await createResourceType(projectId, 'rt-extra', 'Post-snapshot role', {
       count: 1,
       hoursPerDay: 8,
@@ -948,6 +952,25 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     extraRoleDiscountId = await createDiscount(
       projectId, extraRtId, 'PERCENTAGE', 20, 'Post-snapshot role discount', 2,
     )
+    const extraTemplate = await prisma.featureTemplate.create({
+      data: {
+        name: `Snapshot extra owner template ${Date.now()}`,
+        category: 'DEV',
+      },
+    })
+    extraTemplateId = extraTemplate.id
+    await prisma.templateTask.create({
+      data: {
+        name: 'Post-snapshot template task',
+        order: 0,
+        hoursSmall: 8,
+        hoursMedium: 8,
+        hoursLarge: 8,
+        resourceTypeName: 'Post-snapshot role',
+        templateId: extraTemplate.id,
+        resourceTypeId: extraRtId,
+      },
+    })
 
     // Delete ROLE segments, add new ones
     await prisma.capacitySegment.deleteMany({ where: { capacityProfileId: profileRoleId } })
@@ -1120,15 +1143,29 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       where: { projectId },
       orderBy: { order: 'asc' },
     })
-    expect(discountsAfterRollback).toHaveLength(2)
-    expect(discountsAfterRollback.map(d => d.id)).toEqual([projectDiscountId, targetRoleDiscountId])
+    expect(discountsAfterRollback).toHaveLength(3)
+    expect(discountsAfterRollback.map(d => d.id)).toEqual([
+      projectDiscountId,
+      targetRoleDiscountId,
+      extraRoleDiscountId,
+    ])
     const restoredProjectDiscount = discountsAfterRollback.find(d => d.id === projectDiscountId)!
     expect(restoredProjectDiscount.resourceTypeId).toBeNull()
     expect(restoredProjectDiscount.label).toBe('Project-wide baseline')
     const restoredTargetDiscount = discountsAfterRollback.find(d => d.id === targetRoleDiscountId)!
     expect(restoredTargetDiscount.resourceTypeId).toBe(rtDevId)
     expect(restoredTargetDiscount.label).toBe('Developer baseline')
-    expect(discountsAfterRollback.find(d => d.id === extraRoleDiscountId)).toBeUndefined()
+    const restoredExtraDiscount = discountsAfterRollback.find(d => d.id === extraRoleDiscountId)!
+    expect(restoredExtraDiscount.resourceTypeId).toBe(extraRtId)
+    expect(restoredExtraDiscount.label).toBe('Post-snapshot role discount')
+    if (!extraTemplateId) throw new Error('Scenario A template fixture missing')
+    const preservedTemplateTask = await prisma.templateTask.findFirst({
+      where: { templateId: extraTemplateId },
+    })
+    expect(preservedTemplateTask).toMatchObject({
+      resourceTypeId: extraRtId,
+      resourceTypeName: 'Post-snapshot role',
+    })
 
     const rpAfterRollback = await request(app)
       .get(`/api/projects/${projectId}/resource-profile`)
@@ -1151,17 +1188,33 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       where: { projectId },
       orderBy: { name: 'asc' },
     })
-    expect(rts).toHaveLength(2)
+    expect(rts).toHaveLength(3)
     expect(rts.find(r => r.id === rtDevId)!.name).toBe('Developer')
-
-    // NRs: IDs preserved
+    expect(rts.find(r => r.id === extraRtId)).toMatchObject({
+      name: 'Post-snapshot role',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 700,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 45,
+      allocationStartWeek: 2,
+      allocationEndWeek: 7,
+    })
     const nrs = await prisma.namedResource.findMany({
       where: { resourceType: { projectId } },
     })
-    expect(nrs).toHaveLength(8)
+
+    // Named-resource ownership and allocation metadata are not pruned.
+    expect(nrs).toHaveLength(9)
     expect(nrs.find(n => n.id === nrAliceId)!.pricingModel).toBe('ACTUAL_DAYS')
-    expect(rts.find(r => r.id === extraRtId)).toBeUndefined()
-    expect(nrs.find(n => n.id === extraNrId)).toBeUndefined()
+    expect(nrs.find(n => n.id === extraNrId)).toMatchObject({
+      resourceTypeId: extraRtId,
+      name: 'Post-snapshot person',
+      allocationMode: 'TIMELINE',
+      allocationPercent: 45,
+      allocationStartWeek: 2,
+      allocationEndWeek: 7,
+    })
 
 
     const profiles = await prisma.capacityProfile.findMany({
@@ -1372,10 +1425,28 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(overheads).toHaveLength(1)
     expect(overheads[0].value).toBe(15)
 
-    // ── Canonical deep comparison: every field matches pre-mutation state ──
+    // ── Canonical deep comparison: captured state restored, extra owners retained ──
     const canonicalAfter = await captureCanonicalState(projectId)
-    expect(canonicalAfter.resourceTypes).toEqual(canonicalBefore.resourceTypes)
-    expect(canonicalAfter.namedResources).toEqual(canonicalBefore.namedResources)
+    expect(canonicalAfter.resourceTypes.filter(r => r.id !== extraRtId))
+      .toEqual(canonicalBefore.resourceTypes)
+    expect(canonicalAfter.namedResources.filter(n => n.id !== extraNrId))
+      .toEqual(canonicalBefore.namedResources)
+    expect(canonicalAfter.resourceTypes).toHaveLength(canonicalBefore.resourceTypes.length + 1)
+    expect(canonicalAfter.namedResources).toHaveLength(canonicalBefore.namedResources.length + 1)
+    expect(canonicalAfter.resourceTypes.find(r => r.id === extraRtId)).toMatchObject({
+      name: 'Post-snapshot role',
+      dayRate: 700,
+      allocationPercent: 45,
+      allocationStartWeek: 2,
+      allocationEndWeek: 7,
+    })
+    expect(canonicalAfter.namedResources.find(n => n.id === extraNrId)).toMatchObject({
+      resourceTypeId: extraRtId,
+      name: 'Post-snapshot person',
+      allocationPercent: 45,
+      allocationStartWeek: 2,
+      allocationEndWeek: 7,
+    })
     expect(canonicalAfter.capacityProfiles).toEqual(canonicalBefore.capacityProfiles)
     expect(canonicalAfter.timelineEntries).toEqual(canonicalBefore.timelineEntries)
     expect(canonicalAfter.storyTimelineEntries).toEqual(canonicalBefore.storyTimelineEntries)
@@ -1402,11 +1473,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const beforeTL = timelineBefore as Record<string, unknown>
     const afterRows = profileAfter.resourceRows as Array<Record<string, unknown>>
     const beforeRows = beforeRP.resourceRows as Array<Record<string, unknown>>
-    // The restored Resource Profile and Timeline DTOs must not resolve deleted
-    // post-snapshot owners through legacy fallback.
-    expect(afterRows.find(r => r.resourceTypeId === extraRtId)).toBeUndefined()
-    const afterTimelineNRs = timelineAfter.namedResources as Array<Record<string, unknown>>
-    expect(afterTimelineNRs.find(nr => nr.id === extraNrId)).toBeUndefined()
 
 
     // ── Role profile: PROFILE resolutionSource, exact restored segments, null fields ──
