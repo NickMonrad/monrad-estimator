@@ -643,6 +643,56 @@ migration.
 | No sync/regeneration | ✅ Compatibility helpers not invoked |
 | Duplicate owners unmodified | ✅ 1:1 copy; #361 deferred |
 | Schema migration required | No — pure data-layer operation |
+| Billing models preserved | ✅ ACTUAL_DAYS and PRO_RATA; FIXED_PRICE is not supported |
+| Zero-capacity segments preserved | ✅ `capacityPercent: 0` segments cloned verbatim |
+| Rollback transaction atomicity | ✅ Mid-transaction failure reverts all clone writes |
+| Endpoint parity (resource-profile) | ✅ GET source/clone DTOs match after ID normalisation |
+| CSV export parity (buildProfileCsv) | ✅ Required real PostgreSQL clone integration (`projects.clone.integration.test.ts`) executes production `buildProfileCsv` against source/clone HTTP DTOs; exact CSV output matches after expected ID/name normalisation |
+| Commercial calculator parity | ✅ Required real PostgreSQL clone integration (`projects.clone.integration.test.ts`) executes production `computeCommercialData` against source/clone HTTP DTOs; commercial subtotal, after-discounts, and grand total match completely |
+
+### Supported billing model
+
+Clone preserves the `pricingModel` value verbatim. The production Commercial
+calculator (`computeCommercialData` in `financialCalculations.ts`) supports
+**ACTUAL_DAYS** (Bill actual scheduled days) and **PRO_RATA** (Bill planned
+allocation). Any unrecognised value falls through to ACTUAL_DAYS. **FIXED_PRICE**
+is not a supported billing branch and must not appear in clone fixtures or
+evidence — the integration test exercises both ACTUAL_DAYS and PRO_RATA paths.
+
+### Zero-capacity segments
+
+Segments with `capacityPercent: 0` are valid and are copied identically during
+clone. The clone route does not filter, merge, or normalise zero-capacity
+entries — they remain in the profile with their original start week, end week,
+and source. CSV output via `buildProfileCsv` includes the zero segment without
+alteration.
+
+### Rollback transaction evidence
+
+The clone integration suite (`projects.clone.integration.test.ts`) includes a
+guarded real-PostgreSQL scenario that proves atomic rollback after write begins:
+a source project is set up with all clone data, but one capacity profile
+references an unmappable ResourceType/NamedResource. The clone endpoint is called,
+the project and child rows are written, then the route fails on the invalid
+reference. The test asserts the transaction rolled back every row — project
+metadata, resource types, named resources, profiles, segments, epics, features,
+stories, tasks, timeline entries — leaving zero residual state.
+
+### Endpoint, CSV, and Commercial parity
+
+Three independent parity checks establish source-vs-clone identity at the
+endpoint, CSV, and commercial-calculator layers:
+
+1. **Endpoint parity (server integration tests).** Production
+   `GET /api/projects/:id/resource-profile` is called on both source and clone.
+   After normalising clone-owned IDs and generated names, row count, multiplicity,
+   profile fields (`planningBasis`, `source`, `defaultPercent`, `startWeek`,
+   `endWeek`, segments), billable days, overhead rows, subtotals, grand totals,
+   discounts, and tax fields are asserted equal.
+
+2. **CSV export and commercial parity (client functions against endpoint DTOs).** `projects.clone.integration.test.ts` fetches the real source and clone HTTP `GET /api/projects/:id/resource-profile` DTOs, then executes production `buildProfileCsv` and `computeCommercialData` against those DTOs. After expected ID/name normalisation, exact CSV output (planning basis, profile source, windows, segments, planned-resource identity, billing basis, and row multiplicity) and commercial subtotal, after-discounts, and grand total all match.
+
+The focused client test (`clone-commercial-parity.test.ts`) is separate: it is a utility regression over ID-remapped, DTO-shaped fixtures, not real endpoint evidence. CI runs that client Vitest step separately from the required/blocking server command `npm run test:clone-integration` (working directory `server`). The clone integration step runs after Prisma migrations and client generation and blocks CI on failure.
 
 ## Remaining work for #342 — Legacy-field consumers
 

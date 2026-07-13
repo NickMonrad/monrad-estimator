@@ -900,3 +900,51 @@ or compatibility sync.
 - No duplicate-owner repair (owned by #361).
 - No capacity-plan materialisation or interpolation.
 - No compatibility sync or profile regeneration.
+- No FIXED_PRICE billing model — Commercial only supports ACTUAL_DAYS and PRO_RATA.
+
+### Supported billing models
+
+Clone preserves the named-resource `pricingModel` value exactly. The production
+`financialCalculations.ts` (via `computeCommercialData`) supports only
+**ACTUAL_DAYS** (Bill actual scheduled days) and **PRO_RATA** (Bill planned
+allocation). Any other value falls through to ACTUAL_DAYS. Clone does not
+introduce or rely on `FIXED_PRICE`.
+
+### Zero-capacity segments
+
+A `CapacitySegment` with `capacityPercent: 0` is a valid zero-capacity segment.
+Such segments are preserved verbatim during clone: the segment's start week, end
+week, capacity percent of zero, and source are copied with a clone-owned ID.
+Clone does not skip, merge, or eliminate zero-capacity entries — they remain in
+the clone's profile and appear in CSV export via `buildProfileCsv` without
+fabrication.
+
+### Rollback transaction evidence
+
+The clone integration test suite (`projects.clone.integration.test.ts`) includes a
+real-PostgreSQL atomic-failure scenario: the clone route is called with a source
+project whose capacity profile references an unmappable or cross-project
+ResourceType/NamedResource, causing a mid-transaction violation after the clone
+project row and children have been written. The integration test asserts that the
+transaction rolls back every row (project, resource types, named resources,
+profiles, segments, epics, features, stories, tasks, timeline entries) so no
+partial clone state remains.
+
+### Endpoint, CSV, and Commercial parity
+
+Clone evidence covers three independent parity layers:
+
+1. **Endpoint parity (server).** The clone integration suite calls the production
+   `GET /api/projects/:id/resource-profile` on both source and clone, normalises
+   clone-generated IDs/names, and asserts:
+   - Resource row count, multiplicity, and per-row fields match.
+   - Capacity profile `planningBasis`, `source`, `defaultPercent`, `startWeek`,
+     `endWeek`, and segment array (startWeek, endWeek, capacityPercent) match.
+   - Billable days, overhead rows, subtotals, and grand totals match.
+   - Tax fields (`taxRate`, `taxLabel`) are preserved.
+
+2. **CSV export parity (client).** The clone integration test (`projects.clone.integration.test.ts`) fetches source and clone HTTP endpoint DTOs and executes `buildProfileCsv` against those real DTOs. It verifies exact CSV output: identical planning basis, profile source, windows, segments, planned-resource identity, billing basis, and row multiplicity after expected ID/name normalisation.
+
+3. **Commercial calculator parity (client).** That same integration test executes `computeCommercialData` against the real source and clone endpoint DTOs with identical discount and tax settings. It asserts `subtotal`, `afterDiscounts`, and `grandTotal` match exactly.
+
+The focused client test (`clone-commercial-parity.test.ts`) is a separate utility regression over ID-remapped, DTO-shaped fixtures; its manually constructed fixtures are not real endpoint evidence. CI runs this focused client Vitest step separately from the required/blocking server command `npm run test:clone-integration` (working directory `server`); the server integration step runs after Prisma migrations and client generation.

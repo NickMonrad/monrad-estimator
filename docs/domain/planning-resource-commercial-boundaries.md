@@ -504,3 +504,11 @@ directly, respecting the established ownership boundaries:
 - No scheduler or leveller redesign.
 - No capacity-plan materialisation.
 - No duplicate-owner repair.
+
+**Evidence scope:**
+- Clone preserves ACTUAL_DAYS and PRO_RATA billing models; FIXED_PRICE is not supported.
+- Zero-capacity segments (`capacityPercent: 0`) are preserved verbatim.
+- The real-PostgreSQL `projects.clone.integration.test.ts` scenario proves atomic rollback after writes begin.
+- The integration test fetches source/clone HTTP `GET /resource-profile` DTOs and executes production `buildProfileCsv` and `computeCommercialData` against them, verifying exact endpoint-derived CSV output and commercial parity.
+- The focused `clone-commercial-parity.test.ts` client Vitest test is only a pure-utility regression over ID-remapped, DTO-shaped fixtures; it is not real endpoint evidence.
+- CI runs the focused client Vitest step separately from the required/blocking server clone integration step, after Prisma migrations and client generation.

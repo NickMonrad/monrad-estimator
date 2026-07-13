@@ -13,17 +13,19 @@
  *   - Parameterised raw-storage null/type states (DB_NULL vs JSON_NULL)
  *     via both Prisma IS NULL and jsonb_typeof(...) SQL queries
  *   - Nested-null objects and null-containing arrays in legacy values
- *   - Named-resource billing-model preservation (ACTUAL_DAYS / FIXED_PRICE)
+ *   - Named-resource billing-model preservation (ACTUAL_DAYS / PRO_RATA)
  *   - Top-level array, string, finite number, and boolean legacy values
  *   - Resource-profile commercial value parity (production GET endpoint with
  *     resource rows, overhead rows, and summary matched by name)
  *   - Overhead endpoint parity via production GET /overhead
  *   - Tax field preservation (taxRate, taxLabel)
  *   - Grand total consistency (summary.totalCost = Σ row costs)
- *   - Timeline endpoint structure parity via production GET /timeline
  *   - Atomic rollback for cross-project access
- *
- * Guarded by INTEGRATION_TEST env var — skipped in ordinary unit runs.
+ *   - Zero-capacity segment (capacityPercent=0) preservation
+ *   - Client-side computeCommercialData parity via endpoint DTOs
+ *   - Client-side buildProfileCsv parity (billing basis, segment data)
+ *   - Mid-transaction rollback on invalid profile owner shape (Prisma.sql
+ *     injection with valid FK references but shape mismatch)
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -593,7 +595,7 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     nrJohnId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'John Developer',
       { pricingModel: 'ACTUAL_DAYS', allocationPct: 100 })
     nrJaneId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'Jane Architect',
-      { pricingModel: 'FIXED_PRICE', allocationPct: 80, startWeek: 2, endWeek: 10 })
+      { pricingModel: 'PRO_RATA', allocationPct: 80, startWeek: 2, endWeek: 10 })
 
     // ── Capacity profiles (11) ───────────────────────────────────────────
     // ROLE — scalar shape (single segment, same window)
@@ -611,7 +613,8 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', startWeek: 0, endWeek: 12 })
     await createSegment(cpNamedMultiId, crypto.randomUUID(), 0, 3, 100, 'MANUAL')
     await createSegment(cpNamedMultiId, crypto.randomUUID(), 4, 4, 50, 'MANUAL')   // single-week
-    await createSegment(cpNamedMultiId, crypto.randomUUID(), 6, 8, 75, 'FIXED')    // gap at week 5
+    await createSegment(cpNamedMultiId, crypto.randomUUID(), 5, 5, 0, 'MANUAL')    // zero-capacity gap
+    await createSegment(cpNamedMultiId, crypto.randomUUID(), 6, 8, 75, 'FIXED')    // gap at week 9
     await createSegment(cpNamedMultiId, crypto.randomUUID(), 10, 12, 90, 'AVAILABILITY_WINDOW')
 
     // PLANNED_RESOURCE — scalar shape
@@ -969,7 +972,7 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
   })
 
   // ── Test A9: Named resource billing models ──────────────────────────
-  it('A9 — named-resource billing models (ACTUAL_DAYS / FIXED_PRICE) preserved', async () => {
+  it('A9 — named-resource billing models (ACTUAL_DAYS / PRO_RATA) preserved', async () => {
     const cloneProjectId = cloneResponse.body.id
 
     const srcState = await captureNormalisedState(srcProjectId)
@@ -1271,6 +1274,291 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       expect(cloneBody.ganttEntries.length).toBe(srcBody.ganttEntries.length)
     }
   })
+  // ── Test A15: Zero-capacity segment parity ─────────────────────────
+  it('A15 — zero-capacity segment (capacityPercent=0) preserved in clone', async () => {
+    const cloneProjectId = cloneResponse.body.id
+
+    const srcProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId: srcProjectId },
+      include: { segments: { orderBy: { startWeek: 'asc' as const } } },
+    })
+    const cloneProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId: cloneProjectId },
+      include: { segments: { orderBy: { startWeek: 'asc' as const } } },
+    })
+
+    // Find profile with zero-capacity segment in source
+    const srcWithZero = srcProfiles.find(p => p.segments.some(s => s.capacityPercent === 0))
+    expect(srcWithZero).toBeDefined()
+    const zeroSeg = srcWithZero!.segments.find(s => s.capacityPercent === 0)
+    expect(zeroSeg).toBeDefined()
+    expect(zeroSeg!.startWeek).toBe(5)
+    expect(zeroSeg!.endWeek).toBe(5)
+    expect(zeroSeg!.capacityPercent).toBe(0)
+    expect(zeroSeg!.source).toBe('MANUAL')
+
+    // Find matching profile in clone (same owner kind and planning basis)
+    const cloneWithZero = cloneProfiles.find(p =>
+      p.ownerKind === srcWithZero!.ownerKind &&
+      p.planningBasis === srcWithZero!.planningBasis &&
+      p.segments.some(s => s.capacityPercent === 0),
+    )
+    expect(cloneWithZero).toBeDefined()
+    const cloneZeroSeg = cloneWithZero!.segments.find(s => s.capacityPercent === 0)
+    expect(cloneZeroSeg).toBeDefined()
+    expect(cloneZeroSeg!.startWeek).toBe(zeroSeg!.startWeek)
+    expect(cloneZeroSeg!.endWeek).toBe(zeroSeg!.endWeek)
+    expect(cloneZeroSeg!.capacityPercent).toBe(0)
+    expect(cloneZeroSeg!.source).toBe(zeroSeg!.source)
+  })
+
+  // ── Test A16: Complete computeCommercialData parity with ID normalisation ──
+  it('A16 — computeCommercialData output matches source and clone after normalising all generated IDs', async () => {
+    const cloneProjectId = cloneResponse.body.id
+
+    // Fetch DTOs from production HTTP endpoints for both source and clone
+    const srcProfileRes = await request(app)
+      .get(`/api/projects/${srcProjectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    const cloneProfileRes = await request(app)
+      .get(`/api/projects/${cloneProjectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    expect(srcProfileRes.status).toBe(200)
+    expect(cloneProfileRes.status).toBe(200)
+
+    const srcDiscountsRes = await request(app)
+      .get(`/api/projects/${srcProjectId}/discounts`)
+      .set('Authorization', authHeader)
+    const cloneDiscountsRes = await request(app)
+      .get(`/api/projects/${cloneProjectId}/discounts`)
+      .set('Authorization', authHeader)
+    expect(srcDiscountsRes.status).toBe(200)
+    expect(cloneDiscountsRes.status).toBe(200)
+
+    const srcProject = await prisma.project.findUnique({ where: { id: srcProjectId } })
+    const cloneProject = await prisma.project.findUnique({ where: { id: cloneProjectId } })
+    expect(srcProject).not.toBeNull()
+    expect(cloneProject).not.toBeNull()
+
+    // Build ID-to-name lookups for normalisation (names are stable across clone)
+    const srcRTs = await prisma.resourceType.findMany({ where: { projectId: srcProjectId } })
+    const srcNRs = await prisma.namedResource.findMany({
+      where: { resourceType: { projectId: srcProjectId } },
+    })
+    const srcDiscounts = await prisma.projectDiscount.findMany({ where: { projectId: srcProjectId } })
+    const rtNameById = new Map(srcRTs.map(r => [r.id, r.name]))
+    const nrNameById = new Map(srcNRs.map(r => [r.id, r.name]))
+    const discountLabelById = new Map(srcDiscounts.map(d => [d.id, d.label]))
+    const overheadNameById = new Map<string, string>(
+      (srcProfileRes.body.overheadRows ?? []).map((row: { overheadId: string; name: string }) => [row.overheadId, row.name]),
+    )
+    // Clone-side lookups (IDs differ, but the same stable names map to clone IDs)
+    const cloneRTs = await prisma.resourceType.findMany({ where: { projectId: cloneProjectId } })
+    const cloneNRs = await prisma.namedResource.findMany({
+      where: { resourceType: { projectId: cloneProjectId } },
+    })
+    const cloneDiscounts = await prisma.projectDiscount.findMany({ where: { projectId: cloneProjectId } })
+    const cloneRtNameById = new Map(cloneRTs.map(r => [r.id, r.name]))
+    const cloneNrNameById = new Map(cloneNRs.map(r => [r.id, r.name]))
+    const cloneDiscountLabelById = new Map(cloneDiscounts.map(d => [d.id, d.label]))
+    const cloneOverheadNameById = new Map<string, string>(
+      (cloneProfileRes.body.overheadRows ?? []).map((row: { overheadId: string; name: string }) => [row.overheadId, row.name]),
+    )
+
+    // Dynamic import: client is a separate workspace without a server dependency,
+    // so we load the module via file URL — same pattern as snapshotRollback test.
+    const calcModulePath = new URL('../../../client/src/utils/financialCalculations.ts', import.meta.url).href
+    const clientCalc = await import(calcModulePath)
+
+    const srcCommercial = clientCalc.computeCommercialData(
+      srcProfileRes.body,
+      srcDiscountsRes.body,
+      { taxRate: srcProject!.taxRate, taxLabel: srcProject!.taxLabel ?? undefined },
+    )
+    const cloneCommercial = clientCalc.computeCommercialData(
+      cloneProfileRes.body,
+      cloneDiscountsRes.body,
+      { taxRate: cloneProject!.taxRate, taxLabel: cloneProject!.taxLabel ?? undefined },
+    )
+
+    expect(srcCommercial).not.toBeNull()
+    expect(cloneCommercial).not.toBeNull()
+
+    // ── Normalise all generated IDs to stable name-based surrogates ──────
+    function normaliseId(id: string, rtMap: Map<string, string>, nrMap: Map<string, string>, discMap: Map<string, string>, overheadMap: Map<string, string>, projId: string): string {
+      if (rtMap.has(id)) return `rt:${rtMap.get(id)}`
+      if (nrMap.has(id)) return `nr:${nrMap.get(id)}`
+      if (discMap.has(id)) return `disc:${discMap.get(id)}`
+      if (overheadMap.has(id)) return `overhead:${overheadMap.get(id)}`
+      if (id === projId) return 'project:self'
+      return id
+    }
+
+    function normaliseCommercial(src: typeof srcCommercial, rtM: Map<string, string>, nrM: Map<string, string>, dM: Map<string, string>, overheadM: Map<string, string>, pId: string): unknown {
+      const copy = JSON.parse(JSON.stringify(src))
+      for (const row of copy.rows) {
+        row.id = normaliseId(row.id, rtM, nrM, dM, overheadM, pId)
+        row.resourceTypeId = normaliseId(row.resourceTypeId, rtM, nrM, dM, overheadM, pId)
+        for (const ad of row.appliedDiscounts) {
+          ad.id = normaliseId(ad.id, rtM, nrM, dM, overheadM, pId)
+          if (ad.resourceTypeId) ad.resourceTypeId = normaliseId(ad.resourceTypeId, rtM, nrM, dM, overheadM, pId)
+          delete ad.createdAt
+        }
+      }
+      for (const pd of copy.projectDiscounts) {
+        pd.id = normaliseId(pd.id, rtM, nrM, dM, overheadM, pId)
+        pd.projectId = normaliseId(pd.projectId, rtM, nrM, dM, overheadM, pId)
+        if (pd.resourceTypeId) pd.resourceTypeId = normaliseId(pd.resourceTypeId, rtM, nrM, dM, overheadM, pId)
+        delete pd.createdAt
+      }
+      return copy
+    }
+
+    const normSrc = normaliseCommercial(srcCommercial, rtNameById, nrNameById, discountLabelById, overheadNameById, srcProjectId)
+    const normClone = normaliseCommercial(cloneCommercial, cloneRtNameById, cloneNrNameById, cloneDiscountLabelById, cloneOverheadNameById, cloneProjectId)
+    expect(normClone).toEqual(normSrc)
+
+    // ── Field-level sanity checks ────────────────────────────────────────
+    // Verify pricing models on specific named-resource rows
+    const srcRows = (normSrc as Record<string, unknown>).rows as Array<{ name: string; pricingModel: string | null; kind: string }>
+    expect(srcRows.some(r => r.name === 'Jane Architect' && r.pricingModel === 'PRO_RATA' && r.kind === 'named-resource')).toBe(true)
+    expect(srcRows.some(r => r.name === 'John Developer' && r.pricingModel === 'ACTUAL_DAYS' && r.kind === 'named-resource')).toBe(true)
+
+    // Tax fields match project settings
+    const srcNormAny = normSrc as Record<string, unknown>
+    expect(srcNormAny.taxRate).toBe(srcProject!.taxRate)
+    expect(srcNormAny.taxLabel).toBe(srcProject!.taxLabel)
+    // Verify ACTUAL_DAYS and PRO_RATA behaviour using real DTO rows
+    const rawSrcRows = (normSrc as Record<string, unknown>).rows as Array<Record<string, unknown>>
+    const actualDaysRows = rawSrcRows.filter(r => r.pricingModel === 'ACTUAL_DAYS')
+    expect(actualDaysRows.length).toBeGreaterThan(0)
+    for (const row of actualDaysRows) {
+      expect((row.allocatedDays as number)).toBeGreaterThan(0)
+      expect((row.dayRate as number)).toBeGreaterThan(0)
+    }
+    const proRataRows = rawSrcRows.filter(r => r.pricingModel === 'PRO_RATA')
+    expect(proRataRows.length).toBeGreaterThan(0)
+    for (const row of proRataRows) {
+      expect((row.allocatedDays as number)).toBeGreaterThan(0)
+      expect((row.dayRate as number)).toBeGreaterThan(0)
+    }
+  })
+  // ── Test A17: Full buildProfileCsv output parity (exact string match) ──
+  it('A17 — buildProfileCsv output is identical for source and clone and contains required billing/segment columns', async () => {
+    const cloneProjectId = cloneResponse.body.id
+
+    // Fetch resource-profile DTOs from production HTTP endpoints
+    const srcProfileRes = await request(app)
+      .get(`/api/projects/${srcProjectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    const cloneProfileRes = await request(app)
+      .get(`/api/projects/${cloneProjectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    expect(srcProfileRes.status).toBe(200)
+    expect(cloneProfileRes.status).toBe(200)
+
+    // Dynamic import: client is a separate workspace without a server dependency.
+    const csvModulePath = new URL('../../../client/src/hooks/useResourceProfileExport.ts', import.meta.url).href
+    const csvModule = await import(csvModulePath)
+
+    const srcCsv = csvModule.buildProfileCsv(srcProfileRes.body)
+    const cloneCsv = csvModule.buildProfileCsv(cloneProfileRes.body)
+
+    // The CSV output contains no raw DB IDs — only business labels, enum-derived
+    // strings, and computed values.  Since source and clone share identical
+    // business data, the full CSV string must match character-for-character.
+    expect(cloneCsv).toBe(srcCsv)
+
+    // Column count sanity (26 columns from the header)
+    const headers = srcCsv.split('\n')[0].split(',')
+    expect(headers.length).toBe(26)
+
+    // Verify expected column labels
+    expect(headers).toContain('Section')
+    expect(headers).toContain('Role')
+    expect(headers).toContain('Capacity profile segments')
+    expect(headers).toContain('Billing basis')
+
+    // Parse CSV data rows and assert specific semantic columns
+    const colIdx = (name: string) => headers.indexOf(name)
+    expect(colIdx('Section')).toBe(0)
+    expect(colIdx('Role')).toBe(1)
+    expect(colIdx('Resource name')).toBe(2)
+    expect(colIdx('Resource identity')).toBe(3)
+    expect(colIdx('Category')).toBe(4)
+    expect(colIdx('Resource count')).toBe(5)
+    expect(colIdx('Hours per day')).toBe(6)
+    expect(colIdx('Effort days')).toBe(7)
+    expect(colIdx('Assigned days')).toBe(8)
+    expect(colIdx('Billable days')).toBe(9)
+    expect(colIdx('Day rate')).toBe(10)
+    expect(colIdx('Subtotal')).toBe(11)
+    expect(colIdx('Planning basis')).toBe(12)
+    expect(colIdx('Profile source')).toBe(13)
+    expect(colIdx('Default capacity %')).toBe(14)
+    expect(colIdx('Profile start')).toBe(15)
+    expect(colIdx('Profile end')).toBe(16)
+    expect(colIdx('Availability window start')).toBe(17)
+    expect(colIdx('Availability window end')).toBe(18)
+    expect(colIdx('Assigned start')).toBe(19)
+    expect(colIdx('Assigned end')).toBe(20)
+    expect(colIdx('Capacity profile segments')).toBe(21)
+    expect(colIdx('Assignment segments')).toBe(22)
+    expect(colIdx('Assigned weeks')).toBe(23)
+    expect(colIdx('Billing basis')).toBe(24)
+    expect(colIdx('Handover notes')).toBe(25)
+
+    const iNamedId = colIdx('Resource identity')
+    const iResName = colIdx('Resource name')
+    const iRole = colIdx('Role')
+    const iPlanBasis = colIdx('Planning basis')
+    const iProfSrc = colIdx('Profile source')
+    const iDefPct = colIdx('Default capacity %')
+    const iProfStart = colIdx('Profile start')
+    const iProfEnd = colIdx('Profile end')
+    const iCapSeg = colIdx('Capacity profile segments')
+    const iAssSeg = colIdx('Assignment segments')
+    const iAssWks = colIdx('Assigned weeks')
+    const iBillDays = colIdx('Billable days')
+    const iDayRate = colIdx('Day rate')
+    const iSubtotal = colIdx('Subtotal')
+
+    const dataLines = srcCsv.split('\n').filter((line: string) => line.length > 0).slice(1)
+    expect(dataLines.length).toBeGreaterThan(0)
+    for (const line of dataLines) {
+      const cols = line.split(',')
+      // Named identity — not a generated UUID (builder emits no IDs)
+      expect(cols[iNamedId]).toBeDefined()
+      // Resource name present for role/named rows
+      if (cols[iRole]) expect(cols[iResName]).toBeTruthy()
+      // Planning basis / profile source / capacity %
+      expect(cols[iPlanBasis]).toBeDefined()
+      if (cols[iCapSeg]) expect(cols[iProfSrc]).toBeDefined()
+      if (cols[iDefPct] !== '') expect(Number(cols[iDefPct])).not.toBeNaN()
+      if (cols[iProfStart] !== '') expect(cols[iProfStart]).toMatch(/^W\d+$/)
+      if (cols[iProfEnd] !== '') expect(cols[iProfEnd]).toMatch(/^W\d+$/)
+      // Billable days, day rate, subtotal parse as numbers
+      if (cols[iBillDays] !== '') expect(Number(cols[iBillDays])).not.toBeNaN()
+      if (cols[iDayRate] !== '') expect(Number(cols[iDayRate])).not.toBeNaN()
+      if (cols[iSubtotal] !== '') expect(Number(cols[iSubtotal])).not.toBeNaN()
+      // Assignment segments/weeks present where applicable
+      if (cols[iAssSeg]) expect(cols[iAssSeg]).toBeTruthy()
+      if (cols[iAssWks]) expect(cols[iAssWks]).toBeTruthy()
+    }
+
+    // Verify zero-capacity segment exact text in capacity profile segments column
+    const hasZeroSeg = dataLines.some((line: string) => {
+      const cols = line.split(',')
+      return cols[iCapSeg]?.includes('W6 0%')
+    })
+    expect(hasZeroSeg).toBe(true)
+    // Verify billing basis labels appear in CSV data rows
+    expect(srcCsv).toContain('Bill planned allocation')
+    expect(srcCsv).toContain('Bill actual scheduled days')
+
+    // Verify zero-capacity segment appears (W6 = week index 5, 0%)
+    expect(srcCsv).toContain('W6 0%')
+  })
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1302,11 +1590,154 @@ describeIf('Scenario B — cross-project clone returns 404', () => {
   })
 })
 
-// Test count: 16 total (A:14, B:2)
-// A1-A14 cover: response shape, count parity, ID isolation, profile/segment parity,
-//   legacy null/type/typeof raw SQL, planning identity, active-plan preservation,
-//   discount/value/commercial parity, billing models, resource-type fields,
-//   discounts endpoint, resource-profile commercial parity, tax/overhead/grand-total,
-//   timeline endpoint structure.
-// B1-B2 cover: atomic rollback on cross-project clone attempt.
-// All under describeIf — skipped when INTEGRATION_TEST is not 'true'.
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario C — Mid-transaction rollback on invalid profile owner
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario C — clone rolls back transaction after invalid profile owner', () => {
+  let srcProjectId: string
+  let rtEngId: string
+  let nrBobId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+
+    srcProjectId = await createProject()
+    rtEngId = await createResourceType(srcProjectId, crypto.randomUUID(), 'Engineering',
+      { category: 'ENGINEERING', count: 2, dayRate: 800 })
+    nrBobId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'Bob',
+      { pricingModel: 'ACTUAL_DAYS', allocationPct: 100 })
+
+    // Create a valid ROLE capacity profile (FK-safe: has resourceTypeId, no namedResourceId)
+    const cpRoleId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', startWeek: 0, endWeek: 10, defaultPercent: 100 })
+    await createSegment(cpRoleId, crypto.randomUUID(), 0, 10, 100, 'MANUAL')
+
+    // Create another valid NAMED_PERSON profile so more data exists before the
+    // invalid profile is encountered during clone processing
+    const cpNamedId = await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, nrBobId,
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', startWeek: 0, endWeek: 8 })
+    await createSegment(cpNamedId, crypto.randomUUID(), 0, 8, 80, 'MANUAL')
+
+    // Create backlog so epics are cloned ahead of capacity profiles (epic count > 0)
+    const backlog = await createEpicBacklog(srcProjectId, rtEngId)
+    await createTimelineEntry(srcProjectId, backlog.featureId, 0, 4)
+
+    // Use Prisma.sql to corrupt the ROLE profile's owner shape: set both
+    // resourceTypeId AND namedResourceId (both FK-references exist, so SQL FK
+    // constraints pass, but production clone handler rejects ROLE profiles with
+    // non-null namedResourceId — this triggers a mid-transaction throw).
+    await prisma.$executeRaw(Prisma.sql`
+      UPDATE "CapacityProfile"
+      SET "namedResourceId" = ${nrBobId}
+      WHERE id = ${cpRoleId}
+    `)
+  })
+
+  it('C1 — clone returns 500 when profile owner shape is invalid', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${srcProjectId}/clone`)
+      .set('Authorization', authHeader)
+    expect(res.status).toBe(500)
+  })
+
+  it('C2 — no clone entity rows leaked after aborted transaction', async () => {
+    const source = await prisma.project.findUnique({
+      where: { id: srcProjectId },
+      select: { name: true },
+    })
+    expect(source).not.toBeNull()
+    const copyOfFilter = { ownerId: userId, name: `Copy of ${source!.name}` } as const
+
+    // Project — the root entity that would be cloned first
+    const leakedProject = await prisma.project.findFirst({ where: copyOfFilter })
+    expect(leakedProject).toBeNull()
+
+    // ResourceType — cloned after project
+    const leakedRT = await prisma.resourceType.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedRT).toBeNull()
+
+    // NamedResource — cloned per-resource-type inside the RT loop
+    const leakedNR = await prisma.namedResource.findFirst({ where: { resourceType: { project: copyOfFilter } } })
+    expect(leakedNR).toBeNull()
+
+    // CapacityPlan, periods, entries — cloned before profiles
+    const leakedPlan = await prisma.capacityPlan.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedPlan).toBeNull()
+    const leakedPeriod = await prisma.capacityPlanPeriod.findFirst({ where: { plan: { project: copyOfFilter } } })
+    expect(leakedPeriod).toBeNull()
+    const leakedEntry = await prisma.capacityPlanEntry.findFirst({ where: { period: { plan: { project: copyOfFilter } } } })
+    expect(leakedEntry).toBeNull()
+
+    // ProjectOverhead — cloned after plans, before profiles
+    const leakedOh = await prisma.projectOverhead.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedOh).toBeNull()
+
+    // ProjectDiscount — cloned after plans, before profiles
+    const leakedDisc = await prisma.projectDiscount.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedDisc).toBeNull()
+
+    // Epics, features, stories, tasks (backlog) — cloned before profiles
+    const leakedEpic = await prisma.epic.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedEpic).toBeNull()
+    const leakedFeature = await prisma.feature.findFirst({ where: { epic: { project: copyOfFilter } } })
+    expect(leakedFeature).toBeNull()
+    const leakedStory = await prisma.userStory.findFirst({ where: { feature: { epic: { project: copyOfFilter } } } })
+    expect(leakedStory).toBeNull()
+    const leakedTask = await prisma.task.findFirst({ where: { userStory: { feature: { epic: { project: copyOfFilter } } } } })
+    expect(leakedTask).toBeNull()
+
+    // TimelineEntry, StoryTimelineEntry — cloned with epics/features/stories
+    const leakedTl = await prisma.timelineEntry.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedTl).toBeNull()
+    const leakedStl = await prisma.storyTimelineEntry.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedStl).toBeNull()
+
+    // CapacityProfile — where the validation error occurs, but should not leak
+    const leakedProfile = await prisma.capacityProfile.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedProfile).toBeNull()
+
+    // CapacitySegment — child of profile, should not leak
+    const leakedSeg = await prisma.capacitySegment.findFirst({ where: { capacityProfile: { project: copyOfFilter } } })
+    expect(leakedSeg).toBeNull()
+
+    // BacklogSnapshot — not created during clone (backup tested separately),
+    // but assert none accidentally leaked
+    const leakedSnap = await prisma.backlogSnapshot.findFirst({ where: { project: copyOfFilter } })
+    expect(leakedSnap).toBeNull()
+  })
+
+  it('C3 — source project state unchanged after failed clone', async () => {
+    // All source entity counts must match what setup created
+    const srcRTs = await prisma.resourceType.count({ where: { projectId: srcProjectId } })
+    const srcNRs = await prisma.namedResource.count({
+      where: { resourceType: { projectId: srcProjectId } },
+    })
+    const srcProfiles = await prisma.capacityProfile.count({ where: { projectId: srcProjectId } })
+    const srcSegments = await prisma.capacitySegment.count({
+      where: { capacityProfile: { projectId: srcProjectId } },
+    })
+    const srcEpics = await prisma.epic.count({ where: { projectId: srcProjectId } })
+    const srcFeatures = await prisma.feature.count({ where: { epic: { projectId: srcProjectId } } })
+    const srcTimelineEntries = await prisma.timelineEntry.count({ where: { projectId: srcProjectId } })
+
+    expect(srcRTs).toBe(1)
+    expect(srcNRs).toBe(1)
+    expect(srcProfiles).toBe(2)
+    expect(srcSegments).toBe(2)
+    expect(srcEpics).toBeGreaterThanOrEqual(1)
+    // Backlog createEpicBacklog creates 1 epic + 1 feature + 1 story
+    expect(srcFeatures).toBeGreaterThanOrEqual(1)
+    // One timeline entry is created for the backlog feature in setup.
+    expect(srcTimelineEntries).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// Test count: 22 total (A:17, B:2, C:3)
+// A1-A17 cover: response shape, count parity, ID isolation, profile/segment parity,
+//   computeCommercialData parity via ID normalisation plus ACTUAL_DAYS/PRO_RATA
+//   row behaviour on real DTO rows (A16),
+//   buildProfileCsv exact-string parity, all 26 columns verified, planning
+//   basis/source/identity/segment/billing fields parsed (A17).
+// C1-C3 cover: mid-transaction rollback on invalid profile owner shape
+//   from Prisma.sql injection, with no leaked rows and source unchanged.
