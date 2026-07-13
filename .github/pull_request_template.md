@@ -1,6 +1,6 @@
 ## Summary
 
-<!-- What does this PR do? One or two sentences. -->
+<!-- What changed and why? Keep this focused on the user/developer impact. -->
 
 ## Related issue
 
@@ -8,34 +8,65 @@ Closes #
 
 ## Changes
 
-<!-- List the key changes made -->
 -
 -
 -
 
-## E2E Tests
+## Design, data, or migration notes
 
-<!-- List any Playwright tests added or modified in this PR -->
-<!-- e.g. "Added: `backlog.spec.ts` — CSV import shows parse errors on bad file" -->
-<!-- e.g. "Modified: `auth.spec.ts` — updated selector for new sign-in button label" -->
+<!-- Record important decisions, source-of-truth changes, compatibility concerns, or migration impact. Write N/A when none. -->
+
+## Validation
+
+**Repository validation:**
+
+```text
+npm run validate
+# Paste the exact result or explain the blocker.
+```
+
+- [ ] Client and server lint passed
+- [ ] Client and server type-checking passed
+- [ ] Client and server builds passed
+- [ ] Client and server unit/integration tests passed
+- [ ] Backup regression tests passed (Linux and Windows CI)
+- [ ] No unexplained failures were classified as pre-existing
+
+## Security
+
+- [ ] Backup credential handling was verified (PGPASSWORD used, no credential-bearing process arguments)
+
+## E2E tests
+
+<!-- List Playwright tests added or modified, with spec and test name. -->
 
 **Tests added/modified:**
+
 -
 
-**E2E test results (`npm run test:e2e`):**
+**Result:**
+
+```text
+npm run test:e2e:local
+# Paste the exact result, or state N/A with the reason and focused tests used instead.
 ```
-# Paste output here, e.g.:
-# 20 passed (chromium)
-```
 
-## Testing
+- [ ] Playwright coverage was added/updated for changed user-visible behaviour, or E2E is explicitly not applicable
+- [ ] `e2e/TESTS.md` was updated when Playwright coverage changed
 
-- [ ] `npm test` passes in `/server`
-- [ ] `npx tsc --noEmit` passes in `/server`
-- [ ] `npx tsc --noEmit` passes in `/client`
-- [ ] `npm run test:e2e` passes (Playwright — requires dev servers on :3001 and :5173)
-- [ ] `e2e/TESTS.md` updated to reflect any test additions or changes
+## Documentation and screenshots
 
-## Notes
+- [ ] Relevant README, contributing, setup, architecture, or domain documentation is current
+- [ ] Screenshots were regenerated for new pages or material layout changes, or are not applicable
 
-<!-- Anything the reviewer should be aware of -->
+## Risks and follow-ups
+
+<!-- Note known limitations, operational risks, deferred cleanup, or follow-up issues. Write None when there are none. -->
+
+## Review control
+
+- [ ] This PR is ready for human review
+- [ ] Auto-merge is not enabled
+- [ ] The tracked issue will be closed by `Closes #N`
+
+**Do not merge — wait for review.**
