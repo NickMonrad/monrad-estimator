@@ -691,6 +691,30 @@ describe('clone commercial parity', () => {
     // Alice: 10 actual days × $800/day = $8,000
     expect(aliceRow![BILL_DAYS]).toBe('10')
     expect(aliceRow![SUBTOTAL]).toBe('8000.00')
+    expect(aliceRow![COUNT_COL]).toBe('2')
+    expect(aliceRow![HOURS_DAY]).toBe('8')
+    expect(aliceRow![EFFORT]).toBe('20')
+    expect(aliceRow![ASSIGNED]).toBe('10')
+    expect(aliceRow![DAY_RATE]).toBe('800')
+    expect(aliceRow![ASSN_SEGMENTS]).toBe('W1-W4 (10.00d)')
+    expect(aliceRow![ASSN_WEEKS]).toBe('W1=2.50; W2=2.50; W3=2.50; W4=2.50')
+
+    expect(qaRow![COUNT_COL]).toBe('1')
+    expect(qaRow![HOURS_DAY]).toBe('8')
+    expect(qaRow![EFFORT]).toBe('5')
+    expect(qaRow![ASSIGNED]).toBe('5')
+    expect(qaRow![DAY_RATE]).toBe('400')
+    expect(qaRow![ASSN_SEGMENTS]).toBe('')
+    expect(qaRow![ASSN_WEEKS]).toBe('')
+
+    expect(qaLeadRow![COUNT_COL]).toBe('1')
+    expect(qaLeadRow![HOURS_DAY]).toBe('8')
+    expect(qaLeadRow![EFFORT]).toBe('5')
+    expect(qaLeadRow![ASSIGNED]).toBe('5')
+    expect(qaLeadRow![DAY_RATE]).toBe('500')
+    expect(qaLeadRow![ASSN_SEGMENTS]).toBe('')
+    expect(qaLeadRow![ASSN_WEEKS]).toBe('')
+
 
     // ── PRO_RATA NR assertions (Bob) ────────────────────────────────
     const bobRow = sourceRows.find(r => r[RES_NAME] === 'Bob')
@@ -720,6 +744,21 @@ describe('clone commercial parity', () => {
     expect(pmRow![SECTION]).toBe('Overhead')
     expect(pmRow![BILL_DAYS]).toBe('')      // Overheads show computedDays in "Assigned days"
     expect(pmRow![SUBTOTAL]).toBe('5000')   // estimatedCost
+    expect(bobRow![COUNT_COL]).toBe('2')
+    expect(bobRow![HOURS_DAY]).toBe('8')
+    expect(bobRow![EFFORT]).toBe('20')
+    expect(bobRow![ASSIGNED]).toBe('10')
+    expect(bobRow![DAY_RATE]).toBe('800')
+    expect(bobRow![ASSN_SEGMENTS]).toBe('')
+    expect(bobRow![ASSN_WEEKS]).toBe('')
+
+    expect(pmRow![COUNT_COL]).toBe('')
+    expect(pmRow![HOURS_DAY]).toBe('')
+    expect(pmRow![EFFORT]).toBe('')
+    expect(pmRow![ASSIGNED]).toBe('5')
+    expect(pmRow![DAY_RATE]).toBe('')
+    expect(pmRow![ASSN_SEGMENTS]).toBe('')
+    expect(pmRow![ASSN_WEEKS]).toBe('')
 
     // ── Header coverage ──────────────────────────────────────────────
     // Verify all expected headers are present
