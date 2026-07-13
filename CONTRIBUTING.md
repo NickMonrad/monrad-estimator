@@ -101,7 +101,7 @@ Before a Prisma schema migration or other operation that may alter persistent de
 
 `npm run db:backup` is the required repository entry point. It must work on Windows, macOS, and Linux and support both documented local PostgreSQL setups:
 
-- automatic mode uses host `pg_dump` for the exact configured `DATABASE_URL`
+- automatic mode uses host `pg_dump` for the exact configured `DATABASE_URL`; the password is extracted and delivered through `PGPASSWORD` rather than appearing on the command line
 - explicit `MONRAD_DB_MODE=docker` uses the named Docker container (default `monrad-pg`)
 - explicit `MONRAD_DB_MODE=host` uses host `pg_dump`
 
