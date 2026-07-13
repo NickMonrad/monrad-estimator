@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const backupDir = process.env.MONRAD_BACKUP_DIR ?? path.join(root, 'backups')
 const container = process.env.MONRAD_DB_CONTAINER ?? 'monrad-pg'
 const timestamp = formatTimestamp(new Date())
-const destination = path.join(backupDir, `backup-${timestamp}-${process.pid}-${crypto.randomUUID()}.dump`)
+let destination = path.join(backupDir, `backup-${timestamp}-${process.pid}-${crypto.randomUUID()}.dump`)
 const temporaryDestination = `${destination}.tmp-${process.pid}`
 const containerPath = `/tmp/monrad-backup-${timestamp}-${process.pid}.dump`
 let mode = 'host'
@@ -27,7 +27,7 @@ try {
   }
 
   verifyDump(temporaryDestination)
-  fs.renameSync(temporaryDestination, destination)
+  destination = finalizeDump(temporaryDestination, destination)
   console.log(`Backup saved to ${destination}`)
 } catch (error) {
   removeIfPresent(temporaryDestination)
@@ -57,31 +57,88 @@ function resolveConfig(repositoryRoot) {
     throw new Error(`DATABASE_URL must use postgres:// or postgresql://, received ${parsed.protocol}`)
   }
 
-  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
-  if (!database) throw new Error('DATABASE_URL must include a database name')
-
-  const authorityPassword = parsed.password ? decodeURIComponent(parsed.password) : null
-  const queryPasswords = parsed.searchParams.getAll('password')
-  if (queryPasswords.length > 1) {
-    throw new Error('DATABASE_URL must include at most one password query parameter')
+  let database
+  let authorityPassword
+  let queryPassword
+  let sanitizedUrl
+  try {
+    database = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
+    authorityPassword = parsed.password ? decodeURIComponent(parsed.password) : null
+    const query = extractPasswordQueryParameters(databaseUrl)
+    queryPassword = query.password
+    sanitizedUrl = sanitizeConnectionUrl(databaseUrl, parsed, query.rawQuery)
+  } catch (error) {
+    if (error instanceof Error && error.message === 'DATABASE_URL must include at most one password query parameter') {
+      throw error
+    }
+    throw new Error('DATABASE_URL contains malformed percent-encoding')
   }
-  const queryPassword = queryPasswords[0] ?? null
+
+  if (!database) throw new Error('DATABASE_URL must include a database name')
   if (authorityPassword !== null && queryPassword !== null && authorityPassword !== queryPassword) {
     throw new Error('DATABASE_URL authority and query passwords conflict')
   }
 
-  // Build sanitized URL with every password removed.
-  const sanitizedUrl = new URL(parsed)
-  sanitizedUrl.password = ''
-  sanitizedUrl.searchParams.delete('password')
-
   return {
-    databaseUrl: sanitizedUrl.href,
+    databaseUrl: sanitizedUrl,
     database,
     user: decodeURIComponent(parsed.username) || process.env.POSTGRES_USER || fileValues.POSTGRES_USER || 'postgres',
     host: parsed.hostname,
     password: authorityPassword ?? queryPassword,
   }
+}
+
+function extractPasswordQueryParameters(databaseUrl) {
+  const fragmentIndex = databaseUrl.indexOf('#')
+  const withoutFragment = fragmentIndex >= 0 ? databaseUrl.slice(0, fragmentIndex) : databaseUrl
+  const queryIndex = withoutFragment.indexOf('?')
+  if (queryIndex < 0) return { password: null, rawQuery: '' }
+
+  const rawQuery = withoutFragment.slice(queryIndex + 1)
+  const retained = []
+  let password = null
+  let passwordCount = 0
+
+  for (const component of rawQuery.split('&')) {
+    const separatorIndex = component.indexOf('=')
+    const rawKey = separatorIndex >= 0 ? component.slice(0, separatorIndex) : component
+    let decodedKey
+    try {
+      decodedKey = decodeURIComponent(rawKey)
+    } catch {
+      throw new Error('malformed query parameter encoding')
+    }
+
+    if (decodedKey !== 'password') {
+      retained.push(component)
+      continue
+    }
+
+    passwordCount += 1
+    if (passwordCount > 1) {
+      throw new Error('DATABASE_URL must include at most one password query parameter')
+    }
+    const rawValue = separatorIndex >= 0 ? component.slice(separatorIndex + 1) : ''
+    try {
+      password = decodeURIComponent(rawValue)
+    } catch {
+      throw new Error('malformed password query encoding')
+    }
+  }
+
+  return { password, rawQuery: retained.join('&') }
+}
+
+function sanitizeConnectionUrl(databaseUrl, parsed, rawQuery) {
+  const fragmentIndex = databaseUrl.indexOf('#')
+  const rawFragment = fragmentIndex >= 0 ? databaseUrl.slice(fragmentIndex) : ''
+  const sanitized = new URL(parsed)
+  sanitized.password = ''
+  const queryOrFragmentIndex = [sanitized.href.indexOf('?'), sanitized.href.indexOf('#')]
+    .filter(index => index >= 0)
+    .sort((a, b) => a - b)[0]
+  const base = queryOrFragmentIndex === undefined ? sanitized.href : sanitized.href.slice(0, queryOrFragmentIndex)
+  return `${base}${rawQuery ? `?${rawQuery}` : ''}${rawFragment}`
 }
 
 function readEnvFile(filename) {
@@ -123,26 +180,18 @@ function resolveCommand(name, defaultCommand) {
  * |----------------|---------------------|--------|
  * | `"docker"`     | —                   | docker |
  * | `"host"`       | —                   | host   |
- * | *(unset)*      | set                 | docker |
- * | *(unset)*      | *(unset)*           | host   |
+ * | *(unset)*      | set or unset       | host   |
  * | other value    | —                   | error  |
  *
- * Setting MONRAD_DB_CONTAINER is an explicit opt-in to Docker mode;
- * the script never probes the Docker daemon. Automatic mode defaults
- * to host — a local database URL does not prove that a same-named
- * container owns the endpoint.
+ * MONRAD_DB_CONTAINER only overrides the container name after Docker mode
+ * has been selected explicitly with MONRAD_DB_MODE=docker.
  */
 function resolveMode() {
   const requested = process.env.MONRAD_DB_MODE?.toLowerCase()
   if (requested && requested !== 'docker' && requested !== 'host') {
     throw new Error('MONRAD_DB_MODE must be either docker or host')
   }
-  if (requested) return requested
-  if (process.env.MONRAD_DB_CONTAINER) return 'docker'
-
-  // Automatic mode is deliberately conservative: a local URL does not prove
-  // that a same-named Docker container owns the configured endpoint.
-  return 'host'
+  return requested ?? 'host'
 }
 
 function createDockerBackup(databaseConfig, containerName, remotePath, localPath) {
@@ -214,4 +263,19 @@ function formatTimestamp(date) {
     pad(date.getMinutes()),
     pad(date.getSeconds()),
   ].join('')
+}
+
+function finalizeDump(filename, initialDestination) {
+  let candidate = initialDestination
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      fs.linkSync(filename, candidate)
+      fs.rmSync(filename, { force: true })
+      return candidate
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+      candidate = path.join(backupDir, `backup-${timestamp}-${process.pid}-${crypto.randomUUID()}.dump`)
+    }
+  }
+  throw new Error('backup finalization failed: could not reserve a unique destination')
 }
