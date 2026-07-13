@@ -130,10 +130,7 @@ function createDockerBackup(databaseConfig, containerName, remotePath, localPath
 
 function createHostBackup(databaseConfig, localPath) {
   const pgDump = process.env.MONRAD_PG_DUMP_COMMAND ?? 'pg_dump'
-  const env = {}
-  if (databaseConfig.password) {
-    env.PGPASSWORD = databaseConfig.password
-  }
+  const env = { PGPASSWORD: databaseConfig.password ?? undefined }
   run(pgDump, ['--format=custom', '--file', localPath, '--dbname', databaseConfig.databaseUrl], { context: 'host backup', env })
 }
 
