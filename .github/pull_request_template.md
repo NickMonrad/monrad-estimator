@@ -8,9 +8,9 @@ Closes #
 
 ## Changes
 
-- 
-- 
-- 
+-
+-
+-
 
 ## Design, data, or migration notes
 
@@ -38,7 +38,7 @@ npm run validate
 
 **Tests added/modified:**
 
-- 
+-
 
 **Result:**
 
