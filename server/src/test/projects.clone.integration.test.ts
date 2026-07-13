@@ -1405,6 +1405,7 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
         row.resourceTypeId = normaliseId(row.resourceTypeId, rtM, nrM, dM, overheadM, pId)
         for (const ad of row.appliedDiscounts) {
           ad.id = normaliseId(ad.id, rtM, nrM, dM, overheadM, pId)
+          if (ad.projectId) ad.projectId = normaliseId(ad.projectId, rtM, nrM, dM, overheadM, pId)
           if (ad.resourceTypeId) ad.resourceTypeId = normaliseId(ad.resourceTypeId, rtM, nrM, dM, overheadM, pId)
           if (ad.resourceType) {
             ad.resourceType.id = normaliseId(ad.resourceType.id, rtM, nrM, dM, overheadM, pId)
