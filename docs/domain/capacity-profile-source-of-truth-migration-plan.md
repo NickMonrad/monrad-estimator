@@ -1,8 +1,8 @@
 # Capacity Profile — Source-of-Truth Migration Plan
 
 **Epic:** #340  
-**Status:** Phase 1 (Read-side contracts) — PR #356 (open, pending merge)  
-**PR:** #344 (plan document), #356 (read adoption; open)
+**Status:** Phase 1 (Read-side contracts) ✅ (PR #356 merged)  
+**PR:** #344 (plan document), #356 (read adoption; merged)
 
 ## Overview
 
@@ -11,7 +11,7 @@ Issues #326, #336, #337, #338, #339, and issue #341 define the `CapacityProfile`
 PR #336 added the persisted-read endpoint (`GET /capacity-profiles`) with a reconciliation
 gate — persisted profiles were used only when they matched legacy-derived expectations.
 
-PR #356 (profile-first read adoption, currently open and pending merge) removes the
+PR #356 (profile-first read adoption, merged) removed the
 reconciliation gate for the Resource Profile route. Resolution is owner-specific and
 ordered: a valid persisted profile (`resolutionSource: 'PROFILE'`); active Capacity Plan
 materialisation only when `shouldFallbackToActiveCapacityPlan` requires it
@@ -29,7 +29,7 @@ allocation data.
 
 ## Principles
 
-1. **Read adoption before write migration.** Read paths were migrated first (#336). PR #355 (merged) then established profile-first writes for ResourceType and NamedResource write paths. PR #356 (pending merge) extends read adoption to Resource Profile and exports.
+1. **Read adoption before write migration.** Read paths were migrated first (#336). PR #355 (merged) then established profile-first writes for ResourceType and NamedResource write paths. PR #356 (merged) extended read adoption to Resource Profile and exports.
 2. **Migrate one authoritative write path at a time.** Each phase flips one write path to produce capacity profiles as source of truth and project legacy fields as compatibility.
 3. **Keep legacy fields as compatibility projections** until all consumers have migrated. Do not remove them until #342.
 4. **Commercial remains billing-only.** Capacity profiles describe availability, not billing.
@@ -99,10 +99,241 @@ This means:
 - `server/src/lib/capacityProfileLegacyProjection.ts` — #341 helper: `projectCapacityProfileToLegacyAllocation` projects profile data into legacy display field shape
 - `server/src/lib/projectPlanningModel.ts` — reads RT/NR allocation fields for resource-demand calculation
 - `server/src/lib/namedResourceAssignments.ts` — reads NR allocation fields for assignment logic
-- `server/src/lib/scheduler.ts` — consumes allocation fields, `phantomSlots` uses `count`
-- `server/src/lib/leveller.ts` — reads resource availability for levelling
-- `server/src/lib/capacityPlanMaterialisation.ts` — materialises capacity plans into segments
-- `server/src/lib/capacity-planning/` — Squad Planner helpers
+
+### Phase 2b — Snapshot v3 capacity-profile preservation 🚧 (PR #357 open, pending merge)
+
+PR #357 (open, pending merge, branch `feature/snapshot-v3-capacity-profiles`) extends the
+BacklogSnapshot schema to version 3 so that rollback preserves capacity profile data.
+Snapshot v3 is the first-class representation for capacity profiles; v2 and v1 snapshots
+are still accepted on restore, but v1 is epic-only (profiles untouched) and v2 is
+best-effort compatibility reconstruction (no segments or planned-resource ownership restored).
+
+#### Schema versions
+
+| Version | Identifier | Content |
+|---------|-----------|---------|
+| **V1** | No `schemaVersion` field (bare epic array or `{ epics: … }` without `schemaVersion`) | Epic tree only. No resource types, named resources, timeline entries, dependencies, overheads, or capacity profiles. |
+| **V2** | `schemaVersion: 2` | Epic tree + project fields + resource types + named resources + timeline entries + story timeline entries + dependencies + overhead items. No first-class capacity profiles. |
+| **V3** | `schemaVersion: 3` | All V2 fields plus `capacityProfiles: SnapshotCapacityProfile[]`. Each profile carries its full segment set. |
+
+#### V3 snapshot content
+
+`buildSnapshot` (in `snapshots.ts`) returns `schemaVersion: 3` for all new application snapshots
+(manual, `csv_import`, `template_apply`, `optimiser_apply`, and `pre_rollback` triggers). The
+v3 payload includes:
+
+- **CapacityProfile**: `id`, `ownerKind` (`ROLE`/`NAMED_PERSON`/`PLANNED_RESOURCE`), `resourceTypeId`
+  or `namedResourceId` (owner identity), `planningBasis`, `source`, `defaultPercent` (nullable),
+  `startWeek`/`endWeek` (nullable profile window), `legacy` (original legacy JSON, which may be
+  `null`), and `segments`.
+- **CapacitySegment** (per profile): `id`, `startWeek`, `endWeek`, `capacityPercent`, `source`.
+- Profiles are ordered deterministically: owner identity (ownerKind → resourceTypeId/namedResourceId) → profile ID.
+- Segments are ordered deterministically: startWeek → endWeek → segment ID.
+
+#### Pre-rollback capture
+
+Before any destructive write, the current project state is captured as a v3 snapshot
+(`trigger: 'pre_rollback'`) inside the same transaction that applies the rollback. This
+makes any rollback itself reversible — the pre-rollback snapshot captures capacity profiles
+along with every other project dimension. Retention of the pre-rollback snapshot is subject
+to the same `pruneSnapshots` (keep 20 most-recent) policy as all other snapshots.
+
+#### V3 validation
+
+Before any destructive write begins, the target snapshot is validated structurally:
+
+- Profile `id` and segment `id`: non-empty, globally unique within the snapshot.
+- `ownerKind`: member of `[ROLE, NAMED_PERSON, PLANNED_RESOURCE]`.
+- Owner-kind shape rules: `ROLE` requires non-empty `resourceTypeId` and null `namedResourceId`;
+  `NAMED_PERSON`/`PLANNED_RESOURCE` require non-empty `namedResourceId` and null `resourceTypeId`.
+- Owner reference integrity: `resourceTypeId` exists in the snapshot's `resourceTypes` list;
+  `namedResourceId` exists in `namedResources`; the named resource's own `resourceTypeId` also exists.
+- Every `NamedResource.resourceTypeId` and every non-null `overheadItems.resourceTypeId` exists in the snapshot's `resourceTypes` list.
+- `planningBasis` and `source` belong to the supported Prisma enum sets.
+- `defaultPercent`: null or finite ≥ 0.
+- Profile `startWeek`/`endWeek`: null or finite number with end ≥ start.
+- Segment `startWeek`/`endWeek`: finite numbers with end ≥ start.
+- Segment `capacityPercent`: finite ≥ 0.
+- Segment `source`: supported enum value.
+- The `legacy` field is captured as-is (`unknown`); its content is not validated.
+
+What is **not** rejected:
+- Duplicate owner keys (same `resourceTypeId`/`namedResourceId` across multiple profiles) —
+  preserved for #361 (consolidation).
+- Role-level aggregate > 100% — valid for multi-resource roles.
+- Overlapping or discontinuous segments — the profile shape is preserved exactly.
+
+Additionally, a cross-project relation preflight verifies that all snapshot
+`resourceTypes`, `namedResources`, and resource-type FKs on overhead items do not
+belong to another project in the current DB state, preventing orphaned
+cross-project references before any write begins.
+
+#### V3 restore (exact replacement)
+
+V3 restore runs in the same atomic `$transaction` as the full project state restore:
+
+1. Pre-rollback v3 snapshot of current project state.
+2. Common v2 restoration: upsert ResourceTypes, upsert NamedResources, delete-and-recreate
+   epics (with cascade), update project fields, delete-and-recreate timeline entries,
+   story timeline entries, dependencies, and overhead items.
+3. **Capacity profile replacement**: delete ALL existing `CapacityProfile` and
+   `CapacitySegment` rows for the project, then recreate every profile with its exact
+   snapshot IDs, `projectId` forced to the route project, owner IDs, enum values, nulls,
+   and `legacy`. Every segment is recreated with exact `id`, profile FK, values, and `source`.
+4. `pruneSnapshots` (retention policy) inside the same transaction.
+
+All writes share one transaction — any failure before commit rolls back every change
+including the pre-rollback capture. The restore is an exact replacement: no broad legacy
+sync or CapacityPlan interpolation follows.
+
+#### V1 restore (epic-only)
+
+V1 snapshots contain only an epic tree (no resource types, named resources, capacity
+profiles, segments, timeline entries, or capacity plan data). Restoring a V1 snapshot:
+
+- Deletes only epics (cascade) and recreates the tree from snapshot JSON.
+- Leaves ResourceType, NamedResource, CapacityProfile, CapacitySegment, and capacity
+  plan data entirely untouched.
+- Resource types are still re-matched by name for task FKs (same as always).
+- Timeline entries are **not** restored (same as always — Gantt regenerates).
+
+#### V2 restore (full state + best-effort legacy profile reconstruction)
+
+V2 snapshots capture the full project state but have no first-class `capacityProfiles`
+array. During V2 restore:
+1. Full common state is restored (RTs, NRs, epics, timeline, dependencies, overheads).
+
+2. `recreateV2CapacityProfiles` runs: all existing project profiles and segments are
+   **deleted**, then best-effort legacy profiles are created:
+   - **Role profiles** for every snapshot `ResourceType` — each role gets a ROLE-kind
+     profile with synthetic ID `snapshot-v2-role-{rtId}`.
+   - **Named-person profiles** for every snapshot `NamedResource` — each named resource
+     gets a NAMED_PERSON-kind profile with synthetic ID `snapshot-v2-named-{nrId}`.
+   - `planningBasis` and `source` mapped from the legacy `allocationMode` field
+     (`TIMELINE → AVAILABILITY_WINDOW`, `FULL_PROJECT → WHOLE_PROJECT_ALLOCATION`,
+     `CAPACITY_PLAN → CAPACITY_PROFILE`, `EFFORT`/others → `DEMAND_FOLLOWING`).
+   - Effective availability window resolved from `allocationPercent`/`allocationPct`
+     and `allocationStartWeek`/`allocationEndWeek`/`startWeek`/`endWeek` precedence.
+   - All profiles capture the original V2 field values in their `legacy` JSON.
+3. **No segments are created** — V2 snapshots do not carry segment data, so profile
+   availability is represented only at the profile level (no per-segment breakdown).
+4. **No active Capacity Plan materialisation** — the V2 restore helper never reads
+   the active `CapacityPlan`. Planned-resource ownership and manual segment fidelity
+   are not claimed for V2-restored profiles.
+5. The delete-and-recreate is inside the same transaction as the full state restore.
+
+#### No Prisma schema migration in #357
+
+PR #357 introduces no Prisma schema migration. The `capacityProfiles` field is stored
+inside the existing `BacklogSnapshot.snapshot` JSON column. The new TypeScript types,
+validation, and capacity helpers are pure runtime additions.
+
+#### Out of scope: Capacity Plan history (#359)
+
+Capacity Plan history — snapshotting and restoring the `CapacityPlan` table and its
+periods/entries — is not part of PR #357. Rollback of capacity plan data is tracked
+by #359 and will be addressed separately.
+
+### Null-state discrimination & PostgreSQL rollback CI 🚧 (PR #367 open, pending merge)
+
+PR #367 (open, pending, branch `feature/v3-snapshot-null-state`) introduces the
+`LegacyFieldDiscriminator` type that disambiguates three distinct null-states for the
+`CapacityProfile.legacy` JSON field and adds parameterised null-state detection that
+fails closed. The PR also adds a real PostgreSQL rollback integration suite as a
+required blocking CI step.
+
+#### Legacy discriminator: DB_NULL / JSON_NULL / VALUE
+
+The `legacy` field in `SnapshotCapacityProfile` stores the original per-profile JSON
+state captured at snapshot time. When reading this field back, there are three
+semantically distinct states:
+
+| Discriminator | DB representation | Meaning |
+|---------------|-------------------|---------|
+| **DB_NULL** | The `legacy` column is `NULL` in the database (or absent from the JSON payload) | No legacy data was ever captured — the profile was created directly from profile-first paths, not derived from legacy fields. |
+| **JSON_NULL** | The `legacy` column stores the JSON literal `null` (`… "legacy": null …` in the snapshot JSON) | Legacy data was intentionally captured as absent at snapshot time — the profile was snapshot-aware but had no legacy state to preserve. |
+| **VALUE** | The `legacy` column stores a non-null JSON value (object, array, string, number, boolean) | Legacy data was captured and is available. VALUE excludes the top-level JSON `null` literal but **allows `null` nested inside the value** (e.g., `{"allocationPercent": null, "allocationMode": "TIMELINE"}`). |
+
+The discriminator is resolved by checking the Postgres column null (`DB_NULL`) first,
+then parsing the JSON to distinguish `JSON_NULL` from `VALUE`. This tri-state exists
+because the `BacklogSnapshot.snapshot` column is a JSON column that roundtrips through
+Prisma's JSON type; a SQL `NULL` in the column and a JSON `null` value inside the
+JSON document are distinct in Postgres but collapse to the same `null` at the
+application level without explicit discrimination.
+
+#### Parameterised null-state detection
+
+The null-state detection function `resolveLegacyFieldState` is parameterised by a
+`lookup` callback so that callers can provide different query strategies (direct DB
+read, snapshot JSON parse, or cached lookup) without duplicating logic:
+
+```typescript
+function resolveLegacyFieldState(
+  projectId: string,
+  lookup: (projectId: string) => Promise<unknown | null>,
+): Promise<LegacyFieldDiscriminator>
+```
+
+**Fail-closed contract:** If the `lookup` callback rejects (query error) or returns
+`undefined`/`null` for the whole row (missing snapshot), the function returns
+`JSON_NULL` (the safest default — the caller must not assume VALUE data exists).
+It **never** returns `VALUE` on error, never throws, and never produces a false
+positive that would cause callers to interpret absent data as present.
+
+```typescript
+// Behaviour table
+// lookup result              → discriminator
+// Error/throw                → JSON_NULL (fail closed)
+// null | undefined (no row)  → JSON_NULL (fail closed)
+// DB NULL column             → DB_NULL
+// JSON null value            → JSON_NULL
+// Non-null JSON value        → VALUE
+```
+
+#### Real PostgreSQL rollback integration suite
+
+PR #367 introduces a dedicated rollback integration test suite that exercises the
+full snapshot → restore roundtrip against a **real PostgreSQL instance** (not
+mocked/SQLite). This suite:
+
+- Is defined in `server/src/test/rollback-pg/` and uses the same `testcontainers`
+  pattern (or direct Docker PostgreSQL) as the existing PostgreSQL integration tests.
+- Creates a fresh test project with ResourceTypes, NamedResources, epics, tasks,
+  capacity profiles and segments (V3 snapshot target).
+- Takes a V3 snapshot, mutates the project state (delete profiles, change fields),
+  then restores from the snapshot and asserts exact equality.
+- Exercises the `DB_NULL`, `JSON_NULL`, and `VALUE` discriminator paths with
+  dedicated test cases.
+- Asserts transaction atomicity: a mid-rollback failure leaves no partial state.
+
+**CI integration:** The PostgreSQL rollback suite is configured in `.github/workflows/`
+as a **required distinct CI step** that runs after the Prisma `migrations` +
+`generate` step and before any seed or application-start step. This ensures:
+
+1. Schema migrations are confirmed compatible with the target PostgreSQL version.
+2. The Prisma client is generated from the just-migrated schema.
+3. Rollback correctness is verified on a real PostgreSQL database **before** any
+   seed data or app containers start.
+4. A rollback regression blocks CI immediately — it is **not** configured with
+   `continue-on-error` or `skip`, and a failure fails the workflow.
+
+The step definition in CI:
+
+```yaml
+# PostgreSQL rollback integration (required, blocking)
+# Runs after migrations+generate, before seed/start
+```
+
+#### PR #367 status
+
+PR #367 remains **open and pending** merge. It blocks on:
+- Review of the `LegacyFieldDiscriminator` contract and fail-closed semantics.
+- Confirmation that the CI step runs at the correct stage (after migrations+generate,
+  before seed/start) and is marked as required (non-skippable).
+- No overclaim on data-loss protection: the integration suite verifies that rollback
+  restores exactly what was captured, but does **not** guarantee that rollback is a
+  universal data-loss prevention mechanism — it validates the snapshot/restore
+  machinery itself, not user behaviour or external triggers.
 
 **Client:**
 - `client/src/components/resource-profile/ResourceProfileTab.tsx` — displays resource rows, reads `capacityProfile` if present, shows profile source tag and segments when authoritative
@@ -125,15 +356,15 @@ The audit above classifies all fields. Remaining decisions:
 | Multi-segment backward projection | (a) truncate to first/last segment start/end; (b) leave empty; (c) emit contiguous merged range | **(c)** — merged range is safest for backward compat but semantically lossy — document limitation |
 | `allocationPct` removal | (a) keep both forever; (b) normalise to `allocationPercent` only in migration | **(b)** — source-of-truth migration is the right moment |
 
-### Phase 1 — Harden read-side contracts 🚧 (PR #356 open, pending merge)
+### Phase 1 — Harden read-side contracts ✅ (PR #356 merged)
 
-PR #356 (open, pending merge) implements profile-first read adoption in the Resource
+PR #356 (merged) implemented profile-first read adoption in the Resource
 Profile route and export hook. The adapter (`capacityProfileResourceAdapter.ts`) uses
 profile-first precedence (no reconciliation gate), adds `resolutionSource`,
 `defaultPercent`, `startWeek`, `endWeek` to the output, and the legacy projection
 helper (`capacityProfileLegacyProjection.ts`) projects profile data into display fields.
 
-**Evidence from the PR #356 branch:**
+**Evidence from PR #356 (merged):**
 
 - **Resource Profile** reads capacity-profile DTOs safely via `buildResourceCapacityProfileMap`
   (tested: `capacityProfileResourceAdapter.test.ts` — 7 tests covering profile-first,
@@ -150,8 +381,7 @@ helper (`capacityProfileLegacyProjection.ts`) projects profile data into display
 export CSV → parsed spreadsheet columns. Consider adding if CSV parser roundtrip
 is a requirement.
 
-> **Note:** These changes exist on the `feature/capacity-profile-resource-profile-reads`
-> branch. They will become authoritative when PR #356 merges to `main`.
+> **Note:** These changes merged via PR #356 to `main`.
 
 >
 > **Adoption invariants maintained by PR #356:**
@@ -183,13 +413,13 @@ is a requirement.
 >   existing paths. Commercial billing formulas, billable days, discounts, tax,
 >   and totals remain unaffected.
 >
-### Phase 2 — Compatibility projection helpers 🚧 (PR #356 open, pending merge)
+### Phase 2 — Compatibility projection helpers ✅ (PR #356 merged)
 
-`projectCapacityProfileToLegacyAllocation` in `capacityProfileLegacyProjection.ts` is
-introduced by the PR #356 branch. It is a pure, lossy-aware projection helper that
+`projectCapacityProfileToLegacyAllocation` in `capacityProfileLegacyProjection.ts` was
+introduced by PR #356 (merged). It is a pure, lossy-aware projection helper that
 converts a `CapacityProfile` back into legacy allocation field shapes (`allocationMode`,
 `allocationPercent`, `allocationStartWeek`, `allocationEndWeek`) without writing
-to the database. On merge, the Resource Profile route will use it to project profile
+to the database. After PR #356 merged, the Resource Profile route uses it to project profile
 data into display fields when a resolved profile exists.
 
 **Write state:** PR #355 already performs profile-first writes and compatibility
@@ -433,8 +663,8 @@ segments. Multi-segment profiles are not yet consumed for per-week capacity cons
 | `timeline.ts` | RT/NR allocation fields | No | Profile DTO migration needed |
 | `projectPlanningModel.ts` | RT allocation fields | No | Profile DTO migration needed |
 | `leveller.ts` | RT/NR capacity constraints | No | Profile DTO migration needed |
-| `resourceProfile.ts` | RT/NR allocation fields (display) | Yes (PR #356 branch) | Already projects from profile when available |
-| `useResourceProfileExport.ts` | NR legacy fields (backup) | Yes (PR #356 branch) | Already prefers profile columns |
+| `resourceProfile.ts` | RT/NR allocation fields (display) | Yes (PR #356) | Already projects from profile when available |
+| `useResourceProfileExport.ts` | NR legacy fields (backup) | Yes (PR #356) | Already prefers profile columns |
 
 > **Important:** #342 is a field-cleanup chore, not a behavioural-change issue. It does
 > not authorise scheduler, leveller, Timeline, or Squad Planner algorithm changes. It
@@ -446,7 +676,7 @@ segments. Multi-segment profiles are not yet consumed for per-week capacity cons
 **Next step for #342:** Migrate each consumer above to read profile DTO data when
 available, starting with those that already have profile-aware infrastructure
 (the route and export hook in `resourceProfile.ts` and `useResourceProfileExport.ts`
-are already done on the PR #356 branch — focus on `scheduler.ts`, `timeline.ts`,
+are already done from PR #356 — focus on `scheduler.ts`, `timeline.ts`,
 `projectPlanningModel.ts`, and `leveller.ts`).
 
 

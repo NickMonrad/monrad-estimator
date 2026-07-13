@@ -52,6 +52,11 @@ jobs:
       - name: Install all dependencies
         run: npm ci
 
+      # ── Client snapshot regression tests ─────────────────────────
+      - name: Client snapshot regression tests
+        working-directory: client
+        run: npx vitest run src/test/canonical-commercial-consistency.test.ts src/test/resource-profile-export.test.ts
+
       # ── Validate local E2E runner ─────────────────────────────────
       - name: Validate local E2E runner loads env correctly
         run: node scripts/run-e2e-local.mjs --validate
@@ -86,6 +91,11 @@ jobs:
       - name: Generate Prisma client
         working-directory: server
         run: npx prisma generate
+
+      # ── Snapshot rollback integration tests (real PostgreSQL) ──
+      - name: Snapshot rollback integration tests
+        working-directory: server
+        run: npm run test:snapshot-integration
 
       - name: Seed database (creates E2E test user)
         working-directory: server
