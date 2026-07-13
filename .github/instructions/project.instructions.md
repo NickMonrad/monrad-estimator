@@ -125,7 +125,7 @@ When multiple screens consume the same concept, fix or extend the owning domain 
 
 Before any Prisma schema migration or other operation that can alter stored data:
 
-1. Identify the configured database from `DATABASE_URL` or the selected environment file (`MONRAD_ENV_FILE`, default `server/.env`) and any explicit backup-tool overrides. Confirm whether PostgreSQL is running in the default Docker container or directly on the host.
+1. Identify the configured database from `server/.env`, `DATABASE_URL`, and any explicit backup-tool overrides. Confirm whether PostgreSQL is running in the default Docker container or directly on the host.
 2. Run `npm run db:backup` from the repository root.
 3. Confirm the command backed up the configured database and produced a non-empty timestamped dump in `backups/`.
 4. Record the backup method and output path in the implementation handoff or PR description.
@@ -134,13 +134,12 @@ Before any Prisma schema migration or other operation that can alter stored data
 The repository backup tooling is a safety boundary and must:
 
 - work on Windows, macOS, and Linux without POSIX-only shell syntax
-- support both documented local database topologies: a `monrad-pg` Docker container selected with explicit `MONRAD_DB_MODE=docker` (with `MONRAD_DB_CONTAINER` overriding its name) and a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
-- default to host-mode `pg_dump` when `MONRAD_DB_MODE` is unset (conservative default — no automatic Docker endpoint detection)
+- support both documented local database topologies: a `monrad-pg` Docker container (with explicit `MONRAD_DB_MODE=docker` or `MONRAD_DB_CONTAINER`) and a non-Docker PostgreSQL instance configured through `server/.env` or `DATABASE_URL`
+- default to host-mode `pg_dump` when neither `MONRAD_DB_MODE` nor `MONRAD_DB_CONTAINER` is set (conservative default — no automatic Docker endpoint detection)
 - derive the database connection from repository configuration rather than silently assuming the default database, user, or host
 - allow `MONRAD_DB_CONTAINER` to override the Docker container name when Docker mode is active
 - allow `MONRAD_ENV_FILE` as a test/developer override for the `.env` path
 - fail clearly when Docker, `pg_dump`, credentials, or the configured database are unavailable
-- deliver the password through the child process `PGPASSWORD` environment variable rather than on the `pg_dump` command line
 - report only the backup mode, executable, and exit/spawn status on command failure; never print a credential-bearing `DATABASE_URL`
 - never report success after backing up a different database from the one the application is configured to use
 
