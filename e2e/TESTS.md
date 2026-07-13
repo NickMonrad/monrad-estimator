@@ -108,7 +108,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (8 tests)
+### `timeline.spec.ts` — Timeline (10 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -134,6 +134,15 @@ API-level tests using the `request` fixture. No browser UI involved.
 | run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
 | apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts the exact `Starting team options` section label and that candidate cards expose `Apply directly` buttons, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
 
+
+#### `Timeline — Resource-counts layout` describe block (2 tests — issue #369)
+
+`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import, navigates to Timeline, and runs Quick schedule. Both tests have a 90 s timeout.
+
+| Test | Description |
+|------|-------------|
+| shows resource-counts as compact grouped cards at desktop viewport | At 1440×900, verifies the resource-counts section has labels (Count, Hrs/day), resource type names, and Add named resource buttons; asserts no horizontal document overflow |
+| resource-counts layout is usable at narrow viewport | At 820×900, verifies controls remain visible; asserts no horizontal document overflow |
 #### `Timeline — cache invalidation` describe block (1 test)
 
 | Test | Description |

@@ -531,3 +531,89 @@ test.describe('Resource Profile allocation', () => {
     await expect(fteInput).toHaveValue('75')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Timeline Resource-counts layout — issue #369
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Timeline — Resource-counts layout', () => {
+  test.beforeEach(async ({ page }) => {
+    test.setTimeout(90_000)
+
+    const projectName = `E2E RCLayout ${Date.now()}`
+    await login(page)
+    await createProject(page, projectName)
+
+    // Navigate to Backlog and seed CSV with resource types
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    const tmpFile = path.join(os.tmpdir(), `rc-layout-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('Core Platform')).toBeVisible({ timeout: 10_000 })
+
+    // Navigate to Timeline
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
+
+    // Run a quick schedule so the timeline has entries
+    const updateBtn = page.getByRole('button', { name: /update timeline/i })
+    if (await updateBtn.isVisible()) {
+      await updateBtn.click()
+      // Wait for schedule to complete and resource-counts panel to populate
+      await page.waitForTimeout(3_000)
+    }
+  })
+
+  test('shows resource-counts as compact grouped cards at desktop viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+
+    // The resource-counts section header is visible
+    const countsSection = page.getByText('Resource Counts — adjust before Update timeline')
+    await expect(countsSection).toBeVisible({ timeout: 10_000 })
+
+    // Resource type cards are visible (Developer + Tech Lead from CSV)
+    await expect(page.getByText('Developer').first()).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText('Tech Lead').first()).toBeVisible()
+
+    // Count and Hrs/day labels are visible
+    await expect(page.getByText('Count').first()).toBeVisible()
+    await expect(page.getByText('Hrs/day').first()).toBeVisible()
+
+    // Add named resource buttons are present
+    const addDeveloperBtn = page.getByRole('button', { name: /add named resource to developer/i })
+    await expect(addDeveloperBtn).toBeVisible({ timeout: 5_000 })
+
+    // Verify no horizontal document overflow
+    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
+    expect(overflowX).toBe(true)
+  })
+
+  test('resource-counts layout is usable at narrow viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 820, height: 900 })
+
+    // Section header still visible
+    const countsSection = page.getByText('Resource Counts — adjust before Update timeline')
+    await expect(countsSection).toBeVisible({ timeout: 10_000 })
+
+    // Resource type cards collapsed/stacked but still visible
+    await expect(page.getByText('Developer').first()).toBeVisible({ timeout: 10_000 })
+
+    // Count and Hrs/day labels remain visible
+    await expect(page.getByText('Count').first()).toBeVisible()
+    await expect(page.getByText('Hrs/day').first()).toBeVisible()
+
+    // Verify no horizontal document overflow at narrow viewport
+    const overflowX = await page.evaluate(() => {
+      return document.documentElement.scrollWidth <= window.innerWidth + 1
+    })
+    expect(overflowX).toBe(true)
+  })
+})

@@ -575,3 +575,212 @@ describe('TimelinePage — named-resource allocation controls', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Resource-counts section layout — issue #369
+// ---------------------------------------------------------------------------
+describe('TimelinePage — resource-counts layout', () => {
+  const rtId = 'rt-layout'
+  const nrId = 'nr-layout-1'
+
+  const baseResourceType = {
+    id: rtId,
+    name: 'LayoutTester',
+    category: 'Engineering',
+    count: 3,
+    hoursPerDay: 7.6,
+  }
+
+  const baseNamedResource = {
+    id: nrId,
+    resourceTypeId: rtId,
+    name: 'Bob',
+    allocationMode: 'EFFORT' as const,
+    allocationPercent: 100,
+    allocationStartWeek: null,
+    allocationEndWeek: null,
+  }
+
+  beforeEach(() => {
+    const localStorageStore: Record<string, string> = {}
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => localStorageStore[key] ?? null,
+      setItem: (key: string, value: string) => { localStorageStore[key] = value },
+      removeItem: (key: string) => { delete localStorageStore[key] },
+      clear: () => { Object.keys(localStorageStore).forEach(k => delete localStorageStore[k]) },
+      length: 0,
+      key: () => null,
+    })
+
+    vi.clearAllMocks()
+
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes('/timeline')) return Promise.resolve({ data: mockTimeline })
+      if (url.includes('/resource-types')) return Promise.resolve({ data: mockResourceTypes })
+      return Promise.resolve({ data: mockProject })
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders resource type section with Count and Hrs/day labels grouped together', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+    })
+    renderPage()
+
+    // The panel should be open by default
+    // Resource type name is visible (await data loading)
+    const rtNames = await screen.findAllByText('LayoutTester')
+    expect(rtNames.length).toBeGreaterThanOrEqual(1)
+    expect(rtNames[0]).toBeInTheDocument()
+
+    // Count label and value are visible near the resource type name
+    expect(screen.getByText('Count')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+
+    // Hrs/day label and input are visible near the resource type name
+    expect(screen.getByText('Hrs/day')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('7.6')).toBeInTheDocument()
+  })
+
+  it('renders + Add named resource button with accessible name within resource type', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+    })
+    renderPage()
+
+    await screen.findAllByText('LayoutTester')
+
+    const addBtn = screen.getByRole('button', { name: /add named resource to layouttester/i })
+    expect(addBtn).toBeInTheDocument()
+    expect(addBtn).toHaveAttribute('title', 'Add person')
+  })
+
+  it('renders named resource column headers and fields together', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource }],
+    })
+    renderPage()
+
+    // Column headers are visible
+    expect(await screen.findByText('Named resource')).toBeInTheDocument()
+    expect(screen.getByText('Planning basis')).toBeInTheDocument()
+    expect(screen.getByText('Allocation %')).toBeInTheDocument()
+    expect(screen.getByText('Start')).toBeInTheDocument()
+    expect(screen.getByText('End')).toBeInTheDocument()
+
+    // Named resource name is rendered (may appear in multiple panels)
+    const bobNames = await screen.findAllByText('Bob')
+    expect(bobNames.length).toBeGreaterThanOrEqual(1)
+    expect(bobNames[0]).toBeInTheDocument()
+
+    // Remove button has an accessible name
+    const removeBtn = screen.getByRole('button', { name: /remove bob/i })
+    expect(removeBtn).toBeInTheDocument()
+    expect(removeBtn).toHaveAttribute('title', 'Remove person')
+  })
+
+  it('renders conditional planning fields correctly for each planning mode', async () => {
+    mockResourceTypes = [baseResourceType]
+
+    // Test with TIMELINE mode so start/end fields are active
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{
+        ...baseNamedResource,
+        allocationMode: 'TIMELINE',
+        allocationPercent: 80,
+        allocationStartWeek: 2,
+        allocationEndWeek: 10,
+      }],
+    })
+    renderPage()
+
+    await screen.findAllByText('Bob')
+
+    // Planning basis select has the correct value
+    const select = screen.getByRole('combobox')
+    expect(select).toHaveValue('TIMELINE')
+
+    // Allocation % input shows correct value
+    const pctInput = screen.getByDisplayValue('80') as HTMLInputElement
+    expect(pctInput).toBeInTheDocument()
+
+    // Start/end inputs show correct values (same as stored allocationStartWeek)
+    const startInput = screen.getByPlaceholderText('W1') as HTMLInputElement
+    expect(startInput).toHaveValue(2)
+
+    const endInput = screen.getByPlaceholderText('W∞') as HTMLInputElement
+    expect(endInput).toHaveValue(10)
+  })
+
+  it('preserves existing mutation behaviour when hours change', async () => {
+    mockResourceTypes = [{
+      ...baseResourceType,
+      hoursPerDay: 8,
+    }]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+    })
+    renderPage()
+
+    const hoursInput = (await screen.findByDisplayValue('8')) as HTMLInputElement
+
+    fireEvent.change(hoursInput, { target: { value: '6.5' } })
+    fireEvent.blur(hoursInput)
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}`,
+        { hoursPerDay: 6.5 },
+      )
+    })
+  })
+
+  it('add and remove actions retain their current callbacks', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
+      namedResources: [{ ...baseNamedResource }],
+    })
+    // Mock post for add
+    mockPost.mockResolvedValue({ data: { id: 'new-nr' } })
+    mockDelete.mockResolvedValue({ data: {} })
+    renderPage()
+
+    await screen.findAllByText('LayoutTester')
+
+    // Click the Add named resource button
+    const addBtn = screen.getByRole('button', { name: /add named resource to layouttester/i })
+    fireEvent.click(addBtn)
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources`,
+        expect.objectContaining({ name: expect.stringContaining('LayoutTester') }),
+      )
+    })
+
+    // Click the remove button
+    mockGet.mockClear()
+    const removeBtn = screen.getByRole('button', { name: /remove bob/i })
+    // Stub window.confirm
+    const originalConfirm = window.confirm
+    window.confirm = vi.fn(() => true)
+    fireEvent.click(removeBtn)
+    window.confirm = originalConfirm
+
+    await waitFor(() => {
+      expect(mockDelete).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+      )
+    })
+})
+})
