@@ -109,7 +109,21 @@ CLIENT_URL="http://localhost:5173"  # base URL used in email links
 
 For **Brevo**: generate an SMTP key at *Settings → SMTP & API → SMTP*, then verify a sender address at *Senders & IPs → Add a sender*.
 
-### 4. Run database migrations
+### 4. Back up before schema changes
+
+Run the repository backup command before any Prisma migration or other destructive database change:
+
+```bash
+npm run db:backup
+```
+
+`DATABASE_URL` is the source of truth. The command reads it from the process environment first, then `server/.env` (or the path set by `MONRAD_ENV_FILE`), and writes a verified non-empty custom-format dump to `backups/`. Host mode is the default and uses the host `pg_dump`; Docker mode requires `MONRAD_DB_MODE=docker`. `MONRAD_DB_CONTAINER` only overrides the container name while Docker mode is active, with `monrad-pg` as the default. Set `MONRAD_DB_MODE=host` to force host mode explicitly.
+
+Authority passwords are removed from the URI, and raw query-string `password` fields are removed without reserialising unrelated libpq query options. The effective credential is passed through the child `PGPASSWORD` environment variable, never through command arguments. Conflicting authority/query passwords or multiple query-string passwords fail before invoking `pg_dump`, and failures do not reveal the URL or credentials.
+
+Backup regression tests cover credential handling, mode selection, configuration precedence, atomic no-overwrite finalisation, output verification, cleanup, and representative host and Docker failure paths. The backup suite runs in both Linux and Windows CI and is also included in the root `npm test` and `npm run validate` commands.
+
+### 5. Run database migrations
 
 ```bash
 cd server
@@ -117,7 +131,7 @@ npx prisma migrate deploy
 npx prisma generate
 ```
 
-### 5. Start development servers
+### 6. Start development servers
 
 ```bash
 npm run dev          # API on :3001 + Vite on :5173 (concurrently)
@@ -139,15 +153,11 @@ Server logs are written to `logs/dev-servers.log` when running in the background
 > ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) where nested optional dependencies
 > with native binaries may be skipped on Windows.
 
-### Run tests
+### Validate and run tests
 
 ```bash
-# Server unit/integration tests
-cd server && npm test
-
-# TypeScript check
-cd server && npx tsc --noEmit
-cd client && npx tsc --noEmit
+# Complete client/server validation: lint, typecheck, builds, unit tests, and backup regression tests
+npm run validate
 
 # E2E (preferred — local runner starts isolated API/Vite servers, chooses free ports)
 # Loads server/.env, runs e2e-cleanup before seed, passes resolved env to all processes

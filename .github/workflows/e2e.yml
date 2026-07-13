@@ -52,6 +52,10 @@ jobs:
       - name: Install all dependencies
         run: npm ci
 
+      # ── Backup regression tests (deterministic, no Docker/DB needed) ──
+      - name: Backup regression tests
+        run: npm run test:backup
+
       # ── Client clone commercial parity test ──────────────────────
       - name: Client clone commercial parity test
         working-directory: client
@@ -65,6 +69,7 @@ jobs:
       # ── Validate local E2E runner ─────────────────────────────────
       - name: Validate local E2E runner loads env correctly
         run: node scripts/run-e2e-local.mjs --validate
+
       # ── TypeScript type-checking ──────────────────────────────────
       - name: TypeScript check (client)
         working-directory: client
@@ -83,9 +88,13 @@ jobs:
         working-directory: server
         run: npm run lint
 
-      # ── Server unit tests ────────────────────────────────────────
-      - name: Server unit tests
+      # ── Unit and integration tests ───────────────────────────────
+      - name: Server unit and integration tests
         working-directory: server
+        run: npm test
+
+      - name: Client unit tests
+        working-directory: client
         run: npm test
 
       # ── Server ──────────────────────────────────────────────────
@@ -168,3 +177,15 @@ jobs:
           name: playwright-report-${{ github.sha }}
           path: e2e/playwright-report/
           retention-days: 14
+  backup-windows:
+    name: Backup regression (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Backup regression tests
+        run: npm run test:backup
