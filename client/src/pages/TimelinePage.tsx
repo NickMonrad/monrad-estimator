@@ -1129,10 +1129,10 @@ export default function TimelinePage() {
                                 />
                               </div>
 
-                              {/* Add named resource — pushed right */}
+                              {/* Add named resource */}
                               <button
                                 onClick={() => handleAddNamedResource(rt.id, rt.name)}
-                                className="text-xs text-lab3-navy dark:text-lab3-blue hover:underline ml-auto"
+                                className="text-xs text-lab3-navy dark:text-lab3-blue hover:underline"
                                 title="Add person"
                                 aria-label={`Add named resource to ${rt.name}`}
                               >

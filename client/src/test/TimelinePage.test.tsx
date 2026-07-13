@@ -644,11 +644,27 @@ describe('TimelinePage — resource-counts layout', () => {
     })
     renderPage()
 
-    await screen.findAllByText('LayoutTester')
+    const card = await screen.findByTestId(`resource-type-card-${rtId}`)
+    expect(card).toBeInTheDocument()
 
-    const addBtn = screen.getByRole('button', { name: /add named resource to layouttester/i })
+    // Card contains the type name
+    expect(within(card).getByText('LayoutTester')).toBeInTheDocument()
+
+    // Card contains Count label and its value
+    expect(within(card).getByText('Count')).toBeInTheDocument()
+    expect(within(card).getByText('3')).toBeInTheDocument()
+
+    // Card contains Hours per day spinbutton with contextual accessible name
+    const hoursInput = within(card).getByRole('spinbutton', { name: /hours per day for layouttester/i })
+    expect(hoursInput).toBeInTheDocument()
+    expect(hoursInput).toHaveValue(7.6)
+
+    // Card contains the contextual add button
+    const addBtn = within(card).getByRole('button', { name: /add named resource to layouttester/i })
     expect(addBtn).toBeInTheDocument()
     expect(addBtn).toHaveAttribute('title', 'Add person')
+    // Assert ml-auto is not present (targeted class guard for issue #369)
+    expect(addBtn.className).not.toMatch(/\bml-auto\b/)
   })
 
   it('renders named resource column headers and fields together', async () => {
