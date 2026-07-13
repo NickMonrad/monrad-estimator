@@ -1439,13 +1439,13 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     expect(srcNormAny.taxLabel).toBe(srcProject!.taxLabel)
     // Verify ACTUAL_DAYS and PRO_RATA behaviour using real DTO rows
     const rawSrcRows = (normSrc as Record<string, unknown>).rows as Array<Record<string, unknown>>
-    const actualDaysRows = rawSrcRows.filter(r => r.pricingModel === 'ACTUAL_DAYS')
+    const actualDaysRows = rawSrcRows.filter(r => r.kind === 'named-resource' && r.pricingModel === 'ACTUAL_DAYS')
     expect(actualDaysRows.length).toBeGreaterThan(0)
     for (const row of actualDaysRows) {
       expect((row.allocatedDays as number)).toBeGreaterThan(0)
       expect((row.dayRate as number)).toBeGreaterThan(0)
     }
-    const proRataRows = rawSrcRows.filter(r => r.pricingModel === 'PRO_RATA')
+    const proRataRows = rawSrcRows.filter(r => r.kind === 'named-resource' && r.pricingModel === 'PRO_RATA')
     expect(proRataRows.length).toBeGreaterThan(0)
     for (const row of proRataRows) {
       expect((row.allocatedDays as number)).toBeGreaterThan(0)
