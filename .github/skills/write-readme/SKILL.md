@@ -39,7 +39,7 @@ npm run screenshots
 npm run db:backup
 ```
 
-`npm run validate` is the primary complete client/server validation command. It covers lint, type-checking, builds, unit/integration tests, and backup regression tests for both workspaces. Workspace-specific commands may be documented for targeted troubleshooting, but must not be presented as a substitute validation checklist.
+`npm run validate` is the primary complete client/server validation command. It covers lint, type-checking, builds, unit/integration tests, and backup regression tests (Linux and Windows CI) for both workspaces. Workspace-specific commands may be documented for targeted troubleshooting, but must not be presented as a substitute validation checklist.
 
 For database schema development, documentation must show the safety sequence:
 
@@ -52,10 +52,10 @@ npx prisma generate
 
 Before documenting the sequence, verify that `npm run db:backup` backs up the database configured by `DATABASE_URL` or the selected environment file (`MONRAD_ENV_FILE`, default `server/.env`) and supports the documented local topology:
 
-- Docker-based PostgreSQL via explicit `MONRAD_DB_MODE=docker` (default container `monrad-pg`, overridable via `MONRAD_DB_CONTAINER`)
+- Docker-based PostgreSQL via explicit `MONRAD_DB_MODE=docker` or `MONRAD_DB_CONTAINER` (activates Docker mode, container name defaults to `monrad-pg`)
 - non-Docker PostgreSQL running directly on the host (default mode — conservative, no automatic Docker detection)
 
-Documentation must not imply that a Docker-only implementation supports non-Docker development, that automatic container detection proves endpoint identity, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit overrides, credential-redacted failure modes, and the generated backup path accurately.
+Documentation must not imply that a Docker-only implementation supports non-Docker development, that automatic container detection proves endpoint identity, or that a backup of default credentials protects a differently configured database. Describe required tools such as Docker or `pg_dump`, explicit overrides, credential-redacted failure modes (authority and query-string passwords go to `PGPASSWORD` in host mode, never credential-bearing process arguments), and the generated backup path accurately.
 
 Never document `prisma migrate reset` as a routine step. It requires explicit user approval because it destroys data.
 
