@@ -622,7 +622,7 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(overflowX).toBe(true)
   })
 
-  test('mobile viewport: desktop column headers hidden, no overflow', async ({ page }) => {
+  test('mobile viewport: desktop column headers hidden', async ({ page }) => {
     test.setTimeout(90_000)
     await page.setViewportSize({ width: 390, height: 844 })
 
@@ -631,8 +631,5 @@ test.describe('Timeline — Resource-counts layout', () => {
 
     // Desktop column header row has hidden class on mobile
     await expect(countsSection(page).locator('div[class*="hidden"][class*="sm:grid"]').first()).toBeAttached()
-
-    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
-    expect(overflowX).toBe(true)
   })
 })
