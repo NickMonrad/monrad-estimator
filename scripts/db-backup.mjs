@@ -143,7 +143,10 @@ function runDockerCleanup(containerName, remotePath) {
 }
 
 function run(command, args, { allowFailure = false, stdio = 'inherit', context = 'backup', env = {} } = {}) {
-  const result = spawnSync(command, args, {
+  const isJavaScriptHelper = command.endsWith('.mjs')
+  const executable = isJavaScriptHelper ? process.execPath : command
+  const executableArgs = isJavaScriptHelper ? [command, ...args] : args
+  const result = spawnSync(executable, executableArgs, {
     cwd: root,
     stdio,
     shell: false,
