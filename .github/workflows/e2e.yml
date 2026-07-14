@@ -187,33 +187,53 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
-      - name: Install dependencies (no scripts)
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
 
-      - name: Verify native optional package versions
+      - name: Verify Windows native optional packages
         shell: pwsh
         run: |
-          # Check that declared optional packages resolve correctly
-          $packages = @(
-            '@rolldown/binding-win32-x64-msvc',
-            '@tailwindcss/oxide-win32-x64-msvc',
-            'lightningcss-win32-x64-msvc'
-          )
+          $expected = @{
+            '@esbuild/win32-x64' = '0.28.1'
+            '@rolldown/binding-win32-x64-msvc' = '1.1.5'
+            '@tailwindcss/oxide-win32-x64-msvc' = '4.3.2'
+            'lightningcss-win32-x64-msvc' = '1.32.0'
+          }
+
           $failed = $false
-          foreach ($pkg in $packages) {
-            try { $ver = node -e "console.log(require('$pkg/package.json').version)" 2>$null } catch { $ver = '' }
-            if ([string]::IsNullOrEmpty($ver)) {
-              Write-Host "::error::Windows native package $pkg not resolved"
+
+          foreach ($pkg in $expected.Keys) {
+            $expectedVersion = $expected[$pkg]
+
+            try {
+              $actualVersion = node -e "console.log(require('$pkg/package.json').version)"
+            } catch {
+              $actualVersion = ''
+            }
+
+            if ([string]::IsNullOrWhiteSpace($actualVersion)) {
+              Write-Host "::error::Could not resolve $pkg"
+              $failed = $true
+              continue
+            }
+
+            $actualVersion = $actualVersion.Trim()
+
+            if ($actualVersion -ne $expectedVersion) {
+              Write-Host "::error::$pkg resolved to $actualVersion; expected $expectedVersion"
               $failed = $true
             } else {
-              Write-Host "✅ $pkg version $ver"
+              Write-Host "Verified $pkg@$actualVersion"
             }
           }
-          # Verify esbuild resolves to a compatible version
-          $esbuildVer = node -e "console.log(require('esbuild/package.json').version)" 2>$null
-          if (-not [string]::IsNullOrEmpty($esbuildVer)) {
-            Write-Host "✅ esbuild version $esbuildVer"
+
+          if ($failed) {
+            exit 1
           }
-          if ($failed) { exit 1 }
+
       - name: Backup regression tests
         run: npm run test:backup
