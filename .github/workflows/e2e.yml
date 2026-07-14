@@ -34,11 +34,11 @@ jobs:
       TEST_PASSWORD: password123
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       # ── Audit dependencies ───────────────────────────────────────
@@ -181,11 +181,10 @@ jobs:
     name: Backup regression (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
-
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Backup regression tests
         run: npm run test:backup
