@@ -23,7 +23,11 @@ describe('PDF smoke test', { concurrency: false }, () => {
   })
 
   after(async () => {
-    await closeBrowser()
+    // Guard: if before() failed before assigning closeBrowser, skip cleanly
+    if (closeBrowser) {
+      // Allow cleanup errors to propagate — a close failure should fail the test
+      await closeBrowser()
+    }
   })
 
   it('generates a valid PDF via the application generatePdfFromHtml function', async () => {

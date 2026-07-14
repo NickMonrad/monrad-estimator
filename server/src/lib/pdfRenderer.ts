@@ -69,19 +69,18 @@ export async function generatePdfFromHtml(html: string): Promise<Buffer> {
 }
 
 // Graceful shutdown — close the shared browser when the process exits
-process.on('SIGTERM', async () => {
-  await closeBrowser()
+process.on('SIGTERM', () => {
+  void closeBrowser().catch((error) => {
+    console.error('[pdf] Failed to close Puppeteer browser during shutdown', error)
+  })
 })
 
 /** Close the shared browser instance (for clean test shutdown). */
 export async function closeBrowser(): Promise<void> {
   const browser = browserInstance
   browserInstance = null
-  if (browser && browser.connected) {
-    try {
-      await browser.close()
-    } catch {
-      // Browser already disconnected or closing — nothing to do
-    }
-  }
+
+  if (!browser || !browser.connected) return
+
+  await browser.close()
 }
