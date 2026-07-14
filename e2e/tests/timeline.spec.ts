@@ -1134,11 +1134,10 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     // Open Squad Planner again
     await page.getByRole('button', { name: /open squad planner/i }).click()
     await expect(drawer).toBeVisible({ timeout: 5_000 })
-
-    // Change Capacity Tracking to 'Tight' so the re-generated plan differs
-    const tightBtn = drawer.getByRole('button', { name: 'Tight' })
-    await expect(tightBtn).toBeVisible()
-    await tightBtn.click()
+    // Change Target Duration to 12 months so the re-generated plan differs
+    const twelveMonthBtn = drawer.getByRole('button', { name: '12mo' })
+    await expect(twelveMonthBtn).toBeVisible()
+    await twelveMonthBtn.click()
 
     // Generate a different plan
     const planResponse2 = page.waitForResponse(
