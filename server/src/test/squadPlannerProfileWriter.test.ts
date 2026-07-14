@@ -3,9 +3,11 @@ import {
   buildRoleProfileData,
   buildPlannedResourceProfileData,
   buildZeroCapacityProfileData,
+  classifyNamedResource,
   classifyProfileConflicts,
   determineSurplusResourceIds,
   isLegacyPlannerProfile,
+  isPlannerManaged,
   materializeProfilesForResourceType,
 } from '../lib/squadPlannerProfileWriter.js'
 import type { CapacityPlanPeriodInput } from '../lib/capacityPlanMaterialisation.js'
@@ -155,7 +157,7 @@ describe('buildPlannedResourceProfileData', () => {
     expect(result[0].defaultPercent).toBeNull() // Non-uniform
   })
 
-  it('skips trajectories beyond available named resources', () => {
+  it('throws when named resources are missing for required trajectories', () => {
     const trajectories = [
       {
         trajectoryIndex: 0,
@@ -164,11 +166,8 @@ describe('buildPlannedResourceProfileData', () => {
     ]
     const namedResources: Array<{ id: string; name: string }> = []
 
-    const result = buildPlannedResourceProfileData(trajectories, namedResources)
-
-    // When no NRs exist, the function receives an empty array and returns no profiles
-    // because the caller (materializeProfilesForResourceType) needs NRs first
-    expect(result).toHaveLength(0)
+    expect(() => buildPlannedResourceProfileData(trajectories, namedResources))
+      .toThrow(/Trajectory index 0 has no matching named resource/)
   })
 })
 
@@ -201,6 +200,89 @@ describe('isLegacyPlannerProfile', () => {
     expect(isLegacyPlannerProfile({ ...legacyProfile, source: 'MANUAL' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
     expect(isLegacyPlannerProfile({ ...legacyProfile, planningBasis: 'DEMAND_FOLLOWING' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
     expect(isLegacyPlannerProfile({ ...legacyProfile, ownerKind: 'PLANNED_RESOURCE' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
+  })
+})
+
+// ─── Shared resource classification tests ──────────────────────────────────
+
+describe('classifyNamedResource', () => {
+  const resource = { allocationMode: 'CAPACITY_PLAN' }
+  const legacyProfile = { ownerKind: 'NAMED_PERSON' as const, source: 'SQUAD_PLANNER' as const, planningBasis: 'CAPACITY_PROFILE' as const }
+  const plannerProfile = { ownerKind: 'PLANNED_RESOURCE' as const, source: 'SQUAD_PLANNER' as const, planningBasis: 'CAPACITY_PROFILE' as const }
+  const manualProfile = { ownerKind: 'NAMED_PERSON' as const, source: 'MANUAL' as const, planningBasis: 'CAPACITY_PROFILE' as const }
+  const fixedProfile = { ownerKind: 'ROLE' as const, source: 'FIXED' as const, planningBasis: 'CAPACITY_PROFILE' as const }
+  const importedProfile = { ownerKind: 'NAMED_PERSON' as const, source: 'IMPORTED' as const, planningBasis: 'CAPACITY_PROFILE' as const }
+  const namedPersonNonLegacy = { ownerKind: 'NAMED_PERSON' as const, source: 'SQUAD_PLANNER' as const, planningBasis: 'DEMAND_FOLLOWING' as const }
+
+  it('classifies explicit manual person as explicit_person', () => {
+    expect(classifyNamedResource(resource, [manualProfile])).toBe('explicit_person')
+  })
+
+  it('classifies legacy adoptable profile as legacy_adoptable', () => {
+    expect(classifyNamedResource(resource, [legacyProfile])).toBe('legacy_adoptable')
+  })
+
+  it('classifies planned-resource profile as planner_managed', () => {
+    expect(classifyNamedResource(resource, [plannerProfile])).toBe('planner_managed')
+  })
+
+  it('classifies no profiles with CAPACITY_PLAN mode as capacity_plan_untouched', () => {
+    expect(classifyNamedResource({ allocationMode: 'CAPACITY_PLAN' }, [])).toBe('capacity_plan_untouched')
+  })
+
+  it('classifies EFFORT allocation with no profiles as other', () => {
+    expect(classifyNamedResource({ allocationMode: 'EFFORT' }, [])).toBe('other')
+  })
+
+  it('explicit person wins over legacy when both profiles exist', () => {
+    expect(classifyNamedResource(resource, [legacyProfile, manualProfile])).toBe('explicit_person')
+  })
+
+  it('named-person non-legacy is explicit_person', () => {
+    expect(classifyNamedResource(resource, [namedPersonNonLegacy])).toBe('explicit_person')
+  })
+
+  it('FIXED source is explicit_person', () => {
+    expect(classifyNamedResource(resource, [fixedProfile])).toBe('explicit_person')
+  })
+
+  it('IMPORTED source is explicit_person', () => {
+    expect(classifyNamedResource(resource, [importedProfile])).toBe('explicit_person')
+  })
+
+  it('non-legacy NAMED_PERSON without CAPACITY_PLAN allocation is explicit_person', () => {
+    expect(classifyNamedResource({ allocationMode: 'EFFORT' }, [legacyProfile])).toBe('explicit_person')
+  })
+})
+
+describe('isPlannerManaged', () => {
+  it('returns true for legacy_adoptable resources', () => {
+    expect(isPlannerManaged(
+      { allocationMode: 'CAPACITY_PLAN' },
+      [{ ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' }],
+    )).toBe(true)
+  })
+
+  it('returns true for planner_managed resources', () => {
+    expect(isPlannerManaged(
+      { allocationMode: 'CAPACITY_PLAN' },
+      [{ ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' }],
+    )).toBe(true)
+  })
+
+  it('returns true for capacity_plan_untouched resources', () => {
+    expect(isPlannerManaged({ allocationMode: 'CAPACITY_PLAN' }, [])).toBe(true)
+  })
+
+  it('returns false for explicit_person resources', () => {
+    expect(isPlannerManaged(
+      { allocationMode: 'EFFORT' },
+      [{ ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' }],
+    )).toBe(false)
+  })
+
+  it('returns false for other resources', () => {
+    expect(isPlannerManaged({ allocationMode: 'EFFORT' }, [])).toBe(false)
   })
 })
 

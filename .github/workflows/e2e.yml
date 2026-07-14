@@ -120,6 +120,8 @@ jobs:
       - name: Squad Plan profile-first integration tests
         working-directory: server
         run: npm run test:squadplan-integration
+        env:
+          INTEGRATION_TEST: 'true'
       - name: Seed database (creates E2E test user)
         working-directory: server
         run: npx tsx prisma/seed.ts

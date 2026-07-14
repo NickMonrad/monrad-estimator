@@ -940,12 +940,12 @@ describe('persisted capacity-profile DTO integration', () => {
       })
     })
   })
-  describe('5. Fallback on real reconciliation mismatch', () => {
-    it('returns legacy-derived DTO when persisted rows do not reconcile', async () => {
+  describe('5. Persisted authority and fallback', () => {
+    it('returns persisted DTO as authority even when planningBasis differs from legacy', async () => {
       addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
 
-      const corruptId = 'cp-corrupt'
-      addPersistedProfile(corruptId, {
+      const persistedId = 'cp-persisted-authority'
+      addPersistedProfile(persistedId, {
         resourceTypeId: rtId,
         ownerKind: 'ROLE',
         planningBasis: 'AVAILABILITY_WINDOW',
@@ -957,10 +957,11 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(getRes.status).toBe(200)
 
       const dto = getRes.body.capacityProfiles[0]
-      expect(dto.id).toBe(rtId)
-      expect(dto.id).not.toBe(corruptId)
-      expect(dto.planningBasis).toBe('demandFollowing')
-      expect(dto.legacy).toMatchObject({ allocationMode: 'EFFORT' })
+      // Persisted profile IS structurally valid — returned as authority
+      expect(dto.id).toBe(persistedId)
+      expect(dto.planningBasis).toBe('availabilityWindow')
+      // Legacy fields are null for persisted-authority path
+      expect(dto.legacy.allocationMode).toBeNull()
     })
 
     it('returns legacy-derived DTO when no persisted profiles exist', async () => {
@@ -970,20 +971,20 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(getRes.status).toBe(200)
       expect(getRes.body.capacityProfiles).toHaveLength(1)
       expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      expect(getRes.body.capacityProfiles[0].legacy).toMatchObject({ allocationMode: 'EFFORT' })
     })
   })
 
 
-  describe('6. Repair cycle', () => {
-    it('write after corruption repairs persisted state; GET switches to persisted path', async () => {
+  describe('6. Persisted-authority repair cycle', () => {
+    it('structurally valid persisted profile is returned as authority; sync creates new NR profiles', async () => {
       addResourceType(rtId, userName, 1)
       addNamedResource('nr-1', 'Engineer 1', rtId)
 
-      // Phase 1: seed a corrupted profile — wrong owner kind/planningBasis
-      // Legacy mapper produces a named-person profile for nr-1 (RT has NRs).
-      // The seeded ROLE profile with wrong planningBasis → real compareCapacityProfiles fails.
-      const corruptId = 'cp-corrupt'
-      addPersistedProfile(corruptId, {
+      // Seed a ROLE profile that differs from what legacy mapper would produce
+      // (legacy mapper skips role profiles when NRs exist, producing namedPerson)
+      const roleProfileId = 'cp-role-persisted'
+      addPersistedProfile(roleProfileId, {
         resourceTypeId: rtId,
         ownerKind: 'ROLE',
         planningBasis: 'AVAILABILITY_WINDOW',
@@ -991,42 +992,32 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 100,
       })
 
-      // GET before fix → fallback (corrupted profile doesn't reconcile)
+      // GET before PATCH — structurally valid ROLE profile returned as authority
       const getBefore = await getCapacityProfiles()
       expect(getBefore.status).toBe(200)
-      // Fallback: legacy mapper produces named-person profile (RT has NRs)
-      expect(getBefore.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
-      expect(getBefore.body.capacityProfiles[0].owner.id).toBe('nr-1')
-      // Corrupted profile id is NOT exposed
-      const beforeIds = getBefore.body.capacityProfiles.map((p: any) => p.id)
-      expect(beforeIds).not.toContain(corruptId)
+      expect(getBefore.body.capacityProfiles.length).toBeGreaterThanOrEqual(1)
+      const roleDto = getBefore.body.capacityProfiles.find(
+        (p: any) => p.owner.kind === 'role' && p.owner.id === rtId,
+      )
+      expect(roleDto).toBeDefined()
+      expect(roleDto!.id).toBe(roleProfileId)
+      // Legacy fields are null (persisted-authority path)
+      expect(roleDto!.legacy.allocationMode).toBeNull()
 
-      // Phase 2: trigger a PATCH that runs sync → repairs the store
+      // Phase 2: trigger a PATCH that runs sync → creates profiles for new NRs
       await request(app)
         .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
         .set('Authorization', authHeader)
         .send({ count: 2 })
 
-
-      // With preserveResourceTypeIds, the corrupted role profile survives the PATCH
-      const stillCorrupt = storeRef.current.capacityProfiles.find(
-        (p: any) => p.id === corruptId,
+      // Original role profile survives (structurally valid, preserved by preserveResourceTypeIds)
+      const stillRole = storeRef.current.capacityProfiles.find(
+        (p: any) => p.id === roleProfileId,
       )
-      expect(stillCorrupt).toBeDefined()
+      expect(stillRole).toBeDefined()
+      expect(stillRole!.ownerKind).toBe('ROLE')
 
-      // Store now has the role-derived profile for other profiles
-      expect(storeRef.current.capacityProfiles.length).toBeGreaterThan(0)
-
-      // nr-1 is classified as explicit/custom (EFFORT/100/null/null does not match
-      // the corrupted role profile's TIMELINE/100/null/null projection).
-      // Therefore sync skips creating a profile for nr-1.
-      const nr1Profile = storeRef.current.capacityProfiles.find(
-        (p: any) => p.namedResourceId === 'nr-1',
-      )
-      expect(nr1Profile).toBeUndefined()
-
-      // The new named resource (created by PATCH count increase) gets a profile
-      // from sync since it inherits the role default (TIMELINE/100/null/null).
+      // The new named resource (created by PATCH count increase) gets a persisted profile from sync
       const newNr = storeRef.current.namedResources.find(
         (n: any) => n.name === `${userName} 2`,
       )
@@ -1036,26 +1027,238 @@ describe('persisted capacity-profile DTO integration', () => {
       )
       expect(newNRProfile).toBeDefined()
       expect(newNRProfile!.ownerKind).toBe('NAMED_PERSON')
-      // TIMELINE mode maps to AVAILABILITY_WINDOW in the sync mapper
-      expect(['AVAILABILITY_WINDOW', 'DEMAND_FOLLOWING']).toContain(newNRProfile!.planningBasis)
 
-      // Phase 3: GET after fix → persisted path for the new NR, legacy fallback for nr-1
+      // Phase 3: GET returns both the old role profile and the new NR profile
       const getAfter = await getCapacityProfiles()
       expect(getAfter.status).toBe(200)
+
+      const roleDtoAfter = getAfter.body.capacityProfiles.find(
+        (p: any) => p.owner.kind === 'role' && p.owner.id === rtId,
+      )
+      expect(roleDtoAfter).toBeDefined()
+      expect(roleDtoAfter!.id).toBe(roleProfileId)
+
       const newNrDto = getAfter.body.capacityProfiles.find(
         (p: any) => p.owner.kind === 'namedPerson' && p.owner.id === newNr!.id,
       )
       expect(newNrDto).toBeDefined()
-      expect(['availabilityWindow', 'demandFollowing']).toContain(newNrDto!.planningBasis)
+      expect(newNrDto!.planningBasis).toMatch(/demandFollowing|availabilityWindow/)
 
-      // nr-1 may appear via legacy fallback (no persisted profile → derived from legacy fields)
-      const oldNrDto = getAfter.body.capacityProfiles.find(
-        (p: any) => p.owner.kind === 'namedPerson' && p.owner.id === 'nr-1',
+      // nr-1 (explicit NR without own profile) does NOT appear — only role and new NR
+    })
+  })
+
+
+  describe('6b. Structural validation fallback', () => {
+    it('falls back to legacy when persisted profile has duplicate owner keys', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
+
+      addPersistedProfile('cp-dupe-1', {
+        resourceTypeId: rtId,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+      addPersistedProfile('cp-dupe-2', {
+        resourceTypeId: rtId,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      // Falls back to legacy — duplicate owner keys fail structural validation
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      expect(getRes.body.capacityProfiles[0].legacy).toMatchObject({ allocationMode: 'EFFORT' })
+    })
+
+    it('falls back to legacy when persisted profile references non-existent named resource', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
+
+      addPersistedProfile('cp-orphan-nr', {
+        namedResourceId: 'nr-missing',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      // Falls back — orphan owner FK fails structural validation
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+    })
+
+    it('falls back to legacy when persisted profile has both owner FKs set', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
+      addNamedResource('nr-both', 'Both FK', rtId)
+
+      addPersistedProfile('cp-both-fk', {
+        resourceTypeId: rtId,
+        namedResourceId: 'nr-both',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      // RT has named resource → legacy fallback returns named-person profile
+      expect(getRes.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
+      expect(getRes.body.capacityProfiles[0].owner.id).toBe('nr-both')
+      // Corrupt persisted profile id is NOT exposed
+      const ids = getRes.body.capacityProfiles.map((p: any) => p.id)
+      expect(ids).not.toContain('cp-both-fk')
+    })
+
+    it('falls back to legacy when persisted profile has neither owner FK set', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
+
+      addPersistedProfile('cp-no-fk', {
+        resourceTypeId: null,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+    })
+
+    it('falls back to legacy when ROLE profile has namedResourceId but no resourceTypeId', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
+      addNamedResource('nr-role-wrong', 'Wrong Role', rtId)
+
+      addPersistedProfile('cp-role-nr', {
+        resourceTypeId: null,
+        namedResourceId: 'nr-role-wrong',
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      // RT has named resource → legacy fallback returns named-person profile
+      expect(getRes.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
+      expect(getRes.body.capacityProfiles[0].owner.id).toBe('nr-role-wrong')
+      // Corrupt persisted profile id is NOT exposed
+      const ids = getRes.body.capacityProfiles.map((p: any) => p.id)
+      expect(ids).not.toContain('cp-role-nr')
+    })
+
+    it('falls back to legacy when NAMED_PERSON profile has resourceTypeId but no namedResourceId', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
+
+      addPersistedProfile('cp-nr-rt', {
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+    })
+
+    it('falls back to legacy when persisted profile has invalid source enum', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
+
+      addPersistedProfile('cp-bad-source', {
+        resourceTypeId: rtId,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'BOGUS',
+        defaultPercent: 100,
+      })
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+    })
+
+    it('falls back to legacy when segments overlap', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'CAPACITY_PLAN' })
+      addPersistedProfile('cp-overlap-segs', {
+        resourceTypeId: rtId,
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+      })
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-overlap-1', capacityProfileId: 'cp-overlap-segs', startWeek: 0, endWeek: 6, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: new Date(), updatedAt: new Date() },
+        { id: 'seg-overlap-2', capacityProfileId: 'cp-overlap-segs', startWeek: 4, endWeek: 8, capacityPercent: 50, source: 'SQUAD_PLANNER', createdAt: new Date(), updatedAt: new Date() },
       )
-      // Either legacy fallback or absent — no strict assertion required
-      if (oldNrDto) {
-        expect(oldNrDto.planningBasis).toMatch(/demandFollowing|availabilityWindow/)
-      }
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+    })
+
+    it('falls back to legacy when segment has invalid source', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'CAPACITY_PLAN' })
+      addPersistedProfile('cp-bad-seg-source', {
+        resourceTypeId: rtId,
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+      })
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-bad-source', capacityProfileId: 'cp-bad-seg-source', startWeek: 0, endWeek: 6, capacityPercent: 100, source: 'INVALID_SEG_SOURCE', createdAt: new Date(), updatedAt: new Date() },
+      )
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+    })
+
+    it('falls back to legacy when segment has negative startWeek', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'CAPACITY_PLAN' })
+      addPersistedProfile('cp-neg-start', {
+        resourceTypeId: rtId,
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+      })
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-neg', capacityProfileId: 'cp-neg-start', startWeek: -1, endWeek: 6, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: new Date(), updatedAt: new Date() },
+      )
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+    })
+
+    it('falls back to legacy when segment has out-of-range capacityPercent', async () => {
+      addResourceType(rtId, userName, 1, { allocationMode: 'CAPACITY_PLAN' })
+      addPersistedProfile('cp-bad-pct', {
+        resourceTypeId: rtId,
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+      })
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-bad-pct', capacityProfileId: 'cp-bad-pct', startWeek: 0, endWeek: 6, capacityPercent: 150, source: 'SQUAD_PLANNER', createdAt: new Date(), updatedAt: new Date() },
+      )
+
+      const getRes = await getCapacityProfiles()
+      expect(getRes.status).toBe(200)
+      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
     })
   })
 

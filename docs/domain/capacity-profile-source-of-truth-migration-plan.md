@@ -8,33 +8,45 @@
 
 Issues #326, #336, #337, #338, #339, and issue #341 define the `CapacityProfile`/`CapacitySegment` adoption plan.
 
-PR #336 added the persisted-read endpoint (`GET /capacity-profiles`) with a reconciliation
-gate — persisted profiles were used only when they matched legacy-derived expectations.
+PR #336 introduced the persisted-read endpoint (`GET /capacity-profiles`) with a
+reconciliation gate — persisted profiles were used only when they matched
+legacy-derived expectations.
 
-PR #356 (profile-first read adoption, merged) removed the
-reconciliation gate for the Resource Profile route. Resolution is owner-specific and
-ordered: a valid persisted profile (`resolutionSource: 'PROFILE'`); active Capacity Plan
-materialisation only when `shouldFallbackToActiveCapacityPlan` requires it
-(`'ACTIVE_CAPACITY_PLAN'`); then pure legacy compatibility data (`'LEGACY'`).
-Conflicting duplicate persisted profiles are not valid and therefore proceed through the
-same fallback decision. `projectCapacityProfileToLegacyAllocation` supplies display-field
-projection without changing calculation inputs.
+PR #356 (profile-first read adoption, merged) removed that lossy reconciliation
+gate for Resource Profile and exports. PR #359 completes the boundary for the
+Squad Planner apply path: a structurally valid persisted profile is authoritative
+for capacity availability; fallback is used only when the persisted shape is
+missing or invalid. Fallback is deterministic and owner-aware: active
+`CapacityPlan` materialisation is used only when
+`shouldFallbackToActiveCapacityPlan` requires it (`ACTIVE_CAPACITY_PLAN`), then
+legacy compatibility data (`LEGACY`). Conflicting duplicate persisted profiles
+are structurally invalid. `projectCapacityProfileToLegacyAllocation` supplies
+display-field projection without changing calculation inputs.
 
-Legacy `ResourceType` and `NamedResource` fields remain authoritative for scheduler,
-leveller, Timeline, Squad Planner, and Commercial calculations. PR #355 (merged)
-established profile-first writes for ResourceType and NamedResource write paths;
-legacy fields in those paths are compatibility projections. Issue #340 is the larger
-migration where capacity profiles become the **actual source of truth** for all
-allocation data.
+CapacityProfile/CapacitySegment own capacity availability. Timeline/Planning owns
+assignment windows, scheduled demand, and the weekly demand cache. Commercial owns
+pricing, billing basis, and billable calculations. `ResourceType.count` remains
+role metadata for phantom staffing slots, not a capacity-profile field.
+ResourceType and NamedResource legacy allocation fields remain compatibility
+projections for unmigrated consumers. They are no longer a competing authority
+for profile-backed availability.
 
 ## Principles
 
-1. **Read adoption before write migration.** Read paths were migrated first (#336). PR #355 (merged) then established profile-first writes for ResourceType and NamedResource write paths. PR #356 (merged) extended read adoption to Resource Profile and exports.
-2. **Migrate one authoritative write path at a time.** Each phase flips one write path to produce capacity profiles as source of truth and project legacy fields as compatibility.
-3. **Keep legacy fields as compatibility projections** until all consumers have migrated. Do not remove them until #342.
-4. **Commercial remains billing-only.** Capacity profiles describe availability, not billing.
-5. **Reconcile after each migrated write path.** `compareCapacityProfiles` validates that persisted profiles match expected state. Once writes are flipped, reconciliation direction must invert.
-6. **Keep rollback possible** while legacy projections remain current. The fallback in `capacityProfileResourceAdapter.ts` (legacy-derived data when no persisted profile exists) is the safety net.
+1. **Read adoption before write migration.** Read paths were migrated first (#336), then
+   profile-first writes and Resource Profile/export reads adopted persisted capacity data
+   (#355, #356).
+2. **Persisted profiles are authoritative when structurally valid.** Do not use a
+   lossy compare gate; fall back only for missing or structurally invalid persisted data.
+3. **Keep legacy fields as compatibility projections** until all consumers have migrated.
+   Do not remove them until #342.
+4. **Separate availability, assignment, and billing.** CapacityProfile owns availability;
+   Timeline/Planning owns assignments and weekly demand; Commercial owns billing.
+5. **Make planner writes atomic and undoable.** Plan, profile, legacy projection,
+   timeline, and weekly-cache writes commit together; the pre-apply snapshot remains
+   available when the domain transaction rolls back.
+6. **Keep deterministic identity.** Role and named-resource matching uses stable IDs and
+   names; explicit/manual resources are never silently overwritten or deleted.
 
 ## Audit
 
@@ -112,31 +124,38 @@ best-effort compatibility reconstruction (no segments or planned-resource owners
 
 | Version | Identifier | Content |
 |---------|-----------|---------|
-| **V1** | No `schemaVersion` field (bare epic array or `{ epics: … }` without `schemaVersion`) | Epic tree only. No resource types, named resources, timeline entries, dependencies, overheads, or capacity profiles. |
-| **V2** | `schemaVersion: 2` | Epic tree + project fields + resource types + named resources + timeline entries + story timeline entries + dependencies + overhead items. No first-class capacity profiles. |
-| **V3** | `schemaVersion: 3` | All V2 fields plus `capacityProfiles: SnapshotCapacityProfile[]`. Each profile carries its full segment set. |
+| **V1** | No `schemaVersion` field (bare epic array or `{ epics: … }` without `schemaVersion`) | Epic tree only. No resource types, named resources, timeline entries, dependencies, overheads, capacity profiles, or capacity-plan history. |
+| **V2** | `schemaVersion: 2` | Epic tree + project fields + resource types + named resources + timeline entries + story timeline entries + dependencies + overhead items. No first-class capacity profiles or capacity-plan history. |
+| **V3** | `schemaVersion: 3` | All V2 fields plus `capacityProfiles`, exact `capacityPlans` history, and the optional `weeklyDemandCache`. |
 
 #### V3 snapshot content
 
-`buildSnapshot` (in `snapshots.ts`) returns `schemaVersion: 3` for all new application snapshots
-(manual, `csv_import`, `template_apply`, `optimiser_apply`, and `pre_rollback` triggers). The
-v3 payload includes:
+`buildSnapshot` (in `projectSnapshotService.ts`) returns `schemaVersion: 3` for all new
+application snapshots (manual, `csv_import`, `template_apply`, `optimiser_apply`, and
+`pre_rollback` triggers). The v3 payload includes:
 
-- **CapacityProfile**: `id`, `ownerKind` (`ROLE`/`NAMED_PERSON`/`PLANNED_RESOURCE`), `resourceTypeId`
-  or `namedResourceId` (owner identity), `planningBasis`, `source`, `defaultPercent` (nullable),
-  `startWeek`/`endWeek` (nullable profile window), `legacy` (original legacy JSON, which may be
-  `null`), and `segments`.
-- **CapacitySegment** (per profile): `id`, `startWeek`, `endWeek`, `capacityPercent`, `source`.
-- Profiles are ordered deterministically: owner identity (ownerKind → resourceTypeId/namedResourceId) → profile ID.
-- Segments are ordered deterministically: startWeek → endWeek → segment ID.
+- **CapacityProfile**: `id`, `ownerKind` (`ROLE`/`NAMED_PERSON`/`PLANNED_RESOURCE`),
+  `resourceTypeId` or `namedResourceId` (owner identity), `planningBasis`, `source`,
+  `defaultPercent` (nullable), `startWeek`/`endWeek` (nullable profile window),
+  `legacy` (original legacy JSON, which may be `null`), and `segments`.
+- **CapacitySegment** (per profile): `id`, `startWeek`, `endWeek`, `capacityPercent`,
+  `source`.
+- **CapacityPlan history**: exact plan, period, and entry IDs and values, including
+  activation, summary fields, and timestamps. Restore replaces the project's plan
+  history rather than interpolating from legacy fields.
+- **Weekly demand cache**: the optional `weeklyDemandCache` map is validated as finite
+  numeric values and restored with the project state.
+- Profiles, plans, periods, and entries are ordered deterministically by stable IDs.
 
 #### Pre-rollback capture
 
-Before any destructive write, the current project state is captured as a v3 snapshot
-(`trigger: 'pre_rollback'`) inside the same transaction that applies the rollback. This
-makes any rollback itself reversible — the pre-rollback snapshot captures capacity profiles
-along with every other project dimension. Retention of the pre-rollback snapshot is subject
-to the same `pruneSnapshots` (keep 20 most-recent) policy as all other snapshots.
+Before any destructive rollback write, the current project state is captured as a v3
+snapshot (`trigger: 'pre_rollback'`) inside the same transaction that applies the
+rollback. This makes rollback itself reversible. Squad Planner apply uses the same
+snapshot builder immediately before its domain transaction; that snapshot is deliberately
+outside the transaction so it remains available when an apply fails and rolls back.
+Retention of the pre-rollback snapshot is subject to the same `pruneSnapshots` (keep 20
+most-recent) policy as all other snapshots.
 
 #### V3 validation
 
@@ -228,11 +247,12 @@ PR #367 introduced no Prisma schema migration. The `capacityProfiles` field is s
 inside the existing `BacklogSnapshot.snapshot` JSON column. The new TypeScript types,
 validation, and capacity helpers are pure runtime additions.
 
-#### Out of scope: Capacity Plan history (#359)
+#### Capacity Plan history and v3 compatibility
 
-Capacity Plan history — snapshotting and restoring the `CapacityPlan` table and its
-periods/entries — is not part of PR #367. Rollback of capacity plan data is tracked
-by #359 and will be addressed separately.
+PR #359 extends v3 rollback coverage to `CapacityPlan`, `CapacityPlanPeriod`, and
+`CapacityPlanEntry` rows plus the project's weekly demand cache. V3 snapshots that omit
+the optional `capacityPlans` or `weeklyDemandCache` fields remain backward-compatible:
+restore leaves that dimension untouched. V2 and V1 behaviour is unchanged.
 
 ### Null-state discrimination & PostgreSQL rollback CI ✅ (PR #367 merged)
 
@@ -479,26 +499,23 @@ change scheduler behavior under cleanup:
 3. New named resources created by migrated paths receive the role default through
    the established write-side rules.
 
-### Phase 5 — Squad Planner apply
+### Phase 5 — Squad Planner apply ✅ (PR #359)
 
-Only migrate after Phases 3 and 4 are proven in production.
+Squad Planner apply now persists stable named-resource identities and authoritative
+role/planned-resource profiles in one domain transaction. The transaction also covers
+legacy compatibility projections, Timeline rows, and `weeklyDemandCache`.
 
-#### Required prerequisites
-
-- **Stable planned-resource identity.** The `apply` endpoint currently generates NRs with predictable IDs (`capacity-plan-*`). Need actual DB persistence before capacity profiles can reference them.
-- **Repeated apply semantics defined.** What happens when Squad Planner is re-run and re-applied? Delete and recreate profiles? Merge? Version? The current sync-based approach deletes stale segments and recreates. Similar semantics: delete all capacity profiles for `CAPACITY_PLAN`-sourced NRs and recreate from new plan.
-- **Transaction boundaries.** Capacity-profile-affecting writes (NR creation, capacity profile creation) inside transaction. Timeline and weekly-demand cache outside, as currently done.
-
-#### Flow after migration
+#### Current flow
 
 ```
-1. Squad Planner generates plan (unchanged — still reads legacy fields)
-2. Apply:
-   a. Create/update named resources (currently does this)
-   b. Write CapacityProfile/CapacitySegment as authoritative (new)
-   c. Sync legacy compatibility projections from profile (replaces current reverse sync)
-   d. Reconcile (now profile → legacy)
-   e. Materialise timeline (outside transaction)
+1. Squad Planner generates a plan from the request and current project data.
+2. Apply creates/reuses named resources with deterministic `(createdAt, id)` ordering.
+3. Apply writes CapacityProfile/CapacitySegment rows as the authority.
+4. Apply projects compatibility fields for legacy consumers.
+5. Apply clears omitted/surplus planner capacity while preserving explicit/manual data.
+6. Apply persists Timeline assignments and weekly demand cache in the same transaction.
+7. A pre-apply v3 snapshot is written outside the domain transaction so failed applies
+   retain a usable undo point.
 ```
 
 ### Phase 6 — Reverse reconciliation direction
@@ -555,7 +572,7 @@ Tracked separately by #342.
 | One person with multiple segments remains one row | NR row not duplicated per segment |
 | One planned resource with multiple segments remains one row | Planned resource not duplicated per segment |
 | Capacity profile, assigned work, billing basis are separate columns | CSV column independence |
-| Legacy fallback works | Adapter falls back when profiles missing or mismatched |
+| Legacy fallback works | Mapper is used only when profiles are missing or structurally invalid |
 | CSV roundtrip | Multi-segment profiles survive export → parse → compare |
 
 ### Scheduler / Leveller / Timeline
@@ -598,13 +615,9 @@ Tracked separately by #342.
 
 | Issue | Description |
 |-------|-------------|
-| Normalise `allocationPct` → `allocationPercent` | Remove the dual field before or during source-of-truth migration |
-| Stable planned-resource identity | Make Squad Planner "Apply" produce stable DB-persisted NR IDs before migration |
-| Converge `shouldFallbackToActiveCapacityPlan` | Unify scattered fallback logic into one place |
+| Normalise `allocationPct` → `allocationPercent` | Remove the dual field before or during legacy cleanup |
 | CSV roundtrip test | Test multi-segment profile → CSV → parse → compare |
-| Phase 3 implementation | NamedResource capacity/profile editing as source of truth |
-| Phase 4 implementation | ResourceType capacity writes as source of truth |
-| Phase 5 implementation | Squad Planner apply as source of truth |
+| Remove obsolete fallback helpers | Converge remaining legacy consumer fallback logic after all consumers migrate |
 
 ## Project Clone: capacity profile handling
 

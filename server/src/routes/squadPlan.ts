@@ -35,6 +35,8 @@ import {
   projectCompatibilityFields,
   clearSurplusCompatibilityFields,
   clearOmittedPlannerCapacity,
+  __applyFailureSeam,
+  type PrismaTransactionClient,
 } from '../lib/squadPlannerProfileWriter.js'
 
 type ApplyPeriodEntry = {
@@ -486,8 +488,164 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     slotWindowsByRt = deriveSlotWindowsByResourceType(normalisedPeriods)
   }
 
-  // ── 3. Transaction: plan + profile-first capacity writes ─────────────────
-  const plan = await prisma.$transaction(async tx => {
+  // ── 2b. Precompute timeline/cache data (before transaction) ────────────────
+  let timelinePrecomputed: {
+    epicStartWeeks: Map<string, number>
+    featureRows: Array<{ projectId: string; featureId: string; startWeek: number; durationWeeks: number; isManual: false }>
+    storyRows: Array<{ projectId: string; storyId: string; startWeek: number; durationWeeks: number; isManual: false }>
+    weeklyDemandCache: Record<string, number>
+  } | undefined
+
+  if (shouldActivate && maxHeadcountByRt && slotWindowsByRt) {
+    let refreshedWeeklyDemandCache: Record<string, number>
+    let pfFeatureRows: Array<{ projectId: string; featureId: string; startWeek: number; durationWeeks: number; isManual: false }> = []
+    let pfStoryRows: Array<{ projectId: string; storyId: string; startWeek: number; durationWeeks: number; isManual: false }> = []
+    let epicStartWeeks: Map<string, number>
+
+    if (clientLevellingResult?.featureStartWeeks && Object.keys(clientLevellingResult.featureStartWeeks).length > 0) {
+      // ── Direct persistence path: derive spans from planner allocations ───
+      const maxParallelism = clientMaxParallelism ?? 2
+      const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay, {
+        includeCapacityPlanMaterialization: false,
+      })
+      const replayResourceTypes = buildReplayPlannerResourceTypes(
+        schedulerInput.resourceTypes,
+        slotWindowsByRt,
+        maxHeadcountByRt,
+      )
+      const plannerResult = runSAPlanner({
+        ...schedulerInput,
+        resourceTypes: replayResourceTypes,
+      }, {
+        targetDurationWeeks: targetWeeks,
+        maxParallelismPerFeature: maxParallelism,
+        maxConcurrentEpics: clientMaxConcurrentEpics,
+      })
+      refreshedWeeklyDemandCache = buildWeeklyDemandCacheFromPlannerResult(
+        plannerResult.weeklyDemandByResourceType,
+      )
+
+      epicStartWeeks = new Map(
+        Object.entries(clientLevellingResult.epicStartWeeks).map(([k, v]) => [k, Number(v)])
+      )
+
+      // Load features with stories/tasks to compute durations
+      const allEpics = await prisma.epic.findMany({
+        where: { projectId },
+        include: {
+          features: {
+            include: {
+              userStories: {
+                include: { tasks: { include: { resourceType: true } } },
+              },
+            },
+          },
+        },
+      })
+
+      const hpd = project.hoursPerDay
+      const featureStartWeeks = clientLevellingResult.featureStartWeeks
+
+      for (const epic of allEpics) {
+        for (const feature of epic.features) {
+          if (feature.isActive === false) continue
+          const fallbackStartWeek = Number(
+            featureStartWeeks[feature.id]
+              ?? plannerResult.featureStartWeeks.get(feature.id)
+              ?? 0,
+          )
+          const span = deriveFeatureSpanFromWeeklyAllocations(
+            plannerResult.weeklyAllocationsByFeature.get(feature.id),
+            fallbackStartWeek,
+          )
+
+          const demandByRt = new Map<string, number>()
+          const activeStories = feature.userStories.filter(s => s.isActive !== false)
+          for (const story of activeStories) {
+            for (const task of story.tasks) {
+              if (!task.resourceTypeId) continue
+              const rtHpd = task.resourceType?.hoursPerDay ?? hpd
+              const days = effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
+              demandByRt.set(task.resourceTypeId, (demandByRt.get(task.resourceTypeId) ?? 0) + days)
+            }
+          }
+
+          pfFeatureRows.push({
+            projectId,
+            featureId: feature.id,
+            startWeek: span.startWeek,
+            durationWeeks: span.durationWeeks,
+            isManual: false as const,
+          })
+
+          const totalFeatureDays = Array.from(demandByRt.values()).reduce((sum, d) => sum + d, 0)
+          for (const story of activeStories) {
+            let storyDays = 0
+            for (const task of story.tasks) {
+              if (!task.resourceTypeId) continue
+              const rtHpd = task.resourceType?.hoursPerDay ?? hpd
+              storyDays += effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
+            }
+            const proportion = totalFeatureDays > 0 ? storyDays / totalFeatureDays : 0
+            const storyDuration = Math.max(1, Math.ceil(span.durationWeeks * proportion))
+            pfStoryRows.push({
+              projectId,
+              storyId: story.id,
+              startWeek: span.startWeek,
+              durationWeeks: storyDuration,
+              isManual: false as const,
+            })
+          }
+        }
+      }
+    } else {
+      // ── Legacy fallback: re-run scheduler ──────────────────────────────
+      const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay)
+
+      if (clientLevellingResult?.epicStartWeeks) {
+        epicStartWeeks = new Map(Object.entries(clientLevellingResult.epicStartWeeks).map(([k, v]) => [k, Number(v)]))
+      } else {
+        const levelResult = levelEpicStarts(schedulerInput)
+        epicStartWeeks = levelResult.epicStartWeeks
+      }
+
+      const levelledEpics = schedulerInput.epics.map(e => ({
+        ...e,
+        timelineStartWeek: epicStartWeeks.get(e.id) ?? e.timelineStartWeek,
+      }))
+
+      const { featureSchedule, storySchedule, weeklyConsumptionMap } = runScheduler({
+        ...schedulerInput,
+        epics: levelledEpics,
+      })
+      refreshedWeeklyDemandCache = Object.fromEntries(weeklyConsumptionMap)
+
+      pfFeatureRows = featureSchedule
+        .filter(e => !e.isManual)
+        .map(e => ({
+          projectId,
+          featureId: e.featureId,
+          startWeek: e.startWeek,
+          durationWeeks: e.durationWeeks,
+          isManual: false as const,
+        }))
+
+      pfStoryRows = storySchedule
+        .filter(e => !e.isManual)
+        .map(e => ({
+          projectId,
+          storyId: e.storyId,
+          startWeek: e.startWeek,
+          durationWeeks: e.durationWeeks,
+          isManual: false as const,
+        }))
+    }
+
+    timelinePrecomputed = { epicStartWeeks, featureRows: pfFeatureRows, storyRows: pfStoryRows, weeklyDemandCache: refreshedWeeklyDemandCache }
+  }
+
+  // ── 3. Single transaction: plan + profile + timeline + cache ──────────────
+  const plan = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
     // Deactivate existing active plans
     if (shouldActivate) {
       await tx.capacityPlan.updateMany({
@@ -526,7 +684,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       include: { periods: { include: { entries: true } } },
     })
 
-
     // ── Profile-first: write authoritative profiles directly, project compatibility ──
     if (shouldActivate && maxHeadcountByRt) {
       // Update RT counts and allocation mode for demand RTs
@@ -536,6 +693,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
           data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
         })
       }
+
+
 
       // Reuse the validated project resource types for materialisation
       const rtNameById = new Map(projectResourceTypes.map(rt => [rt.id, rt.name]))
@@ -594,201 +753,41 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()))
     }
 
-    return createdPlan
-  })
-
-  // ── 4. Materialise timeline using the projected schedule ─────────────────
-  if (shouldActivate && maxHeadcountByRt && slotWindowsByRt) {
-    let refreshedWeeklyDemandCache: Record<string, number>
-
-    if (clientLevellingResult?.featureStartWeeks && Object.keys(clientLevellingResult.featureStartWeeks).length > 0) {
-      // ── Direct persistence path: derive spans from planner allocations ───
-      const maxParallelism = clientMaxParallelism ?? 2
-      const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay, {
-        includeCapacityPlanMaterialization: false,
-      })
-      const replayResourceTypes = buildReplayPlannerResourceTypes(
-        schedulerInput.resourceTypes,
-        slotWindowsByRt,
-        maxHeadcountByRt,
-      )
-      const plannerResult = runSAPlanner({
-        ...schedulerInput,
-        resourceTypes: replayResourceTypes,
-      }, {
-        targetDurationWeeks: targetWeeks,
-        maxParallelismPerFeature: maxParallelism,
-        maxConcurrentEpics: clientMaxConcurrentEpics,
-      })
-      refreshedWeeklyDemandCache = buildWeeklyDemandCacheFromPlannerResult(
-        plannerResult.weeklyDemandByResourceType,
-      )
-
+    // ── Timeline + cache persistence using precomputed data ────────────
+    if (shouldActivate && timelinePrecomputed) {
       // Persist epic start weeks
-      const epicStartWeeks = new Map(
-        Object.entries(clientLevellingResult.epicStartWeeks).map(([k, v]) => [k, Number(v)])
-      )
-      await Promise.all(
-        Array.from(epicStartWeeks.entries()).map(([epicId, startWeek]) =>
-          prisma.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
-        )
-      )
-
-      // Load features with stories/tasks to compute durations
-      const allEpics = await prisma.epic.findMany({
-        where: { projectId },
-        include: {
-          features: {
-            include: {
-              userStories: {
-                include: { tasks: { include: { resourceType: true } } },
-              },
-            },
-          },
-        },
-      })
-
-      const hpd = project.hoursPerDay
-
-      const featureStartWeeks = clientLevellingResult.featureStartWeeks
-      const featureRows: Array<{
-        projectId: string; featureId: string; startWeek: number; durationWeeks: number; isManual: false
-      }> = []
-      const storyRows: Array<{
-        projectId: string; storyId: string; startWeek: number; durationWeeks: number; isManual: false
-      }> = []
-
-      for (const epic of allEpics) {
-        for (const feature of epic.features) {
-          if (feature.isActive === false) continue
-          const fallbackStartWeek = Number(
-            featureStartWeeks[feature.id]
-              ?? plannerResult.featureStartWeeks.get(feature.id)
-              ?? 0,
-          )
-          const span = deriveFeatureSpanFromWeeklyAllocations(
-            plannerResult.weeklyAllocationsByFeature.get(feature.id),
-            fallbackStartWeek,
-          )
-
-          const demandByRt = new Map<string, number>()
-          const activeStories = feature.userStories.filter(s => s.isActive !== false)
-          for (const story of activeStories) {
-            for (const task of story.tasks) {
-              if (!task.resourceTypeId) continue
-              const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-              const days = effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
-              demandByRt.set(task.resourceTypeId, (demandByRt.get(task.resourceTypeId) ?? 0) + days)
-            }
-          }
-
-          featureRows.push({
-            projectId,
-            featureId: feature.id,
-            startWeek: span.startWeek,
-            durationWeeks: span.durationWeeks,
-            isManual: false as const,
-          })
-
-          const totalFeatureDays = Array.from(demandByRt.values()).reduce((sum, d) => sum + d, 0)
-          for (const story of activeStories) {
-            let storyDays = 0
-            for (const task of story.tasks) {
-              if (!task.resourceTypeId) continue
-              const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-              storyDays += effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
-            }
-            const proportion = totalFeatureDays > 0 ? storyDays / totalFeatureDays : 0
-            const storyDuration = Math.max(1, Math.ceil(span.durationWeeks * proportion))
-            storyRows.push({
-              projectId,
-              storyId: story.id,
-              startWeek: span.startWeek,
-              durationWeeks: storyDuration,
-              isManual: false as const,
-            })
-          }
-        }
+      for (const [epicId, startWeek] of timelinePrecomputed.epicStartWeeks) {
+        await tx.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
       }
 
       // Persist timeline entries
-      await prisma.$transaction(async tx => {
-        await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
-        if (featureRows.length > 0) {
-          await tx.timelineEntry.createMany({ data: featureRows, skipDuplicates: true })
-        }
-        await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
-        if (storyRows.length > 0) {
-          await tx.storyTimelineEntry.createMany({ data: storyRows, skipDuplicates: true })
-        }
-      })
-    } else {
-      // ── Legacy fallback: re-run scheduler ──────────────────────────────
-      const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay)
-
-      let epicStartWeeks: Map<string, number>
-      if (clientLevellingResult?.epicStartWeeks) {
-        epicStartWeeks = new Map(Object.entries(clientLevellingResult.epicStartWeeks).map(([k, v]) => [k, Number(v)]))
-      } else {
-        const levelResult = levelEpicStarts(schedulerInput)
-        epicStartWeeks = levelResult.epicStartWeeks
+      await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
+      if (timelinePrecomputed.featureRows.length > 0) {
+        await tx.timelineEntry.createMany({ data: timelinePrecomputed.featureRows, skipDuplicates: true })
       }
 
-      // Persist levelled epic start weeks
-      await Promise.all(
-        Array.from(epicStartWeeks.entries()).map(([epicId, startWeek]) =>
-          prisma.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
-        )
-      )
+      // Persist story timeline entries
+      await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
+      if (timelinePrecomputed.storyRows.length > 0) {
+        await tx.storyTimelineEntry.createMany({ data: timelinePrecomputed.storyRows, skipDuplicates: true })
+      }
 
-      const levelledEpics = schedulerInput.epics.map(e => ({
-        ...e,
-        timelineStartWeek: epicStartWeeks.get(e.id) ?? e.timelineStartWeek,
-      }))
-
-      const { featureSchedule, storySchedule, weeklyConsumptionMap } = runScheduler({
-        ...schedulerInput,
-        epics: levelledEpics,
+      // Update weekly demand cache
+      await tx.project.update({
+        where: { id: projectId },
+        data: { weeklyDemandCache: timelinePrecomputed.weeklyDemandCache },
       })
-      refreshedWeeklyDemandCache = Object.fromEntries(weeklyConsumptionMap)
 
-      // Materialise timeline entries
-      await prisma.$transaction(async tx => {
-        await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
-        const featureRows = featureSchedule
-          .filter(e => !e.isManual)
-          .map(e => ({
-            projectId,
-            featureId: e.featureId,
-            startWeek: e.startWeek,
-            durationWeeks: e.durationWeeks,
-            isManual: false,
-          }))
-        if (featureRows.length > 0) {
-          await tx.timelineEntry.createMany({ data: featureRows, skipDuplicates: true })
-        }
-
-        await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
-        const storyRows = storySchedule
-          .filter(e => !e.isManual)
-          .map(e => ({
-            projectId,
-            storyId: e.storyId,
-            startWeek: e.startWeek,
-            durationWeeks: e.durationWeeks,
-            isManual: false,
-          }))
-        if (storyRows.length > 0) {
-          await tx.storyTimelineEntry.createMany({ data: storyRows, skipDuplicates: true })
-        }
-      })
+      // ── Test failure seam (after timeline/cache) ─────────────────────────
+      // Production: no-op. Integration tests inject a throwing function to
+      // verify the transaction rolls back timeline and cache mutations too.
+      if (__applyFailureSeam) {
+        __applyFailureSeam()
+      }
     }
 
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { weeklyDemandCache: refreshedWeeklyDemandCache },
-    })
-  }
+    return createdPlan
+  })
 
   res.status(201).json(plan)
 }))

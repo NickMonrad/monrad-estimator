@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "test:snapshot-integration": "vitest run --config vitest.integration.config.ts src/test/snapshotRollback.integration.test.ts",
     "test:clone-integration": "vitest run --config vitest.integration.config.ts src/test/projects.clone.integration.test.ts",
-    "test:squadplan-integration": "vitest run --config vitest.integration.config.ts src/test/squadPlanProfileFirst.integration.test.ts",
+    "test:squadplan-integration": "vitest run --config vitest.integration.config.ts src/test/squadPlanProfileFirst.integration.test.ts src/test/squadPlanApplyParity.integration.test.ts",
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "e2e:cleanup": "tsx scripts/e2e-cleanup.ts",

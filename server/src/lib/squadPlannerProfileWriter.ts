@@ -99,12 +99,77 @@ export function isLegacyPlannerProfile(
     && namedResource.allocationMode === 'CAPACITY_PLAN'
 }
 
-function isPlannerOwnedProfile(
-  profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>,
+
+// ─── Shared planner-managed resource classification ─────────────────────────
+
+/**
+ * Planner-managed resource classification: shared by conflict preflight and
+ * write path for deterministic matching. Each resource is classified by its
+ * full profile set, ordered by priority:
+ *
+ * 1. PROTECTED_PROFILE_SOURCES   → 'explicit_person'   (never matched)
+ * 2. Non-legacy NAMED_PERSON     → 'explicit_person'   (never matched)
+ * 3. Legacy adoptable (all markers) → 'legacy_adoptable'  (matched)
+ * 4. PLANNED_RESOURCE+SQUAD_PLANNER → 'planner_managed'   (matched)
+ * 5. No profiles + CAPACITY_PLAN mode → 'capacity_plan_untouched' (matched)
+ * 6. Everything else → 'other'
+ */
+export type PlannerResourceKind =
+  | 'explicit_person'
+  | 'legacy_adoptable'
+  | 'planner_managed'
+  | 'capacity_plan_untouched'
+  | 'other'
+
+/**
+ * Classify a single named resource by its full profile set.
+ * Used by both conflict preflight and write path for consistent
+ * planner-vs-explicit determination.
+ */
+export function classifyNamedResource(
   namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
+  profiles: ReadonlyArray<Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>>,
+): PlannerResourceKind {
+  for (const profile of profiles) {
+    if (profile.source && PROTECTED_PROFILE_SOURCES[profile.source]) {
+      return 'explicit_person'
+    }
+  }
+  for (const profile of profiles) {
+    if (profile.ownerKind === 'NAMED_PERSON' && !isLegacyPlannerProfile(profile, namedResource)) {
+      return 'explicit_person'
+    }
+  }
+  for (const profile of profiles) {
+    if (isLegacyPlannerProfile(profile, namedResource)) {
+      return 'legacy_adoptable'
+    }
+  }
+  for (const profile of profiles) {
+    if (profile.ownerKind === 'PLANNED_RESOURCE' && profile.source === 'SQUAD_PLANNER') {
+      return 'planner_managed'
+    }
+  }
+  if (profiles.length === 0 && namedResource.allocationMode === 'CAPACITY_PLAN') {
+    return 'capacity_plan_untouched'
+  }
+  return 'other'
+}
+
+/**
+ * True if a resource is planner-managed (legacy-adoptable, existing planner-owned,
+ * or capacity-plan-untouched). Excludes explicit/protected resources.
+ * Stable domain concept used by both findOrCreatePlannedResources and
+ * clearOmittedPlannerCapacity.
+ */
+export function isPlannerManaged(
+  namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
+  profiles: ReadonlyArray<Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>>,
 ): boolean {
-  return (profile.ownerKind === 'PLANNED_RESOURCE' && profile.source === 'SQUAD_PLANNER')
-    || isLegacyPlannerProfile(profile, namedResource)
+  const kind = classifyNamedResource(namedResource, profiles)
+  return kind === 'legacy_adoptable'
+    || kind === 'planner_managed'
+    || kind === 'capacity_plan_untouched'
 }
 
 
@@ -176,8 +241,11 @@ export function buildPlannedResourceProfileData(
   return trajectories.map((trajectory, idx) => {
     const nr = namedResources[idx]
     if (!nr) {
-      // Should not happen if caller ensures enough resources
-      return null as unknown as PlannedResourceProfileWriteSet
+      throw new Error(
+        `Trajectory index ${idx} has no matching named resource — ` +
+        `requires ${trajectories.length} resources but only ${namedResources.length} available. ` +
+        `Check named resource ordering and planner resource classification.`
+      )
     }
     const segments = slotsToSegmentLikes(trajectory.segments)
     const defaultPercent = computeDefaultPercentForSegments(trajectory.segments)
@@ -192,7 +260,7 @@ export function buildPlannedResourceProfileData(
       endWeek,
       segments,
     }
-  }).filter((p): p is PlannedResourceProfileWriteSet => p !== null)
+  })
 }
 
 // ─── Pure: build zero-capacity profile data for surplus resources ───────────
@@ -264,21 +332,14 @@ export function classifyProfileConflicts(
         namedResourceName,
       })
     }
-    for (const profile of profiles) {
-      const namedResource = usedResources.find(r => r.id === namedResourceId) ?? { allocationMode: null }
-      if (profile.ownerKind === 'NAMED_PERSON' && !isLegacyPlannerProfile(profile, namedResource)) {
-        protectedNamedPersonProfiles.push({
-          resourceTypeId: profile.resourceTypeId ?? '',
-          resourceTypeName: 'named-person',
-          namedResourceName,
-        })
-      } else if (PROTECTED_PROFILE_SOURCES[profile.source]) {
-        protectedNamedPersonProfiles.push({
-          resourceTypeId: profile.resourceTypeId ?? '',
-          resourceTypeName: 'protected',
-          namedResourceName,
-        })
-      }
+    const namedResource = usedResources.find(r => r.id === namedResourceId) ?? { allocationMode: null }
+    const kind = classifyNamedResource(namedResource, profiles)
+    if (kind === 'explicit_person') {
+      protectedNamedPersonProfiles.push({
+        resourceTypeId: profiles[0].resourceTypeId ?? '',
+        resourceTypeName: 'named-person',
+        namedResourceName,
+      })
     }
   }
 
@@ -336,48 +397,52 @@ export async function conflictPreflightCheck(
       select: { id: true, name: true, allocationMode: true },
     })) ?? []
 
-    const usedResources = namedResources.slice(0, trajectoryCount)
-    const usedResourceIds = new Set(usedResources.map(r => r.id))
+    const resourceProfiles = namedResources.length === 0
+      ? []
+      : (await tx.capacityProfile.findMany({
+          where: {
+            projectId,
+            namedResourceId: { in: namedResources.map(resource => resource.id) },
+          },
+          select: { id: true, namedResourceId: true, source: true, ownerKind: true, planningBasis: true },
+        })) ?? []
+    const profilesByNamedResource = new Map<string, typeof resourceProfiles>()
+    for (const profile of resourceProfiles) {
+      if (!profile.namedResourceId) continue
+      const profiles = profilesByNamedResource.get(profile.namedResourceId) ?? []
+      profiles.push(profile)
+      profilesByNamedResource.set(profile.namedResourceId, profiles)
+    }
 
-    if (usedResourceIds.size > 0) {
-      const resourceProfiles = (await tx.capacityProfile.findMany({
-        where: {
-          projectId,
-          namedResourceId: { in: [...usedResourceIds] },
-        },
-        select: { id: true, namedResourceId: true, source: true, ownerKind: true, planningBasis: true },
-      })) ?? []
-      const profilesByNamedResource = new Map<string, typeof resourceProfiles>()
-      for (const profile of resourceProfiles) {
-        if (!profile.namedResourceId) continue
-        const profiles = profilesByNamedResource.get(profile.namedResourceId) ?? []
-        profiles.push(profile)
-        profilesByNamedResource.set(profile.namedResourceId, profiles)
+    // Use the same full-profile classification as the write path before
+    // selecting trajectory owners. Explicit resources are skipped rather than
+    // accidentally blocking a later planner-managed resource when enough
+    // planner-owned resources remain.
+    const plannerResources = namedResources.filter(resource => (
+      isPlannerManaged(resource, profilesByNamedResource.get(resource.id) ?? [])
+    ))
+    const explicitResources = namedResources.filter(resource => (
+      classifyNamedResource(resource, profilesByNamedResource.get(resource.id) ?? []) === 'explicit_person'
+    ))
+    if (explicitResources.length > 0 && plannerResources.length < trajectoryCount) {
+      for (const namedResource of explicitResources) {
+        protectedNamedPersonProfiles.push({
+          resourceTypeId: rtId,
+          resourceTypeName: 'named-person',
+          namedResourceName: namedResource.name,
+        })
       }
-      for (const [namedResourceId, profiles] of profilesByNamedResource) {
-        const nr = usedResources.find(resource => resource.id === namedResourceId)
-        if (profiles.length > 1) {
-          conflicts.push({
-            resourceTypeId: rtId,
-            resourceTypeName: 'named-resource',
-            namedResourceName: nr?.name,
-          })
-        }
-        for (const profile of profiles) {
-          if (profile.ownerKind === 'NAMED_PERSON' && !isLegacyPlannerProfile(profile, nr ?? { allocationMode: null })) {
-            protectedNamedPersonProfiles.push({
-              resourceTypeId: rtId,
-              resourceTypeName: 'named-person',
-              namedResourceName: nr?.name,
-            })
-          } else if (PROTECTED_PROFILE_SOURCES[profile.source]) {
-            protectedNamedPersonProfiles.push({
-              resourceTypeId: rtId,
-              resourceTypeName: 'protected',
-              namedResourceName: nr?.name,
-            })
-          }
-        }
+    }
+
+    const usedResources = plannerResources.slice(0, trajectoryCount)
+    for (const namedResource of usedResources) {
+      const profiles = profilesByNamedResource.get(namedResource.id) ?? []
+      if (profiles.length > 1) {
+        conflicts.push({
+          resourceTypeId: rtId,
+          resourceTypeName: 'named-resource',
+          namedResourceName: namedResource.name,
+        })
       }
     }
   }
@@ -430,12 +495,10 @@ export async function findOrCreatePlannedResources(
     profiles.push(profile)
     profilesByResource.set(profile.namedResourceId, profiles)
   }
-  const isPlannerManaged = (nr: { id: string; allocationMode?: string | null }) => {
+  const plannerResources = existingNRs.filter(nr => {
     const profiles = profilesByResource.get(nr.id) ?? []
-    return profiles.some(profile => isPlannerOwnedProfile(profile, nr))
-      || (profiles.length === 0 && nr.allocationMode === 'CAPACITY_PLAN')
-  }
-  const plannerResources = existingNRs.filter(isPlannerManaged)
+    return isPlannerManaged(nr, profiles)
+  })
 
   const missing = Math.max(0, requiredCount - plannerResources.length)
   if (missing > 0) {
@@ -469,8 +532,7 @@ export async function findOrCreatePlannedResources(
   }
   const retained = allNRs.filter(nr => {
     const profiles = allProfilesByResource.get(nr.id) ?? []
-    return profiles.some(profile => isPlannerOwnedProfile(profile, nr))
-      || (profiles.length === 0 && nr.allocationMode === 'CAPACITY_PLAN')
+    return isPlannerManaged(nr, profiles)
   })
 
   return { namedResources: retained, created: missing }
@@ -721,6 +783,31 @@ export async function clearSurplusCompatibilityFields(
     },
   })
 }
+
+// ─── Test failure seam ───────────────────────────────────────────────────────
+
+/**
+ * Deterministic transaction failure seam for the activated apply path.
+ * The squadPlan route invokes it after profile, compatibility, timeline, and
+ * weekly-cache writes begin, so integration tests can prove full transaction
+ * rollback without changing production behaviour.
+ *
+ * In production this is always null — no production code path ever sets it.
+ * Integration tests set a throwing function to verify atomic rollback.
+ *
+ * ```ts
+ * import { __setApplyFailureSeam } from '../lib/squadPlannerProfileWriter.js'
+ * __setApplyFailureSeam(() => { throw new Error('injected') })
+ * ```
+ */
+export let __applyFailureSeam: (() => void) | null = null
+
+/**
+ * Override the failure seam for testing. Pass null to disable.
+ */
+export function __setApplyFailureSeam(fn: (() => void) | null): void {
+  __applyFailureSeam = fn
+}
 /**
  * Clear planner-owned role/resource capacity for resource types omitted from
  * the replacement plan while preserving explicit/manual profiles.
@@ -739,12 +826,31 @@ export async function clearOmittedPlannerCapacity(
     },
     select: { resourceTypeId: true },
   })
-  const omittedResourceTypeIds = [...new Set(
-    roleProfiles
+  // Pre-#359 planner writes had no role CapacityProfile row. Treat an
+  // omitted resource type as planner-owned only when its legacy compatibility
+  // fields carry capacity-plan evidence; explicit/manual profiles are not
+  // selected by this query.
+  const legacyResourceTypes = await tx.resourceType.findMany({
+    where: {
+      projectId,
+      id: { notIn: [...activeResourceTypeIds] },
+      allocationMode: 'CAPACITY_PLAN',
+      OR: [
+        { allocationPercent: { gt: 0 } },
+        { allocationStartWeek: { not: null } },
+        { allocationEndWeek: { not: null } },
+      ],
+    },
+    select: { id: true },
+  })
+  const legacyResourceTypeIds = legacyResourceTypes.map(resourceType => resourceType.id)
+
+  const omittedResourceTypeIds = [...new Set([
+    ...legacyResourceTypeIds,
+    ...roleProfiles
       .map(profile => profile.resourceTypeId)
       .filter((id): id is string => id !== null && !activeResourceTypeIds.has(id)),
-  )]
-  if (omittedResourceTypeIds.length === 0) return
+  ])]
 
   const zeroRoleProfiles: RoleProfileWriteSet[] = omittedResourceTypeIds.map(resourceTypeId => ({
     resourceTypeId,
@@ -771,15 +877,21 @@ export async function clearOmittedPlannerCapacity(
       where: { resourceTypeId },
       select: { id: true, allocationMode: true },
     })
+    const nrIds = namedResources.map(nr => nr.id)
+    const nrAllProfiles = nrIds.length === 0 ? [] : await tx.capacityProfile.findMany({
+      where: { projectId, namedResourceId: { in: nrIds } },
+      select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
+    })
+    const profilesByNrId = new Map<string, typeof nrAllProfiles>()
+    for (const profile of nrAllProfiles) {
+      if (!profile.namedResourceId) continue
+      const list = profilesByNrId.get(profile.namedResourceId) ?? []
+      list.push(profile)
+      profilesByNrId.set(profile.namedResourceId, list)
+    }
     for (const namedResource of namedResources) {
-      const profile = await tx.capacityProfile.findFirst({
-        where: { projectId, namedResourceId: namedResource.id },
-        select: { ownerKind: true, source: true, planningBasis: true },
-      })
-      if (
-        (!profile && namedResource.allocationMode === 'CAPACITY_PLAN')
-        || (profile && isPlannerOwnedProfile(profile, namedResource))
-      ) {
+      const profiles = profilesByNrId.get(namedResource.id) ?? []
+      if (isPlannerManaged(namedResource, profiles)) {
         zeroPlannedProfiles.push(buildZeroCapacityProfileData(namedResource.id))
         zeroResourceIds.push(namedResource.id)
       }

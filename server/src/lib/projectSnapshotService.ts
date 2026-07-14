@@ -6,7 +6,7 @@
  * service operates on already-authenticated inputs.
  */
 
-import type { PrismaClient } from '@prisma/client'
+import { Prisma, type PrismaClient } from '@prisma/client'
 import { prisma } from './prisma.js'
 import {
   parseSnapshotData,
@@ -79,6 +79,23 @@ async function fetchEpics(projectId: string, db: SnapshotDbClient = prisma) {
     },
   })
 }
+function parseWeeklyDemandCache(value: Prisma.JsonValue | null | undefined): Record<string, number> | null {
+  if (value == null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new SnapshotSchemaError('weeklyDemandCache must be a JSON object or null')
+  }
+
+  const entries = Object.entries(value)
+  const cache: Record<string, number> = {}
+  for (const [key, entryValue] of entries) {
+    if (typeof entryValue !== 'number' || !Number.isFinite(entryValue)) {
+      throw new SnapshotSchemaError('weeklyDemandCache values must be finite numbers')
+    }
+    cache[key] = entryValue
+  }
+  return cache
+}
+
 
 
 // ─── buildSnapshot (public) ───────────────────────────────────────────────────
@@ -99,11 +116,12 @@ export async function buildSnapshot(
     featureDependencies,
     overheadItems,
     capacityProfiles,
+    capacityPlans,
   ] = await Promise.all([
     fetchEpics(projectId, db),
     db.project.findUnique({
       where: { id: projectId },
-      select: { startDate: true, onboardingWeeks: true, bufferWeeks: true, hoursPerDay: true },
+      select: { startDate: true, onboardingWeeks: true, bufferWeeks: true, hoursPerDay: true, weeklyDemandCache: true },
     }),
     db.resourceType.findMany({
       where: { projectId },
@@ -145,6 +163,40 @@ export async function buildSnapshot(
       select: { name: true, type: true, value: true, resourceTypeId: true, order: true },
     }),
     loadExactCapacityProfiles(projectId, db),
+    db.capacityPlan?.findMany({
+      where: { projectId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        name: true,
+        targetWeeks: true,
+        periodWeeks: true,
+        maxDelta: true,
+        isActive: true,
+        totalCost: true,
+        deliveryWeeks: true,
+        createdAt: true,
+        periods: {
+          orderBy: [{ periodIndex: 'asc' }, { id: 'asc' }],
+          select: {
+            id: true,
+            periodIndex: true,
+            startWeek: true,
+            endWeek: true,
+            entries: {
+              orderBy: { id: 'asc' },
+              select: {
+                id: true,
+                resourceTypeId: true,
+                headcount: true,
+                demandFTE: true,
+                utilisationPct: true,
+              },
+            },
+          },
+        },
+      },
+    }) ?? Promise.resolve([]),
   ])
 
   // Convert Date to ISO string for JSON compatibility
@@ -156,6 +208,7 @@ export async function buildSnapshot(
         onboardingWeeks: project.onboardingWeeks,
         bufferWeeks: project.bufferWeeks,
         hoursPerDay: project.hoursPerDay,
+        weeklyDemandCache: parseWeeklyDemandCache(project.weeklyDemandCache),
       }
     : null
 
@@ -171,6 +224,10 @@ export async function buildSnapshot(
     featureDependencies,
     overheadItems,
     capacityProfiles,
+    capacityPlans: capacityPlans.map(plan => ({
+      ...plan,
+      createdAt: plan.createdAt.toISOString(),
+    })),
   }
 
   validateSnapshotV3(snapshot)
@@ -309,6 +366,13 @@ async function restoreSnapshotCommonState(
         onboardingWeeks: data.project.onboardingWeeks ?? 0,
         bufferWeeks: data.project.bufferWeeks ?? 0,
         hoursPerDay: data.project.hoursPerDay ?? 7.6,
+        ...(data.project.weeklyDemandCache !== undefined
+          ? {
+              weeklyDemandCache: data.project.weeklyDemandCache === null
+                ? Prisma.DbNull
+                : data.project.weeklyDemandCache,
+            }
+          : {}),
       },
     })
   }
@@ -404,6 +468,50 @@ async function restoreSnapshotCommonState(
   }
 }
 
+/** Restore the exact capacity-plan history captured by a v3 snapshot. */
+async function restoreSnapshotCapacityPlans(
+  tx: SnapshotDbClient,
+  projectId: string,
+  plans: SnapshotV3['capacityPlans'],
+): Promise<void> {
+  if (plans === undefined) return
+
+  await tx.capacityPlan.deleteMany({ where: { projectId } })
+  for (const plan of plans) {
+    await tx.capacityPlan.create({
+      data: {
+        id: plan.id,
+        projectId,
+        name: plan.name,
+        targetWeeks: plan.targetWeeks,
+        periodWeeks: plan.periodWeeks,
+        maxDelta: plan.maxDelta,
+        isActive: plan.isActive,
+        totalCost: plan.totalCost,
+        deliveryWeeks: plan.deliveryWeeks,
+        createdAt: new Date(plan.createdAt),
+        periods: {
+          create: plan.periods.map(period => ({
+            id: period.id,
+            periodIndex: period.periodIndex,
+            startWeek: period.startWeek,
+            endWeek: period.endWeek,
+            entries: {
+              create: period.entries.map(entry => ({
+                id: entry.id,
+                resourceTypeId: entry.resourceTypeId,
+                headcount: entry.headcount,
+                demandFTE: entry.demandFTE,
+                utilisationPct: entry.utilisationPct,
+              })),
+            },
+          })),
+        },
+      },
+    })
+  }
+}
+
 // ─── rollbackProjectSnapshot (the authoritative rollback operation) ───────────
 
 /**
@@ -473,6 +581,9 @@ export async function rollbackProjectSnapshot({
         ...parsedData.overheadItems
           .filter(o => o.resourceTypeId !== null)
           .map(o => o.resourceTypeId as string),
+        ...(parsedData.capacityPlans ?? []).flatMap(plan =>
+          plan.periods.flatMap(period => period.entries.map(entry => entry.resourceTypeId)),
+        ),
       ]),
     ]
     const allNrIds = [
@@ -578,9 +689,10 @@ export async function rollbackProjectSnapshot({
       await restoreSnapshotCommonState(tx, projectId, parsedData)
       await recreateV2CapacityProfiles(tx, projectId, parsedData)
     } else if (isSnapshotV3(parsedData)) {
-      // --- V3: full-state restore + exact profile/segment replacement ---
+      // --- V3: full-state restore + exact profile/segment and plan replacement ---
       await restoreSnapshotCommonState(tx, projectId, parsedData)
       await recreateV3CapacityProfiles(tx, projectId, parsedData)
+      await restoreSnapshotCapacityPlans(tx, projectId, parsedData.capacityPlans)
     }
 
     // Enforce retention policy inside the same transaction

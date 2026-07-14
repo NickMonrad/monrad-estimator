@@ -34,6 +34,7 @@ import { app } from '../app.js'
 import { getWeeklyCapacity } from '../lib/scheduler.js'
 import {
   writePlannerProfiles,
+  __setApplyFailureSeam,
   type RoleProfileWriteSet,
 } from '../lib/squadPlannerProfileWriter.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
@@ -933,6 +934,237 @@ describeIf('Scenario 8 — Profile writes roll back atomically', () => {
     })).toBe(0)
     expect(await prisma.resourceType.findUnique({ where: { id: rtId } }))
       .toMatchObject({ allocationMode: 'TIMELINE' })
+  })
+
+  it('applies atomic rollback when the __applyFailureSeam fires inside the route transaction', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-eng-s8b', 'Engineer')
+    await createEpicBacklog(projectId, rtId)
+
+    // Inject the failure seam — it fires after profile, timeline, and cache
+    // writes inside the route transaction.
+    __setApplyFailureSeam(() => { throw new Error('route seam failure') })
+
+    try {
+      const res = await request(app)
+        .post(`/api/projects/${projectId}/squad-plan/apply`)
+        .set('Authorization', authHeader)
+        .send(buildApplyPayload(rtId, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ], { name: 'Seam Test' }))
+
+      // Should fail with 500 (uncaught transaction error → asyncHandler → 500)
+      expect(res.status).toBe(500)
+    } finally {
+      // Always clean up the seam
+      __setApplyFailureSeam(null)
+    }
+
+    // No profiles or segments should have leaked
+    expect(await fetchProfiles(projectId)).toHaveLength(0)
+    expect(await prisma.capacitySegment.count({
+      where: { capacityProfile: { projectId } },
+    })).toBe(0)
+
+    // Resource type should still have its original allocation mode
+    const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
+    expect(rt).toMatchObject({ allocationMode: 'TIMELINE' })
+
+    // Snapshot was created before the transaction — it exists but the plan does not
+    const snapshots = await prisma.backlogSnapshot.findMany({ where: { projectId } })
+    expect(snapshots.length).toBeGreaterThanOrEqual(1)
+
+    // No active capacity plan
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).toBeNull()
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 9 — Pre-#359 legacy role A/B omission scenario
+// ═════════════════════════════════════════════════════════════════════════════
+// Simulates a pre-#359 state where both role A and role B have only legacy
+// compatibility markers and NAMED_PERSON planner profiles (no ROLE profile
+// rows). A new plan covering only role A should create A's role profile,
+// clear B's legacy capacity, and preserve explicit named-person metadata on B.
+//
+// The pre-apply snapshot is created outside the transaction. If the apply
+// transaction rolls back (failure seam), the snapshot survives but represents
+// the correct pre-apply state — no orphan results.
+
+describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
+  let projectId: string
+  let rtA: string
+  let rtB: string
+  let nrA: string
+  let nrB: string
+  let nrExplicitB: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    rtA = await createResourceType(projectId, 'rt-legacy-a', 'Engineer', { allocationMode: 'CAPACITY_PLAN' })
+    rtB = await createResourceType(projectId, 'rt-legacy-b', 'QA', { allocationMode: 'CAPACITY_PLAN' })
+    await prisma.resourceType.update({
+      where: { id: rtA },
+      data: { allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 8 },
+    })
+    await prisma.resourceType.update({
+      where: { id: rtB },
+      data: { allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 8 },
+    })
+
+    // Create backlog so planner has work to schedule
+    await createEpicBacklog(projectId, rtA)
+
+    // Create named resources with CAPACITY_PLAN (legacy evidence)
+    nrA = await createNamedResource(projectId, rtA, 'nr-legacy-a-1', 'Engineer 1', {
+      allocationMode: 'CAPACITY_PLAN',
+    })
+    nrB = await createNamedResource(projectId, rtB, 'nr-legacy-b-1', 'QA 1', {
+      allocationMode: 'CAPACITY_PLAN',
+    })
+    nrExplicitB = await createNamedResource(projectId, rtB, 'nr-legacy-b-explicit', 'QA Explicit', {
+      allocationMode: 'EFFORT',
+    })
+
+    // Create pre-#359 legacy NAMED_PERSON profiles (both resources)
+    await createProfile(
+      projectId, 'cp-legacy-a-1', 'NAMED_PERSON', null, nrA,
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER' },
+    )
+    await createProfile(
+      projectId, 'cp-legacy-b-1', 'NAMED_PERSON', null, nrB,
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER' },
+    )
+
+    // Create an explicit MANUAL NAMED_PERSON profile on nrExplicitB (must be preserved)
+    await createProfile(
+      projectId, 'cp-explicit-b', 'NAMED_PERSON', null, nrExplicitB,
+      { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL' },
+    )
+
+    // Apply plan covering only rtA (role A), 1 headcount
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtA, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ], { name: 'Legacy A/B Omission Test' }))
+
+    expect(res.status).toBe(201)
+  })
+
+  it('creates role A profile while omitting legacy role B without a role profile row', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const roleAProfile = profiles.find(
+      p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtA,
+    )
+    expect(roleAProfile).toMatchObject({
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+    })
+    // Default should be non-zero (not cleared)
+    expect(roleAProfile!.defaultPercent).toBeGreaterThan(0)
+    const segments = await fetchSegments(roleAProfile!.id)
+    expect(segments.length).toBeGreaterThan(0)
+  })
+
+  it('converts role As legacy NAMED_PERSON to PLANNED_RESOURCE with segments', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const plannedA = profiles.find(
+      p => p.ownerKind === 'PLANNED_RESOURCE' && p.namedResourceId === nrA,
+    )
+    expect(plannedA).toMatchObject({
+      resourceTypeId: null,
+      namedResourceId: nrA,
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+    })
+    expect(plannedA!.defaultPercent).toBeGreaterThan(0)
+    const segments = await fetchSegments(plannedA!.id)
+    expect(segments.length).toBeGreaterThan(0)
+    // Verify no NAMED_PERSON profile remains for nrA
+    expect(profiles.filter(p => p.ownerKind === 'NAMED_PERSON' && p.namedResourceId === nrA))
+      .toHaveLength(0)
+  })
+
+  it('clears role B legacy ROLE profile to zero capacity', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const roleBProfile = profiles.find(
+      p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtB,
+    )
+    expect(roleBProfile).toMatchObject({
+      defaultPercent: 0,
+      startWeek: null,
+      endWeek: null,
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+    })
+    expect(await fetchSegments(roleBProfile!.id)).toHaveLength(0)
+  })
+
+  it('clears role B legacy named resource to zero-capacity PLANNED_RESOURCE', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const plannedB = profiles.find(
+      p => p.ownerKind === 'PLANNED_RESOURCE' && p.namedResourceId === nrB,
+    )
+    expect(plannedB).toMatchObject({
+      defaultPercent: 0,
+      startWeek: null,
+      endWeek: null,
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+    })
+    expect(await fetchSegments(plannedB!.id)).toHaveLength(0)
+  })
+
+  it('clears role B named resource compatibility aliases', async () => {
+    const nr = await prisma.namedResource.findUnique({ where: { id: nrB } })
+    expect(nr).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 0,
+      allocationPct: 0,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+  })
+
+  it('preserves explicit named-person metadata on B unchanged', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const explicitProfile = profiles.find(p => p.id === 'cp-explicit-b')
+    expect(explicitProfile).toMatchObject({
+      ownerKind: 'NAMED_PERSON',
+      source: 'MANUAL',
+      namedResourceId: nrExplicitB,
+      planningBasis: 'CAPACITY_PROFILE',
+    })
+    // Verify the explicit nr was NOT touched by the planner
+    const nr = await prisma.namedResource.findUnique({ where: { id: nrExplicitB } })
+    expect(nr).toMatchObject({
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+    })
+    // Should not have a PLANNED_RESOURCE profile
+    expect(profiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE' && p.namedResourceId === nrExplicitB))
+      .toHaveLength(0)
+    // Should have exactly one profile (the explicit MANUAL one)
+    expect(profiles.filter(p => p.namedResourceId === nrExplicitB))
+      .toHaveLength(1)
+  })
+
+  it('clears role B resource type compatibility fields', async () => {
+    const rt = await prisma.resourceType.findUnique({ where: { id: rtB } })
+    expect(rt).toMatchObject({
+      count: 0,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 0,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
   })
 })
 

@@ -317,16 +317,18 @@ Prefer fast integration/unit coverage around the shared planning model and API b
 ## Follow-up implementation sequence
 
 > **Note:** PR #356 (merged) introduced capacity-profile read adoption in
-> Resource Profile, as part of the #340 source-of-truth epic. It introduced profile-first
-> read precedence in the Resource Profile route and export hook, ahead of the #263
-> sequence above. This means Resource Profile display and export fields will resolve from
-> `CapacityProfile`/`CapacitySegment` when a persisted profile exists, rather than
-> exclusively from legacy `ResourceType`/`NamedResource` fields. Commercial calculations
-> (allocatedDays, actualAllocatedDays, totalDays, estimatedCost) remain unchanged.
-> Scheduler, leveller, Timeline, and Squad Planner also remain unchanged — they continue
-> to read legacy allocation fields directly. The sequence below is for the #263 epic
-> (ownership boundaries); the #340 epic (profile source-of-truth migration) runs in
-> parallel and may inform later #263 items.
+> Resource Profile and exports. PR #359 completes the profile-first Squad Planner
+> apply boundary. Resource Profile display/export resolve from structurally valid
+> persisted `CapacityProfile`/`CapacitySegment` rows, with deterministic fallback
+> only for missing or invalid persisted data. Commercial calculations
+> (allocatedDays, actualAllocatedDays, totalDays, estimatedCost) remain unchanged
+> and remain Commercial-owned. Timeline/Planning owns scheduling, assignment
+> windows, and weekly demand cache; the Squad Planner writes those outputs in the
+> same transaction as the plan and capacity profiles. Legacy allocation fields are
+> compatibility projections for unmigrated consumers.
+
+The sequence below is for the #263 ownership-boundary epic; the #340 profile
+source-of-truth migration runs in parallel and informs later #263 items.
 Recommended order under #263:
 
 1. #264 - Extract shared project planning read model.
@@ -475,8 +477,10 @@ fidelity.
 - `ProjectDiscount` rows remain Commercial-owned and are not serialized into V3
   snapshots. Rollback leaves project-wide, target-role, and post-snapshot discounts
   unchanged; no discount is promoted to project-wide scope.
-- Capacity Plan history (Capacity Plan periods/entries) is **not** part of PR #367;
-  it is tracked by #359 separately.
+- Capacity Plan history is now included in the v3 rollback contract (#359):
+  exact plan, period, and entry rows plus the optional weekly demand cache are
+  restored when present. Older v3 snapshots without those optional fields remain
+  backward-compatible and leave that dimension untouched.
 
 See [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md#phase-2b-—-snapshot-v3-capacity-profile-preservation)
 and [`capacity-profile-design.md`](capacity-profile-design.md#snapshot-schema-v3--snapshot-rollback-capacity-safety) for details.

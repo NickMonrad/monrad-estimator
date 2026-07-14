@@ -954,3 +954,191 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expectElementToFit(page.getByTestId('resource-counts'))
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Squad Planner — profile-first apply with capacity plan
+// Covers: generate, apply and verify planned resource identities on Resource
+// Profile, reapply with changed settings, Snapshot History presence/rollback.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Squad Planner — profile-first apply and resource identity', () => {
+  test('generate, apply, verify planned resources, reapply, and snapshot history', async ({ page }) => {
+    test.setTimeout(150_000)
+
+    const projectName = `E2E SquadPlan ${Date.now()}`
+
+    // ── Login and create project ──
+    await login(page)
+    await createProject(page, projectName)
+
+    // ── Navigate to Backlog and seed CSV with Developer + Tech Lead tasks ──
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
+    const tmpFile = path.join(os.tmpdir(), `squad-plan-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
+
+    // ── Navigate to Timeline ──
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole('button', { name: /timeline/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /timeline/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    // ── Set start date and Update timeline ──
+    const dateInput = page.locator('input[type="date"]')
+    await expect(dateInput).toBeVisible({ timeout: 8_000 })
+    await dateInput.fill('2026-06-01')
+    await expect(dateInput).toHaveValue('2026-06-01')
+    await quickSchedule(page)
+    await expect(
+      page.getByRole('button', { name: /sequential|parallel/i }).first(),
+    ).toBeVisible({ timeout: 15_000 })
+
+    // ── Open Squad Planner drawer ──
+    await page.getByRole('button', { name: /open squad planner/i }).click()
+
+    const drawer = page.getByRole('dialog', { name: /squad planner/i })
+    await expect(drawer).toBeVisible({ timeout: 5_000 })
+    await expect(drawer.getByRole('heading', { name: /squad planner/i })).toBeVisible()
+
+    // ── Generate capacity profile ──
+    const generateBtn = drawer.getByRole('button', { name: /generate capacity profile/i })
+    await expect(generateBtn).toBeVisible()
+
+    const planResponse = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan') && !resp.url().includes('/apply') && resp.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await generateBtn.click()
+    await planResponse
+
+    // Wait for result KPIs — Peak, Delivery, Planned squad cost, Avg Utilisation
+    await expect(drawer.getByText(/Peak/i)).toBeVisible({ timeout: 10_000 })
+    await expect(drawer.getByText(/Delivery/i)).toBeVisible()
+    await expect(drawer.getByText(/Planned squad cost/i)).toBeVisible()
+
+    // ── Apply capacity profile ──
+    const applyBtn = drawer.getByRole('button', { name: /apply capacity profile/i })
+    await expect(applyBtn).toBeVisible()
+
+    // Accept both confirm and the post-apply alert
+    page.on('dialog', dialog => dialog.accept())
+
+    const applyResponse = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan/apply') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
+    await applyBtn.click()
+    await applyResponse
+
+    // Drawer closes after successful apply
+    await expect(drawer).not.toBeVisible({ timeout: 10_000 })
+
+    // ── Navigate to Resource Profile and assert planned-resource identities ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // Find the Developer row and expand named resources
+    const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(devRow).toBeVisible({ timeout: 15_000 })
+
+    // Click "People ↗" to reveal the NamedResourcesPanel
+    await devRow.getByTitle('Show named resources').click()
+
+    // The panel heading confirms it opened
+    await expect(page.getByText('Named Resources')).toBeVisible({ timeout: 8_000 })
+
+    // Check for "Planned resource" badge — each planned resource gets this
+    await expect(page.getByText('Planned resource').first()).toBeVisible({ timeout: 5_000 })
+
+    // Check for "Squad Planner" source badge — the capacity profile source tag
+    await expect(page.getByText('Squad Planner').first()).toBeVisible({ timeout: 5_000 })
+
+    // Name input must be disabled for planned resources (cannot be renamed)
+    const nameInput = devRow.locator('input[type="text"]').first()
+    await expect(nameInput).toBeDisabled()
+
+    // ── Reapply — open Squad Planner with changed settings ──
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    // Open Squad Planner again
+    await page.getByRole('button', { name: /open squad planner/i }).click()
+    await expect(drawer).toBeVisible({ timeout: 5_000 })
+
+    // Change Capacity Tracking to 'Tight' so the re-generated plan differs
+    const tightBtn = drawer.getByRole('button', { name: 'Tight' })
+    await expect(tightBtn).toBeVisible()
+    await tightBtn.click()
+
+    // Generate a different plan
+    const planResponse2 = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan') && !resp.url().includes('/apply') && resp.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /generate capacity profile/i }).click()
+    await planResponse2
+    await expect(drawer.getByText(/Delivery/i)).toBeVisible({ timeout: 10_000 })
+
+    // Apply the changed plan
+    const applyResponse2 = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan/apply') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
+    await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
+    await applyResponse2
+    await expect(drawer).not.toBeVisible({ timeout: 10_000 })
+
+    // ── Verify stable identity + updated capacity on Resource Profile ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const devRow2 = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(devRow2).toBeVisible({ timeout: 15_000 })
+    await devRow2.getByTitle('Show named resources').click()
+
+    // Identity remains stable — still "Planned resource"
+    await expect(page.getByText('Planned resource').first()).toBeVisible({ timeout: 8_000 })
+    // Source badge still "Squad Planner"
+    await expect(page.getByText('Squad Planner').first()).toBeVisible({ timeout: 5_000 })
+    // Name input still disabled
+    await expect(devRow2.locator('input[type="text"]').first()).toBeDisabled()
+
+    // ── Exercise Snapshot History ──
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    // Open History panel
+    await page.getByRole('button', { name: /history/i }).click()
+
+    // SnapshotHistoryPanel heading
+    await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
+
+    // Squad Plan apply creates a snapshot with trigger 'optimiser_apply'
+    await expect(page.getByText('optimiser_apply').first()).toBeVisible({ timeout: 8_000 })
+
+    // Exercise rollback UI — accept the confirm dialog
+    await page.getByRole('button', { name: /rollback/i }).first().click()
+    // After rollback the panel refreshes; this asserts no crash/error
+    await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
+  })
+})

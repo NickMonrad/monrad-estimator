@@ -258,20 +258,6 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
         ],
       })
 
-    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
-    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
-      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
-      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
-      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
-      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn().mockResolvedValue({}), deleteMany: vi.fn() },
-      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn(), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
-      project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
-      timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
-      storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
-      epic: { update: vi.fn(), findMany: vi.fn() },
-      epicDependency: { findMany: vi.fn() },
-      storyDependency: { findMany: vi.fn() },
-    }))
 
     expect(res.status).toBe(400)
     expect(res.body.error).toContain('Unknown resourceTypeId')
@@ -358,17 +344,12 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     vi.mocked(prisma.namedResource.updateMany).mockResolvedValue({ count: 1 } as never)
     vi.mocked(prisma.namedResource.findMany).mockResolvedValue([{ id: 'nr-dev' }] as never)
     vi.mocked(prisma.namedResource.update).mockResolvedValue({} as never)
-    vi.mocked(prisma.epic.update).mockResolvedValue({} as never)
-    vi.mocked(prisma.project.update).mockResolvedValue({
-      ...mockProject,
-      weeklyDemandCache: { 'rt-dev|0': 2 },
-    } as never)
-
-    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
-    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
+    let capturedTx!: Record<string, any>
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => {
+      capturedTx = {
       capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
-      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
-      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
+      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev', allocationMode: 'CAPACITY_PLAN' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
       capacityProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn().mockResolvedValue({}), deleteMany: vi.fn() },
       capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn(), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
       project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
@@ -377,7 +358,9 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       epic: { update: vi.fn(), findMany: vi.fn() },
       epicDependency: { findMany: vi.fn() },
       storyDependency: { findMany: vi.fn() },
-    }))
+      }
+      return fn(capturedTx)
+    })
 
     const res = await request(app)
       .post('/api/projects/proj-1/squad-plan/apply')
@@ -412,7 +395,7 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       })
 
     expect(res.status).toBe(201)
-    expect(prisma.project.update).toHaveBeenCalledWith({
+    expect(capturedTx.project.update).toHaveBeenCalledWith({
       where: { id: 'proj-1' },
       data: { weeklyDemandCache: { 'rt-dev|0': 2 } },
     })
@@ -500,17 +483,12 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       .mockResolvedValueOnce([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }] as never)
       .mockResolvedValueOnce([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }] as never)
     vi.mocked(prisma.namedResource.update).mockResolvedValue({} as never)
-    vi.mocked(prisma.epic.update).mockResolvedValue({} as never)
-    vi.mocked(prisma.project.update).mockResolvedValue({
-      ...mockProject,
-      weeklyDemandCache: {},
-    } as never)
-
-    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
-    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
+    let capturedTx!: Record<string, any>
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => {
+      capturedTx = {
       capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
-      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
-      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
+      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev-1', allocationMode: 'CAPACITY_PLAN' }, { id: 'nr-dev-2', allocationMode: 'CAPACITY_PLAN' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
       capacityProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn().mockResolvedValue({}), deleteMany: vi.fn() },
       capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn(), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
       project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
@@ -519,7 +497,9 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       epic: { update: vi.fn(), findMany: vi.fn() },
       epicDependency: { findMany: vi.fn() },
       storyDependency: { findMany: vi.fn() },
-    }))
+      }
+      return fn(capturedTx)
+    })
 
     const res = await request(app)
       .post('/api/projects/proj-1/squad-plan/apply')
@@ -567,7 +547,8 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       })
 
     expect(res.status).toBe(201)
-    const projectUpdateArg = vi.mocked(prisma.project.update).mock.calls.at(-1)?.[0]
+    expect(capturedTx.project.update).toHaveBeenCalled()
+    const projectUpdateArg = capturedTx.project.update.mock.calls.at(-1)?.[0]
     const weeklyDemandCache = projectUpdateArg?.data?.weeklyDemandCache as Record<string, number>
     expect(weeklyDemandCache['rt-dev|0']).toBeCloseTo(5, 6)
     expect(weeklyDemandCache['rt-dev|4']).toBeCloseTo(2.5, 6)

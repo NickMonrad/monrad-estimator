@@ -2,8 +2,9 @@
  * reconcileCapacityProfiles.ts — Reconciliation/parity helper for capacity profiles.
  *
  * Compares legacy mapper-derived profiles against persisted CapacityProfile/CapacitySegment
- * rows to detect mismatches. Used by the backfill runner to verify data integrity
- * and by the read-only capacity-profile endpoint to decide persisted-read vs fallback.
+ * rows to detect mismatches. Used by the backfill runner and diagnostic tooling to verify
+ * data integrity; the read-only capacity-profile endpoint uses structural validation and
+ * no longer uses this helper as a lossy persisted-read gate.
  */
 import type { PrismaClient } from '@prisma/client'
 
