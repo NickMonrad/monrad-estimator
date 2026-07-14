@@ -275,7 +275,13 @@ export function checkPersistedCompleteness(
   }
 
   for (const resourceType of input.resourceTypes) {
-    const profiles = profilesByResourceType.get(resourceType.id) ?? []
+    const namedResourceIds = new Set(resourceType.namedResources.map(namedResource => namedResource.id))
+    const profiles = [
+      ...(profilesByResourceType.get(resourceType.id) ?? []),
+      ...input.capacityProfiles.filter(
+        profile => profile.namedResourceId != null && namedResourceIds.has(profile.namedResourceId),
+      ),
+    ]
     const roleProfiles = profiles.filter(
       profile => profile.resourceTypeId === resourceType.id && profile.ownerKind === 'ROLE',
     )

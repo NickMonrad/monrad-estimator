@@ -772,9 +772,10 @@ describe('persisted profiles', () => {
       .set('Authorization', authHeader)
 
     expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].owner.kind).toBe('plannedResource')
+    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
     expect(res.body.capacityProfiles[0].owner.id).toBe('nr-1')
     expect(res.body.capacityProfiles[0].legacy).toBeDefined()
+    expect(res.body.capacityProfiles[0].id).toBe('nr-1')
   })
 
   it('accepts explicit-only named-resource coverage without an aggregate ROLE profile', async () => {
