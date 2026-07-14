@@ -459,7 +459,7 @@ export default function TimelinePage() {
     }
   }, [editingFeatureId, timeline])
 
-  const scheduleTimeline = useMutation({
+  const { mutate: scheduleTimelineMutate, isPending: isSchedulePending } = useMutation({
     mutationFn: (body: { startDate?: string; resourceLevel?: boolean }) =>
       api.post(`/projects/${projectId}/timeline/schedule`, body).then(r => r.data),
     onSuccess: (data) => {
@@ -475,10 +475,10 @@ export default function TimelinePage() {
       initialScheduleDone.current = true
       if (timeline.entries.length === 0) {
         const body = project.startDate ? { startDate: project.startDate.slice(0, 10), resourceLevel } : { resourceLevel }
-        scheduleTimeline.mutate(body)
+        scheduleTimelineMutate(body)
       }
     }
-  }, [timeline, project, resourceLevel, scheduleTimeline])
+  }, [timeline, project, resourceLevel, scheduleTimelineMutate])
 
   const invalidate = () => invalidateProjectPlanning(qc, projectId)
 
@@ -678,7 +678,7 @@ export default function TimelinePage() {
     mutationFn: (featureId: string) => api.delete(`/projects/${projectId}/timeline/${featureId}`),
     onSuccess: () => {
       setEditingFeatureId(null)
-      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
+      scheduleTimelineMutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
     },
   })
 
@@ -686,7 +686,7 @@ export default function TimelinePage() {
     mutationFn: () => api.delete(`/projects/${projectId}/timeline`),
     onSuccess: () => {
       setEditingFeatureId(null)
-      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
+      scheduleTimelineMutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
     },
   })
 
@@ -694,7 +694,7 @@ export default function TimelinePage() {
     mutationFn: (storyId: string) =>
       api.delete(`/projects/${projectId}/timeline/stories/${storyId}`),
     onSuccess: () => {
-      scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
+      scheduleTimelineMutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
     },
   })
 
@@ -734,31 +734,39 @@ export default function TimelinePage() {
 
   const handleSchedule = () => {
     setScheduleStale(false)
-    scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
+    scheduleTimelineMutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
   }
+  const timelineEntries = timeline?.entries
+  const storyEntries = timeline?.storyEntries
+  const bufferWeeks = timeline?.bufferWeeks ?? 0
+  const onboardingWeeks = timeline?.onboardingWeeks ?? 0
   // Compute Gantt dimensions
   const totalWeeks = (() => {
-    if (!timeline?.entries?.length) return 0
-    const featureMax = Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks))
-    const storyMax = timeline.storyEntries?.length
-      ? Math.max(...timeline.storyEntries.map(e => e.startWeek + e.durationWeeks))
+    if (!timelineEntries?.length) return 0
+    const featureMax = Math.max(...timelineEntries.map(e => e.startWeek + e.durationWeeks))
+    const storyMax = storyEntries?.length
+      ? Math.max(...storyEntries.map(e => e.startWeek + e.durationWeeks))
       : 0
     const deliveryWeeks = Math.ceil(Math.max(featureMax, storyMax))
-    return deliveryWeeks + (timeline.bufferWeeks ?? 0) + (timeline.onboardingWeeks ?? 0)
+    return deliveryWeeks + bufferWeeks + onboardingWeeks
   })()
 
   // Group entries by epicId, sorted by epicOrder then featureOrder
   const epicGroups = (() => {
-    if (!timeline?.entries?.length) return []
-    const byEpic: Record<string, { epicId: string; epicName: string; epicOrder: number; entries: TimelineEntry[] }> = {}
-    for (const e of timeline.entries) {
-      if (!byEpic[e.epicId]) byEpic[e.epicId] = { epicId: e.epicId, epicName: e.epicName, epicOrder: e.epicOrder ?? 0, entries: [] }
-      byEpic[e.epicId].entries.push(e)
+    if (!timelineEntries?.length) return []
+    const groupsByEpic = new Map<string, { epicId: string; epicName: string; epicOrder: number; entries: TimelineEntry[] }>()
+    for (const entry of timelineEntries) {
+      let group = groupsByEpic.get(entry.epicId)
+      if (!group) {
+        group = { epicId: entry.epicId, epicName: entry.epicName, epicOrder: entry.epicOrder ?? 0, entries: [] }
+        groupsByEpic.set(entry.epicId, group)
+      }
+      group.entries.push(entry)
     }
-    const result = Object.values(byEpic)
-    result.sort((a, b) => a.epicOrder - b.epicOrder)
-    for (const g of result) g.entries.sort((a, b) => (a.featureOrder ?? 0) - (b.featureOrder ?? 0))
-    return result
+    const groups = Array.from(groupsByEpic.values())
+    groups.sort((a, b) => a.epicOrder - b.epicOrder)
+    for (const g of groups) g.entries.sort((a, b) => (a.featureOrder ?? 0) - (b.featureOrder ?? 0))
+    return groups
   })()
 
   // Group resource types by category — only include RTs with demand in timeline
@@ -959,10 +967,10 @@ export default function TimelinePage() {
                   {timelineRecommendation.recommendedAction === 'quick-schedule' ? (
                     <button
                       onClick={handleSchedule}
-                      disabled={scheduleTimeline.isPending}
+                      disabled={isSchedulePending}
                       className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
                     >
-                      {scheduleTimeline.isPending ? 'Scheduling…' : updateTimelineLabel}
+                      {isSchedulePending ? 'Scheduling…' : updateTimelineLabel}
                     </button>
                   ) : (
                     <button
@@ -988,7 +996,7 @@ export default function TimelinePage() {
                     ) : (
                       <button
                         onClick={handleSchedule}
-                        disabled={scheduleTimeline.isPending}
+                        disabled={isSchedulePending}
                         className="border border-gray-200 dark:border-gray-600 px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
                       >
                         {updateTimelineLabel}
