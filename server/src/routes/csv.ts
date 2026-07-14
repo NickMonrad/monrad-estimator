@@ -2,8 +2,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { parse } from 'csv-parse/sync'
-import { stringify } from 'csv-stringify/sync'
+import { parseBacklogCsv, BACKLOG_CSV_HEADERS, serializeCsv } from '../lib/csvFormat.js'
 import { calcDurationDays } from '../utils/round.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
 import { buildSnapshot } from './snapshots.js'
@@ -11,17 +10,7 @@ import { buildSnapshot } from './snapshots.js'
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
-const CSV_HEADERS = [
-  'Type', 'Epic', 'Feature', 'Story', 'Task',
-  'Template',
-  'TemplateSize',
-  'ResourceType',
-  'HoursEffort', 'DurationDays',
-  'Description', 'Assumptions',
-  'EpicStatus', 'FeatureStatus', 'StoryStatus',
-  'EpicMode', 'FeatureMode',
-  'EpicDependsOn', 'FeatureDependsOn',
-]
+const CSV_HEADERS: readonly string[] = BACKLOG_CSV_HEADERS
 
 interface CsvRow {
   Type: string
@@ -143,7 +132,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     },
   })
 
-  const rows: string[][] = [CSV_HEADERS]
+  const rows: string[][] = [[...CSV_HEADERS]]
 
   // Build dependency lookup maps for export
   const epicDepsRaw = await prisma.epicDependency.findMany({
@@ -264,7 +253,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     }
   }
 
-  const csv = stringify(rows)
+  const csv = serializeCsv([...CSV_HEADERS], rows.slice(1))
   res.setHeader('Content-Type', 'text/csv')
   const datestamp = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const safeName = (s: string) => s.replace(/[^a-zA-Z0-9 \-_]/g, '').trim()
@@ -285,7 +274,7 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
 
   let rawRows: CsvRow[]
   try {
-    rawRows = parse(csvText, { columns: true, skip_empty_lines: true, trim: true }) as CsvRow[]
+    rawRows = parseBacklogCsv(csvText) as unknown as CsvRow[]
   } catch (e: unknown) {
     res.status(400).json({ error: 'Failed to parse CSV', detail: (e as Error).message }); return
   }
@@ -295,6 +284,7 @@ router.post('/stage-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     where: { projectId: req.params.projectId as string },
   })
   const rtNames = new Set(resourceTypes.map(r => r.name.toLowerCase()))
+
 
   // Fetch all template names for validation
   const allTemplates = await prisma.featureTemplate.findMany({ select: { name: true } })

@@ -69,6 +69,26 @@ export async function generatePdfFromHtml(html: string): Promise<Buffer> {
 }
 
 // Graceful shutdown — close the shared browser when the process exits
-process.on('SIGTERM', async () => {
-  if (browserInstance) await browserInstance.close()
+process.on('SIGTERM', () => {
+  void closeBrowser().catch((error) => {
+    console.error('[pdf] Failed to close Puppeteer browser during shutdown', error)
+  })
 })
+
+/** Close the shared browser instance (for clean test shutdown). */
+export async function closeBrowser(): Promise<void> {
+  const browser = browserInstance
+  browserInstance = null
+
+  if (!browser || !browser.connected) return
+
+  await browser.close()
+}
+
+/**
+ * Test-only seam: sets the browser singleton for closeBrowser() failure-path coverage.
+ * Not exported to production usage or documented as a public API.
+ */
+export function __setBrowserInstance(browser: Browser | null): void {
+  browserInstance = browser
+}

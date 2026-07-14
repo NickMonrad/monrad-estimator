@@ -5,7 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     setupFiles: ['./src/test/setup.ts'],
-    exclude: ['dist/**', 'node_modules/**'],
+    exclude: ['dist/**', 'node_modules/**', '**/*.test.mjs'],
     // Provide a valid JWT_SECRET for startup validation in index.ts.
     // Individual test files may override process.env.JWT_SECRET for their own jwt.sign calls.
     env: {

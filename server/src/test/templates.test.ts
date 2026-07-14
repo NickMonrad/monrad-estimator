@@ -3,7 +3,7 @@ import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
-
+import { TEMPLATE_CSV_HEADERS } from '../lib/csvFormat.js'
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -131,5 +131,34 @@ describe('POST /api/features/:featureId/apply-template', () => {
 
     expect(res.status).toBe(201)
     expect(res.body.name).toBe('Auth Feature \u2014 SMALL')
+  })
+})
+
+
+describe('POST /api/templates/import-csv/preview', () => {
+  it('returns newTemplates from valid CSV', async () => {
+    const csv = [
+      [...TEMPLATE_CSV_HEADERS].join(','),
+      'API,Engineering,Auth,Developer,1,2,4,8,16',
+    ].join('\n')
+
+    const res = await request(app)
+      .post('/api/templates/import-csv/preview')
+      .set('Authorization', authHeader)
+      .send({ csv })
+
+    expect(res.status).toBe(200)
+    expect(res.body.newTemplates).toHaveLength(1)
+    expect(res.body.updatedTemplates).toHaveLength(0)
+  })
+
+  it('returns 400 on malformed CSV', async () => {
+    const res = await request(app)
+      .post('/api/templates/import-csv/preview')
+      .set('Authorization', authHeader)
+      .send({ csv: 'A,B\n1,2,3' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('Failed to parse CSV')
   })
 })
