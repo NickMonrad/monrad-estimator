@@ -2,8 +2,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { parseTemplateCsv, TEMPLATE_CSV_HEADERS } from '../lib/csvFormat.js'
-import { stringify } from 'csv-stringify/sync'
+import { parseTemplateCsv, TEMPLATE_CSV_HEADERS, serializeCsv } from '../lib/csvFormat.js'
 import { sanitizeCsvCell } from './csv.js'
 
 const router = Router()
@@ -88,7 +87,7 @@ router.get('/export-csv', authenticate, asyncHandler(async (_req: AuthRequest, r
     }
   }
 
-  const csv = stringify(rows)
+  const csv = serializeCsv([...TEMPLATE_CSV_HEADERS], rows.slice(1))
   res.setHeader('Content-Type', 'text/csv')
   res.setHeader('Content-Disposition', 'attachment; filename="templates.csv"')
   res.send(csv)
@@ -254,7 +253,7 @@ router.get('/:id/export-csv', authenticate, asyncHandler(async (req: AuthRequest
     }
   }
 
-  const csv = stringify(rows)
+  const csv = serializeCsv([...TEMPLATE_CSV_HEADERS], rows.slice(1))
   const slug = template.name.toLowerCase().replace(/\s+/g, '-')
   res.setHeader('Content-Type', 'text/csv')
   res.setHeader('Content-Disposition', `attachment; filename="${slug}.csv"`)

@@ -3,45 +3,21 @@
  * Downloads the Puppeteer-managed Chromium browser used for server-side PDF generation.
  * Runs automatically as part of `npm install` via the `postinstall` hook.
  *
- * Safe to re-run: skips download if Chrome is already cached at ~/.cache/puppeteer.
+ * Safe to re-run: detects existing installation via computeExecutablePath + existsSync,
+ * skips download if Chrome is already cached.
  */
 
-import { install } from '@puppeteer/browsers'
-import { existsSync, readdirSync } from 'fs'
+import { install, computeExecutablePath } from '@puppeteer/browsers'
+import { existsSync } from 'fs'
 import { join } from 'path'
-import { createRequire } from 'module'
 import os from 'os'
 
-const require = createRequire(import.meta.url)
-const CACHE_DIR = join(os.homedir(), '.cache', 'puppeteer')
 const BROWSER = 'chrome'
 
-// Use the exact build ID that the installed puppeteer package expects
 async function getPuppeteerBuildId() {
   try {
-    // Puppeteer 25+: version pinned in PUPPETEER_REVISIONS from puppeteer-core
-    const { PUPPETEER_REVISIONS } = await import('puppeteer-core/lib/puppeteer/revisions.js')
+    const { PUPPETEER_REVISIONS } = await import('puppeteer')
     if (PUPPETEER_REVISIONS?.chrome) return PUPPETEER_REVISIONS.chrome
-  } catch {}
-  try {
-    // Fallback for older puppeteer (<=24): read pkg.puppeteer.chrome
-    const puppeteerPkg = require('puppeteer/package.json')
-    let id = puppeteerPkg?.puppeteer?.chrome
-    if (!id) {
-      // Second fallback: launch puppeteer and read executablePath to extract version
-      const p = require('puppeteer')
-      const exePath = p.executablePath()
-      const match = exePath.match(/mac_arm-([^/\\]+)|linux-([^/\\]+)|win64-([^/\\]+)/)
-      id = match?.[1] || match?.[2] || match?.[3]
-    }
-    // On Windows, puppeteer.chrome includes a platform suffix like
-    // "146.0.7680.153\chrome-win64\chrome.exe" — strip everything after
-    // the version number so @puppeteer/browsers resolves the correct cache path.
-    if (id) {
-      const versionOnly = id.split(/[/\\]/)[0]
-      if (versionOnly) return versionOnly
-    }
-    return id
   } catch {}
   return null
 }
@@ -49,25 +25,30 @@ async function getPuppeteerBuildId() {
 async function main() {
   const buildId = await getPuppeteerBuildId()
   if (!buildId) {
-    console.warn('[puppeteer] Could not determine required Chrome version — skipping download.')
-    process.exit(0)
+    console.warn('[puppeteer] Could not determine required Chrome version.')
+    process.exit(1)
   }
 
-  const cacheDir = join(CACHE_DIR, BROWSER)
-  const cacheEntries = existsSync(cacheDir) ? readdirSync(cacheDir) : []
-  const alreadyCached = cacheEntries.some(entry => entry.includes(buildId))
-  if (alreadyCached) {
-    console.log(`[puppeteer] Chrome ${buildId} already cached — skipping download.`)
-    return
+  const cacheDir = process.env.PUPPETEER_CACHE_DIR || join(os.homedir(), '.cache', 'puppeteer')
+
+  try {
+    const executablePath = computeExecutablePath({ browser: BROWSER, buildId, cacheDir })
+    if (existsSync(executablePath)) {
+      console.log(`[puppeteer] Chrome ${buildId} already installed at ${executablePath} — skipping download.`)
+      return
+    }
+  } catch {
+    // computeExecutablePath may throw if the browser/buildId combo isn't recognised;
+    // that's fine — we'll attempt the install below.
   }
 
-  console.log(`[puppeteer] Downloading Chrome ${buildId} for PDF generation...`)
+  console.log(`[puppeteer] Downloading Chrome ${buildId}...`)
 
   try {
     const result = await install({
       browser: BROWSER,
       buildId,
-      cacheDir: CACHE_DIR,
+      cacheDir,
       downloadProgressCallback: (downloaded, total) => {
         if (total) {
           const pct = Math.round((downloaded / total) * 100)
@@ -79,9 +60,8 @@ async function main() {
     console.log(`[puppeteer] Chrome ready at: ${result.executablePath}`)
   } catch (e) {
     process.stdout.write('\n')
-    console.warn(`[puppeteer] Chrome download failed: ${e.message}`)
-    console.warn('[puppeteer] PDF generation will not work. Run `npm run install:chrome` to retry.')
-    process.exit(0) // non-fatal — don't block npm install
+    console.error(`[puppeteer] Chrome download failed: ${e.message}`)
+    process.exit(1)
   }
 }
 

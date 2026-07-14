@@ -2,8 +2,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { parseBacklogCsv, BACKLOG_CSV_HEADERS } from '../lib/csvFormat.js'
-import { stringify } from 'csv-stringify/sync'
+import { parseBacklogCsv, BACKLOG_CSV_HEADERS, serializeCsv } from '../lib/csvFormat.js'
 import { calcDurationDays } from '../utils/round.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
 import { buildSnapshot } from './snapshots.js'
@@ -254,7 +253,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
     }
   }
 
-  const csv = stringify(rows)
+  const csv = serializeCsv([...CSV_HEADERS], rows.slice(1))
   res.setHeader('Content-Type', 'text/csv')
   const datestamp = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const safeName = (s: string) => s.replace(/[^a-zA-Z0-9 \-_]/g, '').trim()

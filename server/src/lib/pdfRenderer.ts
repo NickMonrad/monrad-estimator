@@ -70,13 +70,18 @@ export async function generatePdfFromHtml(html: string): Promise<Buffer> {
 
 // Graceful shutdown — close the shared browser when the process exits
 process.on('SIGTERM', async () => {
-  if (browserInstance) await browserInstance.close()
+  await closeBrowser()
 })
 
 /** Close the shared browser instance (for clean test shutdown). */
 export async function closeBrowser(): Promise<void> {
-  if (browserInstance) {
-    await browserInstance.close()
-    browserInstance = null
+  const browser = browserInstance
+  browserInstance = null
+  if (browser && browser.connected) {
+    try {
+      await browser.close()
+    } catch {
+      // Browser already disconnected or closing — nothing to do
+    }
   }
 }
