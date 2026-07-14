@@ -506,6 +506,8 @@ describe('buildPlannerResourcePlan', () => {
     expect(result.plannerResources).toHaveLength(2)
     expect(result.plannerResources[0].id).toBe('nr-1')
     expect(result.plannerResources[1].id).toBe('nr-2')
+    expect(result.allPlannerResources).toHaveLength(3)
+    expect(result.allPlannerResources[2].id).toBe('nr-3')
     // Surplus resources are tracked separately via determineSurplusResourceIds
   })
 

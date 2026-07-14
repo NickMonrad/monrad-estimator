@@ -530,7 +530,7 @@ export async function findOrCreatePlannedResources(
 
   return {
     namedResources: finalPlan.plannerResources.slice(0, requiredCount),
-    allNamedResources: finalPlan.plannerResources,
+    allNamedResources: finalPlan.allPlannerResources,
     created: missing,
   }
 }
@@ -994,6 +994,8 @@ export function determineSurplusResourceIds(
 export interface PlannerResourcePlan {
   /** Ordered (createdAt, id) planner-managed resources to use for trajectory assignment */
   plannerResources: Array<{ id: string; name: string }>
+  /** All ordered planner-managed resources, including surplus rows to zero. */
+  allPlannerResources: Array<{ id: string; name: string }>
   /** Resources classified as explicit/protected (never selected by planner) */
   explicitResources: Array<{ id: string; name: string }>
   /** Number of new placeholders still needed beyond available planner resources */
@@ -1085,6 +1087,7 @@ export function buildPlannerResourcePlan(
 
   return {
     plannerResources: plannerResources.slice(0, requiredCount),
+    allPlannerResources: plannerResources,
     explicitResources,
     shortfall,
     hasConflict: conflicts.length > 0,
