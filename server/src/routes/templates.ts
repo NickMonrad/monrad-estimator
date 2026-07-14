@@ -2,8 +2,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { parse } from 'csv-parse/sync'
-import { stringify } from 'csv-stringify/sync'
+import { parseTemplateCsv, TEMPLATE_CSV_HEADERS, serializeCsv } from '../lib/csvFormat.js'
 import { sanitizeCsvCell } from './csv.js'
 
 const router = Router()
@@ -19,7 +18,7 @@ interface TplRow {
 /** Parse and validate CSV rows, return structured result (no DB writes) */
 function parseCsvRows(csvText: string): { rows: TplRow[]; parseError?: string } {
   try {
-    const rows = parse(csvText, { columns: true, skip_empty_lines: true, trim: true }) as TplRow[]
+    const rows = parseTemplateCsv(csvText) as unknown as TplRow[]
     return { rows }
   } catch (e: unknown) {
     return { rows: [], parseError: (e as Error).message }
@@ -70,7 +69,7 @@ router.get('/export-csv', authenticate, asyncHandler(async (_req: AuthRequest, r
     include: { tasks: { orderBy: { order: 'asc' } } },
   })
 
-  const headers = ['TemplateName', 'Category', 'TaskName', 'ResourceTypeName', 'HoursExtraSmall', 'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge']
+  const headers = [...TEMPLATE_CSV_HEADERS] as string[]
   const rows: string[][] = [headers]
 
   if (templates.length === 0) {
@@ -88,7 +87,7 @@ router.get('/export-csv', authenticate, asyncHandler(async (_req: AuthRequest, r
     }
   }
 
-  const csv = stringify(rows)
+  const csv = serializeCsv([...TEMPLATE_CSV_HEADERS], rows.slice(1))
   res.setHeader('Content-Type', 'text/csv')
   res.setHeader('Content-Disposition', 'attachment; filename="templates.csv"')
   res.send(csv)
@@ -241,7 +240,7 @@ router.get('/:id/export-csv', authenticate, asyncHandler(async (req: AuthRequest
   })
   if (!template) { res.status(404).json({ error: 'Template not found' }); return }
 
-  const headers = ['TemplateName', 'Category', 'TaskName', 'ResourceTypeName', 'HoursExtraSmall', 'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge']
+  const headers = [...TEMPLATE_CSV_HEADERS] as string[]
   const rows: string[][] = [headers]
 
   if (template.tasks.length === 0) {
@@ -254,7 +253,7 @@ router.get('/:id/export-csv', authenticate, asyncHandler(async (req: AuthRequest
     }
   }
 
-  const csv = stringify(rows)
+  const csv = serializeCsv([...TEMPLATE_CSV_HEADERS], rows.slice(1))
   const slug = template.name.toLowerCase().replace(/\s+/g, '-')
   res.setHeader('Content-Type', 'text/csv')
   res.setHeader('Content-Disposition', `attachment; filename="${slug}.csv"`)

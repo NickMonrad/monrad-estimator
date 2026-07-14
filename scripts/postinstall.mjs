@@ -41,7 +41,14 @@ if (os.platform() === 'win32') {
 }
 
 // ── Puppeteer Chrome (PDF generation) ────────────────────────────
-import('./install-chrome.mjs').catch(() => {
-  // install-chrome.mjs handles its own errors and logs; silence
-  // the unhandled rejection since it's a non-fatal postinstall step.
-})
+;(async () => {
+  try {
+    const { installChrome } = await import('./install-chrome.mjs')
+    await installChrome()
+  } catch (error) {
+    console.warn('[postinstall] PDF generation may be unavailable: Chrome browser could not be installed.')
+    console.warn(`[postinstall]   ${error.message}`)
+    console.warn('[postinstall] Run `npm run install:chrome` to retry browser installation.')
+    // Non-fatal — don't fail npm install.
+  }
+})()
