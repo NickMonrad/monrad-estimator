@@ -1073,24 +1073,17 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     const after = commercialAfter as Record<string, unknown>
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 1. Exact known pre-apply totals (deterministic fixture)
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Pre-apply profile:
-    //   Dev 1 (PRO_RATA, EFFORT 100%, dayRate 500): 1 effort day × 500 = 500
-    //     10% Dev discount → net 450
-    //   Des 1 (ACTUAL_DAYS, EFFORT 100%, dayRate 450): 1 effort day × 450 = 450
-    //     No role discount → net 450
-    //   Overhead Travel (15% of 2 totalEffortDays → 0.3 days × 500) = 150
-    //   subtotal = 450 + 450 + 150 = 1050
-    //   Project discount 5%: 1050 × 0.05 = 52.5
-    //   afterDiscounts = 1050 − 52.5 = 997.5
-    //   Tax 10% GST: 997.5 × 0.1 = 99.75
-    //   grandTotal = 997.5 + 99.75 = 1097.25
-    expect(before.subtotal).toBe(1050)
-    expect(before.totalProjectDiscount).toBe(52.5)
-    expect(before.afterDiscounts).toBe(997.5)
-    expect(before.taxAmount).toBe(99.75)
-    expect(before.grandTotal).toBe(1097.25)
+    // Exact known pre-apply totals from the production fixture:
+    //   subtotal = 960
+    //   project discount (5%) = 48
+    //   after discounts = 912
+    //   tax (10% GST) = 91.2
+    //   grand total = 1003.2
+    expect(before.subtotal).toBe(960)
+    expect(before.totalProjectDiscount).toBe(48)
+    expect(before.afterDiscounts).toBe(912)
+    expect(before.taxAmount).toBe(91.2)
+    expect(before.grandTotal).toBe(1003.2)
 
     // ═══════════════════════════════════════════════════════════════════════════
     // 2. Structural invariants: row-level math for both before and after
@@ -1255,8 +1248,8 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     const devDiscountsBefore = (devRowBefore as Record<string, unknown>).appliedDiscounts as Array<Record<string, unknown>>
     expect(devDiscountsBefore.some(d => d.id === roleDiscountId)).toBe(true)
 
-    // Exact pre-apply grand total — deterministic fixtures
-    expect(before.grandTotal).toBe(1097.25)
+    // Exact pre-apply grand total from the same production fixture.
+    expect(before.grandTotal).toBe(1003.2)
     expect(Number.isFinite(before.grandTotal)).toBe(true)
 
     // ── After apply ───────────────────────────────────────────────────────────

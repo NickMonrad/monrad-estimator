@@ -434,7 +434,10 @@ export async function conflictPreflightCheck(
 // ─── Async: find or create planner-managed named resources ───────────────────
 
 export interface PlannedResourceMatchResult {
+  /** The first requiredCount planner-managed resources in stable order. */
   namedResources: Array<{ id: string; name: string }>
+  /** All planner-managed resources, including surplus resources to zero. */
+  allNamedResources: Array<{ id: string; name: string }>
   created: number
 }
 
@@ -525,7 +528,11 @@ export async function findOrCreatePlannedResources(
     )
   }
 
-  return { namedResources: finalPlan.plannerResources.slice(0, requiredCount), created: missing }
+  return {
+    namedResources: finalPlan.plannerResources.slice(0, requiredCount),
+    allNamedResources: finalPlan.plannerResources,
+    created: missing,
+  }
 }
 
 // ─── Async: write profiles and segments ─────────────────────────────────────
@@ -1193,6 +1200,12 @@ export let __preWriteConflictSeam: (() => void) | null = null
  */
 export function __setPreWriteConflictSeam(fn: (() => void) | null): void {
   __preWriteConflictSeam = fn
+}
+
+/** Invoke the currently configured pre-write seam without relying on mutable
+ * ESM binding semantics in route consumers. */
+export function runPreWriteConflictSeam(): void {
+  __preWriteConflictSeam?.()
 }
 
 // ─── Orchestration: apply planner profiles for one resource type ────────────

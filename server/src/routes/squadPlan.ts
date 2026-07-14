@@ -37,7 +37,7 @@ import {
   clearOmittedPlannerCapacity,
   revalidatePlannerPlan,
   PlannerConflictError,
-  __preWriteConflictSeam,
+  runPreWriteConflictSeam,
   __applyFailureSeam,
   type PrismaTransactionClient,
 } from '../lib/squadPlannerProfileWriter.js'
@@ -671,9 +671,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
         // ── Pre-write conflict test seam ─────────────────────────────────
         // Integration tests inject a profile mutation here to test preflight/apply race.
-        if (__preWriteConflictSeam) {
-          __preWriteConflictSeam()
-        }
+        runPreWriteConflictSeam()
       }
 
       // Deactivate existing active plans
@@ -741,19 +739,19 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
           const trajectories = materializeResourceTrajectories(rtPeriods)
 
           // Find/create named resources with stable ordering (createdAt, id)
-          const { namedResources } = await findOrCreatePlannedResources(
+          const { allNamedResources } = await findOrCreatePlannedResources(
             tx,
             rtId,
             rtName,
             trajectories.length,
           )
-
-          // Build profile write sets (role + per-resource)
+          // Build profile write sets (role + per-resource), including all
+          // planner-managed resources so shrink operations zero surplus rows.
           const materialized = materializeProfilesForResourceType(
             rtId,
             rtName,
             normalisedPeriods as unknown as CapacityPlanPeriodInput[],
-            namedResources,
+            allNamedResources,
           )
 
           // Authoritative profile + segment persistence

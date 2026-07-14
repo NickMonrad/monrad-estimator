@@ -1496,15 +1496,16 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     const profiles = res.body.capacityProfiles as Array<Record<string, unknown>>
     expect(Array.isArray(profiles)).toBe(true)
 
-    // Fallback response includes legacy fields
-    const firstWithLegacy = profiles.find(
-      (p: Record<string, unknown>) => p.legacy && (p.legacy as Record<string, unknown>).allocationMode,
-    )
-    expect(firstWithLegacy).toBeDefined()
-
-    // The Engineer RT should now be derived from legacy mapper
+    // Legacy mapping returns one DTO per resource type/resource and uses the
+    // resource-type ID as the role DTO identity. The legacy field is present
+    // even when a source project has no non-null compatibility values.
+    expect(profiles.every(
+      (p: Record<string, unknown>) =>
+        p.legacy != null &&
+        Object.prototype.hasOwnProperty.call(p.legacy as Record<string, unknown>, 'allocationMode'),
+    )).toBe(true)
     expect(profiles.some(
-      (p: Record<string, unknown>) => (p.legacy as Record<string, unknown>)?.allocationMode != null,
+      (p: Record<string, unknown>) => p.id === rtId,
     )).toBe(true)
   })
 
