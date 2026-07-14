@@ -532,12 +532,12 @@ describeIf('Scenario 3 — Shrink clears surplus planner capacity', () => {
     rtId = await createResourceType(projectId, 'rt-eng-s3', 'Engineer')
     await createEpicBacklog(projectId, rtId)
 
-    // Apply with 2 headcount → 2 trajectories
+    // Apply with 8 headcount → 2 trajectories (4 quarter-units each)
     const res1 = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
       .set('Authorization', authHeader)
       .send(buildApplyPayload(rtId, [
-        { periodIndex: 0, startWeek: 0, endWeek: 12, headcount: 2 },
+        { periodIndex: 0, startWeek: 0, endWeek: 12, headcount: 8 },
       ], { name: 'Pre-shrink', setActive: true }))
     expect(res1.status).toBe(201)
 
@@ -1324,15 +1324,17 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
   it('preflight returns 409 when a conflicting profile exists before apply', async () => {
     if (!runIntegration) return
 
-    // Inject a conflicting duplicate ROLE profile so preflight detects it
-    await createProfile(
-      projectId,
-      'cp-conflict-preflight',
-      'ROLE',
-      rtId,
-      null,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER' },
-    )
+    // Inject two conflicting ROLE profiles so preflight detects a duplicate.
+    for (const id of ['cp-conflict-preflight-a', 'cp-conflict-preflight-b']) {
+      await createProfile(
+        projectId,
+        id,
+        'ROLE',
+        rtId,
+        null,
+        { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER' },
+      )
+    }
 
     try {
       const res = await request(app)
@@ -1344,9 +1346,9 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
 
       expect(res.status).toBe(409)
     } finally {
-      // Cleanup the injected profile so other tests aren't affected
+      // Cleanup the injected profiles so other tests aren't affected
       await prisma.capacityProfile.deleteMany({
-        where: { projectId, id: 'cp-conflict-preflight' },
+        where: { projectId, id: { in: ['cp-conflict-preflight-a', 'cp-conflict-preflight-b'] } },
       }).catch(() => {})
     }
 
@@ -1496,17 +1498,18 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     const profiles = res.body.capacityProfiles as Array<Record<string, unknown>>
     expect(Array.isArray(profiles)).toBe(true)
 
-    // Legacy mapping returns one DTO per resource type/resource and uses the
-    // resource-type ID as the role DTO identity. The legacy field is present
-    // even when a source project has no non-null compatibility values.
+    // Legacy mapping emits named-resource owners (and no persisted planner
+    // owner kinds) while retaining the compatibility field shape.
     expect(profiles.every(
       (p: Record<string, unknown>) =>
         p.legacy != null &&
         Object.prototype.hasOwnProperty.call(p.legacy as Record<string, unknown>, 'allocationMode'),
     )).toBe(true)
     expect(profiles.some(
-      (p: Record<string, unknown>) => p.id === rtId,
-    )).toBe(true)
+      (p: Record<string, unknown>) =>
+        ((p.owner as Record<string, unknown>)?.kind === 'plannedResource') ||
+        ((p.owner as Record<string, unknown>)?.kind === 'role'),
+    )).toBe(false)
   })
 
   it('restores persisted-authority path when ROLE profile is restored', async () => {
