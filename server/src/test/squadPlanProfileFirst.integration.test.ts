@@ -532,12 +532,12 @@ describeIf('Scenario 3 — Shrink clears surplus planner capacity', () => {
     rtId = await createResourceType(projectId, 'rt-eng-s3', 'Engineer')
     await createEpicBacklog(projectId, rtId)
 
-    // Apply with 8 headcount → 2 trajectories (4 quarter-units each)
+    // Apply with 2 headcount → 2 trajectories
     const res1 = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
       .set('Authorization', authHeader)
       .send(buildApplyPayload(rtId, [
-        { periodIndex: 0, startWeek: 0, endWeek: 12, headcount: 8 },
+        { periodIndex: 0, startWeek: 0, endWeek: 12, headcount: 2 },
       ], { name: 'Pre-shrink', setActive: true }))
     expect(res1.status).toBe(201)
 
@@ -1498,18 +1498,15 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     const profiles = res.body.capacityProfiles as Array<Record<string, unknown>>
     expect(Array.isArray(profiles)).toBe(true)
 
-    // Legacy mapping emits named-resource owners (and no persisted planner
-    // owner kinds) while retaining the compatibility field shape.
+    // Legacy mapping emits named-resource owners while retaining the
+    // compatibility field shape. The persisted profile ID must be absent.
     expect(profiles.every(
       (p: Record<string, unknown>) =>
         p.legacy != null &&
         Object.prototype.hasOwnProperty.call(p.legacy as Record<string, unknown>, 'allocationMode'),
     )).toBe(true)
-    expect(profiles.some(
-      (p: Record<string, unknown>) =>
-        ((p.owner as Record<string, unknown>)?.kind === 'plannedResource') ||
-        ((p.owner as Record<string, unknown>)?.kind === 'role'),
-    )).toBe(false)
+    expect(profiles.some((p: Record<string, unknown>) => p.id === 'cp-explicit-designer')).toBe(false)
+    expect(profiles.some((p: Record<string, unknown>) => p.id === explicitNrId)).toBe(true)
   })
 
   it('restores persisted-authority path when ROLE profile is restored', async () => {

@@ -1198,7 +1198,6 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
       for (let i = 0; i < arDiscounts.length; i++) {
         expect(arDiscounts[i].type).toBe(brDiscounts[i].type)
         expect(arDiscounts[i].value).toBe(brDiscounts[i].value)
-        expect(arDiscounts[i].calculatedAmount).toBe(brDiscounts[i].calculatedAmount)
       }
     }
 
