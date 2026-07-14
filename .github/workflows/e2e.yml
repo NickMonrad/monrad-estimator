@@ -56,6 +56,14 @@ jobs:
       - name: Backup regression tests
         run: npm run test:backup
 
+      # ── Chrome installer lifecycle tests ────────────────────────────
+      - name: Chrome installer lifecycle tests
+        run: npm run test:install-chrome
+
+      # ── PDF browser cleanup tests ────────────────────────────────────
+      - name: PDF browser cleanup tests
+        run: npm run test:pdf-cleanup
+
       # ── PDF generation smoke test (real Chromium) ────────────────
       - name: PDF generation smoke test
         run: npm run test:pdf-smoke

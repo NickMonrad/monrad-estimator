@@ -84,3 +84,11 @@ export async function closeBrowser(): Promise<void> {
 
   await browser.close()
 }
+
+/**
+ * Test-only seam: sets the browser singleton for closeBrowser() failure-path coverage.
+ * Not exported to production usage or documented as a public API.
+ */
+export function __setBrowserInstance(browser: Browser | null): void {
+  browserInstance = browser
+}
