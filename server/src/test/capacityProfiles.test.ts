@@ -751,6 +751,57 @@ describe('persisted profiles', () => {
     expect(ids).not.toContain('cp-1')
   })
 
+  it('falls back when planner-owned named profiles omit the aggregate ROLE profile', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', {
+        allocationMode: 'CAPACITY_PLAN',
+        namedResources: [mockNr('nr-1', 'Planner 1', { allocationMode: 'CAPACITY_PLAN' })],
+      })],
+      capacityProfiles: [mockPersistedProfile('cp-planned', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [mockPersistedSegment()],
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].owner.kind).toBe('plannedResource')
+    expect(res.body.capacityProfiles[0].owner.id).toBe('nr-1')
+    expect(res.body.capacityProfiles[0].legacy).toBeDefined()
+  })
+
+  it('accepts explicit-only named-resource coverage without an aggregate ROLE profile', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', {
+        allocationMode: 'EFFORT',
+        namedResources: [mockNr('nr-1', 'Alice')],
+      })],
+      capacityProfiles: [mockPersistedProfile('cp-alice', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'MANUAL',
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles).toHaveLength(1)
+    expect(res.body.capacityProfiles[0].id).toBe('cp-alice')
+    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
+  })
+
   it('returns complete ROLE + named/planned hybrid persisted profiles', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
       resourceTypes: [

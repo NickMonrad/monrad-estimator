@@ -3,9 +3,8 @@
  * profile-first preflight and snapshot rollback fixes in PR #374.
  *
  * Tests:
- *  1. conflictPreflightCheck — existing NAMED_PERSON does not block
- *     adding a new distinct PLANNED_RESOURCE when enough planner-managed
- *     resources exist; blocks only when planner resources are insufficient.
+ *  1. conflictPreflightCheck — existing NAMED_PERSON is protected and never
+ *     blocks planner growth; shortfalls are filled with placeholders.
  *  2. restoreSnapshotCommonState — post-snapshot named resources are
  *     deleted during rollback; snapshot named resources survive.
  *  3. findOrCreatePlannedResources — NAMED_PERSON resources are excluded
@@ -108,7 +107,7 @@ describe('conflictPreflightCheck', () => {
     expect(result).toBeUndefined()
   })
 
-  it('fails when NAMED_PERSON exists and planner resources cannot fill all trajectories', async () => {
+  it('passes when NAMED_PERSON exists and placeholders must fill remaining trajectories', async () => {
     const tx = makeTx({
       capacityProfile: {
         findMany: vi.fn()
@@ -139,12 +138,9 @@ describe('conflictPreflightCheck', () => {
       ],
     )
 
-    // 3 trajectories, 1 planner resource (Bob) — Alice is explicit_person
-    // plannerResources.length (1) < trajectoryCount (3) → conflict
-    expect(result).toBeDefined()
-    expect(result!.hasConflict).toBe(true)
-    expect(result!.protectedNamedPersonProfiles).toHaveLength(1)
-    expect(result!.protectedNamedPersonProfiles[0].namedResourceName).toBe('Alice')
+    // 3 trajectories, 1 planner resource (Bob) — Alice is explicit_person.
+    // Explicit people are protected; the planner creates placeholders for the shortfall.
+    expect(result).toBeUndefined()
   })
 
   it('fails on duplicate ROLE profiles', async () => {

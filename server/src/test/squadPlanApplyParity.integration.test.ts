@@ -977,6 +977,11 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
       allocationPercent: 100,
       pricingModel: 'PRO_RATA',
     })
+    await createNamedResource(projectId, rtDes, 'nr-com-des-1', 'Des 1', {
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      pricingModel: 'ACTUAL_DAYS',
+    })
     const backlog = await createEpicBacklog(projectId, rtDev)
     await prisma.task.create({
       data: {
@@ -1035,9 +1040,10 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     expect(applyRes.status).toBe(201)
   })
 
-  it('commercial data before and after apply preserves same rates, tax, and discount pattern', async () => {
+  it('commercial data before and after apply — exact semantic parity via computeCommercialData', async () => {
     if (!runIntegration) return
 
+    // ── Compute AFTER commercial data ────────────────────────────────────────
     const rpAfter = await request(app)
       .get(`/api/projects/${projectId}/resource-profile`)
       .set('Authorization', authHeader)
@@ -1059,104 +1065,243 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
       projectTaxAfter,
     ) as Record<string, unknown>
 
-    // Both should be non-null
+    // Both must be non-null
     expect(commercialBefore).not.toBeNull()
     expect(commercialAfter).not.toBeNull()
 
     const before = commercialBefore as Record<string, unknown>
     const after = commercialAfter as Record<string, unknown>
 
-    // ── Exact known pre-apply totals ─────────────────────────────────────
-    // Pre-apply profile: 2 tasks × 8h each = 16h → 2 effort days.
-    // Dev 1 (EFFORT NR, dayRate 500): 1 day × 500 = 500
-    //   Dev role discount 10% → -50 → net 450
-    // Designer (RT level, dayRate 450): 1 day × 450 = 450
-    //   No role discount → net 450
-    // Overhead Travel (15% of 2 effort days, dayRate 500): 0.3 days × 500 = 150
-    // subtotal = 450 + 450 + 150 = 1050
-    // Project discount 5%: 0.05 × 1050 = 52.5
-    // afterDiscounts = 1050 − 52.5 = 997.5
-    // Tax 10% GST: 0.10 × 997.5 = 99.75
-    // grandTotal = 997.5 + 99.75 = 1097.25
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 1. Exact known pre-apply totals (deterministic fixture)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Pre-apply profile:
+    //   Dev 1 (PRO_RATA, EFFORT 100%, dayRate 500): 1 effort day × 500 = 500
+    //     10% Dev discount → net 450
+    //   Des 1 (ACTUAL_DAYS, EFFORT 100%, dayRate 450): 1 effort day × 450 = 450
+    //     No role discount → net 450
+    //   Overhead Travel (15% of 2 totalEffortDays → 0.3 days × 500) = 150
+    //   subtotal = 450 + 450 + 150 = 1050
+    //   Project discount 5%: 1050 × 0.05 = 52.5
+    //   afterDiscounts = 1050 − 52.5 = 997.5
+    //   Tax 10% GST: 997.5 × 0.1 = 99.75
+    //   grandTotal = 997.5 + 99.75 = 1097.25
     expect(before.subtotal).toBe(1050)
     expect(before.totalProjectDiscount).toBe(52.5)
     expect(before.afterDiscounts).toBe(997.5)
     expect(before.taxAmount).toBe(99.75)
     expect(before.grandTotal).toBe(1097.25)
 
-    // ── Structural invariants: both before and after ─────────────────────
-    // Helper: verify every commercial structure invariant
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 2. Structural invariants: row-level math for both before and after
+    // ═══════════════════════════════════════════════════════════════════════════
     const assertStructuralInvariants = (cd: Record<string, unknown>) => {
       const rows = cd.rows as Array<Record<string, unknown>>
       expect(Array.isArray(rows)).toBe(true)
-      // Row netSubtotal sum = subtotal
+      // Each row must have valid pricing/billing semantics
+      for (const row of rows) {
+        expect(typeof row.dayRate).toBe('number')
+        expect((row.dayRate as number)).toBeGreaterThan(0)
+        expect(typeof row.subtotal).toBe('number')    // gross subtotal
+        expect(typeof row.netSubtotal).toBe('number')
+        expect(row.netSubtotal).toBeGreaterThanOrEqual(0)
+        // appliedDiscounts is an array (possibly empty)
+        expect(Array.isArray(row.appliedDiscounts)).toBe(true)
+        // gross subtotal = dayRate × totalDays (for resource rows)
+        // overhead subtotal = dayRate × totalDays (which equals computedDays)
+        expect(row.subtotal).toBeCloseTo((row.dayRate as number) * (row.totalDays as number), 8)
+        // netSubtotal = subtotal minus sum of applied discount calculatedAmounts
+        const totalDiscount = (row.appliedDiscounts as Array<Record<string, unknown>>)
+          .reduce((s: number, d) => s + (d.calculatedAmount as number), 0)
+        expect(row.netSubtotal).toBeCloseTo((row.subtotal as number) - totalDiscount, 8)
+      }
+      // Sum of row netSubtotals equals top-level subtotal
       const rowSum = rows.reduce((s: number, r: Record<string, unknown>) => s + (r.netSubtotal as number), 0)
       expect(rowSum).toBeCloseTo(cd.subtotal as number, 8)
-      // Discount subtotal math
+      // Discount subtotal math: subtotal = afterDiscounts + totalProjectDiscount
       expect((cd.afterDiscounts as number) + (cd.totalProjectDiscount as number))
         .toBeCloseTo(cd.subtotal as number, 8)
-      // Tax math
+      // Tax math: taxAmount = taxRate% × afterDiscounts
       if (cd.taxRate != null) {
         expect(cd.taxAmount as number)
           .toBeCloseTo((cd.taxRate as number) / 100 * (cd.afterDiscounts as number), 8)
       }
-      // Grand total math
+      // Grand total math: grandTotal = afterDiscounts + taxAmount
       expect(cd.grandTotal as number)
         .toBeCloseTo((cd.afterDiscounts as number) + (cd.taxAmount as number), 8)
       // All grand totals positive finite
-      expect(cd.grandTotal as number).toBeGreaterThan(0)
+      expect((cd.grandTotal as number)).toBeGreaterThan(0)
       expect(Number.isFinite(cd.grandTotal as number)).toBe(true)
     }
     assertStructuralInvariants(before)
     assertStructuralInvariants(after)
 
-    // ── Tax fields preserved ──────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3. Metadata regression: unchanged even if capacity/totals change
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Tax fields must be identical
     expect(before.taxRate).toBe(10)
     expect(after.taxRate).toBe(10)
     expect(before.taxLabel).toBe('GST')
     expect(after.taxLabel).toBe('GST')
+    expect(before.taxEnabled).toBe(true)
+    expect(after.taxEnabled).toBe(true)
 
-    // ── Project discounts present (same IDs, same pattern) ─────────────
-    const beforeDiscounts = before.projectDiscounts as Array<Record<string, unknown>>
-    const afterDiscounts = after.projectDiscounts as Array<Record<string, unknown>>
-    expect(beforeDiscounts.length).toBe(afterDiscounts.length)
-    expect(beforeDiscounts.map(d => d.id).sort()).toEqual(afterDiscounts.map(d => d.id).sort())
+    // Project discount metadata (labels, types, values, order) must survive unchanged
+    const beforePD = before.projectDiscounts as Array<Record<string, unknown>>
+    const afterPD = after.projectDiscounts as Array<Record<string, unknown>>
+    expect(beforePD.length).toBe(afterPD.length)
+    const sortByOrder = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      (a.order as number) - (b.order as number)
+    const sortedBeforePD = [...beforePD].sort(sortByOrder)
+    const sortedAfterPD = [...afterPD].sort(sortByOrder)
+    for (let i = 0; i < sortedBeforePD.length; i++) {
+      expect(sortedAfterPD[i].id).toBe(sortedBeforePD[i].id)
+      expect(sortedAfterPD[i].label).toBe(sortedBeforePD[i].label)
+      expect(sortedAfterPD[i].type).toBe(sortedBeforePD[i].type)
+      expect(sortedAfterPD[i].value).toBe(sortedBeforePD[i].value)
+      expect(sortedAfterPD[i].order).toBe(sortedBeforePD[i].order)
+      // calculatedAmount may differ because subtotal changed (capacity update)
+    }
 
-    // ── Day rates on rows preserved ───────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 4. Per-row pricing/billing comparison — match by (resourceTypeId, name)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Named resources that exist both before and after (same name, same RT)
+    // must have identical commercial semantics. Resources created by apply
+    // (planned resources with new synthetic names) appear only in after state.
+    const matchKeyByIdentity = (r: Record<string, unknown>) => `${r.resourceTypeId}::${r.name}`
     const beforeRows = before.rows as Array<Record<string, unknown>>
     const afterRows = after.rows as Array<Record<string, unknown>>
+
+    // Index before rows by (resourceTypeId, name) identity
+    const beforeByIdentity = new Map<string, Record<string, unknown>>()
     for (const br of beforeRows) {
-      const ar = afterRows.find((r: Record<string, unknown>) => r.id === br.id)
-      if (ar && br.dayRate != null) {
-        expect(ar.dayRate).toBe(br.dayRate)
+      beforeByIdentity.set(matchKeyByIdentity(br), br)
+    }
+
+    for (const ar of afterRows) {
+      const key = matchKeyByIdentity(ar)
+      const br = beforeByIdentity.get(key)
+      if (!br) continue // New resource (e.g., planned resource after apply)
+
+      // Resource identity mapping: same RT, same name → same semantic resource
+      expect(ar.resourceTypeId).toBe(br.resourceTypeId)
+      expect(ar.name).toBe(br.name)
+
+      // dayRate must match (same resource type)
+      expect(ar.dayRate).toBe(br.dayRate)
+
+      // kind: resource | named-resource | overhead
+      expect(ar.kind).toBe(br.kind)
+
+      // pricingModel: must match for the same named resource
+      expect(ar.pricingModel).toBe(br.pricingModel)
+      // allocationMode and allocationPercent for the same named resource
+      expect(ar.allocationMode).toBe(br.allocationMode)
+      expect(ar.allocationPercent).toBe(br.allocationPercent)
+
+      // appliedDiscounts — same number of entries with matching config
+      const arDiscounts = ar.appliedDiscounts as Array<Record<string, unknown>>
+      const brDiscounts = br.appliedDiscounts as Array<Record<string, unknown>>
+      expect(arDiscounts.length).toBe(brDiscounts.length)
+      for (let i = 0; i < arDiscounts.length; i++) {
+        expect(arDiscounts[i].type).toBe(brDiscounts[i].type)
+        expect(arDiscounts[i].value).toBe(brDiscounts[i].value)
+        expect(arDiscounts[i].calculatedAmount).toBe(brDiscounts[i].calculatedAmount)
       }
     }
-    // ── Row count parity: both before and after have at least the expected rows ──
-    expect(beforeRows.length).toBeGreaterThanOrEqual(2)
-    expect(afterRows.length).toBeGreaterThanOrEqual(2)
-    // Overhead is embedded in commercial rows and verified by structural invariants above
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 5. Overhead row dayRate linkage (same resource type = same dayRate)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Overhead dayRate is derived from the linked resource type; it must not change
+    const beforeOhRows = beforeRows.filter(r => r.kind === 'overhead')
+    const afterOhRows = afterRows.filter(r => r.kind === 'overhead')
+    const beforeOhByName = new Map(beforeOhRows.map(r => [r.name, r]))
+    for (const ar of afterOhRows) {
+      const br = beforeOhByName.get(ar.name as string)
+      if (!br) continue
+      expect(ar.dayRate).toBe(br.dayRate)
+      // Kind must be 'overhead' on both sides
+      expect(ar.kind).toBe('overhead')
+      expect(br.kind).toBe('overhead')
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 6. Row count sanity
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Before: Dev 1 (named-resource) + Des 1 (named-resource) + Overhead = 3
+    // After:  planned resource (named-resource) + Des 1 (named-resource) + Overhead ≥ 3
+    expect(beforeRows.length).toBeGreaterThanOrEqual(3)
+    expect(afterRows.length).toBeGreaterThanOrEqual(3)
   })
 
-  it('commercial data uses correct discount application (project + role-level)', async () => {
+  it('commercial data uses correct discount application (project + role-level) before and after', async () => {
     if (!runIntegration) return
 
     expect(commercialBefore).not.toBeNull()
-    const cd = commercialBefore as Record<string, unknown>
+    const before = commercialBefore as Record<string, unknown>
 
-    // Project-wide discount should be at the project level
-    const projectDiscounts = cd.projectDiscounts as Array<Record<string, unknown>>
-    expect(projectDiscounts.some(d => d.id === projectDiscountId)).toBe(true)
+    // ── Before apply ──────────────────────────────────────────────────────────
+    // Project-wide discount at the project level
+    const beforeProjectDiscounts = before.projectDiscounts as Array<Record<string, unknown>>
+    expect(beforeProjectDiscounts.some(d => d.id === projectDiscountId)).toBe(true)
 
-    // Role-level discount should be applied to Developer rows
-    const rows = cd.rows as Array<Record<string, unknown>>
-    const devRow = rows.find(r => (r as Record<string, unknown>).resourceTypeId === rtDev)
-    expect(devRow).toBeDefined()
-    const devAppliedDiscounts = (devRow as Record<string, unknown>).appliedDiscounts as Array<Record<string, unknown>>
-    expect(devAppliedDiscounts.some(d => d.id === roleDiscountId)).toBe(true)
+    // Role-level discount on Developer rows
+    const beforeRows = before.rows as Array<Record<string, unknown>>
+    const devRowBefore = beforeRows.find(r => r.resourceTypeId === rtDev)
+    expect(devRowBefore).toBeDefined()
+    const devDiscountsBefore = (devRowBefore as Record<string, unknown>).appliedDiscounts as Array<Record<string, unknown>>
+    expect(devDiscountsBefore.some(d => d.id === roleDiscountId)).toBe(true)
 
     // Exact pre-apply grand total — deterministic fixtures
-    expect(cd.grandTotal).toBe(1097.25)
-    expect(Number.isFinite(cd.grandTotal)).toBe(true)
+    expect(before.grandTotal).toBe(1097.25)
+    expect(Number.isFinite(before.grandTotal)).toBe(true)
+
+    // ── After apply ───────────────────────────────────────────────────────────
+    // Compute commercial after inside the test
+    const rpAfter = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    expect(rpAfter.status).toBe(200)
+
+    const discountsAfter = await prisma.projectDiscount.findMany({
+      where: { projectId },
+      orderBy: { order: 'asc' },
+    }) as unknown[]
+    const projectTaxAfter = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { taxRate: true, taxLabel: true },
+    }) as { taxRate: number | null; taxLabel: string | null } | null
+    expect(projectTaxAfter).not.toBeNull()
+
+    const after = await computeCommercialData(
+      rpAfter.body,
+      discountsAfter,
+      projectTaxAfter,
+    ) as Record<string, unknown>
+
+    // Project-wide discount still at the project level
+    const afterProjectDiscounts = after.projectDiscounts as Array<Record<string, unknown>>
+    expect(afterProjectDiscounts.some(d => d.id === projectDiscountId)).toBe(true)
+
+    // Role-level discount still applied to Developer rows (by resourceTypeId)
+    const afterRows = after.rows as Array<Record<string, unknown>>
+    const devRowAfter = afterRows.find(r => r.resourceTypeId === rtDev)
+    expect(devRowAfter).toBeDefined()
+    const devDiscountsAfter = (devRowAfter as Record<string, unknown>).appliedDiscounts as Array<Record<string, unknown>>
+    expect(devDiscountsAfter.some(d => d.id === roleDiscountId)).toBe(true)
+
+    // Designer row must NOT have role-level discount (discount is only for rtDev)
+    const desRowAfter = afterRows.find(r => r.resourceTypeId === rtDes)
+    expect(desRowAfter).toBeDefined()
+    const desDiscountsAfter = (desRowAfter as Record<string, unknown>).appliedDiscounts as Array<Record<string, unknown>>
+    expect(desDiscountsAfter.length).toBe(0)
+
+    // After-apply grandTotal must be positive finite (value will differ from before)
+    expect(after.grandTotal).toBeGreaterThan(0)
+    expect(Number.isFinite(after.grandTotal)).toBe(true)
   })
 })
 

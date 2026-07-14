@@ -365,8 +365,7 @@ export async function conflictPreflightCheck(
   periods: CapacityPlanPeriodInput[],
 ): Promise<ConflictCheckResult | undefined> {
   const resourceTypeIds = [...new Set(periods.flatMap(p => p.entries.map(e => e.resourceTypeId)))]
-  const conflicts: ConflictResourceInfo[] = []
-  const protectedNamedPersonProfiles: ConflictResourceInfo[] = []
+  const allDuplicates: ConflictResourceInfo[] = []
 
   for (const rtId of resourceTypeIds) {
     // Fetch existing ROLE profiles for this resource type
@@ -376,7 +375,7 @@ export async function conflictPreflightCheck(
     })) ?? []
 
     if (roleProfiles.length > 1) {
-      conflicts.push({
+      allDuplicates.push({
         resourceTypeId: rtId,
         resourceTypeName: 'role',
       })
@@ -391,10 +390,12 @@ export async function conflictPreflightCheck(
     }))
     const trajectories = materializeResourceTrajectories(rtPeriods)
     const trajectoryCount = trajectories.length
+
+    // Fetch named resources with stable ordering (includes createdAt for buildPlannerResourcePlan)
     const namedResources = (await tx.namedResource.findMany({
       where: { resourceTypeId: rtId },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true, allocationMode: true },
+      select: { id: true, name: true, createdAt: true, allocationMode: true },
     })) ?? []
 
     const resourceProfiles = namedResources.length === 0
@@ -404,54 +405,26 @@ export async function conflictPreflightCheck(
             projectId,
             namedResourceId: { in: namedResources.map(resource => resource.id) },
           },
-          select: { id: true, namedResourceId: true, source: true, ownerKind: true, planningBasis: true },
+          select: { namedResourceId: true, source: true, ownerKind: true, planningBasis: true },
         })) ?? []
-    const profilesByNamedResource = new Map<string, typeof resourceProfiles>()
-    for (const profile of resourceProfiles) {
-      if (!profile.namedResourceId) continue
-      const profiles = profilesByNamedResource.get(profile.namedResourceId) ?? []
-      profiles.push(profile)
-      profilesByNamedResource.set(profile.namedResourceId, profiles)
-    }
 
-    // Use the same full-profile classification as the write path before
-    // selecting trajectory owners. Explicit resources are skipped rather than
-    // accidentally blocking a later planner-managed resource when enough
-    // planner-owned resources remain.
-    const plannerResources = namedResources.filter(resource => (
-      isPlannerManaged(resource, profilesByNamedResource.get(resource.id) ?? [])
-    ))
-    const explicitResources = namedResources.filter(resource => (
-      classifyNamedResource(resource, profilesByNamedResource.get(resource.id) ?? []) === 'explicit_person'
-    ))
-    if (explicitResources.length > 0 && plannerResources.length < trajectoryCount) {
-      for (const namedResource of explicitResources) {
-        protectedNamedPersonProfiles.push({
-          resourceTypeId: rtId,
-          resourceTypeName: 'named-person',
-          namedResourceName: namedResource.name,
-        })
-      }
-    }
+    // Use the shared deterministic planner resource plan
+    const plan = buildPlannerResourcePlan(
+      namedResources,
+      resourceProfiles,
+      rtId,
+      'role',
+      trajectoryCount,
+    )
 
-    const usedResources = plannerResources.slice(0, trajectoryCount)
-    for (const namedResource of usedResources) {
-      const profiles = profilesByNamedResource.get(namedResource.id) ?? []
-      if (profiles.length > 1) {
-        conflicts.push({
-          resourceTypeId: rtId,
-          resourceTypeName: 'named-resource',
-          namedResourceName: namedResource.name,
-        })
-      }
-    }
+    allDuplicates.push(...plan.conflicts)
   }
 
-  if (conflicts.length > 0 || protectedNamedPersonProfiles.length > 0) {
+  if (allDuplicates.length > 0) {
     return {
       hasConflict: true,
-      duplicateOwnerProfiles: conflicts,
-      protectedNamedPersonProfiles,
+      duplicateOwnerProfiles: allDuplicates,
+      protectedNamedPersonProfiles: [],
     }
   }
 
@@ -488,19 +461,24 @@ export async function findOrCreatePlannedResources(
       where: { namedResourceId: { in: existingNRs.map(nr => nr.id) } },
       select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
     })
-  const profilesByResource = new Map<string, typeof existingProfiles>()
-  for (const profile of existingProfiles) {
-    if (!profile.namedResourceId) continue
-    const profiles = profilesByResource.get(profile.namedResourceId) ?? []
-    profiles.push(profile)
-    profilesByResource.set(profile.namedResourceId, profiles)
-  }
-  const plannerResources = existingNRs.filter(nr => {
-    const profiles = profilesByResource.get(nr.id) ?? []
-    return isPlannerManaged(nr, profiles)
-  })
 
-  const missing = Math.max(0, requiredCount - plannerResources.length)
+  const plan = buildPlannerResourcePlan(
+    existingNRs,
+    existingProfiles,
+    resourceTypeId,
+    resourceTypeName,
+    requiredCount,
+  )
+
+  if (plan.hasConflict) {
+    throw new PlannerConflictError(
+      `Duplicate/ambiguous owner profiles for resource type "${resourceTypeName}" — ` +
+      `repair required before applying.`,
+      plan.conflicts,
+    )
+  }
+
+  const missing = plan.shortfall
   if (missing > 0) {
     const startIndex = existingNRs.length + 1
     const newNRs = Array.from({ length: missing }, (_, i) => ({
@@ -512,6 +490,7 @@ export async function findOrCreatePlannedResources(
     await tx.namedResource.createMany({ data: newNRs })
   }
 
+  // Re-read to capture newly created resource IDs
   const allNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -523,19 +502,30 @@ export async function findOrCreatePlannedResources(
       where: { namedResourceId: { in: allNRs.map(nr => nr.id) } },
       select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
     })
-  const allProfilesByResource = new Map<string, typeof allProfiles>()
-  for (const profile of allProfiles) {
-    if (!profile.namedResourceId) continue
-    const profiles = allProfilesByResource.get(profile.namedResourceId) ?? []
-    profiles.push(profile)
-    allProfilesByResource.set(profile.namedResourceId, profiles)
-  }
-  const retained = allNRs.filter(nr => {
-    const profiles = allProfilesByResource.get(nr.id) ?? []
-    return isPlannerManaged(nr, profiles)
-  })
 
-  return { namedResources: retained, created: missing }
+  const finalPlan = buildPlannerResourcePlan(
+    allNRs,
+    allProfiles,
+    resourceTypeId,
+    resourceTypeName,
+    requiredCount,
+  )
+
+  if (finalPlan.hasConflict || finalPlan.plannerResources.length < requiredCount) {
+    const conflicts = finalPlan.conflicts.length > 0
+      ? finalPlan.conflicts
+      : finalPlan.explicitResources.map(resource => ({
+          resourceTypeId,
+          resourceTypeName,
+          namedResourceName: resource.name,
+        }))
+    throw new PlannerConflictError(
+      `Planner resource ownership changed while applying resource type "${resourceTypeName}".`,
+      conflicts,
+    )
+  }
+
+  return { namedResources: finalPlan.plannerResources.slice(0, requiredCount), created: missing }
 }
 
 // ─── Async: write profiles and segments ─────────────────────────────────────
@@ -569,10 +559,24 @@ export async function writePlannerProfiles(
   const prismaSource = source as CapacityProfileSource
 
   for (const rp of roleProfiles) {
-    const existing = await tx.capacityProfile.findFirst({
+    const existingList = await tx.capacityProfile.findMany({
       where: { projectId, resourceTypeId: rp.resourceTypeId, ownerKind: 'ROLE' },
-      select: { id: true },
+      select: { id: true, resourceTypeId: true, namedResourceId: true },
     })
+    if (existingList.length > 1) {
+      throw new PlannerConflictError(
+        `Duplicate ROLE profiles exist for resource type ${rp.resourceTypeId} — ` +
+        `repair required before applying.`,
+        [{ resourceTypeId: rp.resourceTypeId, resourceTypeName: 'role' }],
+      )
+    }
+    const existing = existingList[0] ?? null
+    if (existing && (existing.resourceTypeId !== rp.resourceTypeId || existing.namedResourceId !== null)) {
+      throw new PlannerConflictError(
+        `ROLE profile ownership is ambiguous for resource type ${rp.resourceTypeId}.`,
+        [{ resourceTypeId: rp.resourceTypeId, resourceTypeName: 'role' }],
+      )
+    }
     const profile = existing
       ? await tx.capacityProfile.update({
           where: { id: existing.id },
@@ -617,10 +621,40 @@ export async function writePlannerProfiles(
   }
 
   for (const pp of plannedProfiles) {
-    const existing = await tx.capacityProfile.findFirst({
+    const existingList = await tx.capacityProfile.findMany({
       where: { projectId, namedResourceId: pp.namedResourceId },
-      select: { id: true },
+      select: { id: true, ownerKind: true, source: true, planningBasis: true },
     })
+    if (existingList.length > 1) {
+      throw new PlannerConflictError(
+        `Duplicate capacity profiles exist for named resource ${pp.namedResourceId} — ` +
+        `repair required before applying.`,
+        [{
+          resourceTypeId: '',
+          resourceTypeName: 'named-resource',
+          namedResourceName: pp.namedResourceId,
+        }],
+      )
+    }
+    const existing = existingList[0] ?? null
+    if (
+      existing &&
+      !(
+        (existing.ownerKind === 'PLANNED_RESOURCE' && existing.source === 'SQUAD_PLANNER') ||
+        (existing.ownerKind === 'NAMED_PERSON'
+          && existing.source === 'SQUAD_PLANNER'
+          && existing.planningBasis === 'CAPACITY_PROFILE')
+      )
+    ) {
+      throw new PlannerConflictError(
+        `Explicit owner profile appeared for named resource ${pp.namedResourceId} during apply.`,
+        [{
+          resourceTypeId: '',
+          resourceTypeName: 'named-resource',
+          namedResourceName: pp.namedResourceId,
+        }],
+      )
+    }
     const profile = existing
       ? await tx.capacityProfile.update({
           where: { id: existing.id },
@@ -665,10 +699,40 @@ export async function writePlannerProfiles(
   }
 
   for (const surplusId of surplusResourceIds) {
-    const existing = await tx.capacityProfile.findFirst({
+    const existingList = await tx.capacityProfile.findMany({
       where: { projectId, namedResourceId: surplusId },
-      select: { id: true },
+      select: { id: true, ownerKind: true, source: true, planningBasis: true },
     })
+    if (existingList.length > 1) {
+      throw new PlannerConflictError(
+        `Duplicate capacity profiles exist for named resource ${surplusId} — ` +
+        `repair required before applying.`,
+        [{
+          resourceTypeId: '',
+          resourceTypeName: 'named-resource',
+          namedResourceName: surplusId,
+        }],
+      )
+    }
+    const existing = existingList[0] ?? null
+    if (
+      existing &&
+      !(
+        (existing.ownerKind === 'PLANNED_RESOURCE' && existing.source === 'SQUAD_PLANNER') ||
+        (existing.ownerKind === 'NAMED_PERSON'
+          && existing.source === 'SQUAD_PLANNER'
+          && existing.planningBasis === 'CAPACITY_PROFILE')
+      )
+    ) {
+      throw new PlannerConflictError(
+        `Explicit owner profile appeared for named resource ${surplusId} during apply.`,
+        [{
+          resourceTypeId: '',
+          resourceTypeName: 'named-resource',
+          namedResourceName: surplusId,
+        }],
+      )
+    }
     const data = {
       resourceTypeId: null,
       namedResourceId: surplusId,
@@ -916,6 +980,219 @@ export function determineSurplusResourceIds(
 ): string[] {
   if (trajectoryCount >= orderedNamedResources.length) return []
   return orderedNamedResources.slice(trajectoryCount).map(nr => nr.id)
+}
+
+// ─── Shared deterministic planner resource plan ───────────────────────────
+
+export interface PlannerResourcePlan {
+  /** Ordered (createdAt, id) planner-managed resources to use for trajectory assignment */
+  plannerResources: Array<{ id: string; name: string }>
+  /** Resources classified as explicit/protected (never selected by planner) */
+  explicitResources: Array<{ id: string; name: string }>
+  /** Number of new placeholders still needed beyond available planner resources */
+  shortfall: number
+  /** Whether duplicate/ambiguous owner state blocks the plan */
+  hasConflict: boolean
+  /** Conflict details when blocked */
+  conflicts: ConflictResourceInfo[]
+}
+
+/**
+ * Build a deterministic planner resource plan for a single resource type.
+ *
+ * Shared by conflict preflight, `findOrCreatePlannedResources`, and
+ * transaction-time revalidation. The plan is derived from the full set of
+ * existing named resources and their profiles, classified by the same
+ * `classifyNamedResource` rules.
+ *
+ * Rules:
+ * - Explicit/protected resources are never selected and never treated as a
+ *   conflict merely because placeholders are needed (shortfall creates new).
+ * - Legacy-adoptable, existing planner-managed, and capacity-plan-untouched
+ *   resources are reused.
+ * - Duplicate/ambiguous owner state causes a failed-closed conflict.
+ * - Returned plannerResources are ordered by (createdAt, id).
+ */
+export function buildPlannerResourcePlan(
+  existingNamedResources: ReadonlyArray<{ id: string; name: string; createdAt: Date; allocationMode: string | null }>,
+  existingProfiles: ReadonlyArray<{ namedResourceId: string | null; ownerKind: string; source: string; planningBasis?: string }>,
+  resourceTypeId: string,
+  resourceTypeName: string,
+  requiredCount: number,
+): PlannerResourcePlan {
+  const profilesByResource = new Map<string, Array<{
+    namedResourceId: string | null
+    ownerKind: string
+    source: string
+    planningBasis?: string
+  }>>()
+  for (const profile of existingProfiles) {
+    if (!profile.namedResourceId) continue
+    const list = profilesByResource.get(profile.namedResourceId)
+    if (list) {
+      list.push(profile)
+    } else {
+      profilesByResource.set(profile.namedResourceId, [profile])
+    }
+  }
+
+  const conflicts: ConflictResourceInfo[] = []
+
+  // Check ROLE profile duplicates (profiles without a named resource)
+  const roleProfiles = existingProfiles.filter(
+    p => !p.namedResourceId && p.ownerKind === 'ROLE'
+  )
+  if (roleProfiles.length > 1) {
+    conflicts.push({
+      resourceTypeId,
+      resourceTypeName,
+      namedResourceName: undefined,
+    })
+  }
+
+  const plannerResources: Array<{ id: string; name: string }> = []
+  const explicitResources: Array<{ id: string; name: string }> = []
+
+  for (const nr of existingNamedResources) {
+    const profiles = profilesByResource.get(nr.id) ?? []
+
+    // Check for duplicate profiles on ANY resource (regardless of classification)
+    if (profiles.length > 1) {
+      conflicts.push({
+        resourceTypeId,
+        resourceTypeName: 'named-resource',
+        namedResourceName: nr.name,
+      })
+    }
+
+    const kind = classifyNamedResource(nr, profiles)
+    if (kind === 'explicit_person') {
+      explicitResources.push({ id: nr.id, name: nr.name })
+    } else if (isPlannerManaged(nr, profiles)) {
+      plannerResources.push({ id: nr.id, name: nr.name })
+    }
+    // 'other' resources are ignored — they aren't planner-managed and not explicit
+  }
+
+  const shortfall = Math.max(0, requiredCount - plannerResources.length)
+
+  return {
+    plannerResources: plannerResources.slice(0, requiredCount),
+    explicitResources,
+    shortfall,
+    hasConflict: conflicts.length > 0,
+    conflicts,
+  }
+}
+
+// ─── Transaction-time revalidation ──────────────────────────────────────────
+
+/**
+ * Error thrown by `revalidatePlannerPlan` when a conflict is detected
+ * inside the transaction, before any mutation. The route catches this
+ * to return 409 and clean up the pre-apply snapshot.
+ */
+export class PlannerConflictError extends Error {
+  public readonly conflicts: ConflictResourceInfo[]
+
+  constructor(message: string, conflicts: ConflictResourceInfo[]) {
+    super(message)
+    this.name = 'PlannerConflictError'
+    this.conflicts = conflicts
+  }
+}
+
+/**
+ * Revalidate the planner plan inside the apply transaction, immediately
+ * before any deactivate/create/write mutation. Re-reads the current DB
+ * state and re-checks all conflict rules using the same shared
+ * `buildPlannerResourcePlan` function that preflight and findOrCreate use.
+ *
+ * Throws `PlannerConflictError` on conflict so the caller can abort
+ * before active-plan deactivation and return 409.
+ */
+export async function revalidatePlannerPlan(
+  tx: PrismaTransactionClient,
+  projectId: string,
+  periods: ReadonlyArray<CapacityPlanPeriodInput>,
+): Promise<void> {
+  const resourceTypeIds = [...new Set(periods.flatMap(p => p.entries.map(e => e.resourceTypeId)))]
+  const allConflicts: ConflictResourceInfo[] = []
+
+  for (const rtId of resourceTypeIds) {
+    // Check ROLE profile duplicates (existing profiles query)
+    const roleProfiles = await tx.capacityProfile.findMany({
+      where: { projectId, resourceTypeId: rtId, ownerKind: 'ROLE' },
+      select: { id: true },
+    })
+    if (roleProfiles.length > 1) {
+      allConflicts.push({
+        resourceTypeId: rtId,
+        resourceTypeName: 'role',
+      })
+    }
+
+    // Compute trajectory count
+    const rtPeriods = periods.map(p => ({
+      periodIndex: p.periodIndex,
+      startWeek: p.startWeek,
+      endWeek: p.endWeek,
+      headcount: p.entries.find(e => e.resourceTypeId === rtId)?.headcount ?? 0,
+    }))
+    const trajectories = materializeResourceTrajectories(rtPeriods)
+    const trajectoryCount = trajectories.length
+
+    // Fetch named resources (stable order)
+    const namedResources = await tx.namedResource.findMany({
+      where: { resourceTypeId: rtId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, name: true, createdAt: true, allocationMode: true },
+    })
+
+    // Fetch profiles for those named resources
+    const resourceProfiles = namedResources.length === 0
+      ? []
+      : await tx.capacityProfile.findMany({
+        where: { namedResourceId: { in: namedResources.map(nr => nr.id) } },
+        select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
+      })
+
+    const plan = buildPlannerResourcePlan(
+      namedResources,
+      resourceProfiles,
+      rtId,
+      'role',
+      trajectoryCount,
+    )
+    allConflicts.push(...plan.conflicts)
+  }
+
+  if (allConflicts.length > 0) {
+    throw new PlannerConflictError(
+      `Plan revalidation failed: ${allConflicts.length} conflict(s) detected. ` +
+      `Duplicate owner profiles exist. Repair required before applying.`,
+      allConflicts,
+    )
+  }
+}
+
+// ─── Pre-write conflict test seam ────────────────────────────────────────────
+
+/**
+ * Deterministic test seam invoked inside the apply transaction after
+ * `revalidatePlannerPlan` passes but before any deactivate/create/write
+ * mutation. Integration tests can set this to inject a profile mutation
+ * between preflight/snapshot and transaction validation.
+ *
+ * In production this is always null.
+ */
+export let __preWriteConflictSeam: (() => void) | null = null
+
+/**
+ * Override the pre-write conflict seam for testing. Pass null to disable.
+ */
+export function __setPreWriteConflictSeam(fn: (() => void) | null): void {
+  __preWriteConflictSeam = fn
 }
 
 // ─── Orchestration: apply planner profiles for one resource type ────────────

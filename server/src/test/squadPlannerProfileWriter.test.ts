@@ -3,6 +3,7 @@ import {
   buildRoleProfileData,
   buildPlannedResourceProfileData,
   buildZeroCapacityProfileData,
+  buildPlannerResourcePlan,
   classifyNamedResource,
   classifyProfileConflicts,
   determineSurplusResourceIds,
@@ -400,6 +401,132 @@ describe('determineSurplusResourceIds', () => {
   it('returns empty when no resources exist', () => {
     const result = determineSurplusResourceIds([], 0)
     expect(result).toHaveLength(0)
+  })
+})
+
+// ─── Shared planner resource plan tests ───────────────────────────────────
+
+describe('buildPlannerResourcePlan', () => {
+  const rtDev = 'rt-dev'
+  const rtName = 'Developer'
+  const baseDate = new Date('2026-01-01')
+
+  it('returns planner resources in deterministic order, excluding explicit people', () => {
+    const namedResources = [
+      { id: 'nr-alice', name: 'Alice', createdAt: new Date('2026-01-01'), allocationMode: 'MANUAL' },
+      { id: 'nr-bob', name: 'Bob', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' },
+    ]
+    const profiles = [
+      { namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
+    ]
+
+    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 1)
+
+    expect(result.hasConflict).toBe(false)
+    expect(result.plannerResources).toHaveLength(1)
+    expect(result.plannerResources[0].id).toBe('nr-bob')
+    expect(result.explicitResources).toHaveLength(1)
+    expect(result.explicitResources[0].id).toBe('nr-alice')
+    expect(result.shortfall).toBe(0)
+  })
+
+  it('returns shortfall when no planner resources exist despite explicit people present', () => {
+    // Explicit people are NOT treated as a conflict — shortfall creates new placeholders
+    const namedResources = [
+      { id: 'nr-alice', name: 'Alice', createdAt: new Date('2026-01-01'), allocationMode: 'MANUAL' },
+    ]
+    const profiles = [
+      { namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
+    ]
+
+    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 2)
+
+    expect(result.hasConflict).toBe(false)
+    expect(result.plannerResources).toHaveLength(0)
+    expect(result.shortfall).toBe(2)
+    expect(result.explicitResources).toHaveLength(1)
+  })
+
+  it('includes legacy-adoptable and capacity-plan-untouched resources as planner-managed', () => {
+    const namedResources = [
+      { id: 'nr-legacy', name: 'Legacy', createdAt: baseDate, allocationMode: 'CAPACITY_PLAN' },
+      { id: 'nr-untouched', name: 'Untouched', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' },
+    ]
+    const profiles = [
+      { namedResourceId: 'nr-legacy', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+    ]
+
+    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 2)
+
+    expect(result.hasConflict).toBe(false)
+    expect(result.plannerResources).toHaveLength(2)
+    expect(result.plannerResources[0].id).toBe('nr-legacy')
+    expect(result.plannerResources[1].id).toBe('nr-untouched')
+    expect(result.shortfall).toBe(0)
+  })
+
+  it('flags duplicate ROLE profiles as conflict', () => {
+    const profiles = [
+      { namedResourceId: null, ownerKind: 'ROLE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: null, ownerKind: 'ROLE', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
+    ]
+
+    const result = buildPlannerResourcePlan([], profiles, rtDev, rtName, 1)
+
+    expect(result.hasConflict).toBe(true)
+    expect(result.conflicts).toHaveLength(1)
+  })
+
+  it('flags duplicate profiles on a planner-managed resource as conflict', () => {
+    const namedResources = [
+      { id: 'nr-dupe', name: 'Dupe', createdAt: baseDate, allocationMode: 'CAPACITY_PLAN' },
+    ]
+    const profiles = [
+      { namedResourceId: 'nr-dupe', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: 'nr-dupe', ownerKind: 'PLANNED_RESOURCE', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
+    ]
+
+    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 1)
+
+    expect(result.hasConflict).toBe(true)
+    expect(result.conflicts).toHaveLength(1)
+  })
+
+  it('slices planner resources to required count, ignoring surplus', () => {
+    const namedResources = [
+      { id: 'nr-1', name: 'First', createdAt: baseDate, allocationMode: 'CAPACITY_PLAN' },
+      { id: 'nr-2', name: 'Second', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' },
+      { id: 'nr-3', name: 'Third', createdAt: new Date('2026-01-03'), allocationMode: 'CAPACITY_PLAN' },
+    ]
+    const profiles: Array<{ namedResourceId: string | null; ownerKind: string; source: string; planningBasis?: string }> = []
+
+    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 2)
+
+    expect(result.hasConflict).toBe(false)
+    expect(result.plannerResources).toHaveLength(2)
+    expect(result.plannerResources[0].id).toBe('nr-1')
+    expect(result.plannerResources[1].id).toBe('nr-2')
+    // Surplus resources are tracked separately via determineSurplusResourceIds
+  })
+
+  it('does not flag explicit people as conflict when placeholders are needed', () => {
+    // This is the core behavioral change: explicit people should NOT block planning
+    const namedResources = [
+      { id: 'nr-manual', name: 'Manual Alice', createdAt: baseDate, allocationMode: 'MANUAL' },
+      { id: 'nr-legacy', name: 'Legacy Bob', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' },
+    ]
+    const profiles = [
+      { namedResourceId: 'nr-manual', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: 'nr-legacy', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+    ]
+
+    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 3)
+
+    // Should NOT conflict: explicit people are ignored for headcount purposes
+    expect(result.hasConflict).toBe(false)
+    expect(result.plannerResources).toHaveLength(1) // Only legacy Bob
+    expect(result.explicitResources).toHaveLength(1) // Manual Alice
+    expect(result.shortfall).toBe(2) // Need 2 more placeholders
   })
 })
 

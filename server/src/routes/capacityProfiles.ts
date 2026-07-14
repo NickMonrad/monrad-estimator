@@ -12,7 +12,10 @@ import type {
   CapacityProfileNamedResourceLike,
   CapacityPlanSlotInput,
 } from '../lib/capacityProfileMapping.js'
-import { validatePersistedCapacityProfiles } from '../lib/persistedCapacityProfileValidation.js'
+import {
+  validatePersistedCapacityProfiles,
+  checkPersistedCompleteness,
+} from '../lib/persistedCapacityProfileValidation.js'
 
 
 const router = Router({ mergeParams: true })
@@ -65,36 +68,24 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     )
 
     if (validation.valid) {
-      // ── Completeness: every RT/named-resource must be covered ──
-      const rtWithRoleProfile = new Set<string>()
-      const namedResourcesCovered = new Set<string>()
-      for (const cp of project.capacityProfiles) {
-        if (cp.resourceTypeId) rtWithRoleProfile.add(cp.resourceTypeId)
-        if (cp.namedResourceId) namedResourcesCovered.add(cp.namedResourceId)
-      }
+      const completenessErrors = checkPersistedCompleteness({
+        resourceTypes: project.resourceTypes.map(rt => ({
+          id: rt.id,
+          name: rt.name,
+          namedResources: rt.namedResources.map(nr => ({ id: nr.id, name: nr.name })),
+        })),
+        capacityProfiles: project.capacityProfiles.map(profile => ({
+          resourceTypeId: profile.resourceTypeId,
+          namedResourceId: profile.namedResourceId,
+          ownerKind: String(profile.ownerKind),
+          source: String(profile.source),
+          planningBasis: String(profile.planningBasis),
+        })),
+      })
 
-      const completenessErrors: string[] = []
-      for (const rt of project.resourceTypes) {
-        if (rt.namedResources.length > 0) {
-          // RT with named resources: every named resource must have a profile
-          for (const nr of rt.namedResources) {
-            if (!namedResourcesCovered.has(nr.id)) {
-              completenessErrors.push(
-                `Named resource "${nr.id}" for RT "${rt.id}" lacks persisted profile`,
-              )
-            }
-          }
-        } else if (!rtWithRoleProfile.has(rt.id)) {
-          // RT without named resources: must have a ROLE profile
-          completenessErrors.push(
-            `Resource type "${rt.id}" lacks persisted ROLE profile`,
-          )
-        }
-      }
-
-      // ── Authority path: structurally valid AND complete ──────────
+      // Persisted state is authoritative only when structural validation and
+      // complete owner coverage both succeed.
       if (completenessErrors.length === 0) {
-        // Build name lookups for DTO mapping
         const resourceTypeById = new Map<string, { id: string; name: string }>()
         const namedResourceById = new Map<string, { id: string; name: string; resourceTypeId: string }>()
         for (const rt of project.resourceTypes) {
@@ -104,12 +95,13 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           }
         }
 
-        const profiles = mapPersistedProfilesToDTOs(
-          project.capacityProfiles,
-          resourceTypeById,
-          namedResourceById,
-        )
-        res.json({ capacityProfiles: profiles })
+        res.json({
+          capacityProfiles: mapPersistedProfilesToDTOs(
+            project.capacityProfiles,
+            resourceTypeById,
+            namedResourceById,
+          ),
+        })
         return
       }
 

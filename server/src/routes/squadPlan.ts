@@ -35,6 +35,9 @@ import {
   projectCompatibilityFields,
   clearSurplusCompatibilityFields,
   clearOmittedPlannerCapacity,
+  revalidatePlannerPlan,
+  PlannerConflictError,
+  __preWriteConflictSeam,
   __applyFailureSeam,
   type PrismaTransactionClient,
 } from '../lib/squadPlannerProfileWriter.js'
@@ -457,11 +460,12 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
-  // ── 1. Create pre-apply snapshot for undo ───────────────────────────────
+  // ── 1. Create pre-apply snapshot for undo (track ID for on-conflict cleanup) ──
+  let newSnapshotId: string | null = null
   if (shouldActivate) {
     const snapshotData = await buildSnapshot(projectId)
     const dateStr = new Date().toISOString().slice(0, 10)
-    await prisma.backlogSnapshot.create({
+    const snapshot = await prisma.backlogSnapshot.create({
       data: {
         projectId,
         label: `Auto-saved before squad plan apply — ${dateStr}`,
@@ -470,7 +474,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         createdById: req.userId!,
       },
     })
-    await pruneSnapshots(prisma, projectId)
+    newSnapshotId = snapshot.id
+    // pruneSnapshots is deferred to after a successful transaction
   }
 
 
@@ -641,155 +646,198 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         }))
     }
 
-    timelinePrecomputed = { epicStartWeeks, featureRows: pfFeatureRows, storyRows: pfStoryRows, weeklyDemandCache: refreshedWeeklyDemandCache }
-  }
-
-  // ── 3. Single transaction: plan + profile + timeline + cache ──────────────
-  const plan = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
-    // Deactivate existing active plans
-    if (shouldActivate) {
-      await tx.capacityPlan.updateMany({
-        where: { projectId, isActive: true },
-        data: { isActive: false },
-      })
+    timelinePrecomputed = {
+      epicStartWeeks,
+      featureRows: pfFeatureRows,
+      storyRows: pfStoryRows,
+      weeklyDemandCache: refreshedWeeklyDemandCache,
     }
 
-    // Create the new plan with nested periods & entries
-    const createdPlan = await tx.capacityPlan.create({
-      data: {
-        projectId,
-        name,
-        targetWeeks,
-        periodWeeks,
-        maxDelta,
-        isActive: shouldActivate,
-        totalCost,
-        deliveryWeeks,
-        periods: {
-          create: normalisedPeriods.map(p => ({
-            periodIndex: p.periodIndex,
-            startWeek: p.startWeek,
-            endWeek: p.endWeek,
-            entries: {
-              create: p.entries.map(e => ({
-                resourceTypeId: e.resourceTypeId,
-                headcount: e.headcount,
-                demandFTE: e.demandFTE,
-                utilisationPct: e.utilisationPct,
-              })),
-            },
-          })),
-        },
-      },
-      include: { periods: { include: { entries: true } } },
-    })
 
-    // ── Profile-first: write authoritative profiles directly, project compatibility ──
-    if (shouldActivate && maxHeadcountByRt) {
-      // Update RT counts and allocation mode for demand RTs
-      for (const [rtId, count] of maxHeadcountByRt) {
-        await tx.resourceType.update({
-          where: { id: rtId },
-          data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
+}
+
+  // ── 3. Single transaction: revalidate → deactivate → plan → profile → timeline + cache ──
+  let plan: unknown
+  try {
+    plan = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
+      // Revalidate the plan inside the transaction, before any mutation.
+      // Catches races where profile state changed between preflight and write.
+      if (shouldActivate) {
+        await revalidatePlannerPlan(
+          tx,
+          projectId,
+          normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+        )
+
+        // ── Pre-write conflict test seam ─────────────────────────────────
+        // Integration tests inject a profile mutation here to test preflight/apply race.
+        if (__preWriteConflictSeam) {
+          __preWriteConflictSeam()
+        }
+      }
+
+      // Deactivate existing active plans
+      if (shouldActivate) {
+        await tx.capacityPlan.updateMany({
+          where: { projectId, isActive: true },
+          data: { isActive: false },
         })
       }
 
-
-
-      // Reuse the validated project resource types for materialisation
-      const rtNameById = new Map(projectResourceTypes.map(rt => [rt.id, rt.name]))
-
-      // Write authoritative profiles per resource type
-      for (const [rtId] of maxHeadcountByRt) {
-        const rtName = rtNameById.get(rtId) ?? 'Resource'
-
-        // Compute trajectories to know required count and provide data
-        const rtPeriods = normalisedPeriods.map(p => ({
-          periodIndex: p.periodIndex,
-          startWeek: p.startWeek,
-          endWeek: p.endWeek,
-          headcount: p.entries.find(e => e.resourceTypeId === rtId)?.headcount ?? 0,
-        }))
-        const trajectories = materializeResourceTrajectories(rtPeriods)
-
-        // Find/create named resources with stable ordering (createdAt, id)
-        const { namedResources } = await findOrCreatePlannedResources(
-          tx,
-          rtId,
-          rtName,
-          trajectories.length,
-        )
-
-        // Build profile write sets (role + per-resource)
-        const materialized = materializeProfilesForResourceType(
-          rtId,
-          rtName,
-          normalisedPeriods as unknown as CapacityPlanPeriodInput[],
-          namedResources,
-        )
-
-        // Authoritative profile + segment persistence
-        await writePlannerProfiles(
-          tx,
+      // Create the new plan with nested periods & entries
+      const createdPlan = await tx.capacityPlan.create({
+        data: {
           projectId,
-          [materialized.roleProfile],
-          materialized.plannedProfiles,
-          materialized.surplusResources,
-        )
-
-        // Project compatibility fields from just-written profiles
-        await projectCompatibilityFields(
-          tx,
-          projectId,
-          [materialized.roleProfile],
-          materialized.plannedProfiles,
-        )
-
-        // Clear surplus resource windows so legacy readers see no stale capacity
-        if (materialized.surplusResources.length > 0) {
-          await clearSurplusCompatibilityFields(tx, materialized.surplusResources)
-        }
-      }
-      await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()))
-    }
-
-    // ── Timeline + cache persistence using precomputed data ────────────
-    if (shouldActivate && timelinePrecomputed) {
-      // Persist epic start weeks
-      for (const [epicId, startWeek] of timelinePrecomputed.epicStartWeeks) {
-        await tx.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
-      }
-
-      // Persist timeline entries
-      await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
-      if (timelinePrecomputed.featureRows.length > 0) {
-        await tx.timelineEntry.createMany({ data: timelinePrecomputed.featureRows, skipDuplicates: true })
-      }
-
-      // Persist story timeline entries
-      await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
-      if (timelinePrecomputed.storyRows.length > 0) {
-        await tx.storyTimelineEntry.createMany({ data: timelinePrecomputed.storyRows, skipDuplicates: true })
-      }
-
-      // Update weekly demand cache
-      await tx.project.update({
-        where: { id: projectId },
-        data: { weeklyDemandCache: timelinePrecomputed.weeklyDemandCache },
+          name,
+          targetWeeks,
+          periodWeeks,
+          maxDelta,
+          isActive: shouldActivate,
+          totalCost,
+          deliveryWeeks,
+          periods: {
+            create: normalisedPeriods.map(p => ({
+              periodIndex: p.periodIndex,
+              startWeek: p.startWeek,
+              endWeek: p.endWeek,
+              entries: {
+                create: p.entries.map(e => ({
+                  resourceTypeId: e.resourceTypeId,
+                  headcount: e.headcount,
+                  demandFTE: e.demandFTE,
+                  utilisationPct: e.utilisationPct,
+                })),
+              },
+            })),
+          },
+        },
+        include: { periods: { include: { entries: true } } },
       })
 
-      // ── Test failure seam (after timeline/cache) ─────────────────────────
-      // Production: no-op. Integration tests inject a throwing function to
-      // verify the transaction rolls back timeline and cache mutations too.
-      if (__applyFailureSeam) {
-        __applyFailureSeam()
-      }
-    }
+      // ── Profile-first: write authoritative profiles directly, project compatibility ──
+      if (shouldActivate && maxHeadcountByRt) {
+        // Update RT counts and allocation mode for demand RTs
+        for (const [rtId, count] of maxHeadcountByRt) {
+          await tx.resourceType.update({
+            where: { id: rtId },
+            data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
+          })
+        }
 
-    return createdPlan
-  })
+        // Reuse the validated project resource types for materialisation
+        const rtNameById = new Map(projectResourceTypes.map(rt => [rt.id, rt.name]))
+
+        // Write authoritative profiles per resource type
+        for (const [rtId] of maxHeadcountByRt) {
+          const rtName = rtNameById.get(rtId) ?? 'Resource'
+
+          // Compute trajectories to know required count and provide data
+          const rtPeriods = normalisedPeriods.map(p => ({
+            periodIndex: p.periodIndex,
+            startWeek: p.startWeek,
+            endWeek: p.endWeek,
+            headcount: p.entries.find(e => e.resourceTypeId === rtId)?.headcount ?? 0,
+          }))
+          const trajectories = materializeResourceTrajectories(rtPeriods)
+
+          // Find/create named resources with stable ordering (createdAt, id)
+          const { namedResources } = await findOrCreatePlannedResources(
+            tx,
+            rtId,
+            rtName,
+            trajectories.length,
+          )
+
+          // Build profile write sets (role + per-resource)
+          const materialized = materializeProfilesForResourceType(
+            rtId,
+            rtName,
+            normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+            namedResources,
+          )
+
+          // Authoritative profile + segment persistence
+          await writePlannerProfiles(
+            tx,
+            projectId,
+            [materialized.roleProfile],
+            materialized.plannedProfiles,
+            materialized.surplusResources,
+          )
+
+          // Project compatibility fields from just-written profiles
+          await projectCompatibilityFields(
+            tx,
+            projectId,
+            [materialized.roleProfile],
+            materialized.plannedProfiles,
+          )
+
+          // Clear surplus resource windows so legacy readers see no stale capacity
+          if (materialized.surplusResources.length > 0) {
+            await clearSurplusCompatibilityFields(tx, materialized.surplusResources)
+          }
+        }
+        await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()))
+      }
+
+      // ── Timeline + cache persistence using precomputed data ────────────
+      if (shouldActivate && timelinePrecomputed) {
+        // Persist epic start weeks
+        for (const [epicId, startWeek] of timelinePrecomputed.epicStartWeeks) {
+          await tx.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
+        }
+
+        // Persist timeline entries
+        await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
+        if (timelinePrecomputed.featureRows.length > 0) {
+          await tx.timelineEntry.createMany({ data: timelinePrecomputed.featureRows, skipDuplicates: true })
+        }
+
+        // Persist story timeline entries
+        await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
+        if (timelinePrecomputed.storyRows.length > 0) {
+          await tx.storyTimelineEntry.createMany({ data: timelinePrecomputed.storyRows, skipDuplicates: true })
+        }
+
+        // Update weekly demand cache
+        await tx.project.update({
+          where: { id: projectId },
+          data: { weeklyDemandCache: timelinePrecomputed.weeklyDemandCache },
+        })
+
+        // ── Test failure seam (after timeline/cache) ─────────────────────────
+        // Production: no-op. Integration tests inject a throwing function to
+        // verify the transaction rolls back timeline and cache mutations too.
+        if (__applyFailureSeam) {
+          __applyFailureSeam()
+        }
+      }
+
+      return createdPlan
+    })
+  } catch (err: unknown) {
+    if (err instanceof PlannerConflictError) {
+      // Transaction-time conflict: abort before active-plan deactivation.
+      // Delete only the new snapshot (created before the transaction) and return 409.
+      if (newSnapshotId) {
+        await prisma.backlogSnapshot.delete({ where: { id: newSnapshotId } }).catch(() => {
+          // Snapshot may already be deleted by another path; ignore deletion failure
+        })
+      }
+      res.status(409).json({ error: err.message })
+      return
+    }
+    throw err // Unexpected errors propagate as 500
+  }
+
+  // Prune snapshots only after a successful transaction
+  if (newSnapshotId) {
+    await pruneSnapshots(prisma, projectId)
+  }
 
   res.status(201).json(plan)
+
 }))
 
 // ─────────────────────────────────────────────────────────────────────────────

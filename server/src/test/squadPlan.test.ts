@@ -17,8 +17,18 @@ vi.mock('../lib/snapshotUtils.js', async importOriginal => {
     pruneSnapshots: vi.fn().mockResolvedValue(undefined),
   }
 })
+vi.mock('../lib/squadPlannerProfileWriter.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../lib/squadPlannerProfileWriter.js')>()
+  return {
+    ...actual,
+    revalidatePlannerPlan: vi.fn().mockResolvedValue(undefined),
+  }
+})
+
+import * as writerModule from '../lib/squadPlannerProfileWriter.js'
 
 import { app } from '../index.js'
+
 import { prisma } from '../lib/prisma.js'
 import {
   deriveFeatureSpanFromWeeklyAllocations,
@@ -26,6 +36,8 @@ import {
 } from '../routes/squadPlan.js'
 import { buildSnapshot } from '../routes/snapshots.js'
 import type { SchedulerResourceType } from '../lib/scheduler.js'
+import { pruneSnapshots } from '../lib/snapshotUtils.js'
+
 
 
 vi.mock('../lib/syncCapacityProfiles.js', () => ({
@@ -588,5 +600,79 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     expect(res.status).toBe(500)
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
     expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('does not create snapshot or prune when setActive is false', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send({
+        name: 'Inactive plan',
+        targetWeeks: 10,
+        periodWeeks: 4,
+        maxDelta: 1,
+        setActive: false,
+        periods: [
+          {
+            periodIndex: 0,
+            startWeek: 0,
+            endWeek: 4,
+            entries: [
+              {
+                resourceTypeId: 'rt-dev',
+                headcount: 1,
+                demandFTE: 0.8,
+                utilisationPct: 80,
+              },
+            ],
+          },
+        ],
+      })
+
+    expect(res.status).toBe(201)
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(pruneSnapshots).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when revalidatePlannerPlan detects a transaction-time conflict, deletes new snapshot', async () => {
+    const conflictError = new writerModule.PlannerConflictError('test conflict', [])
+    vi.mocked(writerModule.revalidatePlannerPlan).mockRejectedValueOnce(conflictError)
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+    vi.mocked(prisma.backlogSnapshot.create).mockResolvedValue({ id: 'test-snapshot-id' } as never)
+    vi.mocked(prisma.backlogSnapshot.delete).mockResolvedValue({ id: 'test-snapshot-id' } as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send({
+        name: 'Race plan',
+        targetWeeks: 10,
+        periodWeeks: 4,
+        maxDelta: 1,
+        setActive: true,
+        periods: [
+          {
+            periodIndex: 0,
+            startWeek: 0,
+            endWeek: 4,
+            entries: [
+              {
+                resourceTypeId: 'rt-dev',
+                headcount: 1,
+                demandFTE: 0.8,
+                utilisationPct: 80,
+              },
+            ],
+          },
+        ],
+      })
+
+    expect(res.status).toBe(409)
+    expect(prisma.backlogSnapshot.create).toHaveBeenCalled()
+    expect(prisma.backlogSnapshot.delete).toHaveBeenCalledWith({ where: { id: 'test-snapshot-id' } })
   })
 })

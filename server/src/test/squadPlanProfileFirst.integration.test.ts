@@ -35,6 +35,8 @@ import { getWeeklyCapacity } from '../lib/scheduler.js'
 import {
   writePlannerProfiles,
   __setApplyFailureSeam,
+  __setPreWriteConflictSeam,
+  PlannerConflictError,
   type RoleProfileWriteSet,
 } from '../lib/squadPlannerProfileWriter.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
@@ -685,12 +687,19 @@ describeIf('Scenario 4 — setActive:false does not mutate capacity profiles', (
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Scenario 5 — Explicit NAMED_PERSON conflict returns 409
+// Scenario 5 — Explicit NAMED_PERSON with insufficient planner resources
+//              succeeds by creating planner placeholder
 // ═════════════════════════════════════════════════════════════════════════════
+//
+// The conflict preflight does NOT block on explicit persons with shortfall.
+// buildPlannerResourcePlan treats explicit resources as skipped, creates new
+// planner-managed placeholders to reach the required trajectory count. Explicit
+// profiles must survive with original ownerKind/source/segments/aliases.
 
-describeIf('Scenario 5 — Explicit NAMED_PERSON conflict returns 409 before snapshot', () => {
+describeIf('Scenario 5 — Explicit NAMED_PERSON + shortfall creates planner placeholder', () => {
   let projectId: string
   let rtId: string
+  let aliceNrId: string
 
   beforeAll(async () => {
     if (!runIntegration) return
@@ -698,61 +707,121 @@ describeIf('Scenario 5 — Explicit NAMED_PERSON conflict returns 409 before sna
     rtId = await createResourceType(projectId, 'rt-eng-s5', 'Engineer')
     await createEpicBacklog(projectId, rtId)
 
-    // Create a named resource with an explicit NAMED_PERSON profile
-    await createNamedResource(projectId, rtId, 'nr-alice', 'Alice')
+    // Create a named resource with an explicit MANUAL NAMED_PERSON profile
+    aliceNrId = await createNamedResource(projectId, rtId, 'nr-alice', 'Alice')
     await createProfile(
       projectId,
       'cp-alice',
       'NAMED_PERSON',
       null,
-      'nr-alice',
+      aliceNrId,
       { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL' },
     )
-  })
 
-  it('returns 409 when a NAMED_PERSON profile conflicts with planner scope', async () => {
+    // Apply with headcount 2 → 2 trajectories needed, but only 0 planner NRs
+    // (Alice is explicit and won't be counted). Planner creates 2 placeholders.
     const res = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
       .set('Authorization', authHeader)
       .send(buildApplyPayload(rtId, [
         { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 2 },
-      ], { setActive: true }))
+      ], { name: 'Explicit Person Success', setActive: true }))
 
-    expect(res.status).toBe(409)
-    // Response should include a descriptive error
-    expect(res.body.error ?? res.body.message).toBeDefined()
+    expect(res.status).toBe(201)
   })
 
-  it('does not create a pre-apply snapshot on conflict', async () => {
-    const snapshots = await prisma.backlogSnapshot.findMany({
-      where: { project: { id: projectId } },
-    })
-    expect(snapshots).toHaveLength(0)
-  })
-
-  it('leaves existing profiles unchanged', async () => {
-    const profiles = await fetchProfiles(projectId)
-    expect(profiles).toHaveLength(1)
-    expect(profiles[0].id).toBe('cp-alice')
-    expect(profiles[0].ownerKind).toBe('NAMED_PERSON')
-  })
-
-  it('does not activate any capacity plan', async () => {
-    const activePlanId = await fetchActivePlanId(projectId)
-    expect(activePlanId).toBeNull()
-  })
-
-  it('does not change resource type allocation mode', async () => {
-    const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
-    expect(rt!.allocationMode).toBe('TIMELINE')
-  })
-
-  it('does not create additional named resources', async () => {
+  it('creates a planner placeholder named resource alongside the explicit person', async () => {
     const nrs = await prisma.namedResource.findMany({
       where: { resourceType: { projectId } },
+      orderBy: { id: 'asc' },
     })
-    expect(nrs).toHaveLength(1)
-    expect(nrs[0].id).toBe('nr-alice')
+    // Alice (explicit) + 2 planner placeholders (for 2 trajectories)
+    expect(nrs).toHaveLength(3)
+
+    const alice = nrs.find(nr => nr.id === aliceNrId)
+    expect(alice).toBeDefined()
+    // Alice's original legacy aliases preserved (EFFORT was default from createNamedResource)
+    expect(alice!.allocationMode).toBe('EFFORT')
+    expect(alice!.allocationPercent).toBe(100)
+
+    // Planner placeholders have CAPACITY_PLAN allocationMode
+    const plannerNRs = nrs.filter(nr => nr.id !== aliceNrId)
+    expect(plannerNRs).toHaveLength(2)
+    for (const nr of plannerNRs) {
+      expect(nr.allocationMode).toBe('CAPACITY_PLAN')
+      expect(nr.resourceTypeId).toBe(rtId)
+    }
+  })
+
+  it('preserves the explicit NAMED_PERSON profile unchanged', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const aliceProfile = profiles.find(p => p.id === 'cp-alice')
+    expect(aliceProfile).toMatchObject({
+      ownerKind: 'NAMED_PERSON',
+      resourceTypeId: null,
+      namedResourceId: aliceNrId,
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'MANUAL',
+    })
+  })
+
+  it('creates ROLE profile and PLANNED_RESOURCE profiles for the placeholders', async () => {
+    const profiles = await fetchProfiles(projectId)
+    const roleProfiles = profiles.filter(p => p.ownerKind === 'ROLE')
+    expect(roleProfiles).toHaveLength(1)
+    expect(roleProfiles[0].resourceTypeId).toBe(rtId)
+    expect(roleProfiles[0].namedResourceId).toBeNull()
+    expect(roleProfiles[0].planningBasis).toBe('CAPACITY_PROFILE')
+    expect(roleProfiles[0].source).toBe('SQUAD_PLANNER')
+
+    const prProfiles = profiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE')
+    expect(prProfiles).toHaveLength(2)
+
+    // Exact owner shape: resourceTypeId null, namedResourceId set
+    for (const pr of prProfiles) {
+      expect(pr.resourceTypeId).toBeNull()
+      expect(pr.namedResourceId).not.toBeNull()
+      expect(pr.planningBasis).toBe('CAPACITY_PROFILE')
+      expect(pr.source).toBe('SQUAD_PLANNER')
+    }
+
+    // Validate named resource FK belongs to this RT
+    const allNRs = await prisma.namedResource.findMany({
+      where: { resourceType: { projectId } },
+    })
+    for (const pr of prProfiles) {
+      const nr = allNRs.find(n => n.id === pr.namedResourceId)
+      expect(nr).toBeDefined()
+      expect(nr!.resourceTypeId).toBe(rtId)
+    }
+  })
+
+  it('writes segments on ROLE and PLANNED_RESOURCE profiles, not on explicit profile', async () => {
+    const profiles = await fetchProfiles(projectId)
+
+    // Explicit profile has no segments
+    const aliceProfile = profiles.find(p => p.id === 'cp-alice')
+    const aliceSegs = await fetchSegments(aliceProfile!.id)
+    expect(aliceSegs).toHaveLength(0)
+
+    // ROLE profile has segments
+    const roleProfile = profiles.find(p => p.ownerKind === 'ROLE')
+    const roleSegs = await fetchSegments(roleProfile!.id)
+    expect(roleSegs.length).toBeGreaterThan(0)
+    expect(roleSegs[0].source).toBe('SQUAD_PLANNER')
+    expect(roleSegs[0].capacityPercent).toBe(200) // 2 headcount over one period
+
+    // PLANNED_RESOURCE profiles have segments
+    const prProfiles = profiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE')
+    for (const pr of prProfiles) {
+      const segs = await fetchSegments(pr.id)
+      expect(segs.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('activates a capacity plan', async () => {
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).not.toBeNull()
   })
 })
 
@@ -1168,6 +1237,341 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
   })
 })
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 10 — Preflight-to-transaction race regression
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// The __preWriteConflictSeam fires inside the apply transaction after
+// revalidatePlannerPlan passes but before any mutations. When the seam throws
+// PlannerConflictError, the route handler must:
+//   - Return 409 (transaction-time conflict)
+//   - Delete the newly-created pre-apply snapshot (created before the
+//     transaction)
+//   - Preserve the older snapshot
+//   - Leave no partial plan, profile, or timeline writes (transaction rollback)
+//
+// Additionally, pre-create a conflicting profile and assert the endpoint
+// returns 409 at preflight time, no snapshot is created, and no state leaks.
+
+describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
+  let projectId: string
+  let rtId: string
+  let olderSnapshotId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    rtId = await createResourceType(projectId, 'rt-race-10', 'Engineer')
+    await createEpicBacklog(projectId, rtId)
+
+    // Create an older snapshot that must survive the race
+    const olderSnapshot = await prisma.backlogSnapshot.create({
+      data: {
+        projectId,
+        label: 'Older snapshot for race test',
+        trigger: 'manual',
+        snapshot: {},
+        createdById: userId,
+      },
+    })
+    olderSnapshotId = olderSnapshot.id
+  })
+
+  it('fires PlannerConflictError from pre-write seam → 409, snapshot cleanup, no partial writes', async () => {
+    if (!runIntegration) return
+
+    __setPreWriteConflictSeam(() => {
+      throw new PlannerConflictError('race: profile state changed between preflight and transaction', [])
+    })
+
+    try {
+      const res = await request(app)
+        .post(`/api/projects/${projectId}/squad-plan/apply`)
+        .set('Authorization', authHeader)
+        .send(buildApplyPayload(rtId, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ], { name: 'Race Test' }))
+
+      expect(res.status).toBe(409)
+    } finally {
+      __setPreWriteConflictSeam(null)
+    }
+
+    // ── No active plan (transaction rolled back before deactivation) ──
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).toBeNull()
+
+    // ── No profiles or segments leaked ────────────────────────────
+    expect(await fetchProfiles(projectId)).toHaveLength(0)
+    expect(await prisma.capacitySegment.count({
+      where: { capacityProfile: { projectId } },
+    })).toBe(0)
+
+    // ── Only the newly-created pre-apply snapshot was removed, older survives ──
+    const allSnapshots = await prisma.backlogSnapshot.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+    })
+    expect(allSnapshots).toHaveLength(1)
+    expect(allSnapshots[0].id).toBe(olderSnapshotId)
+
+    // ── Resource type allocation mode unchanged ───────────────────
+    const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
+    expect(rt).not.toBeNull()
+    expect(rt!.allocationMode).toBe('TIMELINE')
+  })
+
+  it('preflight returns 409 when a conflicting profile exists before apply', async () => {
+    if (!runIntegration) return
+
+    // Inject a conflicting duplicate ROLE profile so preflight detects it
+    await createProfile(
+      projectId,
+      'cp-conflict-preflight',
+      'ROLE',
+      rtId,
+      null,
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER' },
+    )
+
+    try {
+      const res = await request(app)
+        .post(`/api/projects/${projectId}/squad-plan/apply`)
+        .set('Authorization', authHeader)
+        .send(buildApplyPayload(rtId, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ], { name: 'Preflight 409 Test' }))
+
+      expect(res.status).toBe(409)
+    } finally {
+      // Cleanup the injected profile so other tests aren't affected
+      await prisma.capacityProfile.deleteMany({
+        where: { projectId, id: 'cp-conflict-preflight' },
+      }).catch(() => {})
+    }
+
+    // ── No active plan created ──────────────────────────────────
+    expect(await fetchActivePlanId(projectId)).toBeNull()
+
+    // ── No new snapshot (preflight runs first) ──────────────────
+    const allSnapshots = await prisma.backlogSnapshot.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+    })
+    expect(allSnapshots).toHaveLength(1)
+    expect(allSnapshots[0].id).toBe(olderSnapshotId)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 11 — Endpoint-level completeness for /capacity-profiles
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// After a profile-first apply, GET /capacity-profiles must return the
+// persisted-authority DTO path when the persisted set is structurally valid
+// and complete. Deleting the planner ROLE profile (making the set incomplete)
+// causes a fallback to the legacy mapper. Restoring exactly one ROLE profile
+// restores the authority path.
+//
+// Also verifies explicit-only policy co-existence: when explicit NAMED_PERSON
+// profiles exist alongside planner profiles, the completeness check accepts
+// the union as a complete coverage set.
+
+describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles', () => {
+  let projectId: string
+  let rtId: string
+  let explicitRtId: string
+  let explicitNrId: string
+  let plannerProfileId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    rtId = await createResourceType(projectId, 'rt-compl-11', 'Engineer')
+    explicitRtId = await createResourceType(projectId, 'rt-compl-explicit', 'Designer')
+    await createEpicBacklog(projectId, rtId)
+
+    // Create an explicit named resource with MANUAL NAMED_PERSON profile on secondary RT
+    explicitNrId = await createNamedResource(projectId, explicitRtId, 'nr-designer-1', 'Alice Designer', {
+      allocationMode: 'EFFORT',
+    })
+    await createProfile(
+      projectId,
+      'cp-explicit-designer',
+      'NAMED_PERSON',
+      null,
+      explicitNrId,
+      { planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL', defaultPercent: 80 },
+    )
+
+    // Apply plan covering both RTs (Designer gets a placeholder)
+    const applyPayload = buildApplyPayload(rtId, [
+      { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+    ], { name: 'Completeness Test' })
+    // Add explicit RT entry
+    applyPayload.periods[0].entries.push({
+      resourceTypeId: explicitRtId,
+      headcount: 0,
+      demandFTE: 0,
+      utilisationPct: 0,
+    })
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(applyPayload)
+    expect(res.status).toBe(201)
+
+    // Capture the planner ROLE profile ID for later removal
+    const profiles = await fetchProfiles(projectId)
+    const plannerRole = profiles.find(
+      p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtId,
+    )
+    expect(plannerRole).toBeDefined()
+    plannerProfileId = plannerRole!.id
+  })
+
+  it('returns persisted-authority path when persisted profiles are complete', async () => {
+    if (!runIntegration) return
+
+    const res = await request(app)
+      .get(`/api/projects/${projectId}/capacity-profiles`)
+      .set('Authorization', authHeader)
+    expect(res.status).toBe(200)
+
+    const profiles = res.body.capacityProfiles as Array<Record<string, unknown>>
+    expect(Array.isArray(profiles)).toBe(true)
+    expect(profiles.length).toBeGreaterThanOrEqual(3) // role + 2 planner + explicit
+
+    // Role DTO: owner.kind === 'role', owns the RT
+    const roleDto = profiles.find(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role',
+    )
+    expect(roleDto).toBeDefined()
+    expect((roleDto!.owner as Record<string, unknown>).id).toBe(rtId)
+    expect(roleDto!.planningBasis).toBe('capacityProfile')
+    expect(roleDto!.source).toBe('squadPlanner')
+
+    // PLANNED_RESOURCE DTO: owner.kind === 'plannedResource', resourceTypeId absent from DTO
+    const plannedDtos = profiles.filter(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'plannedResource',
+    )
+    expect(plannedDtos.length).toBeGreaterThanOrEqual(1)
+    for (const dto of plannedDtos) {
+      expect((dto.owner as Record<string, unknown>).id).toBeDefined()
+      // RR.owner.roleId should reference the RT the named resource belongs to
+      expect((dto.owner as Record<string, unknown>).roleId).toBe(rtId)
+    }
+
+    // Explicit NAMED_PERSON DTO: owner.kind === 'namedPerson'
+    const explicitDto = profiles.find(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'namedPerson',
+    )
+    expect(explicitDto).toBeDefined()
+    expect((explicitDto!.owner as Record<string, unknown>).id).toBe(explicitNrId)
+    expect((explicitDto!.owner as Record<string, unknown>).name).toBe('Alice Designer')
+    expect(explicitDto!.planningBasis).toBe('availabilityWindow')
+    expect(explicitDto!.source).toBe('manual')
+    expect(explicitDto!.defaultPercent).toBe(80)
+
+    // Legacy fields are null on persisted-authority path
+    expect(explicitDto!.legacy).toBeDefined()
+  })
+
+  it('falls back to legacy mapper when planner ROLE profile is removed', async () => {
+    if (!runIntegration) return
+
+    // Remove the planner ROLE profile, making the persisted set incomplete
+    await prisma.capacityProfile.delete({ where: { id: plannerProfileId } })
+    // Also remove any orphan segments
+    await prisma.capacitySegment.deleteMany({
+      where: { capacityProfileId: plannerProfileId },
+    }).catch(() => {})
+
+    const res = await request(app)
+      .get(`/api/projects/${projectId}/capacity-profiles`)
+      .set('Authorization', authHeader)
+    expect(res.status).toBe(200)
+
+    const profiles = res.body.capacityProfiles as Array<Record<string, unknown>>
+    expect(Array.isArray(profiles)).toBe(true)
+
+    // Fallback response includes legacy fields
+    const firstWithLegacy = profiles.find(
+      (p: Record<string, unknown>) => p.legacy && (p.legacy as Record<string, unknown>).allocationMode,
+    )
+    expect(firstWithLegacy).toBeDefined()
+
+    // The Engineer RT should now be derived from legacy mapper
+    expect(profiles.some(
+      (p: Record<string, unknown>) => (p.legacy as Record<string, unknown>)?.allocationMode != null,
+    )).toBe(true)
+  })
+
+  it('restores persisted-authority path when ROLE profile is restored', async () => {
+    if (!runIntegration) return
+
+    // Restore exactly one planner ROLE profile with correct FK
+    const restoredProfile = await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 7,
+      },
+    })
+
+    // Add segments for completeness
+    await prisma.capacitySegment.create({
+      data: {
+        capacityProfileId: restoredProfile.id,
+        startWeek: 0,
+        endWeek: 7,
+        capacityPercent: 100,
+        source: 'SQUAD_PLANNER',
+      },
+    })
+
+    const res = await request(app)
+      .get(`/api/projects/${projectId}/capacity-profiles`)
+      .set('Authorization', authHeader)
+    expect(res.status).toBe(200)
+
+    const profiles = res.body.capacityProfiles as Array<Record<string, unknown>>
+    expect(Array.isArray(profiles)).toBe(true)
+
+    // Authority path: should include role, plannedResource, and namedPerson
+    const roleDto = profiles.find(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role'
+        && (p.owner as Record<string, unknown>).id === rtId,
+    )
+    expect(roleDto).toBeDefined()
+    expect(roleDto!.planningBasis).toBe('capacityProfile')
+    expect(roleDto!.source).toBe('squadPlanner')
+    // Legacy fields are null on authority path
+    expect((roleDto!.legacy as Record<string, unknown>)?.allocationMode).toBeNull()
+
+    // Planned resources should still be authoritative
+    const plannedDtos = profiles.filter(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'plannedResource',
+    )
+    expect(plannedDtos.length).toBeGreaterThanOrEqual(1)
+
+    // Explicit designer still present
+    const explicitDto = profiles.find(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'namedPerson'
+        && (p.owner as Record<string, unknown>).id === explicitNrId,
+    )
+    expect(explicitDto).toBeDefined()
+    expect(explicitDto!.planningBasis).toBe('availabilityWindow')
+    expect(explicitDto!.source).toBe('manual')
+  })
+})
 // ═════════════════════════════════════════════════════════════════════════════
 // Test coverage is skipped when INTEGRATION_TEST is not 'true'.
 // ═════════════════════════════════════════════════════════════════════════════

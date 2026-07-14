@@ -239,3 +239,67 @@ export function validatePersistedCapacityProfiles(
     errors,
   }
 }
+
+// ─── Completeness assessment ──────────────────────────────────────────────────
+
+export interface PersistedCompletenessInput {
+  resourceTypes: Array<{
+    id: string
+    name: string
+    namedResources: Array<{ id: string; name: string }>
+  }>
+  capacityProfiles: Array<{
+    resourceTypeId: string | null
+    namedResourceId: string | null
+    ownerKind: string
+    source: string
+    planningBasis: string
+  }>
+}
+
+/**
+ * Assess whether persisted profiles cover the complete project authority
+ * boundary. Planner-owned capacity requires an aggregate ROLE profile;
+ * explicit-only named people are allowed without one.
+ */
+export function checkPersistedCompleteness(
+  input: PersistedCompletenessInput,
+): string[] {
+  const errors: string[] = []
+  const profilesByResourceType = new Map<string, typeof input.capacityProfiles>()
+  for (const profile of input.capacityProfiles) {
+    if (!profile.resourceTypeId) continue
+    const profiles = profilesByResourceType.get(profile.resourceTypeId) ?? []
+    profiles.push(profile)
+    profilesByResourceType.set(profile.resourceTypeId, profiles)
+  }
+
+  for (const resourceType of input.resourceTypes) {
+    const profiles = profilesByResourceType.get(resourceType.id) ?? []
+    const roleProfiles = profiles.filter(
+      profile => profile.resourceTypeId === resourceType.id && profile.ownerKind === 'ROLE',
+    )
+    const hasPlannerOwnership = profiles.some(
+      profile => profile.ownerKind === 'PLANNED_RESOURCE' || profile.source === 'SQUAD_PLANNER',
+    )
+
+    for (const namedResource of resourceType.namedResources) {
+      const ownerProfiles = input.capacityProfiles.filter(
+        profile => profile.namedResourceId === namedResource.id,
+      )
+      if (ownerProfiles.length === 0) {
+        errors.push(`Named resource "${namedResource.id}" for RT "${resourceType.id}" lacks persisted profile`)
+      }
+    }
+
+    if (hasPlannerOwnership && roleProfiles.length !== 1) {
+      errors.push(
+        `Resource type "${resourceType.id}" has planner-owned profiles but requires exactly one ROLE profile`,
+      )
+    } else if (resourceType.namedResources.length === 0 && roleProfiles.length !== 1) {
+      errors.push(`Resource type "${resourceType.id}" lacks exactly one persisted ROLE profile`)
+    }
+  }
+
+  return errors
+}
