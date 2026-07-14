@@ -1429,24 +1429,16 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(overheads).toHaveLength(1)
     expect(overheads[0].value).toBe(15)
 
-    // ── Canonical deep comparison: captured state restored, extra owners retained ──
+    // ── Canonical deep comparison: captured state restored, post-snapshot named resources pruned ──
     const canonicalAfter = await captureCanonicalState(projectId)
     expect(canonicalAfter.resourceTypes.filter(r => r.id !== extraRtId))
       .toEqual(canonicalBefore.resourceTypes)
-    expect(canonicalAfter.namedResources.filter(n => n.id !== extraNrId))
-      .toEqual(canonicalBefore.namedResources)
+    expect(canonicalAfter.namedResources).toEqual(canonicalBefore.namedResources)
     expect(canonicalAfter.resourceTypes).toHaveLength(canonicalBefore.resourceTypes.length + 1)
-    expect(canonicalAfter.namedResources).toHaveLength(canonicalBefore.namedResources.length + 1)
+    expect(canonicalAfter.namedResources).toHaveLength(canonicalBefore.namedResources.length)
     expect(canonicalAfter.resourceTypes.find(r => r.id === extraRtId)).toMatchObject({
       name: 'Post-snapshot role',
       dayRate: 700,
-      allocationPercent: 45,
-      allocationStartWeek: 2,
-      allocationEndWeek: 7,
-    })
-    expect(canonicalAfter.namedResources.find(n => n.id === extraNrId)).toMatchObject({
-      resourceTypeId: extraRtId,
-      name: 'Post-snapshot person',
       allocationPercent: 45,
       allocationStartWeek: 2,
       allocationEndWeek: 7,
