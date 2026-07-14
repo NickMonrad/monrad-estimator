@@ -1209,6 +1209,16 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(nrs).toHaveLength(8)
     expect(nrs.find(n => n.id === nrAliceId)!.pricingModel).toBe('ACTUAL_DAYS')
     expect(nrs.find(n => n.id === extraNrId)).toBeUndefined()
+    expect(nrs.map(n => n.id).sort()).toEqual([
+      'nr-alice',
+      'nr-bob',
+      'nr-charlie',
+      'nr-dave',
+      'nr-eve',
+      'nr-frank',
+      'nr-grace',
+      'nr-heidi',
+    ])
 
 
     const profiles = await prisma.capacityProfile.findMany({
