@@ -977,12 +977,13 @@ describe('persisted capacity-profile DTO integration', () => {
 
 
   describe('6. Persisted-authority repair cycle', () => {
-    it('structurally valid persisted profile is returned as authority; sync creates new NR profiles', async () => {
+    it('complete persisted profiles remain authoritative; sync creates new NR profiles', async () => {
       addResourceType(rtId, userName, 1)
       addNamedResource('nr-1', 'Engineer 1', rtId)
 
-      // Seed a ROLE profile that differs from what legacy mapper would produce
-      // (legacy mapper skips role profiles when NRs exist, producing namedPerson)
+      // Seed ROLE and named-resource profiles that differ from what the legacy
+      // mapper would produce. Both owners are required for persisted authority
+      // when a resource type has named resources.
       const roleProfileId = 'cp-role-persisted'
       addPersistedProfile(roleProfileId, {
         resourceTypeId: rtId,
@@ -991,11 +992,20 @@ describe('persisted capacity-profile DTO integration', () => {
         source: 'FIXED',
         defaultPercent: 100,
       })
+      const namedProfileId = 'cp-nr-1-persisted'
+      addPersistedProfile(namedProfileId, {
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })
 
-      // GET before PATCH — structurally valid ROLE profile returned as authority
+      // GET before PATCH — structurally valid complete profiles are
+      // returned as authority.
       const getBefore = await getCapacityProfiles()
       expect(getBefore.status).toBe(200)
-      expect(getBefore.body.capacityProfiles.length).toBeGreaterThanOrEqual(1)
+      expect(getBefore.body.capacityProfiles.length).toBeGreaterThanOrEqual(2)
       const roleDto = getBefore.body.capacityProfiles.find(
         (p: any) => p.owner.kind === 'role' && p.owner.id === rtId,
       )
@@ -1010,14 +1020,21 @@ describe('persisted capacity-profile DTO integration', () => {
         .set('Authorization', authHeader)
         .send({ count: 2 })
 
-      // Original role profile survives (structurally valid, preserved by preserveResourceTypeIds)
+      // Original profiles survive (structurally valid, preserved by
+      // preserveResourceTypeIds).
       const stillRole = storeRef.current.capacityProfiles.find(
         (p: any) => p.id === roleProfileId,
       )
       expect(stillRole).toBeDefined()
       expect(stillRole!.ownerKind).toBe('ROLE')
+      const stillNamed = storeRef.current.capacityProfiles.find(
+        (p: any) => p.id === namedProfileId,
+      )
+      expect(stillNamed).toBeDefined()
+      expect(stillNamed!.ownerKind).toBe('NAMED_PERSON')
 
-      // The new named resource (created by PATCH count increase) gets a persisted profile from sync
+      // The new named resource (created by PATCH count increase) gets a
+      // persisted profile from sync.
       const newNr = storeRef.current.namedResources.find(
         (n: any) => n.name === `${userName} 2`,
       )
@@ -1028,7 +1045,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(newNRProfile).toBeDefined()
       expect(newNRProfile!.ownerKind).toBe('NAMED_PERSON')
 
-      // Phase 3: GET returns both the old role profile and the new NR profile
+      // Phase 3: GET returns the old role profile and both NR profiles.
       const getAfter = await getCapacityProfiles()
       expect(getAfter.status).toBe(200)
 
@@ -1044,9 +1061,13 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(newNrDto).toBeDefined()
       expect(newNrDto!.planningBasis).toMatch(/demandFollowing|availabilityWindow/)
 
-      // nr-1 (explicit NR without own profile) does NOT appear — only role and new NR
+      const existingNrDto = getAfter.body.capacityProfiles.find(
+        (p: any) => p.owner.kind === 'namedPerson' && p.owner.id === 'nr-1',
+      )
+      expect(existingNrDto).toBeDefined()
+      expect(existingNrDto!.id).toBe(namedProfileId)
     })
-  })
+    })
 
 
   describe('6b. Structural validation fallback', () => {
@@ -1243,9 +1264,9 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
     })
 
-    it('falls back to legacy when segment has out-of-range capacityPercent', async () => {
+    it('keeps ROLE profiles authoritative when segment capacity exceeds 100%', async () => {
       addResourceType(rtId, userName, 1, { allocationMode: 'CAPACITY_PLAN' })
-      addPersistedProfile('cp-bad-pct', {
+      addPersistedProfile('cp-role-over-100', {
         resourceTypeId: rtId,
         ownerKind: 'ROLE',
         planningBasis: 'CAPACITY_PROFILE',
@@ -1253,12 +1274,13 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 100,
       })
       storeRef.current.capacitySegments.push(
-        { id: 'seg-bad-pct', capacityProfileId: 'cp-bad-pct', startWeek: 0, endWeek: 6, capacityPercent: 150, source: 'SQUAD_PLANNER', createdAt: new Date(), updatedAt: new Date() },
+        { id: 'seg-role-over-100', capacityProfileId: 'cp-role-over-100', startWeek: 0, endWeek: 6, capacityPercent: 150, source: 'SQUAD_PLANNER', createdAt: new Date(), updatedAt: new Date() },
       )
 
       const getRes = await getCapacityProfiles()
       expect(getRes.status).toBe(200)
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      expect(getRes.body.capacityProfiles[0].id).toBe('cp-role-over-100')
+      expect(getRes.body.capacityProfiles[0].segments[0].capacityPercent).toBe(150)
     })
   })
 

@@ -241,7 +241,7 @@ export async function buildSnapshot(
  * Handles ResourceTypes, NamedResources, epics, project fields, timeline
  * entries, story timeline entries, dependencies, and overhead items.
  */
-async function restoreSnapshotCommonState(
+export async function restoreSnapshotCommonState(
   tx: SnapshotDbClient,
   projectId: string,
   data: Omit<SnapshotV2, 'schemaVersion'>,
@@ -281,7 +281,22 @@ async function restoreSnapshotCommonState(
     rtNameMap.set(rt.name.toLowerCase(), rt.id)
   }
 
-  // 2. Restore NamedResources (depends on RTs existing)
+  // 2. Delete post-snapshot NamedResources not in the snapshot,
+  //    then restore snapshot NamedResources (depends on RTs existing).
+  //    Cascade deletes any capacity profiles referencing the orphan NRs.
+  const snapshotNrIds = new Set(data.namedResources.map(nr => nr.id))
+  const projectNRs = await tx.namedResource.findMany({
+    where: { resourceType: { projectId } },
+    select: { id: true },
+  })
+  const orphanIds = projectNRs
+    .filter(nr => !snapshotNrIds.has(nr.id))
+    .map(nr => nr.id)
+  if (orphanIds.length > 0) {
+    await tx.namedResource.deleteMany({ where: { id: { in: orphanIds } } })
+  }
+
+  // Restore NamedResources (depends on RTs existing)
   for (const nr of data.namedResources) {
     await tx.namedResource.upsert({
       where: { id: nr.id },

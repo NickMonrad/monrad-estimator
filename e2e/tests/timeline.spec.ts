@@ -1046,12 +1046,63 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     await expect(drawer).not.toBeVisible({ timeout: 10_000 })
 
     // ── Navigate to Resource Profile and assert planned-resource identities ──
+    // Capture the GET resource-profile response for persisted-data verification
+    interface SegmentData {
+      startWeek: number
+      endWeek: number
+      capacityPercent: number
+    }
+    interface CapacityProfileData {
+      planningBasis: string
+      source: string
+      segments: SegmentData[]
+    }
+    interface NamedResourceData {
+      id: string
+      name: string
+      resourceIdentity: string
+      capacityProfile?: CapacityProfileData
+    }
+    interface ResourceRowData {
+      name: string
+      namedResources?: NamedResourceData[]
+    }
+    interface ResourceProfileResponse {
+      resourceRows: ResourceRowData[]
+    }
+
+    // Start waiting for API before navigation
+    const rpAfterApplyP = page.waitForResponse(
+      resp => resp.url().includes('/resource-profile') && resp.request().method() === 'GET',
+      { timeout: 20_000 },
+    )
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
     ).toBeVisible({ timeout: 10_000 })
 
-    // Find the Developer row and expand named resources
+    const rpAfterApplyResp = await rpAfterApplyP
+    const rpAfterApplyData = await rpAfterApplyResp.json() as unknown as ResourceProfileResponse
+
+    // Find the Developer row and extract the first planned resource
+    const devRowAPI1 = rpAfterApplyData.resourceRows.find(
+      (r: ResourceRowData) => r.name?.toLowerCase().includes('developer'),
+    )
+    expect(devRowAPI1).toBeDefined()
+    const plannedResource1 = devRowAPI1!.namedResources?.find(
+      (nr: NamedResourceData) => nr.resourceIdentity === 'PLANNED_RESOURCE',
+    )
+    expect(plannedResource1).toBeDefined()
+    const beforeReapply = {
+      id: plannedResource1!.id,
+      name: plannedResource1!.name,
+      resourceIdentity: plannedResource1!.resourceIdentity,
+      segments: plannedResource1!.capacityProfile?.segments ?? [],
+    }
+    expect(beforeReapply.segments.length).toBeGreaterThan(0)
+
+    // ── UI assertions on Resource Profile page ──
+    // Find the Developer row in the DOM and expand named resources
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
 
@@ -1105,11 +1156,42 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     await expect(drawer).not.toBeVisible({ timeout: 10_000 })
 
     // ── Verify stable identity + updated capacity on Resource Profile ──
+    // Capture the API response to verify identity continuity and trajectory change
+    const rpAfterReapplyP = page.waitForResponse(
+      resp => resp.url().includes('/resource-profile') && resp.request().method() === 'GET',
+      { timeout: 20_000 },
+    )
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
     ).toBeVisible({ timeout: 10_000 })
 
+    const rpAfterReapplyResp = await rpAfterReapplyP
+    const rpAfterReapplyData = await rpAfterReapplyResp.json() as unknown as ResourceProfileResponse
+
+    // Find Developer row and the same planned resource by ID
+    const devRowAPI2 = rpAfterReapplyData.resourceRows.find(
+      (r: ResourceRowData) => r.name?.toLowerCase().includes('developer'),
+    )
+    expect(devRowAPI2).toBeDefined()
+
+    // The same persisted ID must appear exactly once (no duplicates)
+    const matchingResources2 = devRowAPI2!.namedResources?.filter(
+      (nr: NamedResourceData) => nr.id === beforeReapply.id,
+    ) ?? []
+    expect(matchingResources2).toHaveLength(1)
+
+    // Same display identity
+    expect(matchingResources2[0].name).toBe(beforeReapply.name)
+    expect(matchingResources2[0].resourceIdentity).toBe(beforeReapply.resourceIdentity)
+
+    // Trajectory must have changed (Tight vs default produces different segments)
+    const afterReapplySegments = matchingResources2[0].capacityProfile?.segments ?? []
+    expect(afterReapplySegments.length).toBeGreaterThan(0)
+    const segmentsChanged = JSON.stringify(afterReapplySegments) !== JSON.stringify(beforeReapply.segments)
+    expect(segmentsChanged).toBe(true)
+
+    // ── UI assertions ──
     const devRow2 = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow2).toBeVisible({ timeout: 15_000 })
     await devRow2.getByTitle('Show named resources').click()
@@ -1121,7 +1203,7 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     // Name input still disabled
     await expect(devRow2.locator('input[type="text"]').first()).toBeDisabled()
 
-    // ── Exercise Snapshot History ──
+    // ── Exercise Snapshot History and rollback ──
     await page.goto(`/projects/${projectId}/timeline`)
     await expect(
       page.getByRole('heading', { name: /timeline planner/i }),
@@ -1136,9 +1218,53 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     // Squad Plan apply creates a snapshot with trigger 'optimiser_apply'
     await expect(page.getByText('optimiser_apply').first()).toBeVisible({ timeout: 8_000 })
 
-    // Exercise rollback UI — accept the confirm dialog
+    // ── Rollback: wait for POST response, then verify state via Resource Profile ──
+    // Start waiting for the rollback POST before clicking
+    const rollbackResponseP = page.waitForResponse(
+      resp => resp.url().includes('/snapshots/') && resp.url().includes('/rollback') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
     await page.getByRole('button', { name: /rollback/i }).first().click()
-    // After rollback the panel refreshes; this asserts no crash/error
+    await rollbackResponseP
+
+    // After rollback the panel refreshes — wait for re-render
     await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
+
+    // ── Navigate to Resource Profile to verify state restoration ──
+    // Start waiting for API before navigation
+    const rpAfterRollbackP = page.waitForResponse(
+      resp => resp.url().includes('/resource-profile') && resp.request().method() === 'GET',
+      { timeout: 20_000 },
+    )
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const rpAfterRollbackResp = await rpAfterRollbackP
+    const rpAfterRollbackData = await rpAfterRollbackResp.json() as unknown as ResourceProfileResponse
+
+
+    // Rollback (.first() targets pre-second-apply snapshot) restores the
+    // state after the first plan, so the original planned resource persists.
+    const devRowAfterRollback = rpAfterRollbackData.resourceRows.find(
+      (r: ResourceRowData) => r.name?.toLowerCase().includes('developer'),
+    )
+    expect(devRowAfterRollback).toBeDefined()
+
+    // The first-plan resource must exist exactly once (no duplicates)
+    const plannedAfterRollback = devRowAfterRollback!.namedResources?.filter(
+      (nr: NamedResourceData) => nr.id === beforeReapply.id,
+    ) ?? []
+    expect(plannedAfterRollback).toHaveLength(1)
+    // Same display identity
+    expect(plannedAfterRollback[0].name).toBe(beforeReapply.name)
+    expect(plannedAfterRollback[0].resourceIdentity).toBe(beforeReapply.resourceIdentity)
+
+    // Segments restored to pre-second-apply state (same as first plan)
+    const restoredSegments = plannedAfterRollback[0].capacityProfile?.segments ?? []
+    expect(restoredSegments.length).toBeGreaterThan(0)
+    const segmentsRestored = JSON.stringify(restoredSegments) === JSON.stringify(beforeReapply.segments)
+    expect(segmentsRestored).toBe(true)
   })
 })

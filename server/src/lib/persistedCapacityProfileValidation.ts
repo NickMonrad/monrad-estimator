@@ -45,7 +45,6 @@ const VALID_SOURCES: Record<string, true> = {
   LEGACY: true,
 }
 
-
 function isFiniteNumber(value: number | null): value is number {
   return value != null && Number.isFinite(value)
 }
@@ -77,7 +76,7 @@ export function validatePersistedCapacityProfiles(
 ): ValidationResult {
   const errors: string[] = []
 
-  // Track (ownerKind, ownerId) keys to detect duplicates
+  // Track physical owner keys (by FK namespace + ID) to detect duplicates
   const ownerKeys = new Map<string, string>() // key → first profile id
 
   for (const p of profiles) {
@@ -129,28 +128,40 @@ export function validatePersistedCapacityProfiles(
     if (!(p.source in VALID_SOURCES)) {
       errors.push(`Profile ${p.id}: invalid source "${p.source}"`)
     }
-    // ── Numeric profile fields ──────────────────────────────────────────
-    if (p.defaultPercent != null && (!isFiniteNumber(p.defaultPercent) || p.defaultPercent < 0 || p.defaultPercent > 100)) {
-      errors.push(`Profile ${p.id}: defaultPercent ${p.defaultPercent} must be finite and in range [0,100]`)
+    if (p.defaultPercent != null) {
+      if (!isFiniteNumber(p.defaultPercent) || p.defaultPercent < 0) {
+        errors.push(`Profile ${p.id}: defaultPercent ${p.defaultPercent} must be finite and non-negative`)
+      } else if (p.ownerKind !== 'ROLE' && p.defaultPercent > 100) {
+        errors.push(`Profile ${p.id}: defaultPercent ${p.defaultPercent} must be in range [0,100] for ownerKind ${p.ownerKind}`)
+      }
     }
-    if ((p.startWeek != null && !isFiniteNumber(p.startWeek)) || (p.endWeek != null && !isFiniteNumber(p.endWeek))) {
-      errors.push(`Profile ${p.id}: startWeek/endWeek must be finite when present`)
+    if (p.startWeek != null && (!isFiniteNumber(p.startWeek) || !Number.isInteger(p.startWeek) || p.startWeek < 0)) {
+      errors.push(`Profile ${p.id}: startWeek ${p.startWeek} must be a non-negative finite integer`)
+    }
+    if (p.endWeek != null && (!isFiniteNumber(p.endWeek) || !Number.isInteger(p.endWeek) || p.endWeek < 0)) {
+      errors.push(`Profile ${p.id}: endWeek ${p.endWeek} must be a non-negative finite integer`)
     }
     if (isFiniteNumber(p.startWeek) && isFiniteNumber(p.endWeek) && p.startWeek > p.endWeek) {
       errors.push(`Profile ${p.id}: startWeek ${p.startWeek} must not exceed endWeek ${p.endWeek}`)
     }
 
 
-    // ── No duplicate owner keys ────────────────────────────────────────
-    const ownerId = p.resourceTypeId ?? p.namedResourceId ?? ''
-    const key = `${p.ownerKind}::${ownerId}`
-    if (ownerKeys.has(key)) {
+    // ── No duplicate physical owner keys ───────────────────────────────
+    // Physical owner is identified by FK namespace + ID, not by ownerKind.
+    // A resourceTypeId can only appear once (for ROLE), and a namedResourceId
+    // can only appear once (cannot be both NAMED_PERSON and PLANNED_RESOURCE).
+    const physKey = p.resourceTypeId
+      ? `resourceTypeId::${p.resourceTypeId}`
+      : p.namedResourceId
+        ? `namedResourceId::${p.namedResourceId}`
+        : '' // caught by shape validation
+    if (physKey && ownerKeys.has(physKey)) {
       errors.push(
-        `Profile ${p.id}: duplicate owner key "${key}" ` +
-        `(first occurrence in profile ${ownerKeys.get(key)})`,
+        `Profile ${p.id}: duplicate physical owner "${physKey}" ` +
+        `(first occurrence in profile ${ownerKeys.get(physKey)})`,
       )
-    } else {
-      ownerKeys.set(key, p.id)
+    } else if (physKey) {
+      ownerKeys.set(physKey, p.id)
     }
 
     // ── Segment validation ─────────────────────────────────────────────
@@ -168,19 +179,18 @@ export function validatePersistedCapacityProfiles(
         if (!(s.source in VALID_SOURCES)) {
           errors.push(`Segment ${s.id}: invalid source "${s.source}"`)
         }
-
-        // Finite capacity and non-negative, ordered range
-        if (
-          !Number.isFinite(s.capacityPercent) ||
-          s.capacityPercent < 0 ||
-          s.capacityPercent > 100
-        ) {
-          errors.push(`Segment ${s.id}: capacityPercent ${s.capacityPercent} out of range [0,100]`)
+        // Finite capacity and non-negative, owner-aware
+        if (!Number.isFinite(s.capacityPercent) || s.capacityPercent < 0) {
+          errors.push(`Segment ${s.id}: capacityPercent ${s.capacityPercent} must be finite and non-negative`)
+        } else if (p.ownerKind !== 'ROLE' && s.capacityPercent > 100) {
+          errors.push(`Segment ${s.id}: capacityPercent ${s.capacityPercent} must be in range [0,100] for ownerKind ${p.ownerKind}`)
         }
 
         if (
           !Number.isFinite(s.startWeek) ||
+          !Number.isInteger(s.startWeek) ||
           !Number.isFinite(s.endWeek) ||
+          !Number.isInteger(s.endWeek) ||
           s.startWeek < 0 ||
           s.endWeek < 0 ||
           s.startWeek > s.endWeek
@@ -189,14 +199,36 @@ export function validatePersistedCapacityProfiles(
         }
       }
 
-      // Non-overlapping: segments must not overlap when sorted by startWeek
+      // Deterministic ordering for overlap and duplicate checks
       const sorted = [...p.segments].sort((a, b) => a.startWeek - b.startWeek)
-      for (let i = 1; i < sorted.length; i++) {
-        if (sorted[i].startWeek < sorted[i - 1].endWeek) {
+
+      // Exact duplicate detection: same week range
+      const seenRanges = new Set<string>()
+      for (const s of sorted) {
+        const rangeKey = `${s.startWeek}-${s.endWeek}`
+        if (seenRanges.has(rangeKey)) {
           errors.push(
-            `Profile ${p.id}: segment "${sorted[i].id}" (W${sorted[i].startWeek}-W${sorted[i].endWeek}) ` +
-            `overlaps with previous segment "${sorted[i - 1].id}" (W${sorted[i - 1].startWeek}-W${sorted[i - 1].endWeek})`,
+            `Profile ${p.id}: duplicate segment "${s.id}" with week range [${s.startWeek}, ${s.endWeek}]`,
           )
+        }
+        seenRanges.add(rangeKey)
+      }
+
+      // Inclusive overlap rejection. Track the furthest prior end so nested
+      // ranges are rejected even when the immediately preceding segment is
+      // shorter than an earlier range.
+      let priorEnd = -1
+      let priorSegmentId: string | null = null
+      for (const current of sorted) {
+        if (current.startWeek <= priorEnd) {
+          errors.push(
+            `Profile ${p.id}: segment "${current.id}" (W${current.startWeek}-W${current.endWeek}) ` +
+            `overlaps with previous segment "${priorSegmentId}" (ending W${priorEnd})`,
+          )
+        }
+        if (current.endWeek > priorEnd) {
+          priorEnd = current.endWeek
+          priorSegmentId = current.id
         }
       }
     }

@@ -14,14 +14,18 @@ legacy-derived expectations.
 
 PR #356 (profile-first read adoption, merged) removed that lossy reconciliation
 gate for Resource Profile and exports. PR #359 completes the boundary for the
-Squad Planner apply path: a structurally valid persisted profile is authoritative
-for capacity availability; fallback is used only when the persisted shape is
-missing or invalid. Fallback is deterministic and owner-aware: active
-`CapacityPlan` materialisation is used only when
-`shouldFallbackToActiveCapacityPlan` requires it (`ACTIVE_CAPACITY_PLAN`), then
-legacy compatibility data (`LEGACY`). Conflicting duplicate persisted profiles
-are structurally invalid. `projectCapacityProfileToLegacyAllocation` supplies
-display-field projection without changing calculation inputs.
+Squad Planner apply path: a structurally valid persisted profile set is
+authoritative for capacity availability; fallback is used only when persisted
+data is missing, structurally invalid, or contains duplicate physical owner IDs
+(same `namedResourceId` across `NAMED_PERSON`/`PLANNED_RESOURCE`). Fallback is
+**all-or-nothing** — the entire persisted set must pass structural validation,
+or the complete legacy projection is used; per-owner persisted/legacy merging
+would silently drop or corrupt incomplete data. When valid, persisted profiles
+preserve stable IDs, segment boundaries, and capacity trajectories with no
+lossy truncation. Owner-aware validation: `ROLE` percent fields are unbounded
+(multi-person aggregate); `NAMED_PERSON` and `PLANNED_RESOURCE` are bounded to
+[0,100]. `projectCapacityProfileToLegacyAllocation` supplies display-field
+projection without changing calculation inputs.
 
 CapacityProfile/CapacitySegment own capacity availability. Timeline/Planning owns
 assignment windows, scheduled demand, and the weekly demand cache. Commercial owns
@@ -47,6 +51,16 @@ for profile-backed availability.
    available when the domain transaction rolls back.
 6. **Keep deterministic identity.** Role and named-resource matching uses stable IDs and
    names; explicit/manual resources are never silently overwritten or deleted.
+7. **All-or-nothing persistence authority.** The entire persisted profile set
+   must pass structural validation, or the complete legacy projection is used.
+   Per-owner persisted/legacy merging is never performed — it would silently
+   drop or corrupt incomplete data.
+8. **Owner-aware validation boundaries.** ROLE-kind percent fields
+   (`defaultPercent`, segment `capacityPercent`) may exceed 100, representing
+   multi-person aggregate capacity. NAMED_PERSON and PLANNED_RESOURCE percents
+   are bounded to [0,100]. Duplicate physical owner keys (same FK namespace +
+   ID, e.g. the same `namedResourceId` across owner kinds) are structurally
+   invalid.
 
 ## Audit
 
@@ -414,6 +428,21 @@ is a requirement.
 > - **Duplicate owner keys fall through:** If a duplicate owner key appears in the
 >   profile map (defensive guard), the adapter treats it as absent and falls through
 >   to the next precedence tier rather than throwing or blocking.
+> - **Physical-owner duplicate rejection (structural validator):** The GET
+>   `/capacity-profiles` route's `validatePersistedCapacityProfiles` detects
+>   duplicate physical owners by FK namespace + ID (e.g. the same
+>   `namedResourceId` cannot appear as both `NAMED_PERSON` and
+>   `PLANNED_RESOURCE`). This is distinct from the adapter's defensive map-merge
+>   fall-through — the validator rejects structurally, while the adapter degrades
+>   gracefully under map collision.
+> - **Owner-aware percentage bounds:** ROLE-kind `defaultPercent` and segment
+>   `capacityPercent` may exceed 100 (aggregate capacity for multiple people);
+>   NAMED_PERSON/PLANNED_RESOURCE percents are bounded to [0,100]. The validator
+>   enforces this; the adapter passes values through unchanged.
+> - **All-or-nothing persistence authority:** The GET route validates the full
+>   persisted set. Every profile must pass structural checks, or the entire set
+>   is discarded and the complete legacy projection is served — no per-owner
+>   partial merge.
 > - **Persisted profile adoption scope:** The adapter's profile-first resolution
 >   (`PROFILE`) enriches Resource Profile display and export. Separately, the
 >   pre-existing active Capacity Plan fallback (`ACTIVE_CAPACITY_PLAN`) uses

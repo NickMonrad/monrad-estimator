@@ -65,29 +65,64 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     )
 
     if (validation.valid) {
-      // Build name lookups for DTO mapping
-      const resourceTypeById = new Map<string, { id: string; name: string }>()
-      const namedResourceById = new Map<string, { id: string; name: string; resourceTypeId: string }>()
+      // ── Completeness: every RT/named-resource must be covered ──
+      const rtWithRoleProfile = new Set<string>()
+      const namedResourcesCovered = new Set<string>()
+      for (const cp of project.capacityProfiles) {
+        if (cp.resourceTypeId) rtWithRoleProfile.add(cp.resourceTypeId)
+        if (cp.namedResourceId) namedResourcesCovered.add(cp.namedResourceId)
+      }
+
+      const completenessErrors: string[] = []
       for (const rt of project.resourceTypes) {
-        resourceTypeById.set(rt.id, { id: rt.id, name: rt.name })
-        for (const nr of rt.namedResources) {
-          namedResourceById.set(nr.id, { id: nr.id, name: nr.name, resourceTypeId: rt.id })
+        if (rt.namedResources.length > 0) {
+          // RT with named resources: every named resource must have a profile
+          for (const nr of rt.namedResources) {
+            if (!namedResourcesCovered.has(nr.id)) {
+              completenessErrors.push(
+                `Named resource "${nr.id}" for RT "${rt.id}" lacks persisted profile`,
+              )
+            }
+          }
+        } else if (!rtWithRoleProfile.has(rt.id)) {
+          // RT without named resources: must have a ROLE profile
+          completenessErrors.push(
+            `Resource type "${rt.id}" lacks persisted ROLE profile`,
+          )
         }
       }
 
-      const profiles = mapPersistedProfilesToDTOs(
-        project.capacityProfiles,
-        resourceTypeById,
-        namedResourceById,
-      )
-      res.json({ capacityProfiles: profiles })
-      return
-    }
+      // ── Authority path: structurally valid AND complete ──────────
+      if (completenessErrors.length === 0) {
+        // Build name lookups for DTO mapping
+        const resourceTypeById = new Map<string, { id: string; name: string }>()
+        const namedResourceById = new Map<string, { id: string; name: string; resourceTypeId: string }>()
+        for (const rt of project.resourceTypes) {
+          resourceTypeById.set(rt.id, { id: rt.id, name: rt.name })
+          for (const nr of rt.namedResources) {
+            namedResourceById.set(nr.id, { id: nr.id, name: nr.name, resourceTypeId: rt.id })
+          }
+        }
 
-    console.warn(
-      `[capacity-profiles] Validation failed for project ${projectId}: ` +
-      validation.errors.join('; ') + '. Falling back to legacy mapper.',
-    )
+        const profiles = mapPersistedProfilesToDTOs(
+          project.capacityProfiles,
+          resourceTypeById,
+          namedResourceById,
+        )
+        res.json({ capacityProfiles: profiles })
+        return
+      }
+
+      console.warn(
+        `[capacity-profiles] Incomplete persisted set for project ${projectId}: ` +
+        completenessErrors.join('; ') + '. Falling back to legacy mapper.',
+      )
+    } else {
+      console.warn(
+        `[capacity-profiles] Validation failed for project ${projectId}: ` +
+        validation.errors.join('; ') + '. Falling back to legacy mapper.',
+      )
+    }
   }
 
   // ── Fallback: derive profiles from project data via legacy mapper ────

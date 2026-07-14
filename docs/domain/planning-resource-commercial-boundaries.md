@@ -134,6 +134,26 @@ use different owner kinds and are independently keyed by `resourceTypeId` and
 key in the profile map (defensive guard), it treats the entry as absent and falls
 through to the next precedence tier rather than throwing or blocking.
 
+**All-or-nothing persistence authority:** The GET `/capacity-profiles` route
+validates the full persisted set via `validatePersistedCapacityProfiles`. Every
+profile must pass structural checks, or the entire set is discarded and the
+complete legacy projection is served. Per-owner persisted/legacy merging never
+occurs — it would silently drop or corrupt incomplete data. When valid,
+persisted profiles preserve stable IDs, segment boundaries, and capacity
+trajectories without lossy truncation.
+
+**Physical-owner duplicate rejection (structural validator):** The GET
+`/capacity-profiles` route's structural validator rejects duplicate physical
+owners by FK namespace + ID. The same `namedResourceId` cannot appear as both
+`NAMED_PERSON` and `PLANNED_RESOURCE`. This is distinct from the adapter's
+defensive map-merge fall-through — the validator rejects structurally, while
+the adapter degrades gracefully under map collision.
+
+**Owner-aware percentage bounds:** ROLE-kind `defaultPercent` and segment
+`capacityPercent` may exceed 100 (aggregate capacity for multiple people);
+`NAMED_PERSON`/`PLANNED_RESOURCE` percents are bounded to [0,100]. The
+validator enforces this; the adapter passes values through unchanged.
+
 ### Commercial owns billing and price presentation
 
 Commercial is the source of truth for pricing presentation and billable calculation choices.
@@ -411,6 +431,17 @@ branch and landed when PR #356 merged.
   named-resource profiles by `namedResourceId`; the two namespaces never collide.
 - Duplicate owner keys in the profile map fall through to the next precedence
   tier rather than blocking.
+- **Physical-owner duplicate rejection:** The structural validator in
+  `validatePersistedCapacityProfiles` rejects identical physical owner FKs
+  (same `namedResourceId` cannot be both `NAMED_PERSON` and
+  `PLANNED_RESOURCE`). This is distinct from the adapter's map-merge
+  fall-through — the validator rejects, the adapter degrades.
+- **Owner-aware percent bounds:** ROLE-kind percent fields are unbounded
+  (role may aggregate multiple people); NAMED_PERSON/PLANNED_RESOURCE percents
+  are bounded to [0,100].
+- **All-or-nothing persistence authority:** The entire persisted set must pass
+  structural validation, or the GET route falls back to the complete legacy
+  projection. No per-owner persisted/legacy merge occurs.
 
 **New files introduced:**
 
