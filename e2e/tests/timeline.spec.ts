@@ -1073,7 +1073,7 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
 
     // Start waiting for API before navigation
     const rpAfterApplyP = page.waitForResponse(
-      resp => resp.url().includes('/resource-profile') && resp.request().method() === 'GET',
+      resp => resp.url().includes(`/api/projects/${projectId}/resource-profile`) && resp.request().method() === 'GET' && resp.ok(),
       { timeout: 20_000 },
     )
     await page.goto(`/projects/${projectId}/resource-profile`)
@@ -1158,7 +1158,7 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     // ── Verify stable identity + updated capacity on Resource Profile ──
     // Capture the API response to verify identity continuity and trajectory change
     const rpAfterReapplyP = page.waitForResponse(
-      resp => resp.url().includes('/resource-profile') && resp.request().method() === 'GET',
+      resp => resp.url().includes(`/api/projects/${projectId}/resource-profile`) && resp.request().method() === 'GET' && resp.ok(),
       { timeout: 20_000 },
     )
     await page.goto(`/projects/${projectId}/resource-profile`)
@@ -1233,7 +1233,7 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     // ── Navigate to Resource Profile to verify state restoration ──
     // Start waiting for API before navigation
     const rpAfterRollbackP = page.waitForResponse(
-      resp => resp.url().includes('/resource-profile') && resp.request().method() === 'GET',
+      resp => resp.url().includes(`/api/projects/${projectId}/resource-profile`) && resp.request().method() === 'GET' && resp.ok(),
       { timeout: 20_000 },
     )
     await page.goto(`/projects/${projectId}/resource-profile`)
