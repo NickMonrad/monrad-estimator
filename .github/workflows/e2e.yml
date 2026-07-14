@@ -186,5 +186,30 @@ jobs:
         with:
           node-version: '24'
 
+
+      - name: Install dependencies (no scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Verify Windows native optional packages
+        shell: pwsh
+        run: |
+          $packages = @(
+            '@esbuild/win32-x64',
+            '@rolldown/binding-win32-x64-msvc',
+            '@tailwindcss/oxide-win32-x64-msvc',
+            'lightningcss-win32-x64-msvc'
+          )
+          $failed = $false
+          foreach ($pkg in $packages) {
+            $resolved = node -e "try{console.log(require.resolve('$pkg'))}catch(e){''}"
+            if ([string]::IsNullOrEmpty($resolved)) {
+              Write-Host "::error::Windows native package $pkg not resolved"
+              $failed = $true
+            } else {
+              $ver = node -e "console.log(require('$pkg/package.json').version)"
+              Write-Host "✅ $pkg resolved — version $ver"
+            }
+          }
+          if ($failed) { exit 1 }
       - name: Backup regression tests
         run: npm run test:backup
