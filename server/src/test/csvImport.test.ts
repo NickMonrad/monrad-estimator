@@ -160,10 +160,9 @@ describe('GET /api/projects/:projectId/backlog/export-csv', () => {
       .set('Authorization', authHeader)
 
     // Parse the CSV output to get the actual cell value (CSV may quote/escape)
-    const lines = res.text.split('\n').filter(Boolean) as string[]
-    const header = BACKLOG_CSV_HEADERS
-    const epicIdx = header.indexOf('Epic')
+    const epicIdx = BACKLOG_CSV_HEADERS.indexOf('Epic')
     expect(epicIdx).toBeGreaterThanOrEqual(0)
+
 
     // Parse the CSV via csv-parse to handle quoting correctly
     const { parse } = await import('csv-parse/sync')
