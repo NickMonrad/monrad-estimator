@@ -282,7 +282,6 @@ function NamedResourcesPanel({
     </div>
   )
 }
-
 export default function TimelinePage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -460,6 +459,15 @@ export default function TimelinePage() {
     }
   }, [editingFeatureId, timeline])
 
+  const scheduleTimeline = useMutation({
+    mutationFn: (body: { startDate?: string; resourceLevel?: boolean }) =>
+      api.post(`/projects/${projectId}/timeline/schedule`, body).then(r => r.data),
+    onSuccess: (data) => {
+      qc.setQueryData(['timeline', projectId], data)
+      invalidateProjectPlanning(qc, projectId)
+    },
+  })
+
   // Auto-schedule on page load ONLY if no entries exist yet (first run for new projects).
   // For projects with existing entries, the user drives rescheduling via the button.
   useEffect(() => {
@@ -470,7 +478,7 @@ export default function TimelinePage() {
         scheduleTimeline.mutate(body)
       }
     }
-  }, [timeline, project])
+  }, [timeline, project, resourceLevel, scheduleTimeline])
 
   const invalidate = () => invalidateProjectPlanning(qc, projectId)
 
@@ -497,14 +505,6 @@ export default function TimelinePage() {
     [resourceTypes],
   )
 
-  const scheduleTimeline = useMutation({
-    mutationFn: (body: { startDate?: string; resourceLevel?: boolean }) =>
-      api.post(`/projects/${projectId}/timeline/schedule`, body).then(r => r.data),
-    onSuccess: (data) => {
-      qc.setQueryData(['timeline', projectId], data)
-      invalidateProjectPlanning(qc, projectId)
-    },
-  })
 
   const savePlanningSettings = useMutation({
     mutationFn: () =>
@@ -736,31 +736,30 @@ export default function TimelinePage() {
     setScheduleStale(false)
     scheduleTimeline.mutate(startDateInput ? { startDate: startDateInput, resourceLevel } : { resourceLevel })
   }
-
   // Compute Gantt dimensions
-  const totalWeeks = useMemo(() => {
-    if (!timeline?.entries.length) return 0
+  const totalWeeks = (() => {
+    if (!timeline?.entries?.length) return 0
     const featureMax = Math.max(...timeline.entries.map(e => e.startWeek + e.durationWeeks))
     const storyMax = timeline.storyEntries?.length
       ? Math.max(...timeline.storyEntries.map(e => e.startWeek + e.durationWeeks))
       : 0
     const deliveryWeeks = Math.ceil(Math.max(featureMax, storyMax))
     return deliveryWeeks + (timeline.bufferWeeks ?? 0) + (timeline.onboardingWeeks ?? 0)
-  }, [timeline])
+  })()
 
   // Group entries by epicId, sorted by epicOrder then featureOrder
-  const epicGroups = useMemo(() => {
-    if (!timeline?.entries.length) return []
-    const map = new Map<string, { epicId: string; epicName: string; epicOrder: number; entries: TimelineEntry[] }>()
+  const epicGroups = (() => {
+    if (!timeline?.entries?.length) return []
+    const byEpic: Record<string, { epicId: string; epicName: string; epicOrder: number; entries: TimelineEntry[] }> = {}
     for (const e of timeline.entries) {
-      if (!map.has(e.epicId)) map.set(e.epicId, { epicId: e.epicId, epicName: e.epicName, epicOrder: e.epicOrder ?? 0, entries: [] })
-      map.get(e.epicId)!.entries.push(e)
+      if (!byEpic[e.epicId]) byEpic[e.epicId] = { epicId: e.epicId, epicName: e.epicName, epicOrder: e.epicOrder ?? 0, entries: [] }
+      byEpic[e.epicId].entries.push(e)
     }
-    const groups = Array.from(map.values())
-    groups.sort((a, b) => a.epicOrder - b.epicOrder)
-    for (const g of groups) g.entries.sort((a, b) => (a.featureOrder ?? 0) - (b.featureOrder ?? 0))
-    return groups
-  }, [timeline])
+    const result = Object.values(byEpic)
+    result.sort((a, b) => a.epicOrder - b.epicOrder)
+    for (const g of result) g.entries.sort((a, b) => (a.featureOrder ?? 0) - (b.featureOrder ?? 0))
+    return result
+  })()
 
   // Group resource types by category — only include RTs with demand in timeline
   const rtByCategory = useMemo(() => {
