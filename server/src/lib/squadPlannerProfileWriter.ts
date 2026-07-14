@@ -1186,6 +1186,29 @@ export async function revalidatePlannerPlan(
   }
 }
 
+// ─── Pre-validation conflict test seam ───────────────────────────────────────
+
+/**
+ * Deterministic async test seam invoked inside the apply transaction before
+ * `revalidatePlannerPlan`. Integration tests can commit a concurrent profile
+ * mutation before the transaction reads ownership state.
+ *
+ * In production this is always null.
+ */
+export let __preValidationConflictSeam: (() => void | Promise<void>) | null = null
+
+/**
+ * Override the pre-validation conflict seam for testing. Pass null to disable.
+ */
+export function __setPreValidationConflictSeam(fn: (() => void | Promise<void>) | null): void {
+  __preValidationConflictSeam = fn
+}
+
+/** Invoke the currently configured pre-validation seam. */
+export async function runPreValidationConflictSeam(): Promise<void> {
+  await __preValidationConflictSeam?.()
+}
+
 // ─── Pre-write conflict test seam ────────────────────────────────────────────
 
 /**

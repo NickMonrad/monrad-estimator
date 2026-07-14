@@ -37,6 +37,7 @@ import {
   clearOmittedPlannerCapacity,
   revalidatePlannerPlan,
   PlannerConflictError,
+  runPreValidationConflictSeam,
   runPreWriteConflictSeam,
   __applyFailureSeam,
   type PrismaTransactionClient,
@@ -660,9 +661,10 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   let plan: unknown
   try {
     plan = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
-      // Revalidate the plan inside the transaction, before any mutation.
-      // Catches races where profile state changed between preflight and write.
+      // A deterministic test seam can commit a concurrent profile mutation
+      // before validation reads ownership state.
       if (shouldActivate) {
+        await runPreValidationConflictSeam()
         await revalidatePlannerPlan(
           tx,
           projectId,

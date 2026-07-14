@@ -16,9 +16,11 @@
  *   - Explicit NAMED_PERSON / MANUAL / FIXED profile conflict returns 409
  *     before the pre-apply snapshot or any capacity writes, leaving state
  *     unchanged.
+ *   - A deterministic concurrent explicit-owner mutation before transaction
+ *     revalidation returns 409, removes only the new snapshot, and preserves
+ *     the concurrent explicit profile.
  *   - setActive:false saves the plan only and does not mutate any capacity
  *     profiles, resource types, or named resources.
- *
  * All tests are skipped unless INTEGRATION_TEST=true.  Follows the same
  * isolation and cleanup pattern as snapshotRollback.integration.test.ts and
  * projects.clone.integration.test.ts.
@@ -35,6 +37,7 @@ import { getWeeklyCapacity } from '../lib/scheduler.js'
 import {
   writePlannerProfiles,
   __setApplyFailureSeam,
+  __setPreValidationConflictSeam,
   __setPreWriteConflictSeam,
   PlannerConflictError,
   type RoleProfileWriteSet,
@@ -1256,6 +1259,7 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
 describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
   let projectId: string
   let rtId: string
+  let concurrentNamedResourceId: string
   let olderSnapshotId: string
 
   beforeAll(async () => {
@@ -1263,6 +1267,13 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
     projectId = await createProject()
     rtId = await createResourceType(projectId, 'rt-race-10', 'Engineer')
     await createEpicBacklog(projectId, rtId)
+    concurrentNamedResourceId = await createNamedResource(
+      projectId,
+      rtId,
+      'nr-race-10-concurrent',
+      'Concurrent Engineer',
+      { allocationMode: 'CAPACITY_PLAN' },
+    )
 
     // Create an older snapshot that must survive the race
     const olderSnapshot = await prisma.backlogSnapshot.create({
@@ -1319,6 +1330,71 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
     const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
     expect(rt).not.toBeNull()
     expect(rt!.allocationMode).toBe('TIMELINE')
+  })
+
+  it('detects a committed concurrent explicit owner before transaction revalidation', async () => {
+    if (!runIntegration) return
+
+    __setPreValidationConflictSeam(async () => {
+      await createProfile(
+        projectId,
+        'cp-concurrent-explicit',
+        'NAMED_PERSON',
+        null,
+        concurrentNamedResourceId,
+        { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL' },
+      )
+    })
+
+    try {
+      const res = await request(app)
+        .post(`/api/projects/${projectId}/squad-plan/apply`)
+        .set('Authorization', authHeader)
+        .send(buildApplyPayload(rtId, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ], { name: 'Concurrent Owner Race Test' }))
+
+      expect(res.status).toBe(409)
+    } finally {
+      __setPreValidationConflictSeam(null)
+    }
+
+    // The conflict is the committed explicit profile, which must remain intact.
+    const explicitProfile = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-concurrent-explicit' },
+    })
+    expect(explicitProfile).toMatchObject({
+      id: 'cp-concurrent-explicit',
+      ownerKind: 'NAMED_PERSON',
+      resourceTypeId: null,
+      namedResourceId: concurrentNamedResourceId,
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'MANUAL',
+    })
+
+    // The new snapshot is removed, while the older snapshot survives.
+    const allSnapshots = await prisma.backlogSnapshot.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+    })
+    expect(allSnapshots).toHaveLength(1)
+    expect(allSnapshots[0].id).toBe(olderSnapshotId)
+
+    // No partial apply writes or compatibility mutations are allowed.
+    expect(await fetchActivePlanId(projectId)).toBeNull()
+    expect(await prisma.capacitySegment.count({
+      where: { capacityProfile: { projectId } },
+    })).toBe(0)
+    expect(await prisma.resourceType.findUnique({ where: { id: rtId } }))
+      .toMatchObject({ allocationMode: 'TIMELINE' })
+    expect(await prisma.namedResource.findUnique({
+      where: { id: concurrentNamedResourceId },
+    })).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
   })
 
   it('preflight returns 409 when a conflicting profile exists before apply', async () => {

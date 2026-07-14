@@ -545,7 +545,9 @@ legacy compatibility projections, Timeline rows, and `weeklyDemandCache`.
 6. Apply persists Timeline assignments and weekly demand cache in the same transaction.
 7. A pre-apply v3 snapshot is written outside the domain transaction so failed applies
    retain a usable undo point.
-```
+8. Before any apply mutation, the transaction revalidates planner ownership. A committed
+   explicit-owner race aborts with HTTP 409; only the new pre-apply snapshot is removed,
+   while older snapshots and the concurrent explicit profile remain intact.
 
 ### Phase 6 — Reverse reconciliation direction
 
