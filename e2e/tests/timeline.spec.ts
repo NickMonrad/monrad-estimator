@@ -1119,7 +1119,10 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     await expect(page.getByText('Squad Planner').first()).toBeVisible({ timeout: 5_000 })
 
     // Name input must be disabled for planned resources (cannot be renamed)
-    const nameInput = devRow.locator('input[type="text"]').first()
+    const namedResourcesRow = page.locator('tr').filter({
+      has: page.getByText('Named Resources', { exact: true }),
+    })
+    const nameInput = namedResourcesRow.locator('input[type="text"]').first()
     await expect(nameInput).toBeDisabled()
 
     // ── Reapply — open Squad Planner with changed settings ──
@@ -1200,8 +1203,11 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     await expect(page.getByText('Planned resource').first()).toBeVisible({ timeout: 8_000 })
     // Source badge still "Squad Planner"
     await expect(page.getByText('Squad Planner').first()).toBeVisible({ timeout: 5_000 })
-    // Name input still disabled
-    await expect(devRow2.locator('input[type="text"]').first()).toBeDisabled()
+    // Name input remains disabled for planned resources
+    const namedResourcesRow2 = page.locator('tr').filter({
+      has: page.getByText('Named Resources', { exact: true }),
+    })
+    await expect(namedResourcesRow2.locator('input[type="text"]').first()).toBeDisabled()
 
     // ── Exercise Snapshot History and rollback ──
     await page.goto(`/projects/${projectId}/timeline`)
