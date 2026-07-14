@@ -1335,6 +1335,17 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
   it('detects a committed concurrent explicit owner before transaction revalidation', async () => {
     if (!runIntegration) return
 
+    // Seed one existing planner-owned profile. The seam then creates a second
+    // physical owner on the same NamedResource, which must fail closed.
+    await createProfile(
+      projectId,
+      'cp-race-existing-planner',
+      'PLANNED_RESOURCE',
+      null,
+      concurrentNamedResourceId,
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER' },
+    )
+
     __setPreValidationConflictSeam(async () => {
       await createProfile(
         projectId,
