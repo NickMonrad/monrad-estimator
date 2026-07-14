@@ -25,6 +25,12 @@ type ResourceTypeLike = {
   name: string
   count: number
   allocationMode?: string | null
+  /**
+   * True when valid persisted owner profiles are authoritative for this RT.
+   * In that case an active Capacity Plan must not rematerialize its named
+   * resources over the persisted profile-backed resources.
+   */
+  capacityProfileBacked?: boolean
   namedResources?: NamedResourceLike[]
 }
 
@@ -104,6 +110,7 @@ function buildEffectiveNamedResources(
   const capacityPlanMaterialized = capacityPlanByRt.get(resourceType.id)
   const useCapacityPlanFallback =
     mode === 'CAPACITY_PLAN' &&
+    !resourceType.capacityProfileBacked &&
     shouldFallbackToActiveCapacityPlan(persistedNamedResources, capacityPlanMaterialized)
 
   const baseNamedResources = useCapacityPlanFallback && capacityPlanMaterialized
