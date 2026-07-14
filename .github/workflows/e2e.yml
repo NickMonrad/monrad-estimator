@@ -56,6 +56,10 @@ jobs:
       - name: Backup regression tests
         run: npm run test:backup
 
+      # ── PDF generation smoke test (real Chromium) ────────────────
+      - name: PDF generation smoke test
+        run: npm run test:pdf-smoke
+
       # ── Client clone commercial parity test ──────────────────────
       - name: Client clone commercial parity test
         working-directory: client
