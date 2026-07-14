@@ -21,7 +21,8 @@
     "test:e2e:report": "npm run report --workspace=e2e",
     "screenshots": "npm run screenshots --workspace=e2e",
     "db:backup": "node scripts/db-backup.mjs",
-    "test:backup": "node --test scripts/db-backup.test.mjs"
+    "test:backup": "node --test scripts/db-backup.test.mjs",
+    "test:pdf-smoke": "node --import tsx --test server/src/test/pdf-smoke.test.mjs"
   },
   "devDependencies": {
     "concurrently": "^10.0.3"

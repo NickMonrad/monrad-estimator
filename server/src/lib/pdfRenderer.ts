@@ -72,3 +72,11 @@ export async function generatePdfFromHtml(html: string): Promise<Buffer> {
 process.on('SIGTERM', async () => {
   if (browserInstance) await browserInstance.close()
 })
+
+/** Close the shared browser instance (for clean test shutdown). */
+export async function closeBrowser(): Promise<void> {
+  if (browserInstance) {
+    await browserInstance.close()
+    browserInstance = null
+  }
+}

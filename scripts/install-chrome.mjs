@@ -17,13 +17,18 @@ const CACHE_DIR = join(os.homedir(), '.cache', 'puppeteer')
 const BROWSER = 'chrome'
 
 // Use the exact build ID that the installed puppeteer package expects
-function getPuppeteerBuildId() {
+async function getPuppeteerBuildId() {
   try {
+    // Puppeteer 25+: version pinned in PUPPETEER_REVISIONS from puppeteer-core
+    const { PUPPETEER_REVISIONS } = await import('puppeteer-core/lib/puppeteer/revisions.js')
+    if (PUPPETEER_REVISIONS?.chrome) return PUPPETEER_REVISIONS.chrome
+  } catch {}
+  try {
+    // Fallback for older puppeteer (<=24): read pkg.puppeteer.chrome
     const puppeteerPkg = require('puppeteer/package.json')
-    // puppeteer stores its pinned revision in the nested puppeteer.chrome config
     let id = puppeteerPkg?.puppeteer?.chrome
     if (!id) {
-      // Fallback: launch puppeteer and read executablePath to extract version
+      // Second fallback: launch puppeteer and read executablePath to extract version
       const p = require('puppeteer')
       const exePath = p.executablePath()
       const match = exePath.match(/mac_arm-([^/\\]+)|linux-([^/\\]+)|win64-([^/\\]+)/)
@@ -42,7 +47,7 @@ function getPuppeteerBuildId() {
 }
 
 async function main() {
-  const buildId = getPuppeteerBuildId()
+  const buildId = await getPuppeteerBuildId()
   if (!buildId) {
     console.warn('[puppeteer] Could not determine required Chrome version — skipping download.')
     process.exit(0)
