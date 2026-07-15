@@ -1716,5 +1716,334 @@ describeIf('Scenario 12 — concurrent valid applies under Serializable isolatio
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
+// Scenario 13 — Protected ROLE profile (non-planner source) rejected at preflight
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario 13 — Protected ROLE profile is rejected by preflight', () => {
+  it('returns 409 when a ROLE profile has MANUAL source', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-protected-role-13', 'ProtectedRole')
+    await createEpicBacklog(projectId, rtId)
+
+    // Create a ROLE profile with MANUAL source (protected)
+    await createProfile(
+      projectId, 'cp-protected-role-13', 'ROLE', rtId, null,
+      { source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
+    )
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ]))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('owner')
+
+    // Verify no active plan or profile changes leaked
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).toBeNull()
+    const profiles = await fetchProfiles(projectId)
+    const protectedRole = profiles.find(profile => profile.id === 'cp-protected-role-13')
+    expect(protectedRole).toMatchObject({
+      source: 'MANUAL',
+      ownerKind: 'ROLE',
+    })
+  })
+
+  it('returns 409 when a ROLE profile has non-CAPACITY_PROFILE basis', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-wrong-basis-role-13', 'WrongBasis')
+    await createEpicBacklog(projectId, rtId)
+
+    // Create a ROLE profile with AVAILABILITY_WINDOW basis (protected)
+    await createProfile(
+      projectId, 'cp-wrong-basis-13', 'ROLE', rtId, null,
+      { source: 'SQUAD_PLANNER', planningBasis: 'AVAILABILITY_WINDOW' },
+    )
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ]))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('owner')
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 14 — Protected ROLE profile in omitted-role cleanup causes atomic failure
+// ═════════════════════════════════════════════════════════════════════════════
+// When a resource type is omitted from the replacement plan but has a protected
+// ROLE profile (non-planner source/basis), the entire apply transaction must
+// fail atomically with 409 and no leaked mutations.
+
+describeIf('Scenario 14 — Protected ROLE causes atomic failure in omitted-role cleanup', () => {
+  it('returns 409 when a protected ROLE profile exists on an omitted resource type', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtActive = await createResourceType(projectId, 'rt-active-14', 'Active')
+    const rtOmitted = await createResourceType(projectId, 'rt-omitted-14', 'OmittedWithProtectedRole')
+    await createEpicBacklog(projectId, rtActive)
+
+    // First apply: create plan covering both resource types
+    const first = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        ...buildApplyPayload(rtActive, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ]),
+        periods: [{
+          periodIndex: 0, startWeek: 0, endWeek: 8,
+          entries: [
+            { resourceTypeId: rtActive, headcount: 1, demandFTE: 0.5, utilisationPct: 50 },
+            { resourceTypeId: rtOmitted, headcount: 1, demandFTE: 0.5, utilisationPct: 50 },
+          ],
+        }],
+      })
+    expect(first.status).toBe(201)
+
+    // Now override the omitted RT's ROLE profile to be MANUAL (protected)
+    const profiles = await fetchProfiles(projectId)
+    const roleOnOmitted = profiles.find(
+      p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtOmitted,
+    )
+    expect(roleOnOmitted).toBeDefined()
+    await prisma.capacityProfile.update({
+      where: { id: roleOnOmitted!.id },
+      data: { source: 'MANUAL' },
+    })
+
+    // Second apply: only rtActive (omittedRt is omitted)
+    // This should fail because clearOmittedPlannerCapacity encounters a protected ROLE
+    const second = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtActive, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ], { name: 'Omit Protected Role' }))
+
+    expect(second.status).toBe(409)
+    expect(second.body.error).toContain('ROLE')
+
+    // Verify no state leaked: first plan still active, protected role unchanged
+    const activePlan = await fetchActivePlanId(projectId)
+    expect(activePlan).not.toBeNull()
+    const profilesAfter = await fetchProfiles(projectId)
+    const protectedRoleStill = profilesAfter.find(profile => profile.id === roleOnOmitted!.id)
+    expect(protectedRoleStill).toMatchObject({
+      source: 'MANUAL',
+      ownerKind: 'ROLE',
+    })
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 15 — Unrelated CAPACITY_PLAN resource is untouched by apply
+// ═════════════════════════════════════════════════════════════════════════════
+// A resource type in CAPACITY_PLAN allocation mode that has never been in any
+// prior active plan and has no planner profiles is not modified by the apply
+// transaction. Its allocation mode, count, and named resources are preserved.
+
+describeIf('Scenario 15 — Unrelated CAPACITY_PLAN resource preserved', () => {
+  it('preserves an unrelated CAPACITY_PLAN resource type when applying a new plan', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtActive = await createResourceType(projectId, 'rt-active-15', 'Active')
+    const rtUnrelated = await createResourceType(projectId, 'rt-unrelated-15', 'Unrelated', {
+      allocationMode: 'CAPACITY_PLAN',
+      count: 2,
+    })
+    await prisma.resourceType.update({
+      where: { id: rtUnrelated },
+      data: { allocationPercent: 50, allocationStartWeek: 0, allocationEndWeek: 10 },
+    })
+
+    // Create a named resource with CAPACITY_PLAN on the unrelated RT
+    const unrelatedNrId = await createNamedResource(
+      projectId, rtUnrelated, 'nr-unrelated-15', 'Unrelated Resource',
+      {
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+      },
+    )
+
+    // Apply plan covering only rtActive (not rtUnrelated)
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtActive, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ], { name: 'Unrelated RT Test' }))
+
+    expect(res.status).toBe(201)
+
+    // Verify unrelated RT unchanged
+    const unrelatedRT = await prisma.resourceType.findUnique({ where: { id: rtUnrelated } })
+    expect(unrelatedRT).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      count: 2,
+    })
+
+    // Verify unrelated named resource unchanged
+    const unrelatedNR = await prisma.namedResource.findUnique({ where: { id: unrelatedNrId } })
+    expect(unrelatedNR).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+    })
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 16 — Prior-plan-only authority clears legacy for omitted resource type
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// A resource type appears only in the prior active CapacityPlan (no capacity
+// profiles after profile deletion). A replacement apply omitting that resource
+// type must still zero its legacy ResourceType and NamedResource compatibility
+// capacity, proving authority was captured before deactivation rather than
+// queried from the replacement active plan.
+
+describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted RT', () => {
+  it('zeros legacy fields on omitted prior-plan-only resource type from captured authority', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+
+    // RT that will be in the prior active plan but omitted from the replacement
+    const rtOmitted = await createResourceType(projectId, 'rt-omitted-16', 'OmittedLegacy', {
+      allocationMode: 'CAPACITY_PLAN',
+      count: 3,
+    })
+    // RT that stays active in both plans
+    const rtActive = await createResourceType(projectId, 'rt-active-16', 'Active', {
+      count: 1,
+    })
+    await createEpicBacklog(projectId, rtActive)
+
+    // ── First apply: plan covering both resource types ──────────────────
+    const first = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        ...buildApplyPayload(rtActive, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ]),
+        periods: [{
+          periodIndex: 0, startWeek: 0, endWeek: 8,
+          entries: [
+            { resourceTypeId: rtActive, headcount: 1, demandFTE: 0.5, utilisationPct: 50 },
+            { resourceTypeId: rtOmitted, headcount: 1, demandFTE: 0.5, utilisationPct: 50 },
+          ],
+        }],
+      })
+    expect(first.status).toBe(201)
+
+    // Capture the first plan's ID
+    const firstPlanId = await fetchActivePlanId(projectId)
+    expect(firstPlanId).not.toBeNull()
+
+    // Find and delete the ROLE and PLANNED_RESOURCE profiles for the omitted RT so its only
+    // planner evidence is being in the prior active plan (capacity_plan_untouched).
+    const profilesAfterFirst = await fetchProfiles(projectId)
+    const omittedRole = profilesAfterFirst.find(
+      p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtOmitted,
+    )
+    expect(omittedRole).toBeDefined()
+    if (omittedRole) await prisma.capacityProfile.delete({ where: { id: omittedRole.id } })
+
+    // Find PLANNED_RESOURCE profiles for rtOmitted's named resources (PLANNED_RESOURCE
+    // profiles have resourceTypeId: null; they link via namedResource).
+    const omittedNrIds = (await prisma.namedResource.findMany({
+      where: { resourceTypeId: rtOmitted },
+      select: { id: true },
+    })).map(nr => nr.id)
+    for (const profile of profilesAfterFirst) {
+      if (profile.ownerKind === 'PLANNED_RESOURCE' && profile.namedResourceId && omittedNrIds.includes(profile.namedResourceId)) {
+        await prisma.capacityProfile.delete({ where: { id: profile.id } })
+      }
+    }
+
+    // Verify legacy fields are non-zero before the second apply
+    const rtBefore = await prisma.resourceType.findUnique({ where: { id: rtOmitted } })
+    expect(rtBefore).not.toBeNull()
+    expect(rtBefore!.count).toBeGreaterThan(0)
+
+    const nrListBefore = await prisma.namedResource.findMany({
+      where: { resourceTypeId: rtOmitted },
+      select: { id: true, allocationPercent: true, allocationPct: true },
+    })
+    expect(nrListBefore.length).toBeGreaterThan(0)
+    for (const nr of nrListBefore) {
+      expect(nr.allocationPercent).toBeGreaterThan(0)
+      expect(nr.allocationPct).toBeGreaterThan(0)
+    }
+
+    // ── Second apply: plan covering only rtActive (rtOmitted is omitted) ──
+    const second = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtActive, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ], { name: 'Prior Plan Only Test' }))
+
+    expect(second.status).toBe(201)
+
+    // ── Assert prior active plan is now inactive ─────────────────────────
+    const firstPlanAfter = await prisma.capacityPlan.findUnique({ where: { id: firstPlanId! } })
+    expect(firstPlanAfter?.isActive).toBe(false)
+
+    // ── Assert omitted RT legacy compatibility fields zeroed ────────────
+    const rtAfter = await prisma.resourceType.findUnique({ where: { id: rtOmitted } })
+    expect(rtAfter).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      count: 0,
+      allocationPercent: 0,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    const nrListAfter = await prisma.namedResource.findMany({
+      where: { resourceTypeId: rtOmitted },
+      select: {
+        id: true,
+        allocationMode: true,
+        allocationPercent: true,
+        allocationPct: true,
+        allocationStartWeek: true,
+        allocationEndWeek: true,
+        startWeek: true,
+        endWeek: true,
+      },
+    })
+    expect(nrListAfter.length).toBeGreaterThan(0)
+    for (const nr of nrListAfter) {
+      expect(nr).toMatchObject({
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 0,
+        allocationPct: 0,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+      })
+    }
+
+    // ── Assert new plan is active ──────────────────────────────────────
+    const secondPlanId = await fetchActivePlanId(projectId)
+    expect(secondPlanId).not.toBeNull()
+    expect(secondPlanId).not.toBe(firstPlanId)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
 // Test coverage is skipped when INTEGRATION_TEST is not 'true'.
 // ═════════════════════════════════════════════════════════════════════════════

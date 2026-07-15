@@ -104,6 +104,147 @@ export interface PlannerProvenance {
   priorActivePlan: boolean
 }
 
+
+/**
+ * Immutable prior-planner authority captured at the start of a Serializable
+ * transaction, before any active-plan mutation. Contains the prior active plan
+ * identity and the complete set of resource types it covers, so downstream
+ * functions (revalidation, find-or-create, omitted-role cleanup) never need to
+ * post-mutation query isActive:true for prior-plan evidence.
+ *
+ * `allPlannerResourceTypeIds` is the union of:
+ * - active-plan resource types
+ * - ROLE+SQUAD_PLANNER+CAPACITY_PROFILE profile resource types
+ * - PLANNED_RESOURCE+SQUAD_PLANNER profile resource types
+ * - legacy NAMED_PERSON+SQUAD_PLANNER+CAPACITY_PROFILE profile resource types
+ */
+export interface PriorPlannerAuthority {
+  readonly activePlanId: string | null
+  readonly activePlanResourceTypeIds: ReadonlySet<string>
+  /** Valid ROLE+SQUAD_PLANNER+CAPACITY_PROFILE resource types. */
+  readonly plannerRoleResourceTypeIds: ReadonlySet<string>
+  /** All resource type IDs with any planner-owned profile evidence captured before mutation. */
+  readonly allPlannerResourceTypeIds: ReadonlySet<string>
+}
+
+/**
+ * Capture the current active plan authority AND all planner-owned profile
+ * evidence before any mutation in a Serializable transaction.
+ *
+ * Queries four sources in parallel:
+ * 1. Active plan (if any) — resource type IDs from period entries
+ * 2. ROLE+SQUAD_PLANNER+CAPACITY_PROFILE profiles
+ * 3. PLANNED_RESOURCE+SQUAD_PLANNER profiles (via namedResource)
+ * 4. Legacy NAMED_PERSON+SQUAD_PLANNER+CAPACITY_PROFILE profiles (via namedResource)
+ *
+ * The returned object is frozen and uses ReadonlySet for immutability.
+ */
+export async function capturePlannerAuthority(
+  tx: PrismaTransactionClient,
+  projectId: string,
+): Promise<PriorPlannerAuthority> {
+  const [activePlan, plannerRoleProfiles, plannerManagedProfiles, legacyPlannerProfiles] =
+    await Promise.all([
+      tx.capacityPlan.findFirst({
+        where: { projectId, isActive: true },
+        select: {
+          id: true,
+          periods: {
+            select: {
+              entries: {
+                select: { resourceTypeId: true },
+              },
+            },
+          },
+        },
+      }),
+      // ROLE-level planner profiles
+      tx.capacityProfile.findMany({
+        where: {
+          projectId,
+          ownerKind: 'ROLE',
+          source: 'SQUAD_PLANNER',
+          planningBasis: 'CAPACITY_PROFILE',
+          namedResourceId: null,
+          resourceTypeId: { not: null },
+        },
+        select: { resourceTypeId: true },
+      }),
+      // PLANNED_RESOURCE planner profiles (join through namedResource)
+      // Filtered to valid planningBasis CAPACITY_PROFILE so stale or
+      // invalid source/basis rows do not become planner authority.
+      tx.capacityProfile.findMany({
+        where: {
+          projectId,
+          ownerKind: 'PLANNED_RESOURCE',
+          source: 'SQUAD_PLANNER',
+          planningBasis: 'CAPACITY_PROFILE',
+          namedResourceId: { not: null },
+        },
+        select: {
+          namedResource: { select: { resourceTypeId: true } },
+        },
+      }),
+      // Legacy planner profiles
+      tx.capacityProfile.findMany({
+        where: {
+          projectId,
+          ownerKind: 'NAMED_PERSON',
+          source: 'SQUAD_PLANNER',
+          planningBasis: 'CAPACITY_PROFILE',
+          namedResourceId: { not: null },
+        },
+        select: {
+          namedResource: { select: { resourceTypeId: true } },
+        },
+      }),
+    ])
+
+  const activePlanRtIds = new Set(
+    activePlan?.periods.flatMap(p => p.entries.map(e => e.resourceTypeId)) ?? [],
+  )
+  const plannerRoleRtIds = new Set(
+    plannerRoleProfiles
+      .map(p => p.resourceTypeId)
+      .filter((id): id is string => id !== null),
+  )
+  const plannerManagedRtIds = new Set(
+    plannerManagedProfiles
+      .map(p => p.namedResource?.resourceTypeId)
+      .filter((id): id is string => id !== undefined),
+  )
+  const legacyPlannerRtIds = new Set(
+    legacyPlannerProfiles
+      .map(p => p.namedResource?.resourceTypeId)
+      .filter((id): id is string => id !== undefined),
+  )
+
+  const allPlannerResourceTypeIds = new Set([
+    ...activePlanRtIds,
+    ...plannerRoleRtIds,
+    ...plannerManagedRtIds,
+    ...legacyPlannerRtIds,
+  ])
+
+  return Object.freeze({
+      activePlanId: activePlan?.id ?? null,
+      activePlanResourceTypeIds: activePlanRtIds,
+      plannerRoleResourceTypeIds: plannerRoleRtIds,
+      allPlannerResourceTypeIds,
+    }) as PriorPlannerAuthority
+}
+
+/**
+ * Derive planner provenance for a single resource type from a captured
+ * PriorPlannerAuthority. Returns priorActivePlan:true exactly when the
+ * resource type was a member of the prior active plan.
+ */
+export function plannerProvenanceFrom(
+  authority: PriorPlannerAuthority,
+  resourceTypeId: string,
+): PlannerProvenance {
+  return { priorActivePlan: authority.activePlanResourceTypeIds.has(resourceTypeId) }
+}
 const noPlannerProvenance: PlannerProvenance = { priorActivePlan: false }
 // ─── Shared planner-managed resource classification ─────────────────────────
 
@@ -425,9 +566,10 @@ export async function validatePlannerOwnerState(
     if (profile.resourceTypeId === resourceTypeId) {
       if (profile.namedResourceId !== null || profile.ownerKind !== 'ROLE') {
         mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
+      } else if (profile.ownerKind === 'ROLE' && (profile.source !== 'SQUAD_PLANNER' || profile.planningBasis !== 'CAPACITY_PROFILE')) {
+        mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
       }
     }
-
     if (profile.namedResourceId) {
       const namedResource = namedResourceById.get(profile.namedResourceId)
       if (!namedResource || profile.resourceTypeId !== null || profile.ownerKind === 'ROLE') {
@@ -589,6 +731,7 @@ export async function findOrCreatePlannedResources(
   resourceTypeName: string,
   requiredCount: number,
   projectId?: string,
+  authority?: PriorPlannerAuthority,
 ): Promise<PlannedResourceMatchResult> {
   const existingNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
@@ -610,9 +753,11 @@ export async function findOrCreatePlannedResources(
       ownerConflicts,
     )
   }
-  const priorActivePlan = projectId
-    ? await hasPriorActivePlanEvidence(tx, projectId, resourceTypeId)
-    : false
+  const priorActivePlan = authority
+    ? authority.activePlanResourceTypeIds.has(resourceTypeId)
+    : projectId
+      ? await hasPriorActivePlanEvidence(tx, projectId, resourceTypeId)
+      : false
 
   const plan = buildPlannerResourcePlan(
     existingNRs,
@@ -1058,82 +1203,47 @@ export async function clearSurplusCompatibilityFields(
  * ```
  */
 export let __applyFailureSeam: (() => void) | null = null
-
 /**
- * Override the failure seam for testing. Pass null to disable.
+ * Override the apply failure seam for testing. Pass null to disable.
  */
 export function __setApplyFailureSeam(fn: (() => void) | null): void {
   __applyFailureSeam = fn
 }
+
 /**
  * Clear planner-owned role/resource capacity for resource types omitted from
  * the replacement plan while preserving explicit/manual profiles.
+ * Uses captured authority data rather than re-querying profiles after mutation.
  */
 export async function clearOmittedPlannerCapacity(
   tx: PrismaTransactionClient,
   projectId: string,
   activeResourceTypeIds: Set<string>,
+  authority: PriorPlannerAuthority,
 ): Promise<void> {
-  const roleProfiles = await tx.capacityProfile.findMany({
-    where: {
-      projectId,
-      ownerKind: 'ROLE',
-      planningBasis: 'CAPACITY_PROFILE',
-      source: 'SQUAD_PLANNER',
-      namedResourceId: null,
-    },
-    select: { resourceTypeId: true },
-  })
-  const activePlan = await tx.capacityPlan.findFirst({
-    where: { projectId, isActive: true },
-    select: {
-      periods: {
-        select: {
-          entries: {
-            select: { resourceTypeId: true },
-          },
-        },
-      },
-    },
-  })
-  const priorActivePlanResourceTypeIds = new Set(
-    activePlan?.periods.flatMap(period => period.entries.map(entry => entry.resourceTypeId)) ?? [],
-  )
-  const legacyPlannerProfiles = await tx.capacityProfile.findMany({
-    where: {
-      projectId,
-      ownerKind: 'NAMED_PERSON',
-      source: 'SQUAD_PLANNER',
-      planningBasis: 'CAPACITY_PROFILE',
-      namedResourceId: { not: null },
-    },
-    select: {
-      namedResource: { select: { resourceTypeId: true } },
-    },
-  })
-  const legacyPlannerResourceTypeIds = legacyPlannerProfiles
-    .map(profile => profile.namedResource?.resourceTypeId)
-    .filter((id): id is string => id !== undefined)
-
-  const omittedResourceTypeIds = [...new Set([
-    ...priorActivePlanResourceTypeIds,
-    ...legacyPlannerResourceTypeIds,
-    ...roleProfiles
-      .map(profile => profile.resourceTypeId)
-      .filter((id): id is string => id !== null),
-  ])].filter(id => !activeResourceTypeIds.has(id))
-
-  const zeroRoleProfiles: RoleProfileWriteSet[] = omittedResourceTypeIds.map(resourceTypeId => ({
-    resourceTypeId,
-    defaultPercent: 0,
-    startWeek: null,
-    endWeek: null,
-    segments: [],
-  }))
+  const priorActivePlanResourceTypeIds = authority.activePlanResourceTypeIds
+  const omittedResourceTypeIds = [...authority.allPlannerResourceTypeIds]
+    .filter(id => !activeResourceTypeIds.has(id))
+  const zeroRoleProfiles: RoleProfileWriteSet[] = [...authority.plannerRoleResourceTypeIds]
+      .filter(resourceTypeId => !activeResourceTypeIds.has(resourceTypeId))
+      .map(resourceTypeId => ({
+        resourceTypeId,
+        defaultPercent: 0,
+        startWeek: null,
+        endWeek: null,
+        segments: [],
+      }))
   const zeroPlannedProfiles: PlannedResourceProfileWriteSet[] = []
   const zeroResourceIds: string[] = []
 
   for (const resourceTypeId of omittedResourceTypeIds) {
+    const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+    if (ownerConflicts.length > 0) {
+      throw new PlannerConflictError(
+        `Protected ROLE profile blocks omitted-role cleanup for resource type "${resourceTypeId}".`,
+        ownerConflicts,
+      )
+    }
     await tx.resourceType.update({
       where: { id: resourceTypeId },
       data: {
@@ -1329,10 +1439,11 @@ export async function revalidatePlannerPlan(
   tx: PrismaTransactionClient,
   projectId: string,
   periods: ReadonlyArray<CapacityPlanPeriodInput>,
+  authority?: PriorPlannerAuthority,
 ): Promise<void> {
+
   const resourceTypeIds = [...new Set(periods.flatMap(p => p.entries.map(e => e.resourceTypeId)))]
   const allConflicts: ConflictResourceInfo[] = []
-
   for (const rtId of resourceTypeIds) {
     allConflicts.push(...await validatePlannerOwnerState(tx, projectId, rtId))
     // Check ROLE profile duplicates (existing profiles query)
@@ -1377,7 +1488,9 @@ export async function revalidatePlannerPlan(
       rtId,
       'role',
       trajectoryCount,
-      { priorActivePlan: await hasPriorActivePlanEvidence(tx, projectId, rtId) },
+      { priorActivePlan: authority
+        ? authority.activePlanResourceTypeIds.has(rtId)
+        : await hasPriorActivePlanEvidence(tx, projectId, rtId) },
     )
     allConflicts.push(...plan.conflicts)
   }

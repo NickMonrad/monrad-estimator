@@ -641,26 +641,27 @@ describe('materializeProfilesForResourceType', () => {
 
 // ─── Ownership validation tests ────────────────────────────────────────────
 
+function makeTransaction(profiles: Array<Record<string, unknown>>) {
+  return {
+    resourceType: {
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'rt-dev',
+        name: 'Developer',
+        projectId: 'project-1',
+      }),
+    },
+    namedResource: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: 'nr-dev-1', name: 'Developer 1' },
+      ]),
+    },
+    capacityProfile: {
+      findMany: vi.fn().mockResolvedValue(profiles),
+    },
+  } as never
+}
+
 describe('validatePlannerOwnerState', () => {
-  function makeTransaction(profiles: Array<Record<string, unknown>>) {
-    return {
-      resourceType: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'rt-dev',
-          name: 'Developer',
-          projectId: 'project-1',
-        }),
-      },
-      namedResource: {
-        findMany: vi.fn().mockResolvedValue([
-          { id: 'nr-dev-1', name: 'Developer 1' },
-        ]),
-      },
-      capacityProfile: {
-        findMany: vi.fn().mockResolvedValue(profiles),
-      },
-    } as never
-  }
 
   it('rejects a ROLE profile that also claims a named resource', async () => {
     const conflicts = await validatePlannerOwnerState(
@@ -702,5 +703,117 @@ describe('validatePlannerOwnerState', () => {
 
     expect(conflicts).toHaveLength(1)
     expect(conflicts[0].namedResourceName).toBe('Developer 1')
+  })
+
+  it('rejects a ROLE profile with non-planner source', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-non-planner-role',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'MANUAL',
+        planningBasis: 'CAPACITY_PROFILE',
+      }]),
+      'project-1',
+      'rt-dev',
+    )
+
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      resourceTypeName: 'Developer',
+    })
+  })
+
+  it('rejects a ROLE profile with non-capacity-basis', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-wrong-basis-role',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'AVAILABILITY_WINDOW',
+      }]),
+      'project-1',
+      'rt-dev',
+    )
+
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      resourceTypeName: 'Developer',
+    })
+  })
+
+  it('accepts a valid planner ROLE profile', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-valid-role',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+      }]),
+      'project-1',
+      'rt-dev',
+    )
+
+    expect(conflicts).toHaveLength(0)
+  })
+})
+
+describe('validatePlannerOwnerState — protected ROLE sources', () => {
+  it.each([
+    { source: 'MANUAL' as const, planningBasis: 'CAPACITY_PROFILE' as const },
+    { source: 'FIXED' as const, planningBasis: 'CAPACITY_PROFILE' as const },
+    { source: 'IMPORTED' as const, planningBasis: 'CAPACITY_PROFILE' as const },
+    { source: 'AVAILABILITY_WINDOW' as const, planningBasis: 'CAPACITY_PROFILE' as const },
+    { source: 'DERIVED' as const, planningBasis: 'CAPACITY_PROFILE' as const },
+    { source: 'LEGACY' as const, planningBasis: 'CAPACITY_PROFILE' as const },
+    { source: 'SQUAD_PLANNER' as const, planningBasis: 'DEMAND_FOLLOWING' as const },
+  ])('rejects a ROLE profile with ($source, $planningBasis)', async ({ source, planningBasis }) => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: `profile-role-${source}-${planningBasis}`,
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source,
+        planningBasis,
+      }]),
+      'project-1',
+      'rt-dev',
+    )
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      resourceTypeName: 'Developer',
+    })
+  })
+})
+
+describe('validatePlannerOwnerState — accepted ROLE profile', () => {
+  it('accepts a valid SQUAD_PLANNER + CAPACITY_PROFILE ROLE profile', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-valid-role-accepted',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+      }]),
+      'project-1',
+      'rt-dev',
+    )
+    expect(conflicts).toHaveLength(0)
   })
 })

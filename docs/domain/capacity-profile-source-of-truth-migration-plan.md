@@ -541,30 +541,66 @@ legacy compatibility projections, Timeline rows, and `weeklyDemandCache`.
 2. Apply creates/reuses named resources with deterministic `(createdAt, id)` ordering.
 3. Apply writes CapacityProfile/CapacitySegment rows as the authority.
 4. Apply projects compatibility fields for legacy consumers.
-5. Apply clears omitted/surplus planner capacity while preserving explicit/manual data.
-6. Apply persists Timeline assignments and weekly demand cache in the same transaction.
-7. A pre-apply v3 snapshot is written outside the domain transaction so failed applies
+5. Before deactivating the prior active plan, each Serializable attempt captures
+   the prior active-plan authority as one immutable value containing prior active
+   plan ID, its resource-type membership, and valid planner provenance. This
+   capture happens inside each retry attempt — retries recapture it from the
+   current committed state.
+6. Apply clears omitted/surplus planner capacity using the captured prior
+   authority to determine planner-owned ROLE profiles and admissions from the
+   prior active plan. Bare compatibility fields (legacy `allocationMode`,
+   `allocationPercent`, etc.) are insufficient provenance — ownership is
+   established only through the captured authority or a matching ROLE profile
+   with valid `SQUAD_PLANNER`/`CAPACITY_PROFILE` identity.
+7. Apply persists Timeline assignments and weekly demand cache in the same transaction.
+8. A pre-apply v3 snapshot is written outside the domain transaction so failed applies
    retain a usable undo point.
-8. Before any apply mutation, the transaction revalidates planner ownership. A committed
-   explicit-owner race aborts with HTTP 409; only the new pre-apply snapshot is removed,
-   while older snapshots and the concurrent explicit profile remain intact.
-9. The domain transaction runs at PostgreSQL `Serializable` isolation. A
-   serialization failure (`P2034`) aborts all domain writes, removes only the new
-   pre-apply snapshot, and returns a retryable HTTP 409 response.
-10. Omitted-role cleanup is evidence-backed: planner-owned `ROLE` profiles,
-    legacy planner `NAMED_PERSON` profiles, or entries in the prior active
-    `CapacityPlan` establish ownership. A bare `CAPACITY_PLAN` row with no
-    profile and no prior active-plan entry is not adopted.
-11. Malformed owner shapes, invalid planner provenance, and duplicate physical
+9. The domain transaction revalidates planner ownership using the captured prior
+   authority, passed explicitly through revalidation, owner matching, and
+   omitted-role reconciliation. A committed explicit-owner race aborts with
+   HTTP 409; only the new pre-apply snapshot is removed, while older snapshots
+   and the concurrent explicit profile remain intact.
+10. The domain transaction runs at PostgreSQL `Serializable` isolation. A
+    serialization failure (`P2034`) aborts all domain writes, removes only the new
+    pre-apply snapshot, and returns a retryable HTTP 409 response. The caller's
+    retry recaptures the prior authority from the new committed state.
+11. Omitted-role cleanup uses the captured prior authority to determine which
+    ROLE profiles were planner-owned. Legacy planner `NAMED_PERSON` profiles and
+    entries in the prior active `CapacityPlan` (from the captured authority)
+    establish ownership. A bare `CAPACITY_PLAN` row with no profile and no
+    prior active-plan entry is not adopted.
+12. **Protected ROLE profiles** — ROLE profiles whose `source` is not
+    `SQUAD_PLANNER` or whose `planningBasis` is not `CAPACITY_PROFILE` are never
+    converted, zeroed, deleted, or normalised by the apply path. `MANUAL`,
+    `FIXED`, `IMPORTED`, `AVAILABILITY_WINDOW`, unknown source, or
+    non-`CAPACITY_PROFILE` basis profiles that conflict with the planner's
+    intended role capacity throw `PlannerConflictError` atomically and return
+    HTTP 409 without mutating any data. Only ROLE profiles with `source:
+    'SQUAD_PLANNER'` and `planningBasis: 'CAPACITY_PROFILE'` are
+    planner-updatable.
+13. **Missing ROLE profile creation** — A ROLE profile absent from the project
+    may be created only when no conflicting owner (same `resourceTypeId` with
+    unprotected source/basis) exists. If a conflicting unprotected
+    owner-resource-type profile is present, the attempt throws
+    `PlannerConflictError` with a project-scoped message and returns HTTP 409.
+14. All planner ownership errors (`PlannerConflictError`) are project-scoped:
+    the error message identifies the conflicting owner kind, key, source, and
+    basis without exposing internal row identifiers beyond the project boundary.
+15. Malformed owner shapes, invalid planner provenance, and duplicate physical
     owners fail closed with HTTP 409. Apply does not repair or implicitly adopt
     ambiguous state.
 
-Commercial remains outside this migration boundary. Squad Planner changes capacity
-availability and compatibility projections; it does not change `pricingModel`,
-billing basis, pricing formulas, discounts, tax, or commercial totals. The real
-PostgreSQL clone integration executes production `computeCommercialData` against
-source and clone DTOs and verifies exact parity after ID normalisation for the
-supported `ACTUAL_DAYS` and `PRO_RATA` billing models.
+Commercial parity is proven through the authenticated apply and production
+calculation path. The real PostgreSQL integration executes production
+`computeCommercialData` against source and clone DTOs and verifies exact parity
+after ID normalisation for the supported `ACTUAL_DAYS` and `PRO_RATA` billing
+models — this is the same calculation path Squad Planner applies use. Squad
+Planner changes capacity availability and compatibility projections; it does
+not change `pricingModel`, billing basis, pricing formulas, discounts, tax, or
+commercial totals. Intentional capacity-change-related commercial variation is
+a separate testing contract — the parity assertion validates that the same
+backlog and resource state produce identical commercial output regardless of
+whether profiles were written by the Squad Planner or by legacy paths.
 
 ### Phase 6 — Reverse reconciliation direction
 

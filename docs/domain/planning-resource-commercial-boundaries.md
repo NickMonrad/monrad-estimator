@@ -338,8 +338,15 @@ Prefer fast integration/unit coverage around the shared planning model and API b
 
 > **Note:** PR #356 (merged) introduced capacity-profile read adoption in
 > Resource Profile and exports. PR #359 completes the profile-first Squad Planner
-> apply boundary. Resource Profile display/export resolve from structurally valid
-> persisted `CapacityProfile`/`CapacitySegment` rows, with deterministic fallback
+> apply boundary. Each Serializable apply attempt captures the prior active-plan
+> authority (plan ID, resource-type membership, planner provenance) as one
+> immutable value before deactivation and passes it explicitly through
+> revalidation, owner matching, and omitted-role reconciliation; retries
+> recapture it. Protected ROLE profiles (non-`SQUAD_PLANNER` source or
+> non-`CAPACITY_PROFILE` basis) are never converted and throw
+> `PlannerConflictError` atomically with HTTP 409. Resource Profile
+> display/export resolve from structurally valid persisted
+> `CapacityProfile`/`CapacitySegment` rows, with deterministic fallback
 > only for missing or invalid persisted data. Commercial calculations
 > (allocatedDays, actualAllocatedDays, totalDays, estimatedCost) remain unchanged
 > and remain Commercial-owned. Timeline/Planning owns scheduling, assignment
@@ -547,3 +554,46 @@ directly, respecting the established ownership boundaries:
 - The integration test fetches source/clone HTTP `GET /resource-profile` DTOs and executes production `buildProfileCsv` and `computeCommercialData` against them, verifying exact endpoint-derived CSV output and commercial parity.
 - The focused `clone-commercial-parity.test.ts` client Vitest test is only a pure-utility regression over ID-remapped, DTO-shaped fixtures; it is not real endpoint evidence.
 - CI runs the focused client Vitest step separately from the required/blocking server clone integration step, after Prisma migrations and client generation.
+
+### Squad Planner apply ✅ (PR #359)
+
+PR #359 completes the profile-first Squad Planner apply boundary by making the
+apply path's ownership model explicit and failure-safe. Key contract additions
+not reflected in earlier phases:
+
+**Prior active-plan authority capture.** Inside each Serializable transaction
+attempt, before the prior active plan is deactivated, one immutable value
+capturing prior active plan ID, resource-type membership, and valid planner
+provenance is recorded. This captured authority is passed explicitly through
+revalidation, owner matching, and omitted-role reconciliation. On retry (after
+a serialization failure), the authority is recaptured from the new committed
+state — never derived from the replacement `isActive: true` plan or from bare
+compatibility fields.
+
+**Protected ROLE profiles.** ROLE profiles whose `source` is not `SQUAD_PLANNER`
+or whose `planningBasis` is not `CAPACITY_PROFILE` are never converted, zeroed,
+deleted, or normalised by the apply path. `MANUAL`, `FIXED`, `IMPORTED`,
+`AVAILABILITY_WINDOW`, unknown source, or non-`CAPACITY_PROFILE` basis profiles
+that conflict with planner-intended role capacity throw `PlannerConflictError`
+atomically and return HTTP 409 without mutating any data. Only ROLE profiles
+with `source: 'SQUAD_PLANNER'` and `planningBasis: 'CAPACITY_PROFILE'` are
+planner-updatable.
+
+**Missing ROLE profile creation.** A ROLE profile absent from the project may
+be created only when no conflicting owner (same `resourceTypeId` with
+unprotected source/basis) exists. Conflicting unprotected profiles cause a
+project-scoped `PlannerConflictError` with HTTP 409. All planner ownership
+errors are project-scoped: the message identifies the conflicting owner kind,
+key, source, and basis without exposing row identifiers beyond the project
+boundary.
+
+**Commercial parity.** Exact commercial migration parity is proven through the
+authenticated apply and production `computeCommercialData` calculation path.
+The same backlog and resource state produce identical commercial output
+regardless of whether profiles were written by the Squad Planner or legacy
+paths. Intentional capacity-input changes produce expected commercial output —
+that variation is a separate testing contract, not part of the migration-parity
+assertion.
+
+See [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md#phase-5-—-squad-planner-apply--pr-359)
+for the complete flow description.

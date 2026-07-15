@@ -37,6 +37,7 @@ import {
   clearSurplusCompatibilityFields,
   clearOmittedPlannerCapacity,
   revalidatePlannerPlan,
+  capturePlannerAuthority,
   PlannerConflictError,
   runPreValidationConflictSeam,
   runPreWriteConflictSeam,
@@ -679,12 +680,14 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     plan = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
       // A deterministic test seam can commit a concurrent profile mutation
       // before validation reads ownership state.
+      const authority = shouldActivate ? await capturePlannerAuthority(tx, projectId) : null
       if (shouldActivate) {
         await runPreValidationConflictSeam()
         await revalidatePlannerPlan(
           tx,
           projectId,
           normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+          authority ?? undefined,
         )
 
         // ── Pre-write conflict test seam ─────────────────────────────────
@@ -763,6 +766,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             rtName,
             trajectories.length,
             projectId,
+            authority ?? undefined,
           )
           // Build profile write sets (role + per-resource), including all
           // planner-managed resources so shrink operations zero surplus rows.
@@ -795,7 +799,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             await clearSurplusCompatibilityFields(tx, materialized.surplusResources)
           }
         }
-        await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()))
+        await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()), authority!)
       }
 
       // ── Timeline + cache persistence using precomputed data ────────────
