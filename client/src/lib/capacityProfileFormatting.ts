@@ -51,8 +51,28 @@ const ALLOCATION_MODE_DESCRIPTIONS: Record<AllocationMode, string> = {
   TIMELINE:
     'Available at the selected percentage only between the selected start and end weeks. Work is assigned only when demand exists.',
   CAPACITY_PLAN:
-    'Availability follows the saved capacity profile. Work is assigned only when demand exists.',
+    'Availability follows the saved weekly capacity profile. Open the Resource Profile tab to review or adjust the profile.',
 }
+
+/**
+ * Option definition for rendering dropdown <option> elements or iterating
+ * over the four allocation modes in a predictable order.
+ */
+export interface AllocationModeOption {
+  value: AllocationMode
+  label: string
+  description: string
+  showPct: boolean
+  showStartEnd: boolean
+}
+
+/** Ordered list of all four allocation-mode options for dropdown rendering. */
+export const ALLOCATION_MODE_OPTIONS: AllocationModeOption[] = [
+  { value: 'EFFORT', label: ALLOCATION_MODE_LABELS.EFFORT, description: ALLOCATION_MODE_DESCRIPTIONS.EFFORT, showPct: false, showStartEnd: false },
+  { value: 'FULL_PROJECT', label: ALLOCATION_MODE_LABELS.FULL_PROJECT, description: ALLOCATION_MODE_DESCRIPTIONS.FULL_PROJECT, showPct: true, showStartEnd: false },
+  { value: 'TIMELINE', label: ALLOCATION_MODE_LABELS.TIMELINE, description: ALLOCATION_MODE_DESCRIPTIONS.TIMELINE, showPct: true, showStartEnd: true },
+  { value: 'CAPACITY_PLAN', label: ALLOCATION_MODE_LABELS.CAPACITY_PLAN, description: ALLOCATION_MODE_DESCRIPTIONS.CAPACITY_PLAN, showPct: false, showStartEnd: false },
+]
 
 const CAPACITY_SOURCE_LABELS: Record<CapacityProfileSource, string> = {
   squadPlanner: 'Squad Planner',

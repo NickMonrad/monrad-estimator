@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { invalidateProjectResourceProfile } from '../lib/projectInvalidation'
+import { formatAllocationMode } from '../lib/capacityProfileFormatting'
 import type { ResourceProfile } from '../types/backlog'
 import type { CommercialRow } from '../utils/financialCalculations'
 
@@ -57,31 +58,35 @@ export function useAllocationEditing(projectId: string | undefined) {
   }
 
   const getAllocationBadge = (row: CommercialRow, profile: ResourceProfile | undefined) => {
-    if (row.allocationMode === 'AGGREGATE') {
+    const mode = row.allocationMode ?? 'FULL_PROJECT'
+    if (mode === 'AGGREGATE') {
       return { label: 'Named resources: mixed modes', color: 'bg-gray-100 text-gray-400', sub: null as string | null }
-    } else if (row.allocationMode === 'EFFORT') {
-      return { label: 'As needed', color: 'bg-gray-100 text-gray-600', sub: null }
-    } else if (row.allocationMode === 'TIMELINE') {
+    }
+    if (mode === 'EFFORT') {
+      return { label: formatAllocationMode(mode), color: 'bg-gray-100 text-gray-600', sub: null }
+    }
+    if (mode === 'TIMELINE') {
       const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek
       const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek
       const sub = effectiveStart != null && effectiveEnd != null
         ? `Wk ${Math.floor(effectiveStart)} → Wk ${Math.floor(effectiveEnd)}`
         : null
       return {
-        label: `Fixed for selected weeks · ${row.allocationPercent}%`,
+        label: `${formatAllocationMode(mode)} · ${row.allocationPercent}%`,
         color: 'bg-blue-100 text-blue-700',
         sub,
       }
-    } else if (row.allocationMode === 'CAPACITY_PLAN') {
-      return { label: 'Varies by week', color: 'bg-green-100 text-green-700', sub: null }
-    } else {
-      const dur = profile?.projectDurationWeeks
-      const sub = dur != null ? `Wk 0 → Wk ${Math.floor(dur)}` : null
-      return {
-        label: `Fixed for whole project · ${row.allocationPercent}%`,
-        color: 'bg-purple-100 text-purple-700',
-        sub,
-      }
+    }
+    if (mode === 'CAPACITY_PLAN') {
+      return { label: formatAllocationMode(mode), color: 'bg-green-100 text-green-700', sub: null }
+    }
+    // FULL_PROJECT default
+    const dur = profile?.projectDurationWeeks
+    const sub = dur != null ? `Wk 0 → Wk ${Math.floor(dur)}` : null
+    return {
+      label: `${formatAllocationMode(mode)} · ${row.allocationPercent}%`,
+      color: 'bg-purple-100 text-purple-700',
+      sub,
     }
   }
 
