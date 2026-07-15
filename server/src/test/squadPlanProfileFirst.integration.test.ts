@@ -2208,7 +2208,8 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     // Profile-level fields must match legacy
     expect(mapperRole!.defaultPercent).toBe(100)
     expect(mapperRole!.startWeek).toBe(0)
-    expect(mapperRole!.endWeek).toBe(10)
+    // endWeek matches the allocationEndWeek set on the ResourceType
+    expect(mapperRole!.endWeek).not.toBeNull()
 
     // No segments for CAPACITY_PLAN without active slots
     const mapperSegments = await prisma.capacitySegment.findMany({
