@@ -132,8 +132,8 @@ async function setupDeterministicCapacityPlan(page: Page): Promise<string> {
     )
     // Create role-level capacity profile with segments
     const cpRes = await client.query(
-      `INSERT INTO "CapacityProfile" ("projectId", "resourceTypeId", "ownerKind", "planningBasis", "source", "defaultPercent", "startWeek", "endWeek", "createdAt", "updatedAt")
-       VALUES ($1, $2, 'ROLE', 'CAPACITY_PROFILE', 'SQUAD_PLANNER', 100, 0, 10, NOW(), NOW()) RETURNING id`,
+      `INSERT INTO "CapacityProfile" ("id", "projectId", "resourceTypeId", "ownerKind", "planningBasis", "source", "defaultPercent", "startWeek", "endWeek", "createdAt", "updatedAt")
+       VALUES (gen_random_uuid(), $1, $2, 'ROLE', 'CAPACITY_PROFILE', 'SQUAD_PLANNER', 100, 0, 10, NOW(), NOW()) RETURNING id`,
       [projectId, rtId],
     )
     const cpId = cpRes.rows[0].id
