@@ -778,7 +778,6 @@ export async function findOrCreatePlannedResources(
       plan.conflicts,
     )
   }
-  let createdResourceIds = new Set<string>()
 
   const missing = plan.shortfall
   if (missing > 0) {
@@ -799,7 +798,7 @@ export async function findOrCreatePlannedResources(
     select: { id: true, name: true, createdAt: true, allocationMode: true },
   })
   const existingResourceIds = new Set(existingNRs.map(resource => resource.id))
-  createdResourceIds = new Set(
+  const createdResourceIds = new Set(
     allNRs
       .filter(resource => !existingResourceIds.has(resource.id))
       .map(resource => resource.id),
