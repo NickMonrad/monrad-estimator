@@ -11,10 +11,12 @@ import {
   formatPlanningBasis,
   formatResolutionSource,
   ALLOCATION_MODE_OPTIONS,
+  deriveEffectiveAvailabilityState,
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 
 const TYPE_OPTIONS = [
+  { label: '% of task days', value: 'PERCENTAGE' },
   { label: 'Fixed total days', value: 'FIXED_DAYS' },
   { label: 'Days per week', value: 'DAYS_PER_WEEK' },
 ] as const
@@ -174,11 +176,10 @@ export default function ResourceProfileTab({
                             </span>
                           )
                         }
-                        const profile = row.capacityProfile
-                        const isProfileAuthoritative = profile?.resolutionSource === 'PROFILE'
-                        const mode = row.allocationMode ?? 'EFFORT'
-                        const planningBasisLabel = isProfileAuthoritative && profile
-                          ? formatPlanningBasis(profile.planningBasis)
+                        const effective = deriveEffectiveAvailabilityState(row)
+                        const mode = effective.effectiveMode
+                        const planningBasisLabel = effective.hasAuthoritativeProfile && row.capacityProfile
+                          ? formatPlanningBasis(row.capacityProfile.planningBasis)
                           : null
                         const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
                         const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
@@ -200,7 +201,7 @@ export default function ResourceProfileTab({
                                 } else {
                                   setEditingAllocation(row.resourceTypeId)
                                   setAllocationDraft({
-                                    allocationMode: row.allocationMode ?? 'EFFORT',
+                                    allocationMode: effective.isProfileManaged ? 'CAPACITY_PLAN' : (row.allocationMode ?? 'EFFORT'),
                                     allocationPercent: row.allocationPercent ?? 100,
                                     allocationStartWeek: row.allocationStartWeek ?? null,
                                     allocationEndWeek: row.allocationEndWeek ?? null,
@@ -212,22 +213,22 @@ export default function ResourceProfileTab({
                             >
                               {badge.label}
                             </button>
-                            {profile && (
+                            {row.capacityProfile && (
                               <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 uppercase tracking-wide" aria-describedby={`profile-meta-${row.resourceTypeId}`}>
-                                {formatCapacityProfileSource(profile.source)}
+                                {formatCapacityProfileSource(row.capacityProfile.source)}
                               </span>
                             )}
-                            {profile && (
+                            {row.capacityProfile && (
                               <span id={`profile-meta-${row.resourceTypeId}`} className="sr-only">
-                                Profile source: {formatCapacityProfileSource(profile.source)} · Resolution source: {formatResolutionSource(profile.resolutionSource)}
+                                Profile source: {formatCapacityProfileSource(row.capacityProfile.source)} · Resolution source: {formatResolutionSource(row.capacityProfile.resolutionSource)}
                               </span>
                             )}
                             {mode === 'TIMELINE' && effectiveStart != null && effectiveEnd != null && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.floor(effectiveStart)} → Wk {Math.floor(effectiveEnd)}</div>
                             )}
-                            {profile && profile.segments.length > 0 && (
+                            {row.capacityProfile && row.capacityProfile.segments.length > 0 && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                                {profile.segments.map((seg, i) => (
+                                {row.capacityProfile.segments.map((seg, i) => (
                                   <span key={i}>
                                     {i > 0 && <span className="mx-1">·</span>}
                                     W{seg.startWeek + 1}-W{seg.endWeek + 1}: {seg.capacityPercent}%
@@ -280,10 +281,10 @@ export default function ResourceProfileTab({
                             </p>
                             <div className="flex gap-2">
                               <button
-                                onClick={() => navigate(`/projects/${projectId}/timeline`)}
+                                onClick={() => navigate(`/projects/${projectId}/timeline?panel=squad-planner`)}
                                 className="inline-flex items-center gap-1 px-4 py-1.5 rounded-lg text-sm font-medium bg-lab3-navy text-white hover:bg-lab3-blue transition-colors"
                               >
-                                View weekly profile ↗
+                                Open weekly profile editor ↗
                               </button>
                               <button data-testid="allocation-cancel" onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
                                 className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">

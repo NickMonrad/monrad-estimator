@@ -238,7 +238,7 @@ See the [Resource Profile and Export Adoption](#resource-profile-and-export-adop
 
 Commercial should explain pricing:
 
-- planning basis, for context;
+- Availability pattern, for planning context;
 - billing basis;
 - billable days;
 - rate;
@@ -326,7 +326,7 @@ Billable days: based on reserved/planned capacity
 6. **First-class capacity profiles** — add segmented capacity profile model and editor.
 7. **Resource Profile and Export Adoption** — PR #356 (merged). Adopt profile-first
    reads in Resource Profile route and export hook; add adapter, legacy projection helper,
-   resolutionSource; add Planning basis, Profile source, Default capacity %, Profile
+   resolutionSource; add Availability pattern, Profile source, Default capacity %, Profile
    start/end CSV columns.
 
 ## Open decisions
@@ -599,7 +599,7 @@ are not affected** — they continue to use legacy fields directly.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `planningBasis` | `string` | Planning basis from the capacity profile |
+| `planningBasis` | `string` | Planning basis (stored value) from the capacity profile |
 | `source` | `string` | Source of the profile |
 | `defaultPercent` | `number \| null` | Profile-level default capacity percentage |
 | `startWeek` | `number \| null` | Profile-level start week |
@@ -614,7 +614,7 @@ columns after the **Subtotal** column:
 
 | Column | Description |
 |--------|-------------|
-| **Planning basis** | Plain-English planning basis name (via `formatPlanningBasis`) |
+| **Availability pattern** | Plain-English availability pattern name (via `formatPlanningBasis`) |
 | **Profile source** | Source identifier (e.g. `fixed`, `availabilityWindow`, `squadPlanner`) |
 | **Default capacity %** | Profile-level default capacity percentage |
 | **Profile start** | Profile-level start week (e.g. `W1`) |
@@ -700,7 +700,7 @@ format (e.g. `W1-W4 50%; W5-W10 100%`), structurally distinct from the existing
 | `server/src/lib/capacityProfileLegacyProjection.ts` | New helper — `projectCapacityProfileToLegacyAllocation` for display-field projection |
 | `server/src/routes/resourceProfile.ts` | Added `capacityProfiles` include, adapter call, `capacityProfile` in response, legacy projection for display fields |
 | `client/src/types/backlog.ts` | Added `capacityProfile` with `defaultPercent`, `startWeek`, `endWeek`, `resolutionSource` |
-| `client/src/hooks/useResourceProfileExport.ts` | Added Planning basis, Profile source, Default capacity %, Profile start/end columns |
+| `client/src/hooks/useResourceProfileExport.ts` | Added Availability pattern, Profile source, Default capacity %, Profile start/end columns |
 | `server/src/test/capacityProfileResourceAdapter.test.ts` | 23 unit tests covering profile-first, legacy fallback, multi-segment, planned resource, duplicate conflict, active-plan fallback |
 | `docs/domain/capacity-profile-design.md` | This section |
 | `docs/domain/planning-resource-commercial-boundaries.md` | Updated |

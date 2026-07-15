@@ -2,6 +2,16 @@ import React, { type ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+
+const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }))
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 import ResourceProfileTab from '@/components/resource-profile/ResourceProfileTab'
 
 /** Wrap in MemoryRouter for useNavigate support. */
@@ -694,6 +704,85 @@ describe('Capacity Profile labels — availability terminology', () => {
     })} />)
     expect(screen.getByText(/Fixed for whole project · 75%/)).toBeInTheDocument()
   })
+  it('uses authoritative capacity profile when allocationMode is stale EFFORT', () => {
+    const setEditingAllocation = vi.fn()
+    const setAllocationDraft = vi.fn()
+    const updateAllocationMutate = vi.fn()
+    const capacityProfile = {
+      resolutionSource: 'PROFILE' as const,
+      planningBasis: 'capacityProfile' as const,
+      source: 'squadPlanner' as const,
+      defaultPercent: null,
+      startWeek: null,
+      endWeek: null,
+      segments: [
+        { startWeek: 2, endWeek: 4, capacityPercent: 80 },
+        { startWeek: 5, endWeek: 8, capacityPercent: 100 },
+      ],
+    }
+    const rowOverrides = {
+      profile: {
+        projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 10,
+        bufferWeeks: 0, onboardingWeeks: 0,
+        resourceRows: [{
+          resourceTypeId: 'rt-dev', name: 'Developer', category: 'ENG', count: 1,
+          hoursPerDay: 8, dayRate: 500, totalHours: 80, totalDays: 10,
+          effortDays: 10, allocatedDays: 10, allocationMode: 'EFFORT' as const,
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          derivedStartWeek: null, derivedEndWeek: null, estimatedCost: 5000,
+          epics: [], namedResources: [],
+          capacityProfile,
+        }],
+        overheadRows: [],
+        summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: true },
+      },
+      filteredResourceRows: [{
+        resourceTypeId: 'rt-dev', name: 'Developer', category: 'ENG', count: 1,
+        hoursPerDay: 8, dayRate: 500, totalHours: 80, totalDays: 10,
+        effortDays: 10, allocatedDays: 10, allocationMode: 'EFFORT' as const,
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        derivedStartWeek: null, derivedEndWeek: null, estimatedCost: 5000,
+        epics: [], namedResources: [],
+        capacityProfile,
+      }],
+      setEditingAllocation,
+      setAllocationDraft,
+      updateAllocationMutation: { isPending: false, mutate: updateAllocationMutate } as never,
+    }
+    // Part 1: render with editor closed — verify badge and click override
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, rowOverrides)} />)
+    const badge = container.querySelector('button[title="Click to edit allocation"]')
+    expect(badge).toBeTruthy()
+    expect(badge!.textContent).toBe('Varies by week')
+    expect(badge!.textContent).not.toMatch(/%/)
+    expect(badge!.className).toContain('bg-green-100')
+    expect(badge!.className).toContain('text-green-700')
+    fireEvent.click(badge!)
+    expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
+    expect(setAllocationDraft).toHaveBeenCalledWith({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+    expect(updateAllocationMutate).not.toHaveBeenCalled()
+    // Part 2: re-render with editor open — verify info panel
+    const { container: c2 } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      ...rowOverrides,
+      editingAllocation: 'rt-dev',
+      allocationDraft: {
+        allocationMode: 'CAPACITY_PLAN' as const,
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+    })} />)
+    expect(screen.getByText(/managed through the weekly capacity profile/i)).toBeInTheDocument()
+    expect(screen.getByText(/Open weekly profile editor/i)).toBeInTheDocument()
+    // No generic allocation-mode select (overhead resource-type select may exist)
+    expect(c2.querySelector('select[aria-label="Availability pattern"]')).toBeNull()
+    expect(screen.queryByText('Save')).toBeNull()
+  })
 })
 
   it('shows Varies by week badge for CAPACITY_PLAN without percentage suffix', () => {
@@ -763,7 +852,10 @@ describe('Capacity Profile labels — availability terminology', () => {
     // The info panel should show — look for the profile-managed message
     expect(screen.getByText(/managed through the weekly capacity profile/i)).toBeInTheDocument()
     // Navigation button should be present
-    expect(screen.getByText(/View weekly profile/i)).toBeInTheDocument()
+    expect(screen.getByText(/Open weekly profile editor/i)).toBeInTheDocument()
+    // Click it and verify navigation to squad planner panel
+    fireEvent.click(screen.getByText(/Open weekly profile editor/i))
+    expect(mockNavigate).toHaveBeenCalledWith('/projects/project-1/timeline?panel=squad-planner')
     // No Save button (CAPACITY_PLAN can't be saved from generic editor)
     expect(screen.queryByText('Save')).toBeNull()
   })
@@ -869,3 +961,65 @@ describe('Capacity Profile labels — availability terminology', () => {
     expect(result.allocationPercent).toBe(75)
   })
 
+
+describe('Overhead type options', () => {
+  it('shows all three overhead type options', () => {
+    renderWithRouter(<ResourceProfileTab {...createProps(1)} />)
+    expect(screen.getByText('% of task days')).toBeInTheDocument()
+    expect(screen.getByText('Fixed total days')).toBeInTheDocument()
+    expect(screen.getByText('Days per week')).toBeInTheDocument()
+  })
+
+  it('selecting % of task days sets form.type to PERCENTAGE', () => {
+    const setForm = vi.fn()
+    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      editingId: 'overhead-1',
+      form: { name: 'Test', resourceTypeId: '', type: 'FIXED_DAYS' as const, value: '10' },
+      setForm,
+    })} />)
+    fireEvent.click(screen.getByText('% of task days'))
+    expect(setForm).toHaveBeenCalled()
+    const updater = setForm.mock.calls[0][0]
+    expect(updater({ type: 'FIXED_DAYS' })).toMatchObject({ type: 'PERCENTAGE' })
+  })
+
+  it('overhead can be created with percentage type', () => {
+    const createOverheadMutate = vi.fn()
+    const handleFormSubmit = vi.fn(() => {
+      createOverheadMutate({ name: 'Test', type: 'PERCENTAGE', value: 20 })
+    })
+    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      form: { name: 'Test', resourceTypeId: '', type: 'PERCENTAGE' as const, value: '20' },
+      handleFormSubmit,
+      createOverhead: { isPending: false, mutate: createOverheadMutate } as never,
+    })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add overhead' }))
+    expect(handleFormSubmit).toHaveBeenCalled()
+    expect(createOverheadMutate).toHaveBeenCalledWith(expect.objectContaining({ type: 'PERCENTAGE' }))
+  })
+})
+
+describe('Responsive layout', () => {
+  it('Availability pattern select has minimum width of 7rem', () => {
+    const props = createProps(1, {
+      editingAllocation: 'rt-security',
+      allocationDraft: { allocationMode: 'TIMELINE' as const, allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+    })
+    const { container } = renderWithRouter(<ResourceProfileTab {...props} />)
+    const select = container.querySelector('select[aria-label="Availability pattern"]')
+    expect(select).toBeTruthy()
+    expect(select!.className).toContain('min-w-[7rem]')
+  })
+
+  it('info panel navigation button is visible and reachable', () => {
+    const props = createProps(1, {
+      editingAllocation: 'rt-security',
+      allocationDraft: { allocationMode: 'CAPACITY_PLAN' as const, allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+    })
+    renderWithRouter(<ResourceProfileTab {...props} />)
+    const navButton = screen.getByText(/Open weekly profile editor/)
+    expect(navButton).toBeInTheDocument()
+    expect(navButton.className).not.toContain('overflow-hidden')
+    expect(navButton.className).not.toContain('invisible')
+  })
+})

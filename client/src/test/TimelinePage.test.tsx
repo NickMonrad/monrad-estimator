@@ -13,6 +13,7 @@ const mockPatch = vi.hoisted(() => vi.fn())
 const mockPost = vi.hoisted(() => vi.fn())
 const mockPut = vi.hoisted(() => vi.fn())
 const mockDelete = vi.hoisted(() => vi.fn())
+const mockNavigate = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -41,7 +42,8 @@ vi.mock('@/components/timeline/TimelineOptimiserDrawer', () => ({
 }))
 
 vi.mock('@/components/timeline/SquadPlannerDrawer', () => ({
-  default: () => null,
+  default: ({ open, onClose }: { open: boolean; onClose?: () => void }) =>
+    open ? <div data-testid="squad-planner-drawer"><button onClick={onClose}>Close Squad Planner</button></div> : null,
 }))
 
 vi.mock('@/components/SnapshotHistoryPanel', () => ({
@@ -51,6 +53,10 @@ vi.mock('@/components/SnapshotHistoryPanel', () => ({
 vi.mock('@/components/timeline/TimelineTooltip', () => ({
   default: () => null,
 }))
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom')
+  return { ...actual, useNavigate: () => mockNavigate }
+})
 
 // ---------------------------------------------------------------------------
 // Mock data
@@ -577,6 +583,11 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(helpText).toBeInTheDocument()
     // Must NOT claim a saved profile exists
     expect(helpText.textContent).not.toMatch(/saved weekly capacity profile/i)
+    // "View Resource Profile" button navigates to the resource profile tab
+    const viewProfileBtn = screen.getByText(/View Resource Profile/)
+    expect(viewProfileBtn).toBeInTheDocument()
+    fireEvent.click(viewProfileBtn)
+    expect(mockNavigate).toHaveBeenCalledWith(`/projects/${projectId}/resource-profile`)
   })
 
   it('marks timeline stale after allocation mode change', async () => {
@@ -1034,5 +1045,85 @@ describe('TimelinePage — resource-counts layout', () => {
     // Row should have the multi-column sm:grid-cols-[...] layout
     expect(row.className).toMatch(/sm:grid-cols-/)
     expect(row.getAttribute('data-testid')).toBe(`named-resource-row-${nrId}`)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Squad Planner deep link — issue #383
+// ---------------------------------------------------------------------------
+describe('TimelinePage — Squad Planner deep link', () => {
+  beforeEach(() => {
+    const localStorageStore: Record<string, string> = {}
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => localStorageStore[key] ?? null,
+      setItem: (key: string, value: string) => { localStorageStore[key] = value },
+      removeItem: (key: string) => { delete localStorageStore[key] },
+      clear: () => { Object.keys(localStorageStore).forEach(k => delete localStorageStore[k]) },
+      length: 0,
+      key: () => null,
+    })
+
+    vi.clearAllMocks()
+
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes('/timeline')) return Promise.resolve({ data: mockTimeline })
+      if (url.includes('/resource-types')) return Promise.resolve({ data: mockResourceTypes })
+      return Promise.resolve({ data: mockProject })
+    })
+
+    mockPost.mockImplementation(() => Promise.resolve({ data: mockTimeline }))
+    mockPatch.mockResolvedValue({ data: mockProject })
+    mockDelete.mockResolvedValue({ data: {} })
+    mockNavigate.mockClear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loading Timeline with ?panel=squad-planner opens Squad Planner drawer', async () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}/timeline?panel=squad-planner`]}>
+          <Routes>
+            <Route path="/projects/:id/timeline" element={<TimelinePage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByTestId('squad-planner-drawer')).toBeInTheDocument()
+  })
+
+  it('loading Timeline without panel param leaves Squad Planner closed', async () => {
+    renderPage()
+
+    // Wait for page to render
+    await screen.findByText('Planning Settings')
+
+    expect(screen.queryByTestId('squad-planner-drawer')).not.toBeInTheDocument()
+  })
+
+  it('closing Squad Planner does not immediately reopen it', async () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}/timeline?panel=squad-planner`]}>
+          <Routes>
+            <Route path="/projects/:id/timeline" element={<TimelinePage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    // Wait for auto-open
+    expect(await screen.findByTestId('squad-planner-drawer')).toBeInTheDocument()
+
+    // Close via the button
+    fireEvent.click(screen.getByText('Close Squad Planner'))
+
+    // Verify it closed and stays closed
+    await waitFor(() => {
+      expect(screen.queryByTestId('squad-planner-drawer')).not.toBeInTheDocument()
+    })
   })
 })
