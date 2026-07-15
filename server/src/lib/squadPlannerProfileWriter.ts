@@ -102,6 +102,8 @@ export function isLegacyPlannerProfile(
 export interface PlannerProvenance {
   /** True only when the previous active CapacityPlan contained this role. */
   priorActivePlan: boolean
+  /** Named resources created in the current transaction are trusted planner rows. */
+  readonly createdResourceIds?: ReadonlySet<string>
 }
 
 
@@ -274,7 +276,7 @@ export type PlannerResourceKind =
  * planner-vs-explicit determination.
  */
 export function classifyNamedResource(
-  namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
+  namedResource: Pick<NamedResourceSummary, 'allocationMode'> & { id?: string },
   profiles: ReadonlyArray<Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>>,
   provenance: PlannerProvenance = noPlannerProvenance,
 ): PlannerResourceKind {
@@ -300,7 +302,8 @@ export function classifyNamedResource(
   }
   if (profiles.length === 0
     && namedResource.allocationMode === 'CAPACITY_PLAN'
-    && provenance.priorActivePlan) {
+    && (provenance.priorActivePlan
+      || (namedResource.id !== undefined && provenance.createdResourceIds?.has(namedResource.id)))) {
     return 'capacity_plan_untouched'
   }
   return 'other'
@@ -311,7 +314,7 @@ export function classifyNamedResource(
  * or an unprofiled legacy row backed by prior active-plan provenance).
  */
 export function isPlannerManaged(
-  namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
+  namedResource: Pick<NamedResourceSummary, 'allocationMode'> & { id?: string },
   profiles: ReadonlyArray<Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>>,
   provenance: PlannerProvenance = noPlannerProvenance,
 ): boolean {
@@ -775,6 +778,7 @@ export async function findOrCreatePlannedResources(
       plan.conflicts,
     )
   }
+  let createdResourceIds = new Set<string>()
 
   const missing = plan.shortfall
   if (missing > 0) {
@@ -785,7 +789,13 @@ export async function findOrCreatePlannedResources(
       allocationMode: 'CAPACITY_PLAN' as const,
       startWeek: 0,
     }))
-    await tx.namedResource.createMany({ data: newNRs })
+    const created = await Promise.all(
+      newNRs.map(async data => {
+        const resource = await tx.namedResource.create({ data })
+        return resource.id
+      }),
+    )
+    createdResourceIds = new Set(created)
   }
 
   // Re-read to capture newly created resource IDs
@@ -816,7 +826,7 @@ export async function findOrCreatePlannedResources(
     resourceTypeId,
     resourceTypeName,
     requiredCount,
-    { priorActivePlan },
+    { priorActivePlan, createdResourceIds },
   )
 
   if (finalPlan.hasConflict || finalPlan.plannerResources.length < requiredCount) {
