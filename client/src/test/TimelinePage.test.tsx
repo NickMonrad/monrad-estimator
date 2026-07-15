@@ -421,10 +421,10 @@ describe('TimelinePage — named-resource allocation controls', () => {
 
 
     expect(await screen.findByText('Named resource')).toBeInTheDocument()
-    expect(screen.getByText('Planning basis')).toBeInTheDocument()
-    expect(screen.getByText('Allocation %')).toBeInTheDocument()
-    expect(screen.getByText('Start')).toBeInTheDocument()
-    expect(screen.getByText('End')).toBeInTheDocument()
+    expect(screen.getByText('Availability pattern')).toBeInTheDocument()
+    expect(screen.getByText('Available %')).toBeInTheDocument()
+    expect(screen.getByText('Available from')).toBeInTheDocument()
+    expect(screen.getByText('Available to')).toBeInTheDocument()
   })
 
   it('renders the named-resource name in its row', async () => {
@@ -434,10 +434,10 @@ describe('TimelinePage — named-resource allocation controls', () => {
 
     const alice = await screen.findAllByText('Alice')
     expect(alice.length).toBeGreaterThan(0)
-    expect(screen.getByText(/No assigned weeks.*Demand-following/i)).toBeInTheDocument()
+    expect(screen.getByText(/No assigned weeks.*As needed/i)).toBeInTheDocument()
   })
 
-  it('shows a planning basis select defaulting to Demand-following', async () => {
+  it('shows a planning basis select defaulting to As needed', async () => {
     setupWithNamedResource({ allocationMode: 'EFFORT' })
     renderPage()
 
@@ -509,7 +509,7 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(within(row!).getByPlaceholderText('W∞')).toHaveValue(12)
   })
 
-  it('switches to Capacity profile without losing the allocation percent', async () => {
+  it('switches to Varies by week without losing the allocation percent', async () => {
     setupWithNamedResource({
       allocationMode: 'TIMELINE',
       allocationPercent: 80,
@@ -677,17 +677,17 @@ describe('TimelinePage — resource-counts layout', () => {
 
     // Column headers are visible
     expect(await screen.findByText('Named resource')).toBeInTheDocument()
-    expect(screen.getByText('Planning basis')).toBeInTheDocument()
-    expect(screen.getByText('Allocation %')).toBeInTheDocument()
-    expect(screen.getByText('Start')).toBeInTheDocument()
-    expect(screen.getByText('End')).toBeInTheDocument()
+    expect(screen.getByText('Availability pattern')).toBeInTheDocument()
+    expect(screen.getByText('Available %')).toBeInTheDocument()
+    expect(screen.getByText('Available from')).toBeInTheDocument()
+    expect(screen.getByText('Available to')).toBeInTheDocument()
 
     // Named resource name is rendered (may appear in multiple panels)
     const bobNames = await screen.findAllByText('Bob')
     expect(bobNames.length).toBeGreaterThanOrEqual(1)
 
     // Planning basis select has contextual accessible name
-    const basisSelect = screen.getByRole('combobox', { name: /planning basis for bob/i })
+    const basisSelect = screen.getByRole('combobox', { name: /availability pattern for bob/i })
     expect(basisSelect).toBeInTheDocument()
     expect(basisSelect).toHaveValue('EFFORT')
 
@@ -725,13 +725,13 @@ describe('TimelinePage — resource-counts layout', () => {
     await screen.findAllByText('Bob')
 
     // Mobile inline labels exist for each control
-    expect(screen.getByText('Basis:')).toBeInTheDocument()
-    expect(screen.getByText('Alloc:')).toBeInTheDocument()
-    expect(screen.getByText('Start:')).toBeInTheDocument()
-    expect(screen.getByText('End:')).toBeInTheDocument()
+    expect(screen.getByText('Pattern:')).toBeInTheDocument()
+    expect(screen.getByText('Avail:')).toBeInTheDocument()
+    expect(screen.getByText('Avail from:')).toBeInTheDocument()
+    expect(screen.getByText('Avail to:')).toBeInTheDocument()
 
     // Inline label spans have sm:hidden class
-    const basisLabel = screen.getByText('Basis:')
+    const basisLabel = screen.getByText('Pattern:')
     expect(basisLabel.className).toMatch(/\bsm:hidden\b/)
   })
 
@@ -749,15 +749,15 @@ describe('TimelinePage — resource-counts layout', () => {
 
     await screen.findAllByText('Bob')
 
-    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    const pctInput = screen.getByRole('spinbutton', { name: /available percentage for bob/i })
     expect(pctInput).toBeInTheDocument()
     expect(pctInput).toHaveValue(75)
 
     // Start/end inputs have contextual accessible names and are disabled in non-TIMELINE mode
-    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    const startInput = screen.getByRole('spinbutton', { name: /available from week for bob/i })
     expect(startInput).toBeDisabled()
 
-    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    const endInput = screen.getByRole('spinbutton', { name: /available to week for bob/i })
     expect(endInput).toBeDisabled()
   })
 
@@ -772,13 +772,13 @@ describe('TimelinePage — resource-counts layout', () => {
     await screen.findAllByText('Bob')
 
     // Both start/end inputs are disabled for non-TIMELINE mode
-    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    const startInput = screen.getByRole('spinbutton', { name: /available from week for bob/i })
     expect(startInput).toBeDisabled()
-    expect(startInput).toHaveAttribute('aria-label', 'Start week for Bob')
+    expect(startInput).toHaveAttribute('aria-label', 'Available from week for Bob')
 
-    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    const endInput = screen.getByRole('spinbutton', { name: /available to week for bob/i })
     expect(endInput).toBeDisabled()
-    expect(endInput).toHaveAttribute('aria-label', 'End week for Bob')
+    expect(endInput).toHaveAttribute('aria-label', 'Available to week for Bob')
   })
 
   it('preserves existing mutation behaviour when hours change', async () => {
@@ -804,7 +804,7 @@ describe('TimelinePage — resource-counts layout', () => {
     })
   })
 
-  it('planning basis change submits exact mutation payload', async () => {
+  it('availability pattern change submits exact mutation payload', async () => {
     mockResourceTypes = [baseResourceType]
     mockTimeline = createTimeline({
       weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
@@ -814,7 +814,7 @@ describe('TimelinePage — resource-counts layout', () => {
 
     await screen.findAllByText('Bob')
 
-    const select = screen.getByRole('combobox', { name: /planning basis for bob/i })
+    const select = screen.getByRole('combobox', { name: /availability pattern for bob/i })
     fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
 
     await waitFor(() => {
@@ -847,7 +847,7 @@ describe('TimelinePage — resource-counts layout', () => {
     await screen.findAllByText('Bob')
 
     // Change allocation percent
-    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    const pctInput = screen.getByRole('spinbutton', { name: /available percentage for bob/i })
     fireEvent.change(pctInput, { target: { value: '60' } })
     fireEvent.blur(pctInput)
 
@@ -859,7 +859,7 @@ describe('TimelinePage — resource-counts layout', () => {
     })
 
     // Change start week
-    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    const startInput = screen.getByRole('spinbutton', { name: /available from week for bob/i })
     fireEvent.change(startInput, { target: { value: '5' } })
     fireEvent.blur(startInput)
 
@@ -871,7 +871,7 @@ describe('TimelinePage — resource-counts layout', () => {
     })
 
     // Change end week
-    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    const endInput = screen.getByRole('spinbutton', { name: /available to week for bob/i })
     fireEvent.change(endInput, { target: { value: '15' } })
     fireEvent.blur(endInput)
 
@@ -961,7 +961,7 @@ describe('TimelinePage — resource-counts layout', () => {
     await screen.findAllByText('Bob')
 
     // Trigger update by changing allocation percent
-    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    const pctInput = screen.getByRole('spinbutton', { name: /available percentage for bob/i })
     fireEvent.change(pctInput, { target: { value: '60' } })
     fireEvent.blur(pctInput)
 

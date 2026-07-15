@@ -127,7 +127,7 @@ function NamedResourcesPanel({
               {/* People rows */}
               {people.map((nr, i) => {
                 const mode = nr.allocationMode ?? 'EFFORT'
-                const modeLabel = mode === 'EFFORT' ? 'Demand-following'
+                const modeLabel = mode === 'EFFORT' ? 'As needed'
                   : mode === 'FULL_PROJECT' ? `Whole-project allocation · ${nr.allocationPct}%`
                   : mode === 'CAPACITY_PLAN' ? `Capacity profile · ${nr.allocationPct}%`
                   : `Availability window · ${nr.allocationPct}%`
@@ -1153,16 +1153,16 @@ export default function TimelinePage() {
                                 {/* Desktop column headers — hidden on mobile, visible as grid on sm+ */}
                                 <div data-testid="named-resource-headers" className="hidden sm:grid sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
                                   <span>Named resource</span>
-                                  <span>Planning basis</span>
-                                  <span className="text-right">Allocation %</span>
-                                  <span className="text-right">Start</span>
-                                  <span className="text-right">End</span>
+                                  <span>Availability pattern</span>
+                                  <span className="text-right">Available %</span>
+                                  <span className="text-right">Available from</span>
+                                  <span className="text-right">Available to</span>
                                   <span />
                                 </div>
                                 {nrs.map((nr, i) => {
                                   const mode = nr.allocationMode ?? 'EFFORT'
-                                  const isTimeline = mode === 'TIMELINE'
-                                  const showPct = mode !== 'EFFORT'
+                                  const showStartEnd = mode === 'TIMELINE'
+                                  const showPct = mode !== 'EFFORT' && mode !== 'CAPACITY_PLAN'
                                   return (
                                     <div
                                       key={nr.id ?? `${rt.id}-${i}`}
@@ -1172,14 +1172,14 @@ export default function TimelinePage() {
                                       {/* Name — direct child so closest('div') from text finds the grid row */}
                                       <span className="truncate text-gray-600 dark:text-gray-300 font-medium min-w-0">{nr.name}</span>
 
-                                      {/* Planning basis */}
+                                      {/* Availability pattern dropdown */}
                                       <div className="flex items-center gap-1.5 sm:block">
-                                        <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">Basis:</span>
+                                        <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">Pattern:</span>
                                         <div className="min-w-0 flex-1 sm:flex-none">
                                           {nr.id ? (
                                             <select
                                               value={mode}
-                                              aria-label={`Planning basis for ${nr.name}`}
+                                              aria-label={`Availability pattern for ${nr.name}`}
                                               onChange={e => {
                                                 const newMode = e.target.value
                                                 const pct = newMode === 'EFFORT' ? 100 : (nr.allocationPercent ?? 100)
@@ -1196,20 +1196,26 @@ export default function TimelinePage() {
                                               }}
                                               className="w-full text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300"
                                             >
-                                              <option value="EFFORT">Demand-following</option>
-                                              <option value="FULL_PROJECT">Whole-project allocation</option>
-                                              <option value="TIMELINE">Availability window</option>
-                                              <option value="CAPACITY_PLAN">Capacity profile</option>
+                                              <option value="EFFORT">As needed</option>
+                                              <option value="FULL_PROJECT">Fixed for whole project</option>
+                                              <option value="TIMELINE">Fixed for selected weeks</option>
+                                              <option value="CAPACITY_PLAN">Varies by week</option>
                                             </select>
                                           ) : (
                                             <span className="text-gray-400 dark:text-gray-600">—</span>
                                           )}
+                                          <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight mt-0.5">
+                                            {mode === 'EFFORT' && 'Assigned only when scheduled work requires this resource.'}
+                                            {mode === 'FULL_PROJECT' && `Available at ${nr.allocationPercent ?? nr.allocationPct ?? 100}% from the beginning to the end of the project. Work is assigned only when demand exists.`}
+                                            {mode === 'TIMELINE' && `Available at ${nr.allocationPercent ?? nr.allocationPct ?? 100}% from W${nr.allocationStartWeek ?? nr.startWeek ?? '?'} to W${nr.allocationEndWeek ?? nr.endWeek ?? '?'}. Work is assigned only when demand exists.`}
+                                            {mode === 'CAPACITY_PLAN' && 'Availability follows the saved capacity profile. Work is assigned only when demand exists.'}
+                                          </div>
                                         </div>
                                       </div>
 
-                                      {/* Allocation % */}
+                                      {/* Available % */}
                                       <div className="flex items-center gap-1.5 sm:justify-end">
-                                        <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">Alloc:</span>
+                                        <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">Avail:</span>
                                         {nr.id && showPct ? (
                                           <>
                                             <input
@@ -1218,7 +1224,7 @@ export default function TimelinePage() {
                                               min={1}
                                               max={100}
                                               defaultValue={nr.allocationPercent ?? 100}
-                                              aria-label={`Allocation percentage for ${nr.name}`}
+                                              aria-label={`Available percentage for ${nr.name}`}
                                               onBlur={e => {
                                                 const val = Math.min(100, Math.max(1, parseInt(e.target.value) || 100))
                                                 updateNamedResource.mutate({
@@ -1239,18 +1245,17 @@ export default function TimelinePage() {
                                         )}
                                       </div>
 
-                                      {/* Start week */}
+                                      {/* Available from week */}
                                       <div className="flex items-center gap-1.5 sm:justify-end">
-                                        <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">Start:</span>
+                                        <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">Avail from:</span>
                                         <div className="w-14 sm:w-full max-w-[3.5rem]">
-                                          {nr.id && isTimeline ? (
+                                          {nr.id && showStartEnd ? (
                                             <input
                                               key={`${nr.id}-start-${nr.allocationStartWeek ?? nr.startWeek ?? 'null'}`}
                                               type="number"
-                                              min={1}
                                               placeholder="W1"
                                               defaultValue={nr.allocationStartWeek ?? nr.startWeek ?? ''}
-                                              aria-label={`Start week for ${nr.name}`}
+                                              aria-label={`Available from week for ${nr.name}`}
                                               onBlur={e => {
                                                 const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
                                                 updateNamedResource.mutate({
@@ -1269,24 +1274,23 @@ export default function TimelinePage() {
                                               type="number"
                                               disabled
                                               placeholder="—"
-                                              aria-label={`Start week for ${nr.name}`}
+                                              aria-label={`Available from week for ${nr.name}`}
                                               className="w-full text-xs border border-gray-100 dark:border-gray-700 rounded px-1 py-0 text-right bg-gray-50 dark:bg-gray-800 text-gray-300 dark:text-gray-600 placeholder-gray-300 cursor-not-allowed"
                                             />
                                           )}
                                         </div>
                                       </div>
-                                      {/* End week */}
+                                      {/* Available to week */}
                                       <div className="flex items-center gap-1.5 sm:justify-end">
-                                        <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">End:</span>
+                                        <span className="sm:hidden text-[10px] text-gray-400 dark:text-gray-500 w-16 shrink-0">Avail to:</span>
                                         <div className="w-14 sm:w-full max-w-[3.5rem]">
-                                          {nr.id && isTimeline ? (
+                                          {nr.id && showStartEnd ? (
                                             <input
                                               key={`${nr.id}-end-${nr.allocationEndWeek ?? nr.endWeek ?? 'null'}`}
                                               type="number"
-                                              min={1}
                                               placeholder="W∞"
                                               defaultValue={nr.allocationEndWeek ?? nr.endWeek ?? ''}
-                                              aria-label={`End week for ${nr.name}`}
+                                              aria-label={`Available to week for ${nr.name}`}
                                               onBlur={e => {
                                                 const val = e.target.value.trim() === '' ? null : Math.max(1, parseInt(e.target.value) || 1)
                                                 updateNamedResource.mutate({
@@ -1305,7 +1309,7 @@ export default function TimelinePage() {
                                               type="number"
                                               disabled
                                               placeholder="—"
-                                              aria-label={`End week for ${nr.name}`}
+                                              aria-label={`Available to week for ${nr.name}`}
                                               className="w-full text-xs border border-gray-100 dark:border-gray-700 rounded px-1 py-0 text-right bg-gray-50 dark:bg-gray-800 text-gray-300 dark:text-gray-600 placeholder-gray-300 cursor-not-allowed"
                                             />
                                           )}
