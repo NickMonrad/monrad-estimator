@@ -225,6 +225,7 @@ export default function SquadPlannerDrawer({
   const [showAllResourceTypes, setShowAllResourceTypes] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [seedBanner, setSeedBanner] = useState<string | null>(null)
+  const [applyDone, setApplyDone] = useState(false)
 
   const qc = useQueryClient()
   const skipNextPersistRef = useRef(false)
@@ -351,6 +352,7 @@ export default function SquadPlannerDrawer({
         : null,
     )
     generate.reset()
+    setApplyDone(false)
   }, [generate, projectId, resourceTypes, seedSettings])
 
   // ── restore state when drawer opens ──────────────────────────────────────
@@ -429,7 +431,7 @@ export default function SquadPlannerDrawer({
     }
   }
 
-  if (!open) return null
+  if (!open || applyDone) return null
 
   const result = generate.data
 
@@ -871,6 +873,7 @@ export default function SquadPlannerDrawer({
                     if (!window.confirm('Apply this capacity profile? Resource profiles will be updated.')) return
                     try {
                       await apply.mutateAsync(result)
+                      setApplyDone(true)
                       onClose()
                       Promise.all([
                         qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
