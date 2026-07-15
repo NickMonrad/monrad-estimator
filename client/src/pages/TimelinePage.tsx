@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toPng } from 'html-to-image'
 import { api } from '../lib/api'
@@ -304,6 +304,18 @@ export default function TimelinePage() {
   const [squadPlannerOpen, setSquadPlannerOpen] = useState(false)
   const [squadPlannerSeedSettings, setSquadPlannerSeedSettings] = useState<SquadPlannerSeedSettings | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [searchParams] = useSearchParams()
+  const [squadPlannerOpenedFromLink, setSquadPlannerOpenedFromLink] = useState(false)
+
+  // Auto-open Squad Planner when ?panel=squad-planner is present in URL
+  useEffect(() => {
+    if (searchParams.get('panel') === 'squad-planner' && !squadPlannerOpenedFromLink) {
+      setSquadPlannerOpenedFromLink(true)
+      setSquadPlannerSeedSettings(null)
+      setOptimiserOpen(false)
+      setSquadPlannerOpen(true)
+    }
+  }, [searchParams, squadPlannerOpenedFromLink])
   const [planningOnboardingWeeks, setPlanningOnboardingWeeks] = useState(0)
   const [planningBufferWeeks, setPlanningBufferWeeks] = useState(0)
 

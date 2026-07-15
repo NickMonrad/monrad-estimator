@@ -135,3 +135,51 @@ export function isResolutionSource(value: string): value is ResolutionSource {
   return value in RESOLUTION_SOURCE_LABELS
 }
 
+
+// ─── Effective availability state ──────────────────────────────────────────
+
+export interface EffectiveAvailabilityState {
+  /** The effective allocation mode derived from authoritative profile first, then legacy state. */
+  effectiveMode: AllocationMode
+  /** Whether this resource is managed through the weekly capacity profile editor. */
+  isProfileManaged: boolean
+  /** Whether the capacity profile has authoritative (PROFILE) resolution. */
+  hasAuthoritativeProfile: boolean
+}
+
+/**
+ * Derive the effective availability state for a resource row.
+ *
+ * Priority order:
+ * 1. Authoritative persisted capacityProfile state (resolutionSource === 'PROFILE')
+ * 2. Legacy allocation fields (fallback)
+ *
+ * A role with an authoritative capacity-profile planning-basis and weekly segments
+ * is treated as Varies by week regardless of stale `row.allocationMode`.
+ */
+export function deriveEffectiveAvailabilityState(row: {
+  allocationMode?: string | null
+  capacityProfile?: {
+    resolutionSource?: string | null
+    planningBasis?: string | null
+    segments?: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+  } | null
+}): EffectiveAvailabilityState {
+  const isAuthoritative = row.capacityProfile?.resolutionSource === 'PROFILE'
+  const isCapacityPlan = row.capacityProfile?.planningBasis === 'capacityProfile'
+
+  if (isAuthoritative && isCapacityPlan) {
+    return {
+      effectiveMode: 'CAPACITY_PLAN',
+      isProfileManaged: true,
+      hasAuthoritativeProfile: true,
+    }
+  }
+
+  // Fall back to legacy allocation mode
+  return {
+    effectiveMode: (row.allocationMode as AllocationMode) ?? 'EFFORT',
+    isProfileManaged: false,
+    hasAuthoritativeProfile: isAuthoritative,
+  }
+}

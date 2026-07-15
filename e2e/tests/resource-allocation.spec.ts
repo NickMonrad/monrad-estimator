@@ -1,5 +1,6 @@
-import { test, expect } from '@playwright/test'
-import { login, createProject } from './helpers'
+import { test, expect, type Page } from '@playwright/test'
+import { login, createProject, API_BASE, DATABASE_URL } from './helpers'
+import { Client } from 'pg'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -13,7 +14,7 @@ const CSV_CONTENT = [
   'Task,Alpha Epic,Alpha Feature,Alpha Story,Beta Task,,Project Manager,8,1,,,,,',
 ].join('\n')
 
-async function setupCommercialTab(page: import('@playwright/test').Page) {
+async function setupCommercialTab(page: Page) {
   await login(page)
   const projectName = `E2E Resource Allocation ${Date.now()}`
   await createProject(page, projectName)
@@ -84,7 +85,7 @@ async function setupCommercialTab(page: import('@playwright/test').Page) {
   return projectId
 }
 
-async function gotoResourceProfile(page: import('@playwright/test').Page, projectId: string) {
+async function gotoResourceProfile(page: Page, projectId: string) {
   const [rtLoadResponse] = await Promise.all([
     page.waitForResponse(
       resp =>
@@ -97,6 +98,65 @@ async function gotoResourceProfile(page: import('@playwright/test').Page, projec
   ])
   expect(rtLoadResponse.ok()).toBeTruthy()
   await expect(page.getByRole('heading', { name: /capacity profile summary/i }).first()).toBeVisible({ timeout: 15_000 })
+}
+
+async function setupDeterministicCapacityPlan(page: Page): Promise<string> {
+  const projectId = await setupCommercialTab(page)
+
+  // Get auth token from localStorage
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  if (!token) throw new Error('No auth token found in localStorage')
+
+  // Fetch resource types to get the first RT id
+  const rtRes = await page.request.get(
+    `${API_BASE}/api/projects/${projectId}/resource-types`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  const rtData = await rtRes.json() as Array<{ id: string }>
+  const rtId = rtData[0]?.id
+  if (!rtId) throw new Error('No resource types found')
+
+  // Direct DB: set allocationMode to CAPACITY_PLAN and create capacity profile
+  const client = new Client({ connectionString: DATABASE_URL })
+  await client.connect()
+  try {
+    // Update RT allocation mode to CAPACITY_PLAN
+    await client.query(
+      `UPDATE "ResourceType" SET "allocationMode" = 'CAPACITY_PLAN' WHERE id = $1`,
+      [rtId],
+    )
+    // Update NR allocation modes
+    await client.query(
+      `UPDATE "NamedResource" SET "allocationMode" = 'CAPACITY_PLAN' WHERE "resourceTypeId" = $1`,
+      [rtId],
+    )
+    // Create role-level capacity profile with segments
+    const cpRes = await client.query(
+      `INSERT INTO "CapacityProfile" ("projectId", "resourceTypeId", "ownerKind", "planningBasis", "source", "defaultPercent", "startWeek", "endWeek", "createdAt", "updatedAt")
+       VALUES ($1, $2, 'ROLE', 'CAPACITY_PROFILE', 'SQUAD_PLANNER', 100, 0, 10, NOW(), NOW()) RETURNING id`,
+      [projectId, rtId],
+    )
+    const cpId = cpRes.rows[0].id
+    await client.query(
+      `INSERT INTO "CapacitySegment" ("capacityProfileId", "startWeek", "endWeek", "capacityPercent", "source", "createdAt", "updatedAt")
+       VALUES ($1, 0, 10, 100, 'SQUAD_PLANNER', NOW(), NOW())`,
+      [cpId],
+    )
+  } finally {
+    await client.end()
+  }
+
+  // Verify via capacity profiles endpoint
+  const verifyRes = await page.request.get(
+    `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  expect(verifyRes.ok()).toBeTruthy()
+  const verifyData = await verifyRes.json()
+  expect(Array.isArray(verifyData.capacityProfiles)).toBeTruthy()
+  expect(verifyData.capacityProfiles.length).toBeGreaterThan(0)
+
+  return projectId
 }
 
 test.describe('Resource Allocation', () => {
@@ -140,7 +200,7 @@ test.describe('Resource Allocation', () => {
     await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
   })
 
-  test('EFFORT hides Available % control; CAPACITY_PLAN shows info panel', async ({ page }) => {
+  test('EFFORT hides Available % control', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
@@ -158,42 +218,44 @@ test.describe('Resource Allocation', () => {
     await expect(page.getByText(/Available %/i)).not.toBeVisible({ timeout: 3_000 })
     await expect(page.getByText(/Available Percent/i)).not.toBeVisible({ timeout: 3_000 })
 
-    // CAPACITY_PLAN is profile-managed and not available in the generic editor dropdown
-    expect(await modeSelect.locator('option[value="CAPACITY_PLAN"]').count()).toBe(0)
-
     // Cancel to close
     await page.locator('[data-testid="allocation-cancel"]').click()
     await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
   })
 
-  test('CAPACITY_PLAN row shows info panel with View weekly profile button', async ({ page }) => {
+  test('CAPACITY_PLAN row shows info panel with safe editor', async ({ page }) => {
     test.setTimeout(90_000)
-    const projectId = await setupCommercialTab(page)
+    const projectId = await setupDeterministicCapacityPlan(page)
     await gotoResourceProfile(page, projectId)
 
-    // Click on badge to open editor for the first row
+    // First row is now deterministically CAPACITY_PLAN
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
+
+    // Badge shows "Capacity profile" without percentage suffix (profile-managed)
+    await expect(badge).toContainText('Capacity profile')
+    await expect(badge).not.toContainText('%')
+
+    // Click badge — opens safe info-panel editor, not the generic editor
     await badge.click({ force: true })
 
-    // If the row is CAPACITY_PLAN (set by the seed/commercial tab), expect info panel
-    const infoPanel = page.getByText(/managed through the weekly capacity profile/i)
-    if (await infoPanel.isVisible().catch(() => false)) {
-      // Row is CAPACITY_PLAN — verify View weekly profile button exists
-      await expect(page.getByText(/View weekly profile/i)).toBeVisible({ timeout: 5_000 })
-      // Verify Save button is NOT present (generic editor not shown)
-      await expect(page.getByText('Save')).not.toBeVisible({ timeout: 2_000 })
-    } else {
-      // Row is not CAPACITY_PLAN — select CAPACITY_PLAN if available, verify info panel
-      const modeSelect = page.locator('select').first()
-      const hasOption = await modeSelect.locator('option[value="CAPACITY_PLAN"]').count()
-      if (hasOption > 0) {
-        await modeSelect.selectOption('CAPACITY_PLAN')
-        await expect(infoPanel).toBeVisible({ timeout: 5_000 })
-      }
-      // Cancel to close
-      await page.locator('[data-testid="allocation-cancel"]').click()
-    }
+    // Info panel shows the managed-through text
+    await expect(page.getByText(/managed through the weekly capacity profile/i)).toBeVisible({ timeout: 5_000 })
+
+    // Generic editor elements MUST be absent
+    await expect(page.locator('select[aria-label="Availability pattern"]')).not.toBeVisible({ timeout: 2_000 })
+    await expect(page.locator('[data-testid="allocation-save"]')).not.toBeVisible({ timeout: 2_000 })
+
+    // Safe editor has the "Open weekly profile editor" CTA
+    const editorButton = page.getByRole('button', { name: /open weekly profile editor/i })
+    await expect(editorButton).toBeVisible({ timeout: 5_000 })
+
+    // Close button is always present
+    await expect(page.locator('[data-testid="allocation-cancel"]')).toBeVisible()
+
+    // Click the editor button and verify navigation to squad planner with panel param
+    await editorButton.click()
+    await page.waitForURL(`/projects/${projectId}/timeline?panel=squad-planner`)
   })
 
   test('changing Available % updates allocated days', async ({ page }) => {
