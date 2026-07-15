@@ -98,7 +98,7 @@ export default function CommercialTab({
         <h2 className="text-base font-semibold text-gray-900 dark:text-white">Cost Summary</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400">Breakdown by resource type with day rates and discounts</p>
         <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-          Planning basis and schedule settings are managed in the <strong>Resource Profile</strong> tab.
+          Availability pattern, rates, and schedule settings are managed in the <strong>Resource Profile</strong> tab.
         </p>
       </header>
       {!commercialData || commercialData.rows.length === 0 ? (
@@ -114,7 +114,7 @@ export default function CommercialTab({
                 <th className="text-left px-6 py-3 font-medium">Role</th>
                 <th className="text-center px-4 py-3 font-medium">Count</th>
                 <th className="text-right px-4 py-3 font-medium">Effort Days</th>
-                <th className="text-left px-4 py-3 font-medium">Planning basis</th>
+                <th className="text-left px-4 py-3 font-medium">Availability pattern</th>
                 <th className="text-left px-4 py-3 font-medium">Period</th>
                 <th className="text-right px-4 py-3 font-medium">Billable days</th>
                 <th className="text-right px-4 py-3 font-medium">Day Rate</th>

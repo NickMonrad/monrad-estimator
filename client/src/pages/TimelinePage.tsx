@@ -22,6 +22,11 @@ import {
 } from '../components/timeline/timelineUx'
 import SnapshotHistoryPanel from '../components/SnapshotHistoryPanel'
 import { invalidateProjectPlanning, invalidateProjectResourceProfile } from '../lib/projectInvalidation'
+import {
+  formatAllocationMode,
+  formatAllocationModeDescription,
+  ALLOCATION_MODE_OPTIONS,
+} from '../lib/capacityProfileFormatting'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
   ENGINEERING: 'bg-blue-100',
@@ -127,10 +132,9 @@ function NamedResourcesPanel({
               {/* People rows */}
               {people.map((nr, i) => {
                 const mode = nr.allocationMode ?? 'EFFORT'
-                const modeLabel = mode === 'EFFORT' ? 'As needed'
-                  : mode === 'FULL_PROJECT' ? `Fixed for whole project · ${nr.allocationPct}%`
-                  : mode === 'CAPACITY_PLAN' ? 'Varies by week'
-                  : `Fixed for selected weeks · ${nr.allocationPct}%`
+                const modeLabel = mode === 'EFFORT' || mode === 'CAPACITY_PLAN'
+                  ? formatAllocationMode(mode)
+                  : `${formatAllocationMode(mode)} · ${nr.allocationPct}%`
                 return (
                   <div
                     key={`${rtName}-${nr.name}-${i}`}
@@ -1196,19 +1200,18 @@ export default function TimelinePage() {
                                               }}
                                               className="w-full text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300"
                                             >
-                                              <option value="EFFORT">As needed</option>
-                                              <option value="FULL_PROJECT">Fixed for whole project</option>
-                                              <option value="TIMELINE">Fixed for selected weeks</option>
-                                              <option value="CAPACITY_PLAN">Varies by week</option>
+                                              {ALLOCATION_MODE_OPTIONS.map(opt => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                              ))}
                                             </select>
                                           ) : (
                                             <span className="text-gray-400 dark:text-gray-600">—</span>
                                           )}
                                           <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight mt-0.5">
-                                            {mode === 'EFFORT' && 'Assigned only when scheduled work requires this resource.'}
-                                            {mode === 'FULL_PROJECT' && `Available at ${nr.allocationPercent ?? nr.allocationPct ?? 100}% from the beginning to the end of the project. Work is assigned only when demand exists.`}
+                                            {mode === 'EFFORT' && formatAllocationModeDescription(mode)}
+                                            {mode === 'FULL_PROJECT' && formatAllocationModeDescription(mode)}
                                             {mode === 'TIMELINE' && `Available at ${nr.allocationPercent ?? nr.allocationPct ?? 100}% from W${nr.allocationStartWeek ?? nr.startWeek ?? '?'} to W${nr.allocationEndWeek ?? nr.endWeek ?? '?'}. Work is assigned only when demand exists.`}
-                                            {mode === 'CAPACITY_PLAN' && 'Availability follows the saved capacity profile. Work is assigned only when demand exists.'}
+                                            {mode === 'CAPACITY_PLAN' && formatAllocationModeDescription(mode)}
                                           </div>
                                         </div>
                                       </div>

@@ -4,9 +4,11 @@ import {
 } from 'recharts'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
 import {
+  formatAllocationMode,
   formatCapacityProfileSource,
   formatPlanningBasis,
   formatResolutionSource,
+  ALLOCATION_MODE_OPTIONS,
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 
@@ -63,7 +65,7 @@ export default function ResourceProfileTab({
                 <th className="text-left px-4 py-3 font-medium">Hrs/Day</th>
                 <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Hours</th>
                 <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Days</th>
-                <th className="text-left px-4 py-3 font-medium">Planning basis</th>
+                <th className="text-left px-4 py-3 font-medium">Availability pattern</th>
                 <th className="text-left px-4 py-3 font-medium">Period</th>
                 <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                 {hasCost && <th className="text-right px-6 py-3 font-medium">Cost</th>}
@@ -175,12 +177,13 @@ export default function ResourceProfileTab({
                           : null
                         const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
                         const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
+                        const modeLabel = planningBasisLabel ?? formatAllocationMode(mode)
                         const badge = (() => {
-                          if (mode === 'EFFORT') return { label: planningBasisLabel ?? 'As needed', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
-                          if (mode === 'TIMELINE') return { label: `${planningBasisLabel ?? 'Fixed for selected weeks'} · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
-                          if (mode === 'FULL_PROJECT') return { label: `${planningBasisLabel ?? 'Fixed for whole project'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
-                          if (mode === 'CAPACITY_PLAN') return { label: `${planningBasisLabel ?? 'Varies by week'} · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
-                          return { label: `${planningBasisLabel ?? 'Fixed for whole project'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'EFFORT') return { label: modeLabel, color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
+                          if (mode === 'TIMELINE') return { label: `${modeLabel} · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
+                          if (mode === 'FULL_PROJECT') return { label: `${modeLabel} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'CAPACITY_PLAN') return { label: modeLabel, color: 'bg-green-100 text-green-700' }
+                          return { label: modeLabel, color: 'bg-purple-100 text-purple-700' }
                         })()
                         return (
                           <div>
@@ -262,18 +265,19 @@ export default function ResourceProfileTab({
                             <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Availability pattern</label>
                             <select value={allocationDraft.allocationMode} onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
                               className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                              <option value="EFFORT">As needed</option>
-                              <option value="TIMELINE">Fixed for selected weeks</option>
-                              <option value="FULL_PROJECT">Fixed for whole project</option>
-                              <option value="CAPACITY_PLAN">Varies by week</option>
+                              {ALLOCATION_MODE_OPTIONS.map(opt => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))}
                             </select>
                           </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Available %</label>
-                            <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
-                              onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
-                              className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                          </div>
+                          {allocationDraft.allocationMode !== 'EFFORT' && allocationDraft.allocationMode !== 'CAPACITY_PLAN' && (
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Available %</label>
+                              <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
+                                onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
+                                className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                            </div>
+                          )}
                           {allocationDraft.allocationMode === 'TIMELINE' && (
                             <>
                               <div>

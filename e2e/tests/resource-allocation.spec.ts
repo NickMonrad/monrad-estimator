@@ -78,7 +78,7 @@ async function setupCommercialTab(page: import('@playwright/test').Page) {
     page.getByRole('heading', { name: /cost summary/i })
   ).toBeVisible({ timeout: 10_000 })
   await expect(
-    page.getByText(/^(Demand-following|Availability window ·|Whole-project allocation ·|Capacity profile)/).first()
+    page.getByText(/^(As needed|Fixed for selected weeks ·|Fixed for whole project ·|Varies by week)/).first()
   ).toBeVisible({ timeout: 15_000 })
 
   return projectId
