@@ -425,7 +425,7 @@ Each project-scoped resource type can have one or more named resources assigned 
 | Name | Person's name or role label |
 | Start week | Week number when this person joins (null = project start) |
 | End week | Week number when this person leaves (null = project end) |
-| Allocation % | What fraction of their time is on this project (0–100) |
+| Available % | What fraction of their time is on this project (0–100) |
 | Allocation mode | `EFFORT` / `TIMELINE` / `FULL_PROJECT` (see [Allocation Modes](#allocation-modes)) |
 
 **Allocation Modes:**
