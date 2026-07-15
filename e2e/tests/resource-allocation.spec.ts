@@ -99,10 +99,64 @@ async function gotoResourceProfile(page: Page, projectId: string) {
   await expect(page.getByRole('heading', { name: /capacity profile summary/i }).first()).toBeVisible({ timeout: 15_000 })
 }
 
-// The CAPACITY_PLAN info panel behavior is fully covered by unit tests
-// (ResourceProfileTab.test.tsx — 27 tests including authoritative override).
-// In the generic editor, CAPACITY_PLAN is intentionally excluded from the
-// dropdown; this is verified by the unit test suite.
+async function setupSquadPlannerCapacityPlan(page: Page) {
+  const projectId = await setupCommercialTab(page)
+
+  // Get auth token from localStorage (set by login helper)
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  const authHeaders: Record<string, string> = {}
+  if (token) authHeaders['Authorization'] = `Bearer ${token}`
+
+  // Navigate to Resource Profile and load RT IDs
+  await page.goto(`/projects/${projectId}/resource-profile`)
+  await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
+
+  // Fetch resource profile to discover resource type IDs
+  const profileRes = await page.request.get(
+    `${API_BASE}/api/projects/${projectId}/resource-profile`,
+    { headers: authHeaders },
+  )
+  expect(profileRes.ok()).toBeTruthy()
+  const profile = await profileRes.json()
+  // Find a resource type to include in the plan (any except Project Manager)
+  const planRt = profile.resourceRows.find((r: { name: string }) => r.name !== 'Project Manager')
+  expect(planRt, 'Expected at least one non-Project Manager resource type').toBeTruthy()
+
+  // Apply a squad plan with only one RT so the other RTs (Project Manager) get
+  // CAPACITY_PLAN via the "all others not in the plan" branch of the apply handler,
+  // WITHOUT having auto-created named resources.
+  const applyRes = await page.request.post(
+    `${API_BASE}/api/projects/${projectId}/squad-plan/apply`,
+    {
+      headers: authHeaders,
+      data: {
+        name: 'E2E test plan',
+        targetWeeks: 12,
+        periodWeeks: 13,
+        maxDelta: 1,
+        periods: [{
+          periodIndex: 0,
+          startWeek: 0,
+          endWeek: 12,
+          entries: [{
+            resourceTypeId: planRt.resourceTypeId,
+            headcount: 1,
+            demandFTE: 1,
+            utilisationPct: 80,
+          }],
+        }],
+        setActive: true,
+      },
+    },
+  )
+  expect(applyRes.ok()).toBeTruthy()
+
+  // Navigate back to Resource Profile with fresh data
+  await page.goto(`/projects/${projectId}/resource-profile`)
+  await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
+
+  return projectId
+}
 
 test.describe('Resource Allocation', () => {
   test('commercial tab shows allocation badge', async ({ page }) => {
@@ -235,4 +289,46 @@ test.describe('Resource Allocation', () => {
     const allocationHeader = page.locator('th').filter({ hasText: /^Availability pattern$/ })
     await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
   })
+
+  test('CAPACITY_PLAN row shows info panel with safe editor', async ({ page }) => {
+    test.setTimeout(120_000)
+    const projectId = await setupSquadPlannerCapacityPlan(page)
+
+    // Locate the Project Manager role row
+    const pmRow = page.locator('table tbody tr').filter({ hasText: 'Project Manager' }).first()
+    await expect(pmRow).toBeVisible({ timeout: 10_000 })
+
+    // Find the allocation badge within that row
+    const badge = pmRow.locator('button[title="Click to edit allocation"]')
+    await expect(badge).toBeVisible({ timeout: 8_000 })
+    // Assert badge shows 'Varies by week' without percentage suffix
+    await expect(badge).toHaveText('Varies by week')
+    // Capacity profile source badge should be visible (legacy-based source display)
+    await expect(pmRow.locator('span.uppercase').first()).toBeVisible({ timeout: 5_000 })
+
+    // Open the info panel by clicking the badge
+    await badge.click({ force: true })
+
+    // Assert info panel content
+    await expect(page.getByText(/managed through the weekly capacity profile/i)).toBeVisible({ timeout: 8_000 })
+
+    // CAPACITY_PLAN must NOT show the availability pattern dropdown
+    await expect(page.locator('select[aria-label="Availability pattern"]')).not.toBeVisible({ timeout: 3_000 })
+
+    // CAPACITY_PLAN must NOT show Available % controls
+    await expect(page.getByText(/Available %/i)).not.toBeVisible({ timeout: 3_000 })
+    await expect(page.getByText(/Available Percent/i)).not.toBeVisible({ timeout: 3_000 })
+
+    // No Save button (CAPACITY_PLAN can't be changed via generic editor)
+    await expect(page.locator('[data-testid="allocation-save"]')).not.toBeVisible({ timeout: 3_000 })
+
+    // 'Open weekly profile editor' button must be visible
+    const editorButton = page.getByRole('button', { name: /open weekly profile editor/i })
+    await expect(editorButton).toBeVisible({ timeout: 5_000 })
+
+    // Clicking it navigates to timeline with squad-planner panel
+    await editorButton.click()
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
+  })
+
 })

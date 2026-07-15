@@ -8,6 +8,7 @@ import {
   isPlanningBasis,
   isCapacityProfileSource,
   isResolutionSource,
+  deriveEffectiveAvailabilityState,
 } from '../lib/capacityProfileFormatting'
 
 describe('formatPlanningBasis', () => {
@@ -173,5 +174,137 @@ describe('isResolutionSource type guard', () => {
   it('returns false for invalid values', () => {
     expect(isResolutionSource('INVALID')).toBe(false)
     expect(isResolutionSource('')).toBe(false)
+  })
+})
+
+describe('deriveEffectiveAvailabilityState', () => {
+  it('handles legacy EFFORT with no profile', () => {
+    const result = deriveEffectiveAvailabilityState({ allocationMode: 'EFFORT' })
+    expect(result.effectiveMode).toBe('EFFORT')
+    expect(result.isProfileManaged).toBe(false)
+    expect(result.hasAuthoritativeProfile).toBe(false)
+    expect(result.hasMeaningfulSegments).toBe(false)
+    expect(result.resolutionSource).toBeUndefined()
+  })
+
+  it('handles legacy TIMELINE with no profile', () => {
+    const result = deriveEffectiveAvailabilityState({ allocationMode: 'TIMELINE' })
+    expect(result.effectiveMode).toBe('TIMELINE')
+    expect(result.isProfileManaged).toBe(false)
+  })
+
+  it('marks ACTIVE_CAPACITY_PLAN as profile-managed', () => {
+    const result = deriveEffectiveAvailabilityState({
+      allocationMode: 'EFFORT',
+      capacityProfile: {
+        resolutionSource: 'ACTIVE_CAPACITY_PLAN',
+        planningBasis: 'wholeProjectAllocation',
+        segments: [{ startWeek: 0, endWeek: 3, capacityPercent: 50 }],
+      },
+    })
+    expect(result.effectiveMode).toBe('CAPACITY_PLAN')
+    expect(result.isProfileManaged).toBe(true)
+    expect(result.hasAuthoritativeProfile).toBe(true)
+    expect(result.hasMeaningfulSegments).toBe(true)
+    expect(result.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
+  })
+
+  it('marks PROFILE + capacityProfile + stale EFFORT as profile-managed', () => {
+    const result = deriveEffectiveAvailabilityState({
+      allocationMode: 'EFFORT',
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'capacityProfile',
+        segments: [],
+      },
+    })
+    expect(result.effectiveMode).toBe('CAPACITY_PLAN')
+    expect(result.isProfileManaged).toBe(true)
+    expect(result.hasAuthoritativeProfile).toBe(true)
+  })
+
+  it('marks PROFILE + availabilityWindow + segments as profile-managed even with stale TIMELINE', () => {
+    const result = deriveEffectiveAvailabilityState({
+      allocationMode: 'TIMELINE',
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'availabilityWindow',
+        segments: [{ startWeek: 0, endWeek: 2, capacityPercent: 50 }, { startWeek: 3, endWeek: 5, capacityPercent: 75 }],
+      },
+    })
+    expect(result.effectiveMode).toBe('CAPACITY_PLAN')
+    expect(result.isProfileManaged).toBe(true)
+    expect(result.hasMeaningfulSegments).toBe(true)
+    expect(result.resolutionSource).toBe('PROFILE')
+  })
+
+  it('marks PROFILE + wholeProjectAllocation + segments as profile-managed even with stale FULL_PROJECT', () => {
+    const result = deriveEffectiveAvailabilityState({
+      allocationMode: 'FULL_PROJECT',
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'wholeProjectAllocation',
+        segments: [{ startWeek: 0, endWeek: 12, capacityPercent: 100 }],
+      },
+    })
+    expect(result.effectiveMode).toBe('CAPACITY_PLAN')
+    expect(result.isProfileManaged).toBe(true)
+    expect(result.hasMeaningfulSegments).toBe(true)
+  })
+
+  it('marks PROFILE + capacityProfile + segments as profile-managed', () => {
+    const result = deriveEffectiveAvailabilityState({
+      allocationMode: 'EFFORT',
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'capacityProfile',
+        segments: [{ startWeek: 0, endWeek: 3, capacityPercent: 100 }],
+      },
+    })
+    expect(result.effectiveMode).toBe('CAPACITY_PLAN')
+    expect(result.isProfileManaged).toBe(true)
+    expect(result.hasMeaningfulSegments).toBe(true)
+  })
+
+  it('allows editing for authoritative availabilityWindow with NO segments (maps to TIMELINE)', () => {
+    const result = deriveEffectiveAvailabilityState({
+      allocationMode: 'TIMELINE',
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'availabilityWindow',
+        segments: [],
+      },
+    })
+    expect(result.effectiveMode).toBe('TIMELINE')
+    expect(result.isProfileManaged).toBe(false)
+    expect(result.hasAuthoritativeProfile).toBe(true)
+    expect(result.hasMeaningfulSegments).toBe(false)
+  })
+
+  it('allows editing for authoritative wholeProjectAllocation with NO segments (maps to FULL_PROJECT)', () => {
+    const result = deriveEffectiveAvailabilityState({
+      allocationMode: 'EFFORT',
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'wholeProjectAllocation',
+        segments: [],
+      },
+    })
+    expect(result.effectiveMode).toBe('FULL_PROJECT')
+    expect(result.isProfileManaged).toBe(false)
+    expect(result.hasAuthoritativeProfile).toBe(true)
+  })
+
+  it('allows editing for authoritative demandFollowing with NO segments (maps to EFFORT)', () => {
+    const result = deriveEffectiveAvailabilityState({
+      allocationMode: 'TIMELINE',
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'demandFollowing',
+        segments: [],
+      },
+    })
+    expect(result.effectiveMode).toBe('EFFORT')
+    expect(result.isProfileManaged).toBe(false)
   })
 })

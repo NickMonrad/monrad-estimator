@@ -948,3 +948,35 @@ Clone evidence covers three independent parity layers:
 3. **Commercial calculator parity (client).** That same integration test executes `computeCommercialData` against the real source and clone endpoint DTOs with identical discount and tax settings. It asserts `subtotal`, `afterDiscounts`, and `grandTotal` match exactly.
 
 The focused client test (`clone-commercial-parity.test.ts`) is a separate utility regression over ID-remapped, DTO-shaped fixtures; its manually constructed fixtures are not real endpoint evidence. CI runs this focused client Vitest step separately from the required/blocking server command `npm run test:clone-integration` (working directory `server`); the server integration step runs after Prisma migrations and client generation.
+
+## Segmented profile safety
+
+Authoritative segmented profiles (where `resolutionSource === 'PROFILE'` and the
+profile has one or more `segments`) cannot be edited through the generic scalar role
+editor, regardless of planning basis.
+
+This guard applies uniformly across all planning bases:
+- `availabilityWindow`
+- `wholeProjectAllocation`
+- `demandFollowing`
+- `capacityProfile`
+
+`ACTIVE_CAPACITY_PLAN` is always treated as profile-managed — it derives from
+Capacity Plan periods and is not editable through scalar fields.
+
+Weekly profile editing for segmented and active-plan profiles is performed through
+the Squad Planner, not through the generic resource-counts panel.
+
+Scalar editing is available only where the effective profile has no segments and
+the planning basis maps safely to a scalar mode:
+
+| Planning basis | Scalar mapping |
+|---|---|
+| `demandFollowing` | `EFFORT` |
+| `availabilityWindow` | `TIMELINE` |
+| `wholeProjectAllocation` | `FULL_PROJECT` |
+| `capacityProfile` | `CAPACITY_PLAN` |
+
+Availability pattern, assignment, and Billing basis remain separate concepts.
+Scarability is about profile editing safety, not about combining these concerns.
+
