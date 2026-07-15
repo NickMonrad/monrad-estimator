@@ -226,6 +226,7 @@ export default function SquadPlannerDrawer({
   const [showAllResourceTypes, setShowAllResourceTypes] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [seedBanner, setSeedBanner] = useState<string | null>(null)
+  const [applySucceeded, setApplySucceeded] = useState(false)
 
   const qc = useQueryClient()
   const skipNextPersistRef = useRef(false)
@@ -299,6 +300,12 @@ export default function SquadPlannerDrawer({
       return () => document.removeEventListener('keydown', handleKeyDown)
     }
   }, [open, handleKeyDown])
+  // ── reset apply-succeeded guard when the drawer opens ──────────────────
+  useEffect(() => {
+    if (open) {
+      setApplySucceeded(false)
+    }
+  }, [open])
 
   // ── generate mutation ───────────────────────────────────────────────────
   const generate = useMutation({
@@ -400,6 +407,7 @@ export default function SquadPlannerDrawer({
         })
         .then(r => r.data),
     onSuccess: () => {
+      setApplySucceeded(true)
       flushSync(() => { onClose() })
       Promise.all([
         qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
@@ -439,7 +447,7 @@ export default function SquadPlannerDrawer({
     }
   }
 
-  if (!open) return null
+  if (!open || applySucceeded) return null
 
   const result = generate.data
 
