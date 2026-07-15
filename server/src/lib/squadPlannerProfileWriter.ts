@@ -83,17 +83,78 @@ const PROTECTED_PROFILE_SOURCES: Record<string, true> = {
 }
 
 /**
- * The only ROLE (source, planningBasis) pair produced by the legacy mapper
- * that the Squad Planner may adopt. All other non-SQUAD_PLANNER ROLE profiles
- * represent explicit/manual ownership and must be rejected.
+ * Allocation mode → mapper-produced (source, planningBasis) pair mapping.
+ * These are the exact pairs the legacy mapper/backfill produces for ROLE-level
+ * capacity profiles in capacityProfileMapping.ts (deriveSource + allocationModeToPlanningBasis).
  *
- * Adoption additionally requires independent planner evidence: the resource
- * type must be present in the captured PriorPlannerAuthority's
- * allPlannerResourceTypeIds set (active plan membership or planner-owned
- * profiles). Fresh projects without evidence fail closed.
+ * The mapper always populates the `legacy` JSON payload with allocationMode,
+ * allocationPercent, allocationStartWeek, and allocationEndWeek for ROLE profiles.
+ * Profile-first/explicit writes leave `legacy` as DB_NULL.
+ *
+ * Only validated mapper-provided profiles (checked via isValidMapperProvenance)
+ * may be adopted by the Squad Planner. All other non-SQUAD_PLANNER ROLE profiles
+ * represent explicit/manual ownership and must be rejected.
  */
-const LEGACY_ADOPTABLE_PAIR: readonly [string, string] = ['LEGACY', 'DEMAND_FOLLOWING'] as const
+const ALLOCATION_MODE_TO_MAPPER_PAIR: Record<string, readonly [string, string]> = {
+  EFFORT: ['FIXED', 'DEMAND_FOLLOWING'],
+  TIMELINE: ['AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
+  FULL_PROJECT: ['FIXED', 'WHOLE_PROJECT_ALLOCATION'],
+  CAPACITY_PLAN: ['LEGACY', 'DEMAND_FOLLOWING'],
+}
 
+/**
+ * Strictly validate that a ROLE-level capacity profile was produced by the
+ * legacy mapper/backfill, using the populated `legacy` payload as independent
+ * provenance evidence.
+ *
+ * The mapper always populates `legacy.allocationMode`, `legacy.allocationPercent`,
+ * `legacy.allocationStartWeek`, and `legacy.allocationEndWeek` for ROLE profiles
+ * (see capacityProfileMapping.ts buildLegacyFields).  Profile-first/explicit
+ * writes leave `legacy` as DB_NULL, so a non-null legacy object with the expected
+ * fields is independent mapper provenance.
+ *
+ * A valid mapper-derived profile requires ALL of:
+ * - ownerKind === 'ROLE'
+ * - namedResourceId === null (aggregate role profile, not per-person)
+ * - `legacy` is a non-null non-array object
+ * - `legacy.allocationMode` is a string matching a known mapper mode
+ * - The profile's (source, planningBasis) matches the mapper pair for that mode
+ * - All expected mapper compatibility fields are present in the legacy payload
+ */
+export function isValidMapperProvenance(
+  profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis' | 'legacy' | 'namedResourceId'>,
+): boolean {
+  // Must be an aggregate ROLE profile (not a named-resource-level profile)
+  if (profile.ownerKind !== 'ROLE') return false
+  if (profile.namedResourceId !== null && profile.namedResourceId !== undefined) return false
+
+  // Legacy payload must be a non-null object (mapper always populates it)
+  if (profile.legacy === null || profile.legacy === undefined) return false
+  if (typeof profile.legacy !== 'object' || Array.isArray(profile.legacy)) return false
+
+  const legacy = profile.legacy as Record<string, unknown>
+
+  // allocationMode is the key discriminant — mapper always sets it
+  const allocationMode = legacy.allocationMode
+  if (typeof allocationMode !== 'string') return false
+
+  // Look up the expected (source, planningBasis) pair for this allocation mode
+  const pair = ALLOCATION_MODE_TO_MAPPER_PAIR[allocationMode]
+  if (!pair) return false
+
+  const [expectedSource, expectedBasis] = pair
+  if (profile.source !== expectedSource) return false
+  if (profile.planningBasis !== expectedBasis) return false
+
+  // Verify expected mapper compatibility fields are present (not undefined).
+  // The mapper always writes these, even when null; undefined means the
+  // legacy payload was constructed differently (profile-first/explicit write).
+  if (legacy.allocationPercent === undefined) return false
+  if (legacy.allocationStartWeek === undefined) return false
+  if (legacy.allocationEndWeek === undefined) return false
+
+  return true
+}
 
 /** Minimal NamedResource shape for deterministic ordering. */
 interface NamedResourceSummary {
@@ -588,14 +649,14 @@ export async function validatePlannerOwnerState(
         mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
       } else if (profile.ownerKind === 'ROLE') {
         const validSquadPlanner = profile.source === 'SQUAD_PLANNER' && profile.planningBasis === 'CAPACITY_PROFILE'
-        const hasLegacyPair = profile.source === LEGACY_ADOPTABLE_PAIR[0] && profile.planningBasis === LEGACY_ADOPTABLE_PAIR[1]
+        const isMapperProfile = isValidMapperProvenance(profile)
+        // LEGACY/DEMAND_FOLLOWING ROLE profiles without mapper provenance may
+        // still be adoptable when prior planner authority evidence confirms
+        // this resource type was previously planner-managed.
+        const hasLegacyPair = profile.source === 'LEGACY' && profile.planningBasis === 'DEMAND_FOLLOWING'
         const hasAuthorityEvidence = authority != null && authority.allPlannerResourceTypeIds.has(resourceTypeId)
-        // Mapper-generated profiles carry a populated legacy payload; profile-first/explicit
-        // LEGACY/DEMAND_FOLLOWING writes leave it null. Accept mapper-generated roles
-        // even without prior planner authority (first Squad Planner apply on fresh project).
-        const hasMapperProvenance = profile.legacy !== null && typeof profile.legacy === 'object'
-        const validLegacyRole = hasLegacyPair && (hasAuthorityEvidence || hasMapperProvenance)
-        if (!validSquadPlanner && !validLegacyRole) {
+        const validAdoptableRole = isMapperProfile || (hasLegacyPair && hasAuthorityEvidence)
+        if (!validSquadPlanner && !validAdoptableRole) {
           mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
         }
       }
@@ -1243,18 +1304,20 @@ export async function clearOmittedPlannerCapacity(
   const omittedResourceTypeIds = [...authority.allPlannerResourceTypeIds]
     .filter(id => !activeResourceTypeIds.has(id))
   
-  // Query existing LEGACY/DEMAND_FOLLOWING ROLE profiles for omitted RTs
+  // Query all ROLE profiles for omitted RTs (mapper-produced + prior planner)
   const existingOmittedRoleProfiles = omittedResourceTypeIds.length > 0
     ? await tx.capacityProfile.findMany({
         where: {
           projectId,
           resourceTypeId: { in: omittedResourceTypeIds },
           namedResourceId: null,
-          source: 'LEGACY',
-          planningBasis: 'DEMAND_FOLLOWING',
+          ownerKind: 'ROLE',
         },
         select: {
           resourceTypeId: true,
+          source: true,
+          planningBasis: true,
+          legacy: true,
           defaultPercent: true,
           startWeek: true,
           endWeek: true,
@@ -1546,9 +1609,13 @@ export async function revalidatePlannerPlan(
   }
 
   if (allConflicts.length > 0) {
+    const rtNames = [...new Set(allConflicts.map(c => c.resourceTypeName))].join(', ')
+    const nrNames = [...new Set(allConflicts.filter(c => c.namedResourceName).map(c => c.namedResourceName!))].join(', ')
+    let detail = `Protected ROLE profile for resource type(s): ${rtNames}.`
+    if (nrNames) detail += ` Protected named resource(s): ${nrNames}.`
     throw new PlannerConflictError(
-      `Plan revalidation failed: ${allConflicts.length} conflict(s) detected. ` +
-      `Duplicate owner profiles exist. Repair required before applying.`,
+      `Plan revalidation failed: ${allConflicts.length} conflict(s). ` +
+      detail + ` Repair required before applying.`,
       allConflicts,
     )
   }

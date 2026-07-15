@@ -8,6 +8,7 @@ import {
   classifyProfileConflicts,
   determineSurplusResourceIds,
   isLegacyPlannerProfile,
+  isValidMapperProvenance,
   isPlannerManaged,
   materializeProfilesForResourceType,
   validatePlannerOwnerState,
@@ -203,6 +204,115 @@ describe('isLegacyPlannerProfile', () => {
     expect(isLegacyPlannerProfile({ ...legacyProfile, source: 'MANUAL' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
     expect(isLegacyPlannerProfile({ ...legacyProfile, planningBasis: 'DEMAND_FOLLOWING' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
     expect(isLegacyPlannerProfile({ ...legacyProfile, ownerKind: 'PLANNED_RESOURCE' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
+  })
+})
+
+// ─── Mapper-provenance validation tests ──────────────────────────────────
+
+describe('isValidMapperProvenance', () => {
+  const baseRole = {
+    ownerKind: 'ROLE' as const,
+    namedResourceId: null,
+  }
+
+  it('accepts EFFORT mapper profile (FIXED/DEMAND_FOLLOWING with legacy)', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+    })).toBe(true)
+  })
+
+  it('accepts TIMELINE mapper profile (AVAILABILITY_WINDOW/AVAILABILITY_WINDOW with legacy)', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 1, allocationEndWeek: 12 },
+    })).toBe(true)
+  })
+
+  it('accepts FULL_PROJECT mapper profile (FIXED/WHOLE_PROJECT_ALLOCATION with legacy)', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'FIXED',
+      planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+      legacy: { allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+    })).toBe(true)
+  })
+
+  it('accepts CAPACITY_PLAN mapper profile (LEGACY/DEMAND_FOLLOWING with legacy)', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'LEGACY',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+    })).toBe(true)
+  })
+
+  it('rejects profile with null legacy', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: null,
+    })).toBe(false)
+  })
+
+  it('rejects profile with undefined legacy', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+    })).toBe(false)
+  })
+
+  it('rejects profile with non-object legacy (array)', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: [],
+    })).toBe(false)
+  })
+
+  it('rejects profile with malformed legacy (missing allocationPercent)', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationStartWeek: 1, allocationEndWeek: 12 },
+    })).toBe(false)
+  })
+
+  it('rejects profile with mismatched allocationMode vs source/basis', () => {
+    // allocationMode=TIMELINE but source/basis is FIXED/DEMAND_FOLLOWING (EFFORT pair)
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 1, allocationEndWeek: 12 },
+    })).toBe(false)
+  })
+
+  it('rejects profile with unknown allocationMode', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'UNKNOWN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects NAMED_PERSON profile (not ROLE)', () => {
+    expect(isValidMapperProvenance({
+      ownerKind: 'NAMED_PERSON',
+      namedResourceId: 'nr-1',
+      source: 'SQUAD_PLANNER',
+      planningBasis: 'CAPACITY_PROFILE',
+      legacy: null,
+    })).toBe(false)
   })
 })
 
@@ -1044,5 +1154,140 @@ describe('validatePlannerOwnerState — legacy role adoption (evidence-backed)',
       resourceTypeId: 'rt-dev',
       resourceTypeName: 'Developer',
     })
+  })
+
+  // ── Mapper-produced profile acceptance (first-apply on fresh project) ──
+
+  it('accepts mapper-produced TIMELINE profile (AVAILABILITY_WINDOW/AVAILABILITY_WINDOW with valid legacy) even on fresh project', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-mapper-timeline',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'AVAILABILITY_WINDOW',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 1, allocationEndWeek: 12 },
+      }]),
+      'project-1',
+      'rt-dev',
+      authorityWithoutEvidence,  // fresh project, no prior planner evidence
+    )
+    expect(conflicts).toHaveLength(0)
+  })
+
+  it('accepts mapper-produced EFFORT profile (FIXED/DEMAND_FOLLOWING with valid legacy) even on fresh project', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-mapper-effort',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'FIXED',
+        planningBasis: 'DEMAND_FOLLOWING',
+        legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      }]),
+      'project-1',
+      'rt-dev',
+      authorityWithoutEvidence,
+    )
+    expect(conflicts).toHaveLength(0)
+  })
+
+  it('accepts mapper-produced FULL_PROJECT profile (FIXED/WHOLE_PROJECT_ALLOCATION with valid legacy) even on fresh project', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-mapper-full',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'FIXED',
+        planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+        legacy: { allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      }]),
+      'project-1',
+      'rt-dev',
+      authorityWithoutEvidence,
+    )
+    expect(conflicts).toHaveLength(0)
+  })
+
+  it('accepts mapper-produced CAPACITY_PLAN profile (LEGACY/DEMAND_FOLLOWING with valid legacy) even on fresh project', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-mapper-capacity',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'LEGACY',
+        planningBasis: 'DEMAND_FOLLOWING',
+        legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      }]),
+      'project-1',
+      'rt-dev',
+      authorityWithoutEvidence,
+    )
+    expect(conflicts).toHaveLength(0)
+  })
+
+  // ── Malformed/absent legacy for each pair rejects on fresh project ──
+
+  it('rejects TIMELINE pair with null legacy on fresh project', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-null-legacy',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'AVAILABILITY_WINDOW',
+        planningBasis: 'AVAILABILITY_WINDOW',
+      }]),
+      'project-1',
+      'rt-dev',
+      authorityWithoutEvidence,
+    )
+    expect(conflicts).toHaveLength(1)
+  })
+
+  it('rejects EFFORT pair with mismatched legacy on fresh project', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-mismatched-legacy',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'FIXED',
+        planningBasis: 'DEMAND_FOLLOWING',
+        legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 1, allocationEndWeek: 12 },
+      }]),
+      'project-1',
+      'rt-dev',
+      authorityWithoutEvidence,
+    )
+    expect(conflicts).toHaveLength(1)
+  })
+
+  it('rejects maps LEGACY/DEMAND_FOLLOWING without legacy on fresh project (reject fallback)', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-legacy-no-mapper',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'LEGACY',
+        planningBasis: 'DEMAND_FOLLOWING',
+      }]),
+      'project-1',
+      'rt-dev',
+      authorityWithoutEvidence,
+    )
+    expect(conflicts).toHaveLength(1)
   })
 })
