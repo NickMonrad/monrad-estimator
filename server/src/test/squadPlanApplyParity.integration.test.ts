@@ -253,6 +253,38 @@ async function createNamedResource(
   })
   return id
 }
+async function createPlannerProfile(
+  projectId: string,
+  id: string,
+  ownerKind: $Enums.CapacityProfileOwnerKind,
+  resourceTypeId: string | null,
+  namedResourceId: string | null,
+  segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>,
+): Promise<void> {
+  await prisma.capacityProfile.create({
+    data: {
+      id,
+      projectId,
+      ownerKind,
+      resourceTypeId,
+      namedResourceId,
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+      defaultPercent: null,
+      startWeek: null,
+      endWeek: null,
+    },
+  })
+  if (segments.length > 0) {
+    await prisma.capacitySegment.createMany({
+      data: segments.map(segment => ({
+        capacityProfileId: id,
+        ...segment,
+        source: 'SQUAD_PLANNER' as const,
+      })),
+    })
+  }
+}
 
 async function createDiscount(
   projectId: string,
@@ -1098,6 +1130,29 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
         },
       },
     })
+    // ── Existing planner profiles: BEFORE must already use the same canonical
+    //    resource identities and trajectories that apply will rewrite. ────────
+    await createPlannerProfile(projectId, 'cp-com-role-dev', 'ROLE', rtDev, null, [
+      { startWeek: 0, endWeek: 3, capacityPercent: 200 },
+      { startWeek: 4, endWeek: 7, capacityPercent: 100 },
+    ])
+    await createPlannerProfile(projectId, 'cp-com-dev-1', 'PLANNED_RESOURCE', null, 'nr-com-dev-1', [
+      { startWeek: 0, endWeek: 3, capacityPercent: 100 },
+      { startWeek: 4, endWeek: 7, capacityPercent: 100 },
+    ])
+    await createPlannerProfile(projectId, 'cp-com-dev-2', 'PLANNED_RESOURCE', null, 'nr-com-dev-2', [
+      { startWeek: 0, endWeek: 3, capacityPercent: 100 },
+    ])
+    await createPlannerProfile(projectId, 'cp-com-role-des', 'ROLE', rtDes, null, [
+      { startWeek: 0, endWeek: 3, capacityPercent: 100 },
+      { startWeek: 4, endWeek: 7, capacityPercent: 100 },
+    ])
+    await createPlannerProfile(projectId, 'cp-com-des-1', 'PLANNED_RESOURCE', null, 'nr-com-des-1', [
+      { startWeek: 0, endWeek: 3, capacityPercent: 100 },
+      { startWeek: 4, endWeek: 7, capacityPercent: 100 },
+    ])
+    await createPlannerProfile(projectId, 'cp-com-des-2', 'PLANNED_RESOURCE', null, 'nr-com-des-2', [])
+
 
     // ── Discounts: project-wide + role-specific ────────────────────────────
     projectDiscountId = await createDiscount(projectId, null, 'PERCENTAGE', 5, 'Project discount', 0)
