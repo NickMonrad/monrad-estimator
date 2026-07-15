@@ -2238,7 +2238,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     // Profile-level fields preserved from source
     expect(roleAfter!.defaultPercent).toBe(100)
     expect(roleAfter!.startWeek).toBe(0)
-    expect(roleAfter!.endWeek).toBe(10)
+    expect(roleAfter!.endWeek).toBe(7)  // derived from period endWeek=8 (exclusive)
 
     // Verify no second ROLE profile was created for this RT
     const rolesAfter = await prisma.capacityProfile.findMany({
