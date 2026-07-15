@@ -509,7 +509,7 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(within(row!).getByPlaceholderText('W∞')).toHaveValue(12)
   })
 
-  it('switches to Varies by week without losing the allocation percent', async () => {
+  it('switching to CAPACITY_PLAN preserves allocationPercent in API payload for server compatibility', async () => {
     setupWithNamedResource({
       allocationMode: 'TIMELINE',
       allocationPercent: 80,
@@ -555,6 +555,28 @@ describe('TimelinePage — named-resource allocation controls', () => {
     // No % input visible for EFFORT
     const percentInputs = screen.queryAllByRole('spinbutton', { name: /allocation/i })
     expect(percentInputs.length).toBe(0)
+  })
+
+  it('CAPACITY_PLAN mode label shows Varies by week without percentage suffix', async () => {
+    setupWithNamedResource({ allocationMode: 'CAPACITY_PLAN' })
+    renderPage()
+    await screen.findAllByText('Alice')
+    // The summary label should not contain a percentage
+    const summaryLabels = screen.getAllByText(/Varies by week/)
+    for (const el of summaryLabels) {
+      if (el.tagName === 'OPTION') continue // skip the dropdown option
+      expect(el.textContent).not.toMatch(/%/)
+    }
+  })
+
+  it('CAPACITY_PLAN has truthful help text', async () => {
+    setupWithNamedResource({ allocationMode: 'CAPACITY_PLAN' })
+    renderPage()
+    await screen.findAllByText('Alice')
+    const helpText = await screen.findByText(/Availability varies by week/i)
+    expect(helpText).toBeInTheDocument()
+    // Must NOT claim a saved profile exists
+    expect(helpText.textContent).not.toMatch(/saved weekly capacity profile/i)
   })
 
   it('marks timeline stale after allocation mode change', async () => {
