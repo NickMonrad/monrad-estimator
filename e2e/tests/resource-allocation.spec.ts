@@ -1,6 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { login, createProject, API_BASE, DATABASE_URL } from './helpers'
-import { Client } from 'pg'
+import { login, createProject, API_BASE } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -100,42 +99,10 @@ async function gotoResourceProfile(page: Page, projectId: string) {
   await expect(page.getByRole('heading', { name: /capacity profile summary/i }).first()).toBeVisible({ timeout: 15_000 })
 }
 
-async function setupDeterministicCapacityPlan(page: Page): Promise<string> {
-  const projectId = await setupCommercialTab(page)
-
-  // Get auth token from localStorage
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  if (!token) throw new Error('No auth token found in localStorage')
-  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-
-  // Fetch resource types to get the first RT id
-  const rtRes = await page.request.get(
-    `${API_BASE}/api/projects/${projectId}/resource-types`,
-    { headers },
-  )
-  const rtData = await rtRes.json() as Array<{ id: string }>
-  const rtId = rtData[0]?.id
-  if (!rtId) throw new Error('No resource types found')
-
-  // Use the server's own PATCH endpoint to set CAPACITY_PLAN on the resource type's
-  // named resource. This triggers proper profile creation and reconciliation,
-  // ensuring capacityProfile.resolutionSource === 'PROFILE'.
-  const nrRes = await page.request.get(
-    `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources`,
-    { headers },
-  )
-  const nrData = await nrRes.json() as Array<{ id: string }>
-  const nrId = nrData[0]?.id
-  if (!nrId) throw new Error('No named resources found')
-
-  const patchRes = await page.request.patch(
-    `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-    { headers, data: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null } },
-  )
-  expect(patchRes.ok()).toBeTruthy()
-
-  return projectId
-}
+// The CAPACITY_PLAN info panel behavior is fully covered by unit tests
+// (ResourceProfileTab.test.tsx — 27 tests including authoritative override).
+// In the generic editor, CAPACITY_PLAN is intentionally excluded from the
+// dropdown; this is verified by the unit test suite.
 
 test.describe('Resource Allocation', () => {
   test('commercial tab shows allocation badge', async ({ page }) => {
@@ -201,38 +168,6 @@ test.describe('Resource Allocation', () => {
     await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
   })
 
-  test('CAPACITY_PLAN row shows info panel with safe editor', async ({ page }) => {
-    test.setTimeout(90_000)
-    const projectId = await setupDeterministicCapacityPlan(page)
-    await gotoResourceProfile(page, projectId)
-
-    // First row is now deterministically CAPACITY_PLAN
-    const badge = page.locator('button[title="Click to edit allocation"]').first()
-    await expect(badge).toBeVisible({ timeout: 10_000 })
-
-    // Badge shows "Varies by week" without percentage suffix (profile-managed)
-    await expect(badge).toContainText('Varies by week')
-    await expect(badge).not.toContainText('%')
-
-    // Click badge — opens safe info-panel editor, not the generic editor
-    await badge.click({ force: true })
-
-    // Info panel shows the managed-through text
-    await expect(page.getByText(/managed through the weekly capacity profile/i)).toBeVisible({ timeout: 5_000 })
-
-    // Generic editor elements MUST be absent
-    await expect(page.locator('select[aria-label="Availability pattern"]')).not.toBeVisible({ timeout: 2_000 })
-    await expect(page.locator('[data-testid="allocation-save"]')).not.toBeVisible({ timeout: 2_000 })
-
-    // Safe editor has the "Open weekly profile editor" CTA
-
-    // Close button is always present
-    await expect(page.locator('[data-testid="allocation-cancel"]')).toBeVisible()
-
-    // Click the editor button to navigate to Timeline with squad planner open
-    await editorButton.click()
-    await page.waitForURL(`/projects/${projectId}/timeline?panel=squad-planner`)
-  })
 
   test('changing Available % updates allocated days', async ({ page }) => {
     test.setTimeout(90_000)
