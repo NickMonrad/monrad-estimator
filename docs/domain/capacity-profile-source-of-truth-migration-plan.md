@@ -592,26 +592,63 @@ legacy compatibility projections, Timeline rows, and `weeklyDemandCache`.
 13. **Protected ROLE profiles** — ROLE profiles whose `source` is not
     `SQUAD_PLANNER` and whose `planningBasis` is not `CAPACITY_PROFILE` are never
     converted, zeroed, deleted, or normalised by the apply path, *unless* they
-    match the single adoptable legacy pair and satisfy the evidence requirement.
-    - **Adoptable pair:** Only `source='LEGACY'` + `planningBasis='DEMAND_FOLLOWING'`
-      ROLE profiles may be adopted by the planner.
-    - **Evidence requirement:** The resource type must appear in the captured
-      `PriorPlannerAuthority.allPlannerResourceTypeIds` set (active plan membership
-      or any planner-owned profile evidence). Fresh projects without any planner
-      history fail closed — a bare `LEGACY`/`DEMAND_FOLLOWING` ROLE profile with
-      no evidence returns HTTP 409.
-    - **Adoption effect:** The same profile ID is reused; `source` is set to
-      `'SQUAD_PLANNER'` and `planningBasis` to `'CAPACITY_PROFILE'`.
-    - **Non-adoptable explicit pairs** (`FIXED`/`DEMAND_FOLLOWING`,
-      `FIXED`/`WHOLE_PROJECT_ALLOCATION`, `AVAILABILITY_WINDOW`/`AVAILABILITY_WINDOW`,
-      `IMPORTED` on any basis) always return HTTP 409 with no state change,
-      regardless of authority evidence.
-    - `MANUAL`, `IMPORTED`, `AVAILABILITY_WINDOW`, unknown source, or
-      non-`CAPACITY_PROFILE` basis profiles that do not match the adoptable pair
-      throw `PlannerConflictError` atomically and return
-      HTTP 409 without mutating any data. Only ROLE profiles with `source:
-      'SQUAD_PLANNER'` and `planningBasis: 'CAPACITY_PROFILE'` are
-      planner-updatable (the adoptable pair is updated to this value on adoption).
+    carry validated mapper provenance (proving the legacy mapper/backfill
+    created them) or satisfy the prior-planner authority evidence requirement.
+    
+    **Mapper-provenance adoption (first-apply on fresh project):**
+    A ROLE profile is adoptable without prior planner authority when it carries
+    a validated mapper/backfill provenance payload in its `legacy` JSON column.
+    The `isValidMapperProvenance()` function requires ALL of:
+    - `ownerKind = 'ROLE'`
+    - `namedResourceId = null`
+    - `legacy` is a non-null, non-array object
+    - All seven mapper-produced keys exist:
+      `allocationMode`, `allocationPercent`, `allocationPct`,
+      `allocationStartWeek`, `allocationEndWeek`, `startWeek`, `endWeek`
+    - Each numeric value is a finite number or `null` (rejects strings, objects, NaN)
+    - Profile-level `defaultPercent`/`startWeek`/`endWeek` match the
+      corresponding legacy fields (the mapper derives both from the same
+      ResourceType fields)
+    - The `(source, planningBasis)` pair matches the exact mapper-produced
+      pair for the profile's `allocationMode`:
+      
+      | `allocationMode` | Mapper source | Mapper planningBasis | Derivation |
+      |---|---|---|---|
+      | `EFFORT` | `FIXED` | `DEMAND_FOLLOWING` | deriveSource: `'EFFORT' → 'fixed'` → `FIXED`. allocationModeToPlanningBasis: `'EFFORT' → 'demandFollowing'` → `DEMAND_FOLLOWING`. |
+      | `TIMELINE` | `AVAILABILITY_WINDOW` | `AVAILABILITY_WINDOW` | deriveSource: `'TIMELINE' → 'availabilityWindow'` → `AVAILABILITY_WINDOW`. allocationModeToPlanningBasis: `'TIMELINE' → 'availabilityWindow'` → `AVAILABILITY_WINDOW`. |
+      | `FULL_PROJECT` | `FIXED` | `WHOLE_PROJECT_ALLOCATION` | deriveSource: `'FULL_PROJECT' → 'fixed'` → `FIXED`. allocationModeToPlanningBasis: `'FULL_PROJECT' → 'wholeProjectAllocation'` → `WHOLE_PROJECT_ALLOCATION`. |
+      | `CAPACITY_PLAN` (no active slots) | `LEGACY` | `CAPACITY_PROFILE` | deriveSource: `'CAPACITY_PLAN' + no slots → fallthrough to 'legacy'` → `LEGACY`. allocationModeToPlanningBasis: `'CAPACITY_PLAN' → 'capacityProfile'` → `CAPACITY_PROFILE`. |
+      | `null` / `undefined` | `LEGACY` | `DEMAND_FOLLOWING` | deriveSource fallthrough → `'legacy'` → `LEGACY`. allocationModeToPlanningBasis fallback → `'demandFollowing'` → `DEMAND_FOLLOWING`. |
+    
+    - `CAPACITY_PLAN` with active slot materialisation: the mapper produces
+      `SQUAD_PLANNER`/`CAPACITY_PROFILE`. These are already planner-owned
+      and pass through the normal SQUAD_PLANNER/CAPACITY_PROFILE rule.
+    - Source/basis alone is insufficient. An identical pair with `legacy = null`,
+      malformed/incomplete legacy, or mismatched allocationMode fails closed.
+
+    **Prior-planner authority adoption:**
+    A ROLE profile with `LEGACY`/`DEMAND_FOLLOWING` (the null/undefined
+    allocationMode path) may also be adopted when the captured
+    `PriorPlannerAuthority.allPlannerResourceTypeIds` set contains the resource
+    type (active plan membership or any planner-owned profile evidence). Fresh
+    projects without any planner history fail closed — a bare `LEGACY`/`DEMAND_FOLLOWING`
+    ROLE profile with no authority evidence and no mapper provenance returns HTTP 409.
+
+    **Protected profiles** — ROLE profiles that fail the mapper-provenance check
+    and do not meet the authority evidence requirement are never converted or
+    normalised:
+    - Profile-first / explicit writes that happened to use a mapper-produced
+      `(source, planningBasis)` but left `legacy` as DB_NULL remain protected.
+    - `MANUAL`, `IMPORTED`, and profiles with unknown/bogus source/basis are
+      always protected.
+    - Malformed legacy payloads (missing keys, wrong types, mismatched
+      consistency) fail closed.
+
+    **Adoption effect:** The same profile ID is reused; `source` is set to
+    `'SQUAD_PLANNER'` and `planningBasis` to `'CAPACITY_PROFILE'`.
+    Only ROLE profiles with `source: 'SQUAD_PLANNER'` and `planningBasis:
+    'CAPACITY_PROFILE'` are planner-updatable (mapper profiles are updated
+    to this value on adoption, then behave as native planner profiles).
 14. **Missing ROLE profile creation** — A ROLE profile absent from the project
     may be created only when no conflicting owner (same `resourceTypeId` with
     unprotected source/basis) exists. If a conflicting unprotected
