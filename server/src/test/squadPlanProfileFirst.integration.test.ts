@@ -2279,7 +2279,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
       take: 5,
     })
     // Pre-apply snapshot exists
-    const preApplySnap = snapshots.find(s => s.trigger === 'pre_apply')
+    const preApplySnap = snapshots.find(s => s.trigger === 'optimiser_apply')
     expect(preApplySnap).toBeDefined()
   })
 })
