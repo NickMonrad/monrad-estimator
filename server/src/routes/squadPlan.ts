@@ -79,6 +79,18 @@ const isFiniteNumber = (value: unknown): value is number =>
 
 const isNonNegativeFiniteNumber = (value: unknown): value is number =>
   isFiniteNumber(value) && value >= 0
+const MAX_SERIALIZATION_RETRIES = 2
+
+function isSerializationConflict(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+    return true
+  }
+  if (typeof err !== 'object' || err === null) return false
+  const cause = (err as { cause?: unknown }).cause
+  return typeof cause === 'object'
+    && cause !== null
+    && (cause as { originalCode?: unknown }).originalCode === '40001'
+}
 
 export function deriveFeatureSpanFromWeeklyAllocations(
   weeklyAllocations: Map<number, Map<string, number>> | undefined,
@@ -661,6 +673,9 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   // ── 3. Single transaction: revalidate → deactivate → plan → profile → timeline + cache ──
   let plan: unknown
   try {
+    let transactionAttempts = 0
+    while (true) {
+      try {
     plan = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
       // A deterministic test seam can commit a concurrent profile mutation
       // before validation reads ownership state.
@@ -818,6 +833,14 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       return createdPlan
     }, { isolationLevel: 'Serializable' })
+        break
+      } catch (err) {
+        if (!isSerializationConflict(err) || transactionAttempts >= MAX_SERIALIZATION_RETRIES) {
+          throw err
+        }
+        transactionAttempts += 1
+      }
+    }
   } catch (err: unknown) {
     if (err instanceof PlannerConflictError) {
       // Transaction-time conflict: abort before active-plan deactivation.
@@ -830,7 +853,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       res.status(409).json({ error: err.message })
       return
     }
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+    if (isSerializationConflict(err)) {
       // PostgreSQL Serializable transactions can abort on a concurrent write.
       // The new snapshot is outside the transaction and must be cleaned up explicitly.
       if (newSnapshotId) {
