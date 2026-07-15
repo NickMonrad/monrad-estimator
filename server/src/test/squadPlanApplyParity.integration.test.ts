@@ -1040,14 +1040,14 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     await createNamedResource(projectId, rtDev, 'nr-com-dev-2', 'Developer 2', {
       allocationMode: 'CAPACITY_PLAN',
       allocationPercent: 100,
-      pricingModel: 'ACTUAL_DAYS',
+      pricingModel: 'PRO_RATA',
       startWeek: 0,
       endWeek: 3,
     })
     await createNamedResource(projectId, rtDes, 'nr-com-des-1', 'Designer 1', {
       allocationMode: 'CAPACITY_PLAN',
       allocationPercent: 100,
-      pricingModel: 'ACTUAL_DAYS',
+      pricingModel: 'PRO_RATA',
       startWeek: 0,
       endWeek: 7,
     })
@@ -1175,7 +1175,22 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     // ── Overhead: two fixed-days rows with billable resource types ─────────
     await createOverhead(projectId, 'Travel', 'FIXED_DAYS', 3, rtDev, 0)
     await createOverhead(projectId, 'Management', 'FIXED_DAYS', 2, rtDes, 1)
-
+    // ── Seed the canonical weekly-demand cache before both profile reads ─────
+    // The apply endpoint refreshes this cache from the planner. Keeping the
+    // baseline on the same cache path makes the before/after Resource Profile
+    // projections comparable; this scenario uses PRO_RATA rows so the test
+    // isolates profile identity and capacity from scheduler assignment noise.
+    // Total effort: Dev 32h/8hpd=4d, Des 40h/8hpd=5d over weeks 0-7.
+    const devDays = 4, desDays = 5, durationWeeks = 8
+    const cache: Record<string, number> = {}
+    for (let w = 0; w < durationWeeks; w++) {
+      cache[`${rtDev}|${w}`] = devDays / durationWeeks
+      cache[`${rtDes}|${w}`] = desDays / durationWeeks
+    }
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: cache as unknown as object },
+    })
     // ── Capture commercial data BEFORE apply ──────────────────────────────
     const rpBefore = await request(app)
       .get(`/api/projects/${projectId}/resource-profile`)
