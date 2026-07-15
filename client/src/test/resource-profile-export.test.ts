@@ -36,7 +36,7 @@ function parseCsv(csv: string): { headers: string[]; rows: string[][] } {
 }
 
 describe('ResourceProfile CSV Export — authoritative profile columns', () => {
-  it('includes Planning basis, Profile source, Default capacity %, Profile start, Profile end headers', () => {
+  it('includes Availability pattern, Profile source, Default capacity %, Profile start, Profile end headers', () => {
     const profile = makeProfile({
       resourceRows: [
         {
@@ -74,7 +74,7 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     const csv = buildProfileCsv(profile)
     const { headers } = parseCsv(csv)
 
-    expect(headers).toContain('Planning basis')
+    expect(headers).toContain('Availability pattern')
     expect(headers).toContain('Profile source')
     expect(headers).toContain('Default capacity %')
     expect(headers).toContain('Profile start')
@@ -144,18 +144,18 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     const row = rows[0]
     // Column indices: 0=Section, 1=Role, 2=Resource name, 3=Resource identity, 4=Category,
     // 5=Resource count, 6=Hours per day, 7=Effort days, 8=Assigned days, 9=Billable days,
-    // 10=Day rate, 11=Subtotal, 12=Planning basis, 13=Profile source, 14=Default capacity %,
-    // 15=Profile start, 16=Profile end, 17=Availability window start, 18=Availability window end,
+    // 10=Day rate, 11=Subtotal, 12=Availability pattern, 13=Profile source, 14=Default capacity %,
+    // 15=Profile start, 16=Profile end, 17=Available from, 18=Available to,
     // 19=Assigned start, 20=Assigned end, 21=Capacity profile segments, 22=Assignment segments,
     // 23=Assigned weeks, 24=Billing basis, 25=Handover notes
-    expect(row[12]).toBe('Availability window')  // Planning basis
+    expect(row[12]).toBe('Fixed for selected weeks')  // Availability pattern
     expect(row[13]).toBe('Fixed')                 // Profile source
     expect(row[14]).toBe('100')                   // Default capacity %
     expect(row[15]).toBe('W3')                    // Profile start (0-indexed → W3)
     expect(row[16]).toBe('W10')                   // Profile end (0-indexed → W10)
     // Availability window uses profile start/end (from named resource's capacityProfile)
-    expect(row[17]).toBe('W3')                    // Availability window start
-    expect(row[18]).toBe('W10')                   // Availability window end
+    expect(row[17]).toBe('W3')                    // Available from
+    expect(row[18]).toBe('W10')                   // Available to
   })
 
   it('falls back to legacy fields when no capacityProfile exists', () => {
@@ -191,14 +191,14 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     expect(rows.length).toBe(1)
     const row = rows[0]
     // Planning basis should fall back to allocationMode
-    expect(row[12]).toBe('Availability window')  // from allocationMode='TIMELINE'
+    expect(row[12]).toBe('Fixed for selected weeks')  // from allocationMode='TIMELINE'
     expect(row[13]).toBe('')                      // Profile source empty
     expect(row[14]).toBe('')                      // Default capacity % empty
     expect(row[15]).toBe('')                      // Profile start empty
     expect(row[16]).toBe('')                      // Profile end empty
     // Availability window columns empty for role-level (no startWeek/endWeek on row directly)
-    expect(row[17]).toBe('')
-    expect(row[18]).toBe('')
+    expect(row[17]).toBe('')                      // Available from empty
+    expect(row[18]).toBe('')                      // Available to empty
   })
 
   it('authoritative no-window profile produces empty profile and availability-window CSV fields despite stale legacy windows', () => {
@@ -263,7 +263,7 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     expect(rows.length).toBe(1)
     const row = rows[0]
     // Planning basis from profile
-    expect(row[12]).toBe('Demand-following')
+    expect(row[12]).toBe('As needed')
     // Profile source from profile (formatted)
     expect(row[13]).toBe('Squad Planner')
     // Default capacity % is null in profile

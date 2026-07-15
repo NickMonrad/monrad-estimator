@@ -104,10 +104,9 @@ test.describe('Resource Allocation', () => {
     test.setTimeout(90_000)
     await setupCommercialTab(page)
 
-    const badge = page.getByText(/^(Demand-following|Availability window ·|Whole-project allocation ·|Capacity profile)/).first()
+    const badge = page.getByText(/^(As needed|Fixed for selected weeks ·|Fixed for whole project ·|Varies by week)/).first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
-    const badgeText = await badge.textContent()
-    expect(badgeText).toMatch(/Demand-following|Availability window|Whole-project allocation|Capacity profile/)
+    expect(badgeText).toMatch(/As needed|Fixed for selected weeks|Fixed for whole project|Varies by week/)
   })
 
   test('allocation editor opens on badge click', async ({ page }) => {
@@ -121,10 +120,10 @@ test.describe('Resource Allocation', () => {
     await expect(badge).toHaveAttribute('title', 'Click to edit allocation')
     await badge.click({ force: true })
 
-    await expect(page.getByText(/Planning basis/i).first()).toBeVisible({ timeout: 8_000 })
-    await expect(page.getByText(/Capacity %/i).first()).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText(/Available %|Available Percent/i).first()).toBeVisible({ timeout: 5_000 })
 
-    const modeSelect = page.locator('select').filter({ hasText: /Demand-following|Availability window|Whole-project allocation/ }).first()
+    const modeSelect = page.locator('select').filter({ hasText: /As needed|Fixed for selected weeks|Fixed for whole project/ }).first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
 
     const capacityInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
@@ -134,7 +133,7 @@ test.describe('Resource Allocation', () => {
     await expect(page.locator('[data-testid="allocation-cancel"]')).toBeVisible()
   })
 
-  test('changing Capacity % updates allocated days', async ({ page }) => {
+  test('changing Available % updates allocated days', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
@@ -143,7 +142,7 @@ test.describe('Resource Allocation', () => {
     await expect(badge).toBeVisible({ timeout: 10_000 })
     await badge.click({ force: true })
 
-    await expect(page.getByText(/Capacity %/i).first()).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText(/Available %/i).first()).toBeVisible({ timeout: 8_000 })
 
     const capacityInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
     await capacityInput.fill('50')
@@ -169,9 +168,9 @@ test.describe('Resource Allocation', () => {
     const badgeTextBefore = await badge.textContent()
 
     await badge.click({ force: true })
-    await expect(page.getByText(/Planning basis/i).first()).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
 
-    const modeSelect = page.locator('select').filter({ hasText: /Demand-following|Availability window|Whole-project allocation/ }).first()
+    const modeSelect = page.locator('select').filter({ hasText: /As needed|Fixed for selected weeks|Fixed for whole project/ }).first()
     await modeSelect.selectOption('FULL_PROJECT')
 
     // Click Cancel via data-testid
@@ -186,12 +185,13 @@ test.describe('Resource Allocation', () => {
     expect(badgeTextAfter?.trim()).toBe(badgeTextBefore?.trim())
   })
 
-  test('summary tab shows Planning basis column', async ({ page }) => {
+  test('summary tab shows Availability pattern column', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
 
-    const allocationHeader = page.locator('th').filter({ hasText: /^Planning basis$/ })
+    const allocationHeader = page.locator('th').filter({ hasText: /^Availability pattern$/ })
+    await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
     await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
   })
 })

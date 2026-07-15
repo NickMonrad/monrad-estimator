@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatAllocationMode,
+  formatAllocationModeDescription,
   formatPlanningBasis,
   formatCapacityProfileSource,
   formatResolutionSource,
@@ -10,21 +12,77 @@ import {
 
 describe('formatPlanningBasis', () => {
   it('formats demandFollowing', () => {
-    expect(formatPlanningBasis('demandFollowing')).toBe('Demand-following')
+    expect(formatPlanningBasis('demandFollowing')).toBe('As needed')
   })
 
   it('formats availabilityWindow', () => {
-    expect(formatPlanningBasis('availabilityWindow')).toBe('Availability window')
+    expect(formatPlanningBasis('availabilityWindow')).toBe('Fixed for selected weeks')
   })
 
   it('formats wholeProjectAllocation', () => {
-    expect(formatPlanningBasis('wholeProjectAllocation')).toBe('Whole-project allocation')
+    expect(formatPlanningBasis('wholeProjectAllocation')).toBe('Fixed for whole project')
   })
 
   it('formats capacityProfile', () => {
-    expect(formatPlanningBasis('capacityProfile')).toBe('Capacity profile')
+    expect(formatPlanningBasis('capacityProfile')).toBe('Varies by week')
   })
 
+
+describe('formatAllocationMode', () => {
+  it('formats EFFORT', () => {
+    expect(formatAllocationMode('EFFORT')).toBe('As needed')
+  })
+
+  it('formats FULL_PROJECT', () => {
+    expect(formatAllocationMode('FULL_PROJECT')).toBe('Fixed for whole project')
+  })
+
+  it('formats TIMELINE', () => {
+    expect(formatAllocationMode('TIMELINE')).toBe('Fixed for selected weeks')
+  })
+
+  it('formats CAPACITY_PLAN', () => {
+    expect(formatAllocationMode('CAPACITY_PLAN')).toBe('Varies by week')
+  })
+
+  it('passes through unrecognised values', () => {
+    expect(formatAllocationMode('UNKNOWN')).toBe('UNKNOWN')
+  })
+
+  it('passes through empty string', () => {
+    expect(formatAllocationMode('')).toBe('')
+  })
+})
+
+describe('formatAllocationModeDescription', () => {
+  it('describes EFFORT', () => {
+    expect(formatAllocationModeDescription('EFFORT')).toBe(
+      'Assigned only when scheduled work requires this resource.'
+    )
+  })
+
+  it('describes FULL_PROJECT', () => {
+    expect(formatAllocationModeDescription('FULL_PROJECT')).toBe(
+      'Available at the selected percentage from the beginning to the end of the project. Work is assigned only when demand exists.'
+    )
+  })
+
+  it('describes TIMELINE', () => {
+    expect(formatAllocationModeDescription('TIMELINE')).toBe(
+      'Available at the selected percentage only between the selected start and end weeks. Work is assigned only when demand exists.'
+    )
+  })
+
+  it('describes CAPACITY_PLAN', () => {
+    expect(formatAllocationModeDescription('CAPACITY_PLAN')).toBe(
+      'Availability follows the saved capacity profile. Work is assigned only when demand exists.'
+    )
+  })
+
+  it('returns empty for unrecognised values', () => {
+    expect(formatAllocationModeDescription('UNKNOWN')).toBe('')
+  })
+})
 })
 
 describe('formatCapacityProfileSource', () => {

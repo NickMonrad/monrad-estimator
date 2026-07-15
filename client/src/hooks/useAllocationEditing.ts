@@ -60,7 +60,7 @@ export function useAllocationEditing(projectId: string | undefined) {
     if (row.allocationMode === 'AGGREGATE') {
       return { label: 'Named resources: mixed modes', color: 'bg-gray-100 text-gray-400', sub: null as string | null }
     } else if (row.allocationMode === 'EFFORT') {
-      return { label: 'Demand-following', color: 'bg-gray-100 text-gray-600', sub: null }
+      return { label: 'As needed', color: 'bg-gray-100 text-gray-600', sub: null }
     } else if (row.allocationMode === 'TIMELINE') {
       const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek
       const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek
@@ -68,17 +68,17 @@ export function useAllocationEditing(projectId: string | undefined) {
         ? `Wk ${Math.floor(effectiveStart)} → Wk ${Math.floor(effectiveEnd)}`
         : null
       return {
-        label: `Availability window · ${row.allocationPercent}%`,
+        label: `Fixed for selected weeks · ${row.allocationPercent}%`,
         color: 'bg-blue-100 text-blue-700',
         sub,
       }
     } else if (row.allocationMode === 'CAPACITY_PLAN') {
-      return { label: 'Capacity profile', color: 'bg-green-100 text-green-700', sub: null }
+      return { label: 'Varies by week', color: 'bg-green-100 text-green-700', sub: null }
     } else {
       const dur = profile?.projectDurationWeeks
       const sub = dur != null ? `Wk 0 → Wk ${Math.floor(dur)}` : null
       return {
-        label: `Whole-project allocation · ${row.allocationPercent}%`,
+        label: `Fixed for whole project · ${row.allocationPercent}%`,
         color: 'bg-purple-100 text-purple-700',
         sub,
       }
