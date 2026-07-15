@@ -1,10 +1,12 @@
 import { Fragment } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
 } from 'recharts'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
 import {
   formatAllocationMode,
+  formatAllocationModeDescription,
   formatCapacityProfileSource,
   formatPlanningBasis,
   formatResolutionSource,
@@ -13,10 +15,12 @@ import {
 import NamedResourcesPanel from './NamedResourcesPanel'
 
 const TYPE_OPTIONS = [
-  { label: '% of task days', value: 'PERCENTAGE' },
   { label: 'Fixed total days', value: 'FIXED_DAYS' },
   { label: 'Days per week', value: 'DAYS_PER_WEEK' },
 ] as const
+
+/** Options for the generic editor dropdown — excludes CAPACITY_PLAN (profile-managed). */
+const MANUAL_ALLOCATION_OPTIONS = ALLOCATION_MODE_OPTIONS.filter(o => o.value !== 'CAPACITY_PLAN')
 
 interface Props extends UseResourceProfileReturn {
   projectId: string
@@ -34,6 +38,7 @@ export default function ResourceProfileTab({
   editingAllocation, setEditingAllocation, allocationDraft, setAllocationDraft,
   updateAllocationMutation,
 }: Props) {
+  const navigate = useNavigate()
   return (
     <>
     <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
@@ -258,74 +263,109 @@ export default function ResourceProfileTab({
                     {hasCost && <td className="text-right px-6 py-3 text-gray-900 dark:text-white">{row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}</td>}
                   </tr>
                   {editingAllocation === row.resourceTypeId && allocationDraft && (
-                    <tr className="border-b border-blue-100 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30">
-                      <td colSpan={columnCount} className="px-6 py-4">
-                        <div className="flex flex-wrap items-end gap-4">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Availability pattern</label>
-                            <select value={allocationDraft.allocationMode} onChange={e => {
-                              const newMode = e.target.value
-                              setAllocationDraft(d => d ? {
-                                ...d,
-                                allocationMode: newMode,
-                                allocationStartWeek: newMode === 'TIMELINE' ? d.allocationStartWeek : null,
-                                allocationEndWeek: newMode === 'TIMELINE' ? d.allocationEndWeek : null,
-                                allocationPercent: (newMode !== 'EFFORT' && newMode !== 'CAPACITY_PLAN') ? d.allocationPercent : 100,
-                              } : d)
-                            }}>
-                              {ALLOCATION_MODE_OPTIONS.map(opt => (
-                                <option key={opt.value} value={opt.value}>{opt.label}</option>
-                              ))}
-                            </select>
-                          </div>
-                          {allocationDraft.allocationMode !== 'EFFORT' && allocationDraft.allocationMode !== 'CAPACITY_PLAN' && (
-                            <div>
-                              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Available %</label>
-                              <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
-                                onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
-                                className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    allocationDraft.allocationMode === 'CAPACITY_PLAN' ? (
+                      <tr className="border-b border-green-100 dark:border-green-900 bg-green-50 dark:bg-green-950/30">
+                        <td colSpan={columnCount} className="px-6 py-4">
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                                Varies by week
+                              </span>
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                — managed through the weekly capacity profile
+                              </span>
                             </div>
-                          )}
-                          {allocationDraft.allocationMode === 'TIMELINE' && (
-                            <>
-                              <div>
-                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                                  Available from
-                                  {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
-                                </label>
-                                <input type="number" min={0} step={0.5} value={allocationDraft.allocationStartWeek ?? ''} placeholder="auto"
-                                  onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
-                                  className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                              </div>
-                              <div>
-                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                                  Available to
-                                  {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
-                                </label>
-                                <input type="number" min={0} step={0.5} value={allocationDraft.allocationEndWeek ?? ''} placeholder="auto"
-                                  onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
-                                  className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                              </div>
-                            </>
-                          )}
-                          <div className="flex gap-2 ml-auto">
-                            <button data-testid="allocation-save" onClick={() => {
-                              updateAllocationMutation.mutate(
-                                { rtId: row.resourceTypeId, data: { allocationMode: allocationDraft.allocationMode, allocationPercent: allocationDraft.allocationPercent, allocationStartWeek: allocationDraft.allocationStartWeek, allocationEndWeek: allocationDraft.allocationEndWeek } },
-                                { onSuccess: () => { setEditingAllocation(null); setAllocationDraft(null) } }
-                              )
-                            }} disabled={updateAllocationMutation.isPending}
-                              className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                              {updateAllocationMutation.isPending ? 'Saving…' : 'Save'}
-                            </button>
-                            <button data-testid="allocation-cancel" onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
-                              className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
-                              Cancel
-                            </button>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              {formatAllocationModeDescription('CAPACITY_PLAN')}
+                            </p>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => navigate(`/projects/${projectId}/timeline`)}
+                                className="inline-flex items-center gap-1 px-4 py-1.5 rounded-lg text-sm font-medium bg-lab3-navy text-white hover:bg-lab3-blue transition-colors"
+                              >
+                                View weekly profile ↗
+                              </button>
+                              <button data-testid="allocation-cancel" onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
+                                className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                Close
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr className="border-b border-blue-100 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30">
+                        <td colSpan={columnCount} className="px-6 py-4">
+                          <div className="flex flex-wrap items-end gap-4">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Availability pattern</label>
+                              <select value={allocationDraft.allocationMode} onChange={e => {
+                                const newMode = e.target.value
+                                setAllocationDraft(d => d ? {
+                                  ...d,
+                                  allocationMode: newMode,
+                                  allocationStartWeek: newMode === 'TIMELINE' ? d.allocationStartWeek : null,
+                                  allocationEndWeek: newMode === 'TIMELINE' ? d.allocationEndWeek : null,
+                                  allocationPercent: (newMode !== 'EFFORT' && newMode !== 'CAPACITY_PLAN') ? d.allocationPercent : 100,
+                                } : d)
+                              }}
+                                className="w-full text-xs border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[7rem]"
+                                aria-label="Availability pattern"
+                              >
+                                {MANUAL_ALLOCATION_OPTIONS.map(opt => (
+                                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                            {allocationDraft.allocationMode !== 'EFFORT' && allocationDraft.allocationMode !== 'CAPACITY_PLAN' && (
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Available %</label>
+                                <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
+                                  onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
+                                  className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                              </div>
+                            )}
+                            {allocationDraft.allocationMode === 'TIMELINE' && (
+                              <>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                    Available from
+                                    {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
+                                  </label>
+                                  <input type="number" min={0} step={0.5} value={allocationDraft.allocationStartWeek ?? ''} placeholder="auto"
+                                    onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
+                                    className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                    Available to
+                                    {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
+                                  </label>
+                                  <input type="number" min={0} step={0.5} value={allocationDraft.allocationEndWeek ?? ''} placeholder="auto"
+                                    onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
+                                    className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                                </div>
+                              </>
+                            )}
+                            <div className="flex gap-2 ml-auto">
+                              <button data-testid="allocation-save" onClick={() => {
+                                updateAllocationMutation.mutate(
+                                  { rtId: row.resourceTypeId, data: { allocationMode: allocationDraft.allocationMode, allocationPercent: allocationDraft.allocationPercent, allocationStartWeek: allocationDraft.allocationStartWeek, allocationEndWeek: allocationDraft.allocationEndWeek } },
+                                  { onSuccess: () => { setEditingAllocation(null); setAllocationDraft(null) } }
+                                )
+                              }} disabled={updateAllocationMutation.isPending}
+                                className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
+                                {updateAllocationMutation.isPending ? 'Saving…' : 'Save'}
+                              </button>
+                              <button data-testid="allocation-cancel" onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
+                                className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )
                   )}
                   {expandedNamedResources.has(row.resourceTypeId) && (
                     <NamedResourcesPanel
