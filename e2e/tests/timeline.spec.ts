@@ -1040,26 +1040,20 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
       { timeout: 20_000 },
     )
     await applyBtn.click()
-    await applyResponse
-    expect(applyResponse.status()).toBe(201)
-    const applyBody = await applyResponse.json()
+    const response = await applyResponse
+    expect(response.status()).toBe(201)
+    const applyBody = await response.json()
+    // Response body is the Prisma CapacityPlan object
     type SquadPlanApplyResponse = {
-      activePlanId: string
-      resourceTypes: Array<{
-        resourceTypeId: string
-        resourceTypeName: string
-        headcount: number
-      }>
-      namedResources: Array<{
-        id: string
-        name: string
-      }>
+      id: string
+      isActive: boolean
+      name: string
     }
     const applyData = applyBody as SquadPlanApplyResponse
-    expect(applyData.activePlanId).toBeTruthy()
-    expect(typeof applyData.activePlanId).toBe('string')
-    expect(Array.isArray(applyData.resourceTypes)).toBe(true)
-    expect(applyData.resourceTypes.length).toBeGreaterThan(0)
+    expect(applyData.id).toBeTruthy()
+    expect(typeof applyData.id).toBe('string')
+    expect(applyData.isActive).toBe(true)
+    expect(applyData.name).toBeTruthy()
 
     // Drawer closes after successful apply
     await expect(drawer).not.toBeVisible({ timeout: 10_000 })
@@ -1173,11 +1167,11 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
       { timeout: 20_000 },
     )
     await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
-    await applyResponse2
-    expect(applyResponse2.status()).toBe(201)
-    const applyBody2 = await applyResponse2.json() as SquadPlanApplyResponse
-    expect(applyBody2.activePlanId).toBeTruthy()
-    expect(applyBody2.activePlanId).not.toBe(applyData.activePlanId)
+    const response2 = await applyResponse2
+    expect(response2.status()).toBe(201)
+    const applyBody2 = await response2.json() as SquadPlanApplyResponse
+    expect(applyBody2.id).toBeTruthy()
+    expect(applyBody2.id).not.toBe(applyData.id)
     await expect(drawer).not.toBeVisible({ timeout: 10_000 })
 
     // ── Verify stable identity + updated capacity on Resource Profile ──
