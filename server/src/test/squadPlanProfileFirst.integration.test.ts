@@ -2112,14 +2112,14 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
       .get(`/api/projects/${projectId}/capacity-profiles`)
       .set('Authorization', authHeader)
     expect(cpRes.status).toBe(200)
-    const cpBody = cpRes.body as { profiles: Array<Record<string, unknown>> }
-    expect(Array.isArray(cpBody.profiles)).toBe(true)
-    const omittedRoleCP = cpBody.profiles.find(
-      (p: Record<string, unknown>) => p.ownerKind === 'ROLE' && p.resourceTypeId === rtOmitted,
+    const cpBody = cpRes.body as { capacityProfiles: Array<Record<string, unknown>> }
+    expect(Array.isArray(cpBody.capacityProfiles)).toBe(true)
+    const omittedRoleCP = cpBody.capacityProfiles.find(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role' && (p.owner as Record<string, unknown>).id === rtOmitted,
     )
     expect(omittedRoleCP).toBeDefined()
-    expect((omittedRoleCP as Record<string, unknown>).source).toBe('SQUAD_PLANNER')
-    expect((omittedRoleCP as Record<string, unknown>).planningBasis).toBe('CAPACITY_PROFILE')
+    expect((omittedRoleCP as Record<string, unknown>).source).toBe('squadPlanner')
+    expect((omittedRoleCP as Record<string, unknown>).planningBasis).toBe('capacityProfile')
     expect((omittedRoleCP as Record<string, unknown>).defaultPercent).toBe(0)
     // No stale non-zero segments
     const segments = (omittedRoleCP as Record<string, unknown>).segments as Array<unknown> ?? []
@@ -2173,11 +2173,6 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
       data: { allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 10 },
     })
 
-    // Create a named resource (simulates user having planned one slot)
-    await createNamedResource(
-      projectId, rtId, 'nr-cap-plan-19', 'CapacityPlan Engineer',
-      { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, startWeek: 0, endWeek: 10 },
-    )
     await createEpicBacklog(projectId, rtId)
 
     // ── Run the production mapper/sync path (same sync called on project/resource creation) ──
@@ -2272,13 +2267,13 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
       .get(`/api/projects/${projectId}/capacity-profiles`)
       .set('Authorization', authHeader)
     expect(cpAfter.status).toBe(200)
-    const cpAfterBody = cpAfter.body as { profiles: Array<Record<string, unknown>> }
-    const roleInEndpoint = cpAfterBody.profiles.find(
+    const cpAfterBody = cpAfter.body as { capacityProfiles: Array<Record<string, unknown>> }
+    const roleInEndpoint = cpAfterBody.capacityProfiles.find(
       (p: Record<string, unknown>) => p.id === mapperRoleId,
     )
     expect(roleInEndpoint).toBeDefined()
-    expect((roleInEndpoint as Record<string, unknown>).source).toBe('SQUAD_PLANNER')
-    expect((roleInEndpoint as Record<string, unknown>).planningBasis).toBe('CAPACITY_PROFILE')
+    expect((roleInEndpoint as Record<string, unknown>).source).toBe('squadPlanner')
+    expect((roleInEndpoint as Record<string, unknown>).planningBasis).toBe('capacityProfile')
 
     // ── Assert snapshot history ───────────────────────────────────────
     const snapshots = await prisma.backlogSnapshot.findMany({
@@ -2346,6 +2341,8 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
       .set('Authorization', authHeader)
     expect(cpBefore.status).toBe(200)
 
+    const cpBeforeBody = cpBefore.body as { capacityProfiles: Array<Record<string, unknown>> }
+
     // ── Apply should be rejected ──────────────────────────────────────
     const applyRes = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
@@ -2384,11 +2381,13 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
       .get(`/api/projects/${projectId}/capacity-profiles`)
       .set('Authorization', authHeader)
     expect(cpAfter.status).toBe(200)
-    // Compare the bad profile in both responses
-    const cpBeforeProfiles = cpBefore.body as { profiles: Array<{ id: string }> }
-    const cpAfterProfiles = cpAfter.body as { profiles: Array<{ id: string }> }
-    const badInBefore = cpBeforeProfiles.profiles.find((p: { id: string }) => p.id === badProfileId)
-    const badInAfter = cpAfterProfiles.profiles.find((p: { id: string }) => p.id === badProfileId)
+    // Compare the bad profile in both responses (DTO format, id field may not be DB id)
+    const badInBefore = cpBeforeBody.capacityProfiles.find(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role' && (p.owner as Record<string, unknown>).id === rtId,
+    )
+    const badInAfter = (cpAfter.body as { capacityProfiles: Array<Record<string, unknown>> }).capacityProfiles.find(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role' && (p.owner as Record<string, unknown>).id === rtId,
+    )
     expect(badInBefore).toBeDefined()
     expect(badInAfter).toBeDefined()
   })
