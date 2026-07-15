@@ -607,6 +607,159 @@ describe('TimelinePage — named-resource allocation controls', () => {
       expect(screen.getByText(/timeline inputs changed/i)).toBeInTheDocument()
     })
   })
+
+
+  // ---------------------------------------------------------------------------
+  // Exact-payload verification for allocation mode changes — issue #382
+  // ---------------------------------------------------------------------------
+  it('sends exact payload with allocationPercent=100 when switching to EFFORT', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('TIMELINE')
+
+    fireEvent.change(select, { target: { value: 'EFFORT' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        {
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      )
+    })
+  })
+
+  it('sends exact payload with preserved percent and null weeks when switching to FULL_PROJECT', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('TIMELINE')
+
+    fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        {
+          allocationMode: 'FULL_PROJECT',
+          allocationPercent: 80,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      )
+    })
+  })
+
+  it('sends exact payload with preserved percent and weeks when switching to TIMELINE', async () => {
+    setupWithNamedResource({
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 80,
+      allocationStartWeek: 3,
+      allocationEndWeek: 12,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('FULL_PROJECT')
+
+    fireEvent.change(select, { target: { value: 'TIMELINE' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        {
+          allocationMode: 'TIMELINE',
+          allocationPercent: 80,
+          allocationStartWeek: 3,
+          allocationEndWeek: 12,
+        },
+      )
+    })
+  })
+
+  it('sends exact payload with allocationPercent=100 when switching to CAPACITY_PLAN', async () => {
+    setupWithNamedResource({
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('EFFORT')
+
+    fireEvent.change(select, { target: { value: 'CAPACITY_PLAN' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        {
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      )
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Field visibility per allocation mode — issue #382
+  // ---------------------------------------------------------------------------
+  it('shows percentage input for FULL_PROJECT mode', async () => {
+    setupWithNamedResource({ allocationMode: 'FULL_PROJECT', allocationPercent: 75 })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    const pctInput = screen.getByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(pctInput).toBeInTheDocument()
+    expect(pctInput).toHaveValue(75)
+  })
+
+  it('shows percentage input for TIMELINE mode', async () => {
+    setupWithNamedResource({ allocationMode: 'TIMELINE', allocationPercent: 80 })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    const pctInput = screen.getByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(pctInput).toBeInTheDocument()
+    expect(pctInput).toHaveValue(80)
+  })
+
+  it('shows enabled date controls for TIMELINE mode', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    const fromInput = screen.getByPlaceholderText('W1')
+    const toInput = screen.getByPlaceholderText('W∞')
+    expect(fromInput).not.toBeDisabled()
+    expect(toInput).not.toBeDisabled()
+    expect(fromInput).toHaveValue(2)
+    expect(toInput).toHaveValue(10)
+  })
 })
 
 // ---------------------------------------------------------------------------

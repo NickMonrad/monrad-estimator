@@ -141,21 +141,59 @@ export function isResolutionSource(value: string): value is ResolutionSource {
 export interface EffectiveAvailabilityState {
   /** The effective allocation mode derived from authoritative profile first, then legacy state. */
   effectiveMode: AllocationMode
-  /** Whether this resource is managed through the weekly capacity profile editor. */
+  /** Whether this resource is managed through the weekly capacity profile editor.
+   *  When true, the generic scalar editor (availability select, Available %, Save)
+   *  must NOT render. */
   isProfileManaged: boolean
-  /** Whether the capacity profile has authoritative (PROFILE) resolution. */
+  /** Whether the capacity profile has authoritative resolution (PROFILE or ACTIVE_CAPACITY_PLAN). */
   hasAuthoritativeProfile: boolean
+  /** Whether the persisted profile contains at least one weekly segment. */
+  hasMeaningfulSegments: boolean
+  /** The resolution source that determined the effective state, if authoritative. */
+  resolutionSource?: 'PROFILE' | 'ACTIVE_CAPACITY_PLAN'
+}
+
+
+/**
+ * Map a capacity-profile planning basis to the most appropriate scalar
+ * allocation mode for editing, used when an authoritative profile has no
+ * segments and is therefore safely representable by scalar controls.
+ *
+ * | PlanningBasis                | Mapped mode     | Rationale                         |
+ * |------------------------------|-----------------|-----------------------------------|
+ * | demandFollowing              | EFFORT          | Follows demand, no date window    |
+ * | availabilityWindow           | TIMELINE        | Has start/end window              |
+ * | wholeProjectAllocation       | FULL_PROJECT    | Fixed for whole project           |
+ * | capacityProfile              | CAPACITY_PLAN   | Weekly profile (managed)          |
+ */
+function planningBasisToEditableMode(basis: string | null | undefined): AllocationMode {
+  switch (basis) {
+    case 'demandFollowing': return 'EFFORT'
+    case 'availabilityWindow': return 'TIMELINE'
+    case 'wholeProjectAllocation': return 'FULL_PROJECT'
+    case 'capacityProfile': return 'CAPACITY_PLAN'
+    default: return 'EFFORT'
+  }
 }
 
 /**
  * Derive the effective availability state for a resource row.
  *
  * Priority order:
- * 1. Authoritative persisted capacityProfile state (resolutionSource === 'PROFILE')
- * 2. Legacy allocation fields (fallback)
+ * 1. `resolutionSource === 'ACTIVE_CAPACITY_PLAN'` → profile-managed (any segments state)
+ * 2. `resolutionSource === 'PROFILE'` with meaningful segments → profile-managed (any planning basis)
+ * 3. `resolutionSource === 'PROFILE'` with `capacityProfile` planning basis → profile-managed
+ * 4. `resolutionSource === 'PROFILE'` with no segments + scalar-safe planning basis → editable
+ * 5. Legacy `allocationMode` fallback
  *
- * A role with an authoritative capacity-profile planning-basis and weekly segments
- * is treated as Varies by week regardless of stale `row.allocationMode`.
+ * A profile-managed row MUST NOT show the generic scalar editor (select, inputs, Save).
+ * An authoritative segmented profile has weekly shape that the scalar writer (`upsertRTProfileAndProjectLegacy`)
+ * would destroy by deleting existing segments. The `isProfileManaged` gate is the only
+ * client-side protection against flattening segmented profiles.
+ *
+ * For authoritative but scalar profiles without segments, the planning basis is safely
+ * representable by the scalar controls and editing is allowed. The `planningBasisToEditableMode`
+ * mapping selects the appropriate allocation mode.
  */
 export function deriveEffectiveAvailabilityState(row: {
   allocationMode?: string | null
@@ -165,21 +203,62 @@ export function deriveEffectiveAvailabilityState(row: {
     segments?: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
   } | null
 }): EffectiveAvailabilityState {
-  const isAuthoritative = row.capacityProfile?.resolutionSource === 'PROFILE'
-  const isCapacityPlan = row.capacityProfile?.planningBasis === 'capacityProfile'
+  const resolutionSource = row.capacityProfile?.resolutionSource as ('PROFILE' | 'ACTIVE_CAPACITY_PLAN' | null | undefined)
+  const planningBasis = row.capacityProfile?.planningBasis
+  const segments = row.capacityProfile?.segments ?? []
+  const hasSegments = segments.length > 0
 
-  if (isAuthoritative && isCapacityPlan) {
+  // 1. ACTIVE_CAPACITY_PLAN → always profile-managed
+  if (resolutionSource === 'ACTIVE_CAPACITY_PLAN') {
     return {
       effectiveMode: 'CAPACITY_PLAN',
       isProfileManaged: true,
       hasAuthoritativeProfile: true,
+      hasMeaningfulSegments: hasSegments,
+      resolutionSource: 'ACTIVE_CAPACITY_PLAN',
     }
   }
 
-  // Fall back to legacy allocation mode
+  const isAuthoritative = resolutionSource === 'PROFILE'
+
+  if (isAuthoritative) {
+    // 2. PROFILE with meaningful segments → profile-managed (any planning basis)
+    if (hasSegments) {
+      return {
+        effectiveMode: 'CAPACITY_PLAN',
+        isProfileManaged: true,
+        hasAuthoritativeProfile: true,
+        hasMeaningfulSegments: true,
+        resolutionSource: 'PROFILE',
+      }
+    }
+
+    // 3. PROFILE + capacityProfile → profile-managed even without segments
+    if (planningBasis === 'capacityProfile') {
+      return {
+        effectiveMode: 'CAPACITY_PLAN',
+        isProfileManaged: true,
+        hasAuthoritativeProfile: true,
+        hasMeaningfulSegments: false,
+        resolutionSource: 'PROFILE',
+      }
+    }
+
+    // 4. PROFILE, no segments, scalar-safe planning basis → editable
+    return {
+      effectiveMode: planningBasisToEditableMode(planningBasis),
+      isProfileManaged: false,
+      hasAuthoritativeProfile: true,
+      hasMeaningfulSegments: false,
+      resolutionSource: 'PROFILE',
+    }
+  }
+
+  // 5. Legacy fallback
   return {
     effectiveMode: (row.allocationMode as AllocationMode) ?? 'EFFORT',
     isProfileManaged: false,
-    hasAuthoritativeProfile: isAuthoritative,
+    hasAuthoritativeProfile: false,
+    hasMeaningfulSegments: false,
   }
 }

@@ -1167,7 +1167,7 @@ export default function TimelinePage() {
                             {nrs.length > 0 && (
                               <div className="border-t border-gray-100 dark:border-gray-700 mt-2 pt-2">
                                 {/* Desktop column headers — hidden on mobile, visible as grid on sm+ */}
-                                <div data-testid="named-resource-headers" className="hidden sm:grid sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
+                                <div data-testid="named-resource-headers" className="hidden sm:grid sm:grid-cols-[minmax(90px,1fr)_minmax(155px,1.4fr)_70px_55px_55px_36px] gap-x-1.5 text-[11px] text-gray-400 dark:text-gray-500 font-medium px-1 pb-1">
                                   <span>Named resource</span>
                                   <span>Availability pattern</span>
                                   <span className="text-right">Available %</span>
@@ -1183,7 +1183,7 @@ export default function TimelinePage() {
                                     <div
                                       key={nr.id ?? `${rt.id}-${i}`}
                                       data-testid={nr.id ? `named-resource-row-${nr.id}` : undefined}
-                                      className="grid grid-cols-1 sm:grid-cols-[minmax(90px,1fr)_130px_70px_55px_55px_36px] gap-x-1.5 gap-y-1 items-center text-xs text-gray-500 dark:text-gray-400 py-1.5 px-1 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40 min-w-0"
+                                      className="grid grid-cols-1 sm:grid-cols-[minmax(90px,1fr)_minmax(155px,1.4fr)_70px_55px_55px_36px] gap-x-1.5 gap-y-1 items-center text-xs text-gray-500 dark:text-gray-400 py-1.5 px-1 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40 min-w-0"
                                     >
                                       {/* Name — direct child so closest('div') from text finds the grid row */}
                                       <span className="truncate text-gray-600 dark:text-gray-300 font-medium min-w-0">{nr.name}</span>
