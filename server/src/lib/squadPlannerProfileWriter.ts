@@ -72,6 +72,12 @@ interface PersistedProfileSummary {
   planningBasis?: string
   /** Non-null when the profile was created by the mapper/backfill (legacy sync). */
   legacy?: unknown
+  /** Profile-level default percent (legacy allocationPercent). */
+  defaultPercent?: number | null
+  /** Profile-level start week (legacy allocationStartWeek). */
+  startWeek?: number | null
+  /** Profile-level end week (legacy allocationEndWeek). */
+  endWeek?: number | null
 }
 
 /** Sources that represent explicit/manual ownership and must not be replaced. */
@@ -99,7 +105,18 @@ const ALLOCATION_MODE_TO_MAPPER_PAIR: Record<string, readonly [string, string]> 
   EFFORT: ['FIXED', 'DEMAND_FOLLOWING'],
   TIMELINE: ['AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
   FULL_PROJECT: ['FIXED', 'WHOLE_PROJECT_ALLOCATION'],
-  CAPACITY_PLAN: ['LEGACY', 'DEMAND_FOLLOWING'],
+  // CAPACITY_PLAN without active slot materialisation: the mapper produces
+  //   source='LEGACY' (fallthrough in deriveSource for CAPACITY_PLAN with no slots)
+  //   planningBasis=capacityProfile ('capacityProfile' via allocationModeToPlanningBasis)
+  //   → Prisma enums: LEGACY, CAPACITY_PROFILE
+  CAPACITY_PLAN: ['LEGACY', 'CAPACITY_PROFILE'],
+  // Null/undefined allocationMode: the mapper defaults to
+  //   source='LEGACY' (deriveSource fallthrough)
+  //   planningBasis='demandFollowing' (allocationModeToPlanningBasis fallback)
+  //   → Prisma enums: LEGACY, DEMAND_FOLLOWING
+  //
+  // This pair is handled separately in isValidMapperProvenance via the
+  // allocationMode===null branch rather than being a named key here.
 }
 
 /**
@@ -122,11 +139,12 @@ const ALLOCATION_MODE_TO_MAPPER_PAIR: Record<string, readonly [string, string]> 
  * - All expected mapper compatibility fields are present in the legacy payload
  */
 export function isValidMapperProvenance(
-  profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis' | 'legacy' | 'namedResourceId'>,
+  profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis' | 'legacy' | 'namedResourceId' | 'resourceTypeId' | 'defaultPercent' | 'startWeek' | 'endWeek'>,
 ): boolean {
   // Must be an aggregate ROLE profile (not a named-resource-level profile)
   if (profile.ownerKind !== 'ROLE') return false
   if (profile.namedResourceId !== null && profile.namedResourceId !== undefined) return false
+  if (profile.resourceTypeId === null || profile.resourceTypeId === undefined) return false
 
   // Legacy payload must be a non-null object (mapper always populates it)
   if (profile.legacy === null || profile.legacy === undefined) return false
@@ -134,26 +152,79 @@ export function isValidMapperProvenance(
 
   const legacy = profile.legacy as Record<string, unknown>
 
-  // allocationMode is the key discriminant — mapper always sets it
+  // ── 1. allocationMode validation ──────────────────────────────────────
+  // The mapper always writes allocationMode.  For a recognised string mode,
+  // look up the expected (source, planningBasis) pair.  For null/undefined
+  // (mapper fallback for null mode), expect LEGACY/DEMAND_FOLLOWING.
   const allocationMode = legacy.allocationMode
-  if (typeof allocationMode !== 'string') return false
 
-  // Look up the expected (source, planningBasis) pair for this allocation mode
-  const pair = ALLOCATION_MODE_TO_MAPPER_PAIR[allocationMode]
-  if (!pair) return false
+  let expectedSource: string
+  let expectedBasis: string
 
-  const [expectedSource, expectedBasis] = pair
+  if (allocationMode === null || allocationMode === undefined) {
+    // Mapper default pair for null/undefined allocationMode
+    expectedSource = 'LEGACY'
+    expectedBasis = 'DEMAND_FOLLOWING'
+  } else if (typeof allocationMode === 'string') {
+    const pair = ALLOCATION_MODE_TO_MAPPER_PAIR[allocationMode]
+    if (!pair) return false
+    expectedSource = pair[0]
+    expectedBasis = pair[1]
+  } else {
+    // allocationMode is a non-string, non-null value — invalid
+    return false
+  }
+
   if (profile.source !== expectedSource) return false
   if (profile.planningBasis !== expectedBasis) return false
 
-  // Verify expected mapper compatibility fields are present (not undefined).
-  // The mapper always writes these, even when null; undefined means the
-  // legacy payload was constructed differently (profile-first/explicit write).
-  if (legacy.allocationPercent === undefined) return false
-  if (legacy.allocationStartWeek === undefined) return false
-  if (legacy.allocationEndWeek === undefined) return false
+  // ── 2. All seven mapper keys must exist in the legacy payload ────
+  // The mapper's buildLegacyFields() always writes these seven keys:
+  //   allocationMode, allocationPercent, allocationPct,
+  //   allocationStartWeek, allocationEndWeek, startWeek, endWeek
+  // Absence of any key means the payload was constructed differently.
+  const mapperKeys: (keyof typeof legacy)[] = [
+    'allocationMode', 'allocationPercent', 'allocationPct',
+    'allocationStartWeek', 'allocationEndWeek', 'startWeek', 'endWeek',
+  ]
+  for (const key of mapperKeys) {
+    if (!(key in legacy)) return false
+  }
+
+  // ── 3. Type validation ─────────────────────────────────────────────
+  // Percentages: finite number or null (reject strings, objects, NaN)
+  if (!isValidNullableFinite(legacy.allocationPercent)) return false
+  if (!isValidNullableFinite(legacy.allocationPct)) return false
+
+  // Week fields: finite number or null
+  if (!isValidNullableFinite(legacy.allocationStartWeek)) return false
+  if (!isValidNullableFinite(legacy.allocationEndWeek)) return false
+  if (!isValidNullableFinite(legacy.startWeek)) return false
+  if (!isValidNullableFinite(legacy.endWeek)) return false
+
+  // ── 4. Internal consistency with the persisted ROLE profile ────────
+  // The mapper derives both profile-level and legacy-level fields from the
+  // same ResourceType fields, so they must agree.
+  if (profile.defaultPercent !== undefined && profile.defaultPercent !== null) {
+    if (profile.defaultPercent !== legacy.allocationPercent) return false
+  }
+  if (profile.startWeek !== undefined && profile.startWeek !== null) {
+    if (profile.startWeek !== legacy.allocationStartWeek) return false
+  }
+  if (profile.endWeek !== undefined && profile.endWeek !== null) {
+    if (profile.endWeek !== legacy.allocationEndWeek) return false
+  }
 
   return true
+}
+
+/**
+ * True when `value` is `null`, `undefined`, or a finite number.
+ * Rejects NaN, Infinity, strings, objects, booleans and arrays.
+ */
+function isValidNullableFinite(value: unknown): boolean {
+  if (value === null || value === undefined) return true
+  return typeof value === 'number' && Number.isFinite(value)
 }
 
 /** Minimal NamedResource shape for deterministic ordering. */
@@ -619,6 +690,9 @@ export async function validatePlannerOwnerState(
       source: true,
       planningBasis: true,
       legacy: true,
+      defaultPercent: true,
+      startWeek: true,
+      endWeek: true,
     },
   })) ?? []
   const conflicts: ConflictResourceInfo[] = []
@@ -650,9 +724,9 @@ export async function validatePlannerOwnerState(
       } else if (profile.ownerKind === 'ROLE') {
         const validSquadPlanner = profile.source === 'SQUAD_PLANNER' && profile.planningBasis === 'CAPACITY_PROFILE'
         const isMapperProfile = isValidMapperProvenance(profile)
-        // LEGACY/DEMAND_FOLLOWING ROLE profiles without mapper provenance may
-        // still be adoptable when prior planner authority evidence confirms
-        // this resource type was previously planner-managed.
+        // Fallback: LEGACY/DEMAND_FOLLOWING ROLE profiles without mapper provenance
+        // (null allocationMode or prior writer that didn't populate legacy) may still
+        // be adoptable when prior planner authority confirms planner-managed status.
         const hasLegacyPair = profile.source === 'LEGACY' && profile.planningBasis === 'DEMAND_FOLLOWING'
         const hasAuthorityEvidence = authority != null && authority.allPlannerResourceTypeIds.has(resourceTypeId)
         const validAdoptableRole = isMapperProfile || (hasLegacyPair && hasAuthorityEvidence)
