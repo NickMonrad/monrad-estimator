@@ -789,13 +789,7 @@ export async function findOrCreatePlannedResources(
       allocationMode: 'CAPACITY_PLAN' as const,
       startWeek: 0,
     }))
-    const created = await Promise.all(
-      newNRs.map(async data => {
-        const resource = await tx.namedResource.create({ data })
-        return resource.id
-      }),
-    )
-    createdResourceIds = new Set(created)
+    await tx.namedResource.createMany({ data: newNRs })
   }
 
   // Re-read to capture newly created resource IDs
@@ -804,6 +798,12 @@ export async function findOrCreatePlannedResources(
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: { id: true, name: true, createdAt: true, allocationMode: true },
   })
+  const existingResourceIds = new Set(existingNRs.map(resource => resource.id))
+  createdResourceIds = new Set(
+    allNRs
+      .filter(resource => !existingResourceIds.has(resource.id))
+      .map(resource => resource.id),
+  )
   const allProfiles = allNRs.length === 0
     ? []
     : await tx.capacityProfile.findMany({
