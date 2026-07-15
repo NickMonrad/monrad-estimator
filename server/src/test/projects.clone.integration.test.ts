@@ -1519,7 +1519,7 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
 
     const iNamedId = colIdx('Resource identity')
     const iResName = colIdx('Resource name')
-    const iPlanBasis = colIdx('Planning basis')
+    const iPlanBasis = colIdx('Availability pattern')
     const iProfSrc = colIdx('Profile source')
     const iDefPct = colIdx('Default capacity %')
     const iProfStart = colIdx('Profile start')
