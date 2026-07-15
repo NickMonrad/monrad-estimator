@@ -182,6 +182,9 @@ async function createResourceType(
     category: $Enums.ResourceCategory
     count: number
     allocationMode: $Enums.AllocationMode
+    allocationPercent: number
+    allocationStartWeek: number | null
+    allocationEndWeek: number | null
     dayRate: number
     hoursPerDay: number
   }> = {},
@@ -194,6 +197,9 @@ async function createResourceType(
       category: overrides.category ?? 'ENGINEERING',
       count: overrides.count ?? 2,
       allocationMode: overrides.allocationMode ?? 'TIMELINE',
+      allocationPercent: overrides.allocationPercent ?? 100,
+      allocationStartWeek: overrides.allocationStartWeek ?? null,
+      allocationEndWeek: overrides.allocationEndWeek ?? null,
       dayRate: overrides.dayRate ?? null,
       hoursPerDay: overrides.hoursPerDay ?? null,
     },
@@ -260,6 +266,7 @@ async function createPlannerProfile(
   resourceTypeId: string | null,
   namedResourceId: string | null,
   segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>,
+  defaultPercent: number | null = null,
 ): Promise<void> {
   await prisma.capacityProfile.create({
     data: {
@@ -270,7 +277,7 @@ async function createPlannerProfile(
       namedResourceId,
       planningBasis: 'CAPACITY_PROFILE',
       source: 'SQUAD_PLANNER',
-      defaultPercent: null,
+      defaultPercent,
       startWeek: null,
       endWeek: null,
     },
@@ -1008,42 +1015,48 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     // ── 2 resource types with day rates ─────────────────────────────────
     rtDev = await createResourceType(projectId, 'rt-com-dev', 'Developer', {
       dayRate: 500,
-      allocationMode: 'TIMELINE',
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 150,
+      allocationStartWeek: 0,
+      allocationEndWeek: 7,
     })
     rtDes = await createResourceType(projectId, 'rt-com-des', 'Designer', {
       dayRate: 400,
-      allocationMode: 'TIMELINE',
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: 0,
+      allocationEndWeek: 7,
       count: 2,
     })
 
     // ── 4 named resources: 2 per RT, each with stable well-known IDs ─────
     await createNamedResource(projectId, rtDev, 'nr-com-dev-1', 'Developer 1', {
-      allocationMode: 'TIMELINE',
+      allocationMode: 'CAPACITY_PLAN',
       allocationPercent: 100,
       pricingModel: 'PRO_RATA',
       startWeek: 0,
       endWeek: 7,
     })
     await createNamedResource(projectId, rtDev, 'nr-com-dev-2', 'Developer 2', {
-      allocationMode: 'TIMELINE',
+      allocationMode: 'CAPACITY_PLAN',
       allocationPercent: 100,
       pricingModel: 'ACTUAL_DAYS',
       startWeek: 0,
-      endWeek: 7,
+      endWeek: 3,
     })
     await createNamedResource(projectId, rtDes, 'nr-com-des-1', 'Designer 1', {
-      allocationMode: 'TIMELINE',
+      allocationMode: 'CAPACITY_PLAN',
       allocationPercent: 100,
       pricingModel: 'ACTUAL_DAYS',
       startWeek: 0,
       endWeek: 7,
     })
     await createNamedResource(projectId, rtDes, 'nr-com-des-2', 'Designer 2', {
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 0,
       pricingModel: 'PRO_RATA',
-      startWeek: 0,
-      endWeek: 7,
+      startWeek: null,
+      endWeek: null,
     })
 
     // ── Backlog with enough hours for non-zero actualAllocatedDays ────────
@@ -1151,7 +1164,7 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
       { startWeek: 0, endWeek: 3, capacityPercent: 100 },
       { startWeek: 4, endWeek: 7, capacityPercent: 100 },
     ])
-    await createPlannerProfile(projectId, 'cp-com-des-2', 'PLANNED_RESOURCE', null, 'nr-com-des-2', [])
+    await createPlannerProfile(projectId, 'cp-com-des-2', 'PLANNED_RESOURCE', null, 'nr-com-des-2', [], 0)
 
 
     // ── Discounts: project-wide + role-specific ────────────────────────────
