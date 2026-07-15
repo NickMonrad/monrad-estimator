@@ -70,6 +70,8 @@ interface PersistedProfileSummary {
   ownerKind: string
   source: string
   planningBasis?: string
+  /** Non-null when the profile was created by the mapper/backfill (legacy sync). */
+  legacy?: unknown
 }
 
 /** Sources that represent explicit/manual ownership and must not be replaced. */
@@ -555,6 +557,7 @@ export async function validatePlannerOwnerState(
       ownerKind: true,
       source: true,
       planningBasis: true,
+      legacy: true,
     },
   })) ?? []
   const conflicts: ConflictResourceInfo[] = []
@@ -587,7 +590,11 @@ export async function validatePlannerOwnerState(
         const validSquadPlanner = profile.source === 'SQUAD_PLANNER' && profile.planningBasis === 'CAPACITY_PROFILE'
         const hasLegacyPair = profile.source === LEGACY_ADOPTABLE_PAIR[0] && profile.planningBasis === LEGACY_ADOPTABLE_PAIR[1]
         const hasAuthorityEvidence = authority != null && authority.allPlannerResourceTypeIds.has(resourceTypeId)
-        const validLegacyRole = hasLegacyPair && hasAuthorityEvidence
+        // Mapper-generated profiles carry a populated legacy payload; profile-first/explicit
+        // LEGACY/DEMAND_FOLLOWING writes leave it null. Accept mapper-generated roles
+        // even without prior planner authority (first Squad Planner apply on fresh project).
+        const hasMapperProvenance = profile.legacy !== null && typeof profile.legacy === 'object'
+        const validLegacyRole = hasLegacyPair && (hasAuthorityEvidence || hasMapperProvenance)
         if (!validSquadPlanner && !validLegacyRole) {
           mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
         }
@@ -1222,6 +1229,9 @@ export function __setApplyFailureSeam(fn: (() => void) | null): void {
  * Clear planner-owned role/resource capacity for resource types omitted from
  * the replacement plan while preserving explicit/manual profiles.
  * Uses captured authority data rather than re-querying profiles after mutation.
+ * Synthesizes zero-capacity ROLE profiles for RTs that have planner-owned
+ * named resources but no existing ROLE profile, ensuring complete persisted
+ * authority that checkPersistedCompleteness accepts.
  */
 export async function clearOmittedPlannerCapacity(
   tx: PrismaTransactionClient,
@@ -1252,22 +1262,12 @@ export async function clearOmittedPlannerCapacity(
       })
     : []
 
-  // Merge planner-owned and LEGACY/DEMAND_FOLLOWING ROLE RTs into zero-cap profiles
-  // without synthesizing absent ROLE rows.
   const roleRtIds = new Set([
     ...[...authority.plannerRoleResourceTypeIds].filter(id => !activeResourceTypeIds.has(id)),
     ...existingOmittedRoleProfiles
       .map(p => p.resourceTypeId)
       .filter((id): id is string => id !== null),
   ])
-  const zeroRoleProfiles: RoleProfileWriteSet[] = [...roleRtIds]
-    .map(resourceTypeId => ({
-      resourceTypeId,
-      defaultPercent: 0,
-      startWeek: null,
-      endWeek: null,
-      segments: [],
-    }))
   const zeroPlannedProfiles: PlannedResourceProfileWriteSet[] = []
   const zeroResourceIds: string[] = []
 
@@ -1305,6 +1305,7 @@ export async function clearOmittedPlannerCapacity(
       list.push(profile)
       profilesByNrId.set(profile.namedResourceId, list)
     }
+    let hasPlannerManagedNRs = false
     for (const namedResource of namedResources) {
       const profiles = profilesByNrId.get(namedResource.id) ?? []
       if (isPlannerManaged(
@@ -1314,9 +1315,26 @@ export async function clearOmittedPlannerCapacity(
       )) {
         zeroPlannedProfiles.push(buildZeroCapacityProfileData(namedResource.id))
         zeroResourceIds.push(namedResource.id)
+        hasPlannerManagedNRs = true
       }
     }
+    // If RT has planner-owned NRs but no existing ROLE profile, ensure a
+    // zero-capacity aggregate ROLE is synthesized so persisted authority is complete.
+    if (hasPlannerManagedNRs && !roleRtIds.has(resourceTypeId)) {
+      roleRtIds.add(resourceTypeId)
+    }
   }
+
+  // Build zeroRoleProfiles from the final roleRtIds set (may include newly
+  // synthesized entries for RTs with planner-owned NRs but no existing ROLE).
+  const zeroRoleProfiles: RoleProfileWriteSet[] = [...roleRtIds]
+    .map(resourceTypeId => ({
+      resourceTypeId,
+      defaultPercent: 0,
+      startWeek: null,
+      endWeek: null,
+      segments: [],
+    }))
 
   await writePlannerProfiles(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles, [], undefined, authority)
   await projectCompatibilityFields(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles)
