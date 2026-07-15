@@ -263,8 +263,16 @@ export default function ResourceProfileTab({
                         <div className="flex flex-wrap items-end gap-4">
                           <div>
                             <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Availability pattern</label>
-                            <select value={allocationDraft.allocationMode} onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
-                              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <select value={allocationDraft.allocationMode} onChange={e => {
+                              const newMode = e.target.value
+                              setAllocationDraft(d => d ? {
+                                ...d,
+                                allocationMode: newMode,
+                                allocationStartWeek: newMode === 'TIMELINE' ? d.allocationStartWeek : null,
+                                allocationEndWeek: newMode === 'TIMELINE' ? d.allocationEndWeek : null,
+                                allocationPercent: (newMode !== 'EFFORT' && newMode !== 'CAPACITY_PLAN') ? d.allocationPercent : 100,
+                              } : d)
+                            }}>
                               {ALLOCATION_MODE_OPTIONS.map(opt => (
                                 <option key={opt.value} value={opt.value}>{opt.label}</option>
                               ))}

@@ -49,7 +49,7 @@ A normal estimate usually follows this path:
 3. **Estimate effort** by giving tasks hours or duration days and assigning resource types (roles).
 4. **Define resource types** such as Senior Engineer, Project Manager, or Principal Consultant.
 5. **Set rates and capacity** such as day rate, hours per day, and resource count.
-6. **Set planning basis** on the Resource Counts panel — choose how each role is planned (demand-following or whole-project allocation), set availability windows, and configure capacity profiles.
+6. **Set availability patterns** on the Resource Counts panel — choose how each role is made available (as needed, fixed for the whole project, fixed for selected weeks, or varies by week).
 7. **Add named people or named resources** if you need to model specific people or a staffing shape over time.
 8. **Click Update timeline** to schedule the work onto the delivery timeline.
 9. **Review the Timeline** for feature/story bars, warnings, gaps, dependencies, and manual overrides.
@@ -100,7 +100,7 @@ Use it after changing any of the following:
 - backlog items (new, removed, or reordered);
 - dependencies between features or epics;
 - project start date;
-- resource counts or planning basis settings;
+- resource counts or availability pattern settings;
 - named people or named resources;
 - capacity settings that affect how much work a role can handle per week.
 
@@ -181,27 +181,35 @@ A role can have no named people, one named person, or many named people.
 
 If a role has a count greater than the number of named people, the remaining capacity is treated as unnamed capacity. Think of it as planned staffing slots that are not tied to a specific person yet.
 
-## Resource Counts / planning basis
+## Resource Counts / Availability patterns
 
-The Resource Counts panel lets you control how each role's capacity is planned.
+The Resource Counts panel controls how each role is made available over time.
 
-### Demand-following
+**Three things are separate:**
 
-The role gets exactly as many people each week as the scheduled work demands, up to the resource count. This is the simplest mode: set a count and let the scheduler decide how many are needed each week.
+1. **Available capacity** — the maximum role/person capacity that can be used.
+2. **Assigned work** — work actually scheduled against that capacity.
+3. **Billing basis** — the separate Commercial rule used to calculate billable days.
 
-### Whole-project allocation
+Changing availability does not automatically assign work or set the billing rate.
 
-The role is assigned a fixed allocation for the entire project (or for a specific date range), regardless of how much scheduled work exists in each week. This is useful for roles like project management that are billed as a consistent effort throughout the project rather than varying week to week.
+### As needed
 
-### Availability window
+Capacity is made available when scheduled work requires the role or person, up to the resource count. Work is assigned only when demand exists. This is the simplest mode: set a count and let the scheduler decide how many are needed each week.
 
-The date range during which a role or named person is available. Work outside this window is not scheduled against that resource.
+### Fixed for whole project
 
-### Capacity profile
+A fixed percentage of capacity is available from the beginning to the end of the project. Availability does not by itself create assigned work and does not determine billing.
 
-A model of how headcount changes over time. For example, a project may start with one engineer, grow to three engineers during the main delivery phase, and then taper back down. Capacity profiles let you represent this shape.
+### Fixed for selected weeks
 
-After changing resource counts, planning basis, named people, capacity profiles, or dependencies, the Timeline may be stale. Click **Update timeline** to rebuild it.
+A fixed percentage of capacity is available only between the selected start and end weeks. Work outside the window cannot use that capacity. Use this for roles or named people whose availability is limited to a specific period.
+
+### Varies by week
+
+Availability follows the configured weekly capacity profile. See the Resource Profile tab to review or adjust the profile. This is typically set via the Squad Planner or by configuring capacity profile segments directly.
+
+After changing counts, availability patterns, named people, capacity profiles, or dependencies, the Timeline may be stale. Click **Update timeline** to rebuild it.
 
 ## Squad Planner and Starting Team Finder
 

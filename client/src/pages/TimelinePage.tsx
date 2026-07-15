@@ -1211,7 +1211,18 @@ export default function TimelinePage() {
                                             {mode === 'EFFORT' && formatAllocationModeDescription(mode)}
                                             {mode === 'FULL_PROJECT' && formatAllocationModeDescription(mode)}
                                             {mode === 'TIMELINE' && `Available at ${nr.allocationPercent ?? nr.allocationPct ?? 100}% from W${nr.allocationStartWeek ?? nr.startWeek ?? '?'} to W${nr.allocationEndWeek ?? nr.endWeek ?? '?'}. Work is assigned only when demand exists.`}
-                                            {mode === 'CAPACITY_PLAN' && formatAllocationModeDescription(mode)}
+                                            {mode === 'CAPACITY_PLAN' && (
+                                              <>
+                                                {formatAllocationModeDescription(mode)}
+                                                <br />
+                                                <button
+                                                  onClick={() => navigate(`/projects/${projectId}/resource-profile`)}
+                                                  className="text-lab3-navy hover:underline font-medium mt-0.5"
+                                                >
+                                                  View Resource Profile ↗
+                                                </button>
+                                              </>
+                                            )}
                                           </div>
                                         </div>
                                       </div>

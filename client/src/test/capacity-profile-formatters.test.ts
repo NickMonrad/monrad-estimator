@@ -75,7 +75,7 @@ describe('formatAllocationModeDescription', () => {
 
   it('describes CAPACITY_PLAN', () => {
     expect(formatAllocationModeDescription('CAPACITY_PLAN')).toBe(
-      'Availability follows the saved weekly capacity profile. Open the Resource Profile tab to review or adjust the profile.'
+      'Availability varies by week. Open the Resource Profile tab to review or configure the weekly pattern.'
     )
   })
 
