@@ -398,13 +398,15 @@ export default function SquadPlannerDrawer({
           setActive: true,
         })
         .then(r => r.data),
-    onSuccess: async () => {
-      await Promise.all([
+    onSuccess: () => {
+      onClose()
+      Promise.all([
         qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
         qc.refetchQueries({ queryKey: ['timeline', projectId] }),
         qc.refetchQueries({ queryKey: ['resource-types', projectId] }),
-      ])
-      onClose()
+      ]).catch(() => {
+        /* refetch failures are non-critical after successful apply */
+      })
       setTimeout(() => alert('✅ Plan applied — timeline and resource counts updated.'), 100)
     },
     onError: (err: unknown) => {
