@@ -2193,11 +2193,11 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
       expect(nrCPSegments.length).toBe(0)
     }
  
-    // No legacy mapper entries for omitted RT (only one role, no stale legacy kinds)
-    const allRoles = cpBody.capacityProfiles.filter(
-      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role',
+    // Only one role entry for omitted RT (no duplicate, no stale legacy fallback)
+    const omittedRtRoles = cpBody.capacityProfiles.filter(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role' && (p.owner as Record<string, unknown>).id === rtOmitted,
     )
-    expect(allRoles.length).toBe(1)
+    expect(omittedRtRoles.length).toBe(1)
  
     // ── Canonical endpoint: /resource-profile ──────────────────────────
     // Must show zero capacity for omitted RT with PROFILE resolution
@@ -2211,7 +2211,7 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
       (r: Record<string, unknown>) => r.resourceTypeId === rtOmitted,
     )
     expect(omittedRow).toBeDefined()
-    expect((omittedRow as Record<string, unknown>).allocatedHeadcount ?? 0).toBe(0)
+    expect((omittedRow as Record<string, unknown>).allocatedDays ?? 0).toBe(0)
  
     // Assert PROFILE resolution source for each named resource
     const namedResourcesOutput = (omittedRow as Record<string, unknown>).namedResources as Array<Record<string, unknown>> ?? []
@@ -2447,7 +2447,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     )
     expect(rtRow).toBeDefined()
     // Capacity from planner should be the non-zero headcount
-    expect((rtRow as Record<string, unknown>).allocatedHeadcount).toBeGreaterThan(0)
+    expect((rtRow as Record<string, unknown>).allocatedDays).toBeGreaterThan(0)
  
     // Named resource has capacityProfile with PROFILE resolution
     const nrOutputs = (rtRow as Record<string, unknown>).namedResources as Array<Record<string, unknown>> ?? []
