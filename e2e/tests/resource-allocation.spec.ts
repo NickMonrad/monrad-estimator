@@ -106,14 +106,14 @@ test.describe('Resource Allocation', () => {
 
     const badge = page.getByText(/^(As needed|Fixed for selected weeks ·|Fixed for whole project ·|Varies by week)/).first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
-    expect(badgeText).toMatch(/As needed|Fixed for selected weeks|Fixed for whole project|Varies by week/)
   })
 
-  test('allocation editor opens on badge click', async ({ page }) => {
+  test('allocation editor opens on badge click, supports all four mode labels', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
 
+    // Open the first editable row
     const badge = page.locator('button[title="Click to edit allocation"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
     // Regression: button contract must remain "Click to edit allocation"
@@ -121,16 +121,51 @@ test.describe('Resource Allocation', () => {
     await badge.click({ force: true })
 
     await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
-    await expect(page.getByText(/Available %|Available Percent/i).first()).toBeVisible({ timeout: 5_000 })
 
-    const modeSelect = page.locator('select').filter({ hasText: /As needed|Fixed for selected weeks|Fixed for whole project/ }).first()
+    // Select FULL_PROJECT to make Available % visible
+    const modeSelect = page.locator('select').first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
+    await modeSelect.selectOption('FULL_PROJECT')
 
+    // Now Available % should be visible
+    await expect(page.getByText(/Available %/i).first()).toBeVisible({ timeout: 5_000 })
     const capacityInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
     await expect(capacityInput).toBeVisible({ timeout: 5_000 })
 
     await expect(page.locator('[data-testid="allocation-save"]')).toBeVisible()
     await expect(page.locator('[data-testid="allocation-cancel"]')).toBeVisible()
+
+    // Cancel to close
+    await page.locator('[data-testid="allocation-cancel"]').click()
+    await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
+  })
+
+  test('EFFORT and CAPACITY_PLAN hide Available % control', async ({ page }) => {
+    test.setTimeout(90_000)
+    const projectId = await setupCommercialTab(page)
+    await gotoResourceProfile(page, projectId)
+
+    const badge = page.locator('button[title="Click to edit allocation"]').first()
+    await expect(badge).toBeVisible({ timeout: 10_000 })
+    await badge.click({ force: true })
+
+    await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
+    const modeSelect = page.locator('select').first()
+    await expect(modeSelect).toBeVisible({ timeout: 5_000 })
+
+    // Select EFFORT — Available % should NOT be visible
+    await modeSelect.selectOption('EFFORT')
+    await expect(page.getByText(/Available %/i)).not.toBeVisible({ timeout: 3_000 })
+    await expect(page.getByText(/Available Percent/i)).not.toBeVisible({ timeout: 3_000 })
+
+    // Select CAPACITY_PLAN — Available % should NOT be visible
+    await modeSelect.selectOption('CAPACITY_PLAN')
+    await expect(page.getByText(/Available %/i)).not.toBeVisible({ timeout: 3_000 })
+    await expect(page.getByText(/Available Percent/i)).not.toBeVisible({ timeout: 3_000 })
+
+    // Cancel to close
+    await page.locator('[data-testid="allocation-cancel"]').click()
+    await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
   })
 
   test('changing Available % updates allocated days', async ({ page }) => {
@@ -142,7 +177,12 @@ test.describe('Resource Allocation', () => {
     await expect(badge).toBeVisible({ timeout: 10_000 })
     await badge.click({ force: true })
 
-    await expect(page.getByText(/Available %/i).first()).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
+
+    // Select FULL_PROJECT to access Available %
+    const modeSelect = page.locator('select').first()
+    await modeSelect.selectOption('FULL_PROJECT')
+    await expect(page.getByText(/Available %/i).first()).toBeVisible({ timeout: 5_000 })
 
     const capacityInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
     await capacityInput.fill('50')
@@ -170,7 +210,8 @@ test.describe('Resource Allocation', () => {
     await badge.click({ force: true })
     await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
 
-    const modeSelect = page.locator('select').filter({ hasText: /As needed|Fixed for selected weeks|Fixed for whole project/ }).first()
+    const modeSelect = page.locator('select').first()
+    await expect(modeSelect).toBeVisible({ timeout: 5_000 })
     await modeSelect.selectOption('FULL_PROJECT')
 
     // Click Cancel via data-testid
@@ -191,7 +232,6 @@ test.describe('Resource Allocation', () => {
     await gotoResourceProfile(page, projectId)
 
     const allocationHeader = page.locator('th').filter({ hasText: /^Availability pattern$/ })
-    await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
     await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
   })
 })

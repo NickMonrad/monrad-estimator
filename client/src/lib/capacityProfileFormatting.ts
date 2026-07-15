@@ -51,7 +51,7 @@ const ALLOCATION_MODE_DESCRIPTIONS: Record<AllocationMode, string> = {
   TIMELINE:
     'Available at the selected percentage only between the selected start and end weeks. Work is assigned only when demand exists.',
   CAPACITY_PLAN:
-    'Availability follows the saved weekly capacity profile. Open the Resource Profile tab to review or adjust the profile.',
+    'Availability varies by week. Open the Resource Profile tab to review or configure the weekly pattern.',
 }
 
 /**

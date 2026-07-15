@@ -149,8 +149,8 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       capProfile?.defaultPercent != null ? String(capProfile.defaultPercent) : '',
       profileStart,
       profileEnd,
-      '',   // Availability window start
-      '',   // Availability window end
+      '',   // Available from
+      '',   // Available to
       '',   // Assigned start
       '',   // Assigned end
       formatCapacityProfileSegments(capProfile), // Capacity profile segments
@@ -166,13 +166,13 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       'Overhead', row.name, '', '', '',
       '', '', '', String(row.computedDays), '',
       '', row.estimatedCost != null ? String(row.estimatedCost) : '',
-      '',   // Planning basis
+      '',   // Availability pattern
       '',   // Profile source
       '',   // Default capacity %
       '',   // Profile start
       '',   // Profile end
-      '',   // Availability window start
-      '',   // Availability window end
+      '',   // Available from
+      '',   // Available to
       '',   // Assigned start
       '',   // Assigned end
       '',   // Capacity profile segments
