@@ -1041,6 +1041,25 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     )
     await applyBtn.click()
     await applyResponse
+    expect(applyResponse.status()).toBe(201)
+    const applyBody = await applyResponse.json()
+    type SquadPlanApplyResponse = {
+      activePlanId: string
+      resourceTypes: Array<{
+        resourceTypeId: string
+        resourceTypeName: string
+        headcount: number
+      }>
+      namedResources: Array<{
+        id: string
+        name: string
+      }>
+    }
+    const applyData = applyBody as SquadPlanApplyResponse
+    expect(applyData.activePlanId).toBeTruthy()
+    expect(typeof applyData.activePlanId).toBe('string')
+    expect(Array.isArray(applyData.resourceTypes)).toBe(true)
+    expect(applyData.resourceTypes.length).toBeGreaterThan(0)
 
     // Drawer closes after successful apply
     await expect(drawer).not.toBeVisible({ timeout: 10_000 })
@@ -1155,6 +1174,10 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     )
     await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
     await applyResponse2
+    expect(applyResponse2.status()).toBe(201)
+    const applyBody2 = await applyResponse2.json() as SquadPlanApplyResponse
+    expect(applyBody2.activePlanId).toBeTruthy()
+    expect(applyBody2.activePlanId).not.toBe(applyData.activePlanId)
     await expect(drawer).not.toBeVisible({ timeout: 10_000 })
 
     // ── Verify stable identity + updated capacity on Resource Profile ──

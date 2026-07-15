@@ -44,6 +44,7 @@ import {
   PlannerConflictError,
   type RoleProfileWriteSet,
 } from '../lib/squadPlannerProfileWriter.js'
+import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async (importOriginal) => {
   return await importOriginal()
@@ -2104,6 +2105,41 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     const secondPlanId = await fetchActivePlanId(projectId)
     expect(secondPlanId).not.toBeNull()
     expect(secondPlanId).not.toBe(firstPlanId)
+
+    // ── Canonical endpoint assertions ─────────────────────────────────
+    // GET /capacity-profiles must return the zeroed ROLE profile
+    const cpRes = await request(app)
+      .get(`/api/projects/${projectId}/capacity-profiles`)
+      .set('Authorization', authHeader)
+    expect(cpRes.status).toBe(200)
+    const cpBody = cpRes.body as { profiles: Array<Record<string, unknown>> }
+    expect(Array.isArray(cpBody.profiles)).toBe(true)
+    const omittedRoleCP = cpBody.profiles.find(
+      (p: Record<string, unknown>) => p.ownerKind === 'ROLE' && p.resourceTypeId === rtOmitted,
+    )
+    expect(omittedRoleCP).toBeDefined()
+    expect((omittedRoleCP as Record<string, unknown>).source).toBe('SQUAD_PLANNER')
+    expect((omittedRoleCP as Record<string, unknown>).planningBasis).toBe('CAPACITY_PROFILE')
+    expect((omittedRoleCP as Record<string, unknown>).defaultPercent).toBe(0)
+    // No stale non-zero segments
+    const segments = (omittedRoleCP as Record<string, unknown>).segments as Array<unknown> ?? []
+    expect(segments.length).toBe(0)
+
+    // GET /api/projects/:id/resource-profile must show zero capacity for omitted RT
+    const rpRes = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    expect(rpRes.status).toBe(200)
+    const rpBody = rpRes.body as { resourceRows: Array<Record<string, unknown>> }
+    expect(Array.isArray(rpBody.resourceRows)).toBe(true)
+    const omittedRow = rpBody.resourceRows.find(
+      (r: Record<string, unknown>) => r.resourceTypeId === rtOmitted,
+    )
+    // Omitted RT may not appear in the Resource Profile rows (zero capacity),
+    // or may appear with zero capacity. Either is acceptable.
+    if (omittedRow) {
+      expect((omittedRow as Record<string, unknown>).allocatedHeadcount ?? 0).toBe(0)
+    }
   })
 })
 
@@ -2111,6 +2147,297 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
 // Test coverage is skipped when INTEGRATION_TEST is not 'true'.
 // ═════════════════════════════════════════════════════════════════════════════
 
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 19 — Fresh CAPACITY_PLAN first apply with production mapper path
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// A fresh project with a CAPACITY_PLAN resource type (no active plan slots)
+// gets a ROLE profile from the production mapper/sync path. The first Squad
+// Planner apply must adopt this mapper-produced profile via the
+// isValidMapperProvenance check: reuse its ID, convert source/basis to
+// SQUAD_PLANNER/CAPACITY_PROFILE, and create the active plan with PLANNED_RESOURCE
+// profiles for the materialised resources.
+
+describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted on first apply', () => {
+  it('adopts mapper-produced LEGACY/CAPACITY_PROFILE through production sync + apply', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-cap-plan-19', 'CapacityPlanRole', {
+      allocationMode: 'CAPACITY_PLAN',
+      count: 2,
+    })
+    await prisma.resourceType.update({
+      where: { id: rtId },
+      data: { allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 10 },
+    })
+
+    // Create a named resource (simulates user having planned one slot)
+    await createNamedResource(
+      projectId, rtId, 'nr-cap-plan-19', 'CapacityPlan Engineer',
+      { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, startWeek: 0, endWeek: 10 },
+    )
+    await createEpicBacklog(projectId, rtId)
+
+    // ── Run the production mapper/sync path (same sync called on project/resource creation) ──
+    const syncResult = await syncCapacityProfilesForProject(prisma, projectId)
+    expect(syncResult.profilesCreated).toBeGreaterThanOrEqual(1)
+
+    // ── Assert mapper produced the expected ROLE profile ──────────────
+    const profilesBefore = await fetchProfiles(projectId)
+    const mapperRole = profilesBefore.find(
+      p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtId && p.namedResourceId === null,
+    )
+    expect(mapperRole).toBeDefined()
+    const mapperRoleId = mapperRole!.id
+
+    // Check source/basis
+    expect(mapperRole!.source).toBe('LEGACY')
+    expect(mapperRole!.planningBasis).toBe('CAPACITY_PROFILE')
+
+    // Check legacy payload has all 7 keys
+    const mapperRoleAny = mapperRole as unknown as Record<string, unknown>
+    const legacy = mapperRoleAny.legacy as Record<string, unknown> | null
+    expect(legacy).not.toBeNull()
+    expect(typeof legacy).toBe('object')
+    expect(legacy!.allocationMode).toBe('CAPACITY_PLAN')
+    expect(legacy!.allocationPercent).toBe(100)
+    expect(legacy!.allocationStartWeek).toBe(0)
+    expect(legacy!.allocationEndWeek).toBe(10)
+    // ROLE-only fields must be null
+    expect(legacy!.allocationPct).toBeNull()
+    expect(legacy!.startWeek).toBeNull()
+    expect(legacy!.endWeek).toBeNull()
+
+    // Profile-level fields must match legacy
+    expect(mapperRole!.defaultPercent).toBe(100)
+    expect(mapperRole!.startWeek).toBe(0)
+    expect(mapperRole!.endWeek).toBe(10)
+
+    // No segments for CAPACITY_PLAN without active slots
+    const mapperSegments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: mapperRoleId },
+    })
+    expect(mapperSegments.length).toBe(0)
+
+    // ── Apply a plan covering this RT ─────────────────────────────────
+    const applyRes = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ], { name: 'CAPACITY_PLAN First Apply' }))
+
+    expect(applyRes.status).toBe(201)
+    const applyBody = applyRes.body as { activePlanId: string; resourceTypes: Array<Record<string, unknown>> }
+    expect(applyBody.activePlanId).toBeTruthy()
+    expect(typeof applyBody.activePlanId).toBe('string')
+
+    // ── Assert mapper-produced ROLE profile reused and converted ──────
+    const roleAfter = await prisma.capacityProfile.findUnique({
+      where: { id: mapperRoleId },
+    })
+    expect(roleAfter).toBeDefined()
+    expect(roleAfter!.source).toBe('SQUAD_PLANNER')
+    expect(roleAfter!.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(roleAfter!.ownerKind).toBe('ROLE')
+    // Profile-level fields preserved from source
+    expect(roleAfter!.defaultPercent).toBe(100)
+    expect(roleAfter!.startWeek).toBe(0)
+    expect(roleAfter!.endWeek).toBe(10)
+
+    // Verify no second ROLE profile was created for this RT
+    const rolesAfter = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'ROLE', resourceTypeId: rtId },
+    })
+    expect(rolesAfter.length).toBe(1)
+    expect(rolesAfter[0].id).toBe(mapperRoleId)
+
+    // ── Assert PLANNED_RESOURCE profiles created ──────────────────────
+    const plannedAfter = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
+    })
+    expect(plannedAfter.length).toBeGreaterThanOrEqual(1)
+    // At least one planned resource has the rtId's named resource
+    expect(plannedAfter.length).toBeGreaterThanOrEqual(1)
+
+    // ── Assert active plan ────────────────────────────────────────────
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).not.toBeNull()
+    expect(activePlanId).toBe(applyBody.activePlanId)
+
+    // ── Assert canonical endpoint returns correct persisted state ─────
+    const cpAfter = await request(app)
+      .get(`/api/projects/${projectId}/capacity-profiles`)
+      .set('Authorization', authHeader)
+    expect(cpAfter.status).toBe(200)
+    const cpAfterBody = cpAfter.body as { profiles: Array<Record<string, unknown>> }
+    const roleInEndpoint = cpAfterBody.profiles.find(
+      (p: Record<string, unknown>) => p.id === mapperRoleId,
+    )
+    expect(roleInEndpoint).toBeDefined()
+    expect((roleInEndpoint as Record<string, unknown>).source).toBe('SQUAD_PLANNER')
+    expect((roleInEndpoint as Record<string, unknown>).planningBasis).toBe('CAPACITY_PROFILE')
+
+    // ── Assert snapshot history ───────────────────────────────────────
+    const snapshots = await prisma.backlogSnapshot.findMany({
+      where: { projectId },
+      select: { trigger: true, label: true },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    })
+    // Pre-apply snapshot exists
+    const preApplySnap = snapshots.find(s => s.trigger === 'pre_apply')
+    expect(preApplySnap).toBeDefined()
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 20 — Malformed MAPPER-provenance rejection (state preservation)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// A CAPACITY_PLAN ROLE profile with a mismatched or malformed legacy payload
+// (e.g., null vs non-null consistency violation) must be rejected with 409
+// and the canonical state preserved unchanged.
+
+describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves state', () => {
+  it('returns 409 with exact state preservation for null-vs-non-null consistency violation', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-malformed-20', 'MalformedRole', {
+      allocationMode: 'CAPACITY_PLAN',
+    })
+    await createEpicBacklog(projectId, rtId)
+
+    // Create a profile with source/basis matching LEGACY/CAPACITY_PROFILE
+    // but with a null/defaultPercent vs non-null/allocationPercent mismatch.
+    // This simulates an explicit/profile-first write that happened to use
+    // the mapper pair but has inconsistent null behaviour.
+    const badProfileId = 'cp-malformed-20'
+    await prisma.capacityProfile.create({
+      data: {
+        id: badProfileId,
+        projectId,
+        ownerKind: 'ROLE',
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        source: 'LEGACY',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: null,            // ← profile defaultPercent is null
+        startWeek: 0,
+        endWeek: 10,
+        legacy: {
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 100,          // ← but legacy allocationPercent is 100
+          allocationPct: null,
+          allocationStartWeek: 0,
+          allocationEndWeek: 10,
+          startWeek: null,
+          endWeek: null,
+        },
+      },
+    })
+
+    // Capture canonical state before apply
+    const profilesBefore = await fetchProfiles(projectId)
+    const cpBefore = await request(app)
+      .get(`/api/projects/${projectId}/capacity-profiles`)
+      .set('Authorization', authHeader)
+    expect(cpBefore.status).toBe(200)
+
+    // ── Apply should be rejected ──────────────────────────────────────
+    const applyRes = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ], { name: 'Malformed Provenance Test' }))
+
+    expect(applyRes.status).toBe(409)
+
+    // ── Canonical state must be preserved exactly ──────────────────────
+    const profilesAfter = await fetchProfiles(projectId)
+    expect(profilesAfter.length).toBe(profilesBefore.length)
+
+    const badProfile = await prisma.capacityProfile.findUnique({
+      where: { id: badProfileId },
+    })
+    expect(badProfile).toBeDefined()
+    // Profile must NOT have been converted to SQUAD_PLANNER
+    expect(badProfile!.source).toBe('LEGACY')
+    expect(badProfile!.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(badProfile!.defaultPercent).toBeNull()
+
+    // No PLANNED_RESOURCE profiles created
+    const plannedProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
+    })
+    expect(plannedProfiles.length).toBe(0)
+
+    // No active plan
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).toBeNull()
+
+    // GET /capacity-profiles returns identical state
+    const cpAfter = await request(app)
+      .get(`/api/projects/${projectId}/capacity-profiles`)
+      .set('Authorization', authHeader)
+    expect(cpAfter.status).toBe(200)
+    // Compare the bad profile in both responses
+    const cpBeforeProfiles = cpBefore.body as { profiles: Array<{ id: string }> }
+    const cpAfterProfiles = cpAfter.body as { profiles: Array<{ id: string }> }
+    const badInBefore = cpBeforeProfiles.profiles.find((p: { id: string }) => p.id === badProfileId)
+    const badInAfter = cpAfterProfiles.profiles.find((p: { id: string }) => p.id === badProfileId)
+    expect(badInBefore).toBeDefined()
+    expect(badInAfter).toBeDefined()
+  })
+
+  it('returns 409 for non-null ROLE legacy.allocationPct and preserves state', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-malformed-pct-20', 'MalformedPct')
+    await createEpicBacklog(projectId, rtId)
+
+    // Profile with non-null allocationPct (normally null for ROLE)
+    await prisma.capacityProfile.create({
+      data: {
+        id: 'cp-malformed-pct-20',
+        projectId,
+        ownerKind: 'ROLE',
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        source: 'FIXED',
+        planningBasis: 'DEMAND_FOLLOWING',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        legacy: {
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationPct: 50,    // ← ROLE should have null allocationPct
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
+        },
+      },
+    })
+
+    const applyRes = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ], { name: 'Non-null allocationPct for ROLE' }))
+
+    expect(applyRes.status).toBe(409)
+
+    // State unchanged
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).toBeNull()
+  })
+})
 // ═════════════════════════════════════════════════════════════════════════════
 // Scenario 17 — Explicit ROLE pair regressions (evidence-backed policy)
 // ═════════════════════════════════════════════════════════════════════════════

@@ -204,16 +204,19 @@ export function isValidMapperProvenance(
 
   // ── 4. Internal consistency with the persisted ROLE profile ────────
   // The mapper derives both profile-level and legacy-level fields from the
-  // same ResourceType fields, so they must agree.
-  if (profile.defaultPercent !== undefined && profile.defaultPercent !== null) {
-    if (profile.defaultPercent !== legacy.allocationPercent) return false
-  }
-  if (profile.startWeek !== undefined && profile.startWeek !== null) {
-    if (profile.startWeek !== legacy.allocationStartWeek) return false
-  }
-  if (profile.endWeek !== undefined && profile.endWeek !== null) {
-    if (profile.endWeek !== legacy.allocationEndWeek) return false
-  }
+  // same ResourceType fields, so they must agree exactly — including null.
+  // Normalise undefined to null since Prisma cannot persist undefined.
+  if ((profile.defaultPercent ?? null) !== legacy.allocationPercent) return false
+  if ((profile.startWeek ?? null) !== legacy.allocationStartWeek) return false
+  if ((profile.endWeek ?? null) !== legacy.allocationEndWeek) return false
+
+  // ── 5. ROLE-only legacy fields ────────────────────────────────────
+  // For aggregate ROLE profiles, the mapper never sources these fields
+  // from ResourceType fields (they are only populated for NamedResource-level
+  // profiles). They must be exactly null.
+  if (legacy.allocationPct !== null) return false
+  if (legacy.startWeek !== null) return false
+  if (legacy.endWeek !== null) return false
 
   return true
 }

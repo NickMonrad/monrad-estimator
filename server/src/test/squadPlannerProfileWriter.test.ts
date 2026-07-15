@@ -422,6 +422,105 @@ describe('isValidMapperProvenance', () => {
       legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
     })).toBe(false)
   })
+  it('rejects profile with null defaultPercent when legacy allocationPercent is 100', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: null, startWeek: null, endWeek: null,
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects profile with defaultPercent 100 when legacy allocationPercent is null', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 100, startWeek: null, endWeek: null,
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'EFFORT', allocationPercent: null, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects profile with null startWeek when legacy allocationStartWeek is 1', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 50, startWeek: null, endWeek: 12,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects profile with startWeek 1 when legacy allocationStartWeek is null', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 50, startWeek: 1, endWeek: 12,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: null, allocationEndWeek: 12, startWeek: null, endWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects profile with null endWeek when legacy allocationEndWeek is 12', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 50, startWeek: 1, endWeek: null,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects profile with endWeek 12 when legacy allocationEndWeek is null', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 50, startWeek: 1, endWeek: 12,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: null, startWeek: null, endWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects ROLE profile with non-null legacy allocationPct', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 100, startWeek: null, endWeek: null,
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: 50, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects ROLE profile with non-null legacy startWeek', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 100, startWeek: null, endWeek: null,
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: 5, endWeek: null },
+    })).toBe(false)
+  })
+
+  it('rejects ROLE profile with non-null legacy endWeek', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 100, startWeek: null, endWeek: null,
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: 12 },
+    })).toBe(false)
+  })
+
 })
 
 // ─── Shared resource classification tests ──────────────────────────────────
