@@ -1992,6 +1992,7 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
       count: 1,
     })
     await createEpicBacklog(projectId, rtActive)
+    await createEpicBacklog(projectId, rtOmitted)
 
     // ── First apply: plan covering both resource types ──────────────────
     const first = await request(app)
@@ -2100,32 +2101,106 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
         endWeek: null,
       })
     }
-
+ 
     // ── Assert new plan is active ──────────────────────────────────────
     const secondPlanId = await fetchActivePlanId(projectId)
     expect(secondPlanId).not.toBeNull()
     expect(secondPlanId).not.toBe(firstPlanId)
-
-    // ── Canonical endpoint assertions ─────────────────────────────────
-    // GET /capacity-profiles must return the zeroed ROLE profile
+ 
+    // ── Direct DB: assert aggregate ROLE profile for omitted RT ────────
+    const rolesAfterOmission = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'ROLE', resourceTypeId: rtOmitted },
+      orderBy: { id: 'asc' },
+    })
+    expect(rolesAfterOmission.length).toBe(1)
+    const omittedRoleProfile = rolesAfterOmission[0]
+    expect(omittedRoleProfile.namedResourceId).toBeNull()
+    expect(omittedRoleProfile.source).toBe('SQUAD_PLANNER')
+    expect(omittedRoleProfile.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(omittedRoleProfile.defaultPercent).toBe(0)
+    expect(omittedRoleProfile.startWeek).toBeNull()
+    expect(omittedRoleProfile.endWeek).toBeNull()
+ 
+    // Exactly zero segments
+    const omittedRoleSegments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: omittedRoleProfile.id },
+    })
+    expect(omittedRoleSegments.length).toBe(0)
+ 
+    // ── Direct DB: assert PLANNED_RESOURCE profiles for omitted NRs ────
+    const omittedRtNRs = await prisma.namedResource.findMany({
+      where: { resourceTypeId: rtOmitted },
+      orderBy: { id: 'asc' },
+    })
+    expect(omittedRtNRs.length).toBeGreaterThan(0)
+ 
+    const plannedForOmitted = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'PLANNED_RESOURCE', namedResourceId: { in: omittedRtNRs.map(nr => nr.id) } },
+      orderBy: { namedResourceId: 'asc' },
+    })
+    expect(plannedForOmitted.length).toBe(omittedRtNRs.length)
+    const plannedNrIds = new Set(plannedForOmitted.map(p => p.namedResourceId))
+    for (const nr of omittedRtNRs) {
+      expect(plannedNrIds.has(nr.id)).toBe(true)
+    }
+    for (const p of plannedForOmitted) {
+      expect(p.resourceTypeId).toBeNull()
+      expect(p.namedResourceId).not.toBeNull()
+      expect(p.source).toBe('SQUAD_PLANNER')
+      expect(p.planningBasis).toBe('CAPACITY_PROFILE')
+      expect(p.defaultPercent).toBe(0)
+      expect(p.startWeek).toBeNull()
+      expect(p.endWeek).toBeNull()
+      const segs = await prisma.capacitySegment.findMany({ where: { capacityProfileId: p.id } })
+      expect(segs.length).toBe(0)
+      // No duplicate owner under another ownerKind for same NR
+      const otherOwner = await prisma.capacityProfile.findFirst({
+        where: { projectId, ownerKind: { not: 'PLANNED_RESOURCE' }, namedResourceId: p.namedResourceId },
+      })
+      expect(otherOwner).toBeNull()
+    }
+ 
+    // ── Canonical endpoint: /capacity-profiles ─────────────────────────
+    // Must return the exact persisted authority set with no fallback
     const cpRes = await request(app)
       .get(`/api/projects/${projectId}/capacity-profiles`)
       .set('Authorization', authHeader)
     expect(cpRes.status).toBe(200)
     const cpBody = cpRes.body as { capacityProfiles: Array<Record<string, unknown>> }
     expect(Array.isArray(cpBody.capacityProfiles)).toBe(true)
-    const omittedRoleCP = cpBody.capacityProfiles.find(
+ 
+    // Aggregate ROLE entry: exactly one, correct fields
+    const roleCPs = cpBody.capacityProfiles.filter(
       (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role' && (p.owner as Record<string, unknown>).id === rtOmitted,
     )
-    expect(omittedRoleCP).toBeDefined()
-    expect((omittedRoleCP as Record<string, unknown>).source).toBe('squadPlanner')
-    expect((omittedRoleCP as Record<string, unknown>).planningBasis).toBe('capacityProfile')
-    expect((omittedRoleCP as Record<string, unknown>).defaultPercent).toBe(0)
-    // No stale non-zero segments
-    const segments = (omittedRoleCP as Record<string, unknown>).segments as Array<unknown> ?? []
-    expect(segments.length).toBe(0)
-
-    // GET /api/projects/:id/resource-profile must show zero capacity for omitted RT
+    expect(roleCPs.length).toBe(1)
+    expect(roleCPs[0].source).toBe('squadPlanner')
+    expect(roleCPs[0].planningBasis).toBe('capacityProfile')
+    expect(roleCPs[0].defaultPercent).toBe(0)
+    const cpRoleSegments = (roleCPs[0].segments as Array<unknown>) ?? []
+    expect(cpRoleSegments.length).toBe(0)
+ 
+    // Every expected PLANNED_RESOURCE owner returned exactly once
+    for (const nr of omittedRtNRs) {
+      const nrCPs = cpBody.capacityProfiles.filter(
+        (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'plannedResource' && (p.owner as Record<string, unknown>).id === nr.id,
+      )
+      expect(nrCPs.length).toBe(1)
+      expect(nrCPs[0].source).toBe('squadPlanner')
+      expect(nrCPs[0].planningBasis).toBe('capacityProfile')
+      expect(nrCPs[0].defaultPercent).toBe(0)
+      const nrCPSegments = (nrCPs[0].segments as Array<unknown>) ?? []
+      expect(nrCPSegments.length).toBe(0)
+    }
+ 
+    // No legacy mapper entries for omitted RT (only one role, no stale legacy kinds)
+    const allRoles = cpBody.capacityProfiles.filter(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role',
+    )
+    expect(allRoles.length).toBe(1)
+ 
+    // ── Canonical endpoint: /resource-profile ──────────────────────────
+    // Must show zero capacity for omitted RT with PROFILE resolution
     const rpRes = await request(app)
       .get(`/api/projects/${projectId}/resource-profile`)
       .set('Authorization', authHeader)
@@ -2135,10 +2210,17 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     const omittedRow = rpBody.resourceRows.find(
       (r: Record<string, unknown>) => r.resourceTypeId === rtOmitted,
     )
-    // Omitted RT may not appear in the Resource Profile rows (zero capacity),
-    // or may appear with zero capacity. Either is acceptable.
-    if (omittedRow) {
-      expect((omittedRow as Record<string, unknown>).allocatedHeadcount ?? 0).toBe(0)
+    expect(omittedRow).toBeDefined()
+    expect((omittedRow as Record<string, unknown>).allocatedHeadcount ?? 0).toBe(0)
+ 
+    // Assert PROFILE resolution source for each named resource
+    const namedResourcesOutput = (omittedRow as Record<string, unknown>).namedResources as Array<Record<string, unknown>> ?? []
+    expect(namedResourcesOutput.length).toBe(omittedRtNRs.length)
+    for (const nrData of namedResourcesOutput) {
+      const cp = nrData.capacityProfile as Record<string, unknown> | undefined
+      expect(cp).toBeDefined()
+      expect(cp!.resolutionSource).toBe('PROFILE')
+      expect(cp!.defaultPercent).toBe(0)
     }
   })
 })
@@ -2226,7 +2308,16 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
       ], { name: 'CAPACITY_PLAN First Apply' }))
 
     expect(applyRes.status).toBe(201)
-    expect(applyRes.status).toBe(201)
+    // Assert response body contract
+    expect(applyRes.body).toBeDefined()
+    expect(applyRes.body.id).toBeTruthy()
+    expect(typeof applyRes.body.id).toBe('string')
+    expect(applyRes.body.isActive).toBe(true)
+    expect(applyRes.body.name).toBe('CAPACITY_PLAN First Apply')
+    expect(Array.isArray(applyRes.body.periods)).toBe(true)
+    expect(applyRes.body.periods.length).toBeGreaterThanOrEqual(1)
+    expect(applyRes.body.periods[0].entries).toBeDefined()
+ 
     // ── Assert mapper-produced ROLE profile reused and converted ──────
     const roleAfter = await prisma.capacityProfile.findUnique({
       where: { id: mapperRoleId },
@@ -2239,38 +2330,134 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     expect(roleAfter!.defaultPercent).toBe(100)
     expect(roleAfter!.startWeek).toBe(0)
     expect(roleAfter!.endWeek).toBe(7)  // derived from period endWeek=8 (exclusive)
-
-    // Verify no second ROLE profile was created for this RT
+ 
+    // No second ROLE profile created for this RT
     const rolesAfter = await prisma.capacityProfile.findMany({
       where: { projectId, ownerKind: 'ROLE', resourceTypeId: rtId },
     })
     expect(rolesAfter.length).toBe(1)
     expect(rolesAfter[0].id).toBe(mapperRoleId)
-
-    // ── Assert PLANNED_RESOURCE profiles created ──────────────────────
+ 
+    // ── Assert aggregate ROLE segments created ─────────────────────────
+    const roleSegments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: mapperRoleId },
+      orderBy: { startWeek: 'asc' },
+    })
+    // 1 period → 1 segment
+    expect(roleSegments.length).toBe(1)
+    expect(roleSegments[0].startWeek).toBe(0)
+    expect(roleSegments[0].capacityPercent).toBe(100)
+    // endWeek derived from period endWeek=8 (exclusive in planner)
+    expect(roleSegments[0].endWeek).toBeGreaterThan(0)
+    expect(roleSegments[0].source).toBe('SQUAD_PLANNER')
+ 
+    // ── Assert materialised NamedResources ──────────────────────────────
+    const nrsAfter = await prisma.namedResource.findMany({
+      where: { resourceTypeId: rtId },
+      orderBy: { id: 'asc' },
+    })
+    // headcount=1 for 1 period → 1 NamedResource
+    expect(nrsAfter.length).toBe(1)
+    const nrAfter = nrsAfter[0]
+    expect(nrAfter.allocationMode).toBe('CAPACITY_PLAN')
+    expect(nrAfter.allocationPercent).toBe(100)
+ 
+    // ── Assert PLANNED_RESOURCE profiles ──────────────────────────────
     const plannedAfter = await prisma.capacityProfile.findMany({
       where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
+      orderBy: { id: 'asc' },
     })
-    expect(plannedAfter.length).toBeGreaterThanOrEqual(1)
-
+    // 1 NamedResource → 1 PLANNED_RESOURCE profile
+    expect(plannedAfter.length).toBe(1)
+    const plannedProfile = plannedAfter[0]
+    expect(plannedProfile.resourceTypeId).toBeNull()
+    expect(plannedProfile.namedResourceId).toBe(nrAfter.id)
+    expect(plannedProfile.source).toBe('SQUAD_PLANNER')
+    expect(plannedProfile.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(plannedProfile.defaultPercent).toBe(100)
+    // startWeek/endWeek from segment boundaries
+    expect(plannedProfile.startWeek).toBe(0)
+    expect(plannedProfile.endWeek).not.toBeNull()
+ 
+    // Assert PLANNED_RESOURCE segments
+    const plannedSegments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: plannedProfile.id },
+      orderBy: { startWeek: 'asc' },
+    })
+    expect(plannedSegments.length).toBe(1)
+    expect(plannedSegments[0].startWeek).toBe(0)
+    expect(plannedSegments[0].capacityPercent).toBe(100)
+    expect(plannedSegments[0].source).toBe('SQUAD_PLANNER')
+ 
+    // No duplicate PLANNED_RESOURCE profile
+    const otherOwner = await prisma.capacityProfile.findFirst({
+      where: { projectId, ownerKind: { not: 'PLANNED_RESOURCE' }, namedResourceId: nrAfter.id },
+    })
+    expect(otherOwner).toBeNull()
+ 
     // ── Assert active plan ────────────────────────────────────────────
     const activePlanId = await fetchActivePlanId(projectId)
     expect(activePlanId).not.toBeNull()
-    // (activePlanId already verified above via fetchActivePlanId)
-
-    // ── Assert canonical endpoint returns correct persisted state ─────
+ 
+    // ── Assert /capacity-profiles returns complete persisted set ──────
     const cpAfter = await request(app)
       .get(`/api/projects/${projectId}/capacity-profiles`)
       .set('Authorization', authHeader)
     expect(cpAfter.status).toBe(200)
     const cpAfterBody = cpAfter.body as { capacityProfiles: Array<Record<string, unknown>> }
-    const roleInEndpoint = cpAfterBody.capacityProfiles.find(
+ 
+    // Aggregate ROLE: exactly one, correct fields
+    const roleCPs = cpAfterBody.capacityProfiles.filter(
       (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role' && (p.owner as Record<string, unknown>).id === rtId,
     )
-    expect(roleInEndpoint).toBeDefined()
-    expect((roleInEndpoint as Record<string, unknown>).source).toBe('squadPlanner')
-    expect((roleInEndpoint as Record<string, unknown>).planningBasis).toBe('capacityProfile')
-
+    expect(roleCPs.length).toBe(1)
+    expect(roleCPs[0].source).toBe('squadPlanner')
+    expect(roleCPs[0].planningBasis).toBe('capacityProfile')
+    expect(roleCPs[0].defaultPercent).toBe(100)
+    const cpRoleSegments = (roleCPs[0].segments as Array<Record<string, unknown>>) ?? []
+    expect(cpRoleSegments.length).toBe(1)
+    expect(cpRoleSegments[0].startWeek).toBe(0)
+    expect(cpRoleSegments[0].capacityPercent).toBe(100)
+ 
+    // PLANNED_RESOURCE: exactly one, correct owner
+    const plannedCPs = cpAfterBody.capacityProfiles.filter(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'plannedResource' && (p.owner as Record<string, unknown>).id === nrAfter.id,
+    )
+    expect(plannedCPs.length).toBe(1)
+    expect(plannedCPs[0].source).toBe('squadPlanner')
+    expect(plannedCPs[0].planningBasis).toBe('capacityProfile')
+    expect(plannedCPs[0].defaultPercent).toBe(100)
+    const cpPlannedSegments = (plannedCPs[0].segments as Array<Record<string, unknown>>) ?? []
+    expect(cpPlannedSegments.length).toBe(1)
+    expect(cpPlannedSegments[0].startWeek).toBe(0)
+    expect(cpPlannedSegments[0].capacityPercent).toBe(100)
+ 
+    // Total endpoint profiles count matches persisted authority set
+    const persistedProfileCount = await prisma.capacityProfile.count({ where: { projectId } })
+    expect(cpAfterBody.capacityProfiles.length).toBe(persistedProfileCount)
+ 
+    // ── Assert Resource Profile shows planned identity and capacity ────
+    const rpAfter = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    expect(rpAfter.status).toBe(200)
+    const rpAfterBody = rpAfter.body as { resourceRows: Array<Record<string, unknown>> }
+    const rtRow = rpAfterBody.resourceRows.find(
+      (r: Record<string, unknown>) => r.resourceTypeId === rtId,
+    )
+    expect(rtRow).toBeDefined()
+    // Capacity from planner should be the non-zero headcount
+    expect((rtRow as Record<string, unknown>).allocatedHeadcount).toBeGreaterThan(0)
+ 
+    // Named resource has capacityProfile with PROFILE resolution
+    const nrOutputs = (rtRow as Record<string, unknown>).namedResources as Array<Record<string, unknown>> ?? []
+    expect(nrOutputs.length).toBe(1)
+    expect(nrOutputs[0].id).toBe(nrAfter.id)
+    expect(nrOutputs[0].resourceIdentity).toBe('PLANNED_RESOURCE')
+    const nrCp = nrOutputs[0].capacityProfile as Record<string, unknown> | undefined
+    expect(nrCp).toBeDefined()
+    expect(nrCp!.resolutionSource).toBe('PROFILE')
+ 
     // ── Assert snapshot history ───────────────────────────────────────
     const snapshots = await prisma.backlogSnapshot.findMany({
       where: { projectId },
@@ -2278,7 +2465,6 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
       orderBy: { createdAt: 'desc' },
       take: 5,
     })
-    // Pre-apply snapshot exists
     const preApplySnap = snapshots.find(s => s.trigger === 'optimiser_apply')
     expect(preApplySnap).toBeDefined()
   })
@@ -2291,7 +2477,6 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
 // A CAPACITY_PLAN ROLE profile with a mismatched or malformed legacy payload
 // (e.g., null vs non-null consistency violation) must be rejected with 409
 // and the canonical state preserved unchanged.
-
 describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves state', () => {
   it('returns 409 with exact state preservation for null-vs-non-null consistency violation', async () => {
     if (!runIntegration) return
@@ -2300,11 +2485,9 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
       allocationMode: 'CAPACITY_PLAN',
     })
     await createEpicBacklog(projectId, rtId)
-
+ 
     // Create a profile with source/basis matching LEGACY/CAPACITY_PROFILE
     // but with a null/defaultPercent vs non-null/allocationPercent mismatch.
-    // This simulates an explicit/profile-first write that happened to use
-    // the mapper pair but has inconsistent null behaviour.
     const badProfileId = 'cp-malformed-20'
     await prisma.capacityProfile.create({
       data: {
@@ -2329,16 +2512,10 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
         },
       },
     })
-
-    // Capture canonical state before apply
-    const profilesBefore = await fetchProfiles(projectId)
-    const cpBefore = await request(app)
-      .get(`/api/projects/${projectId}/capacity-profiles`)
-      .set('Authorization', authHeader)
-    expect(cpBefore.status).toBe(200)
-
-    const cpBeforeBody = cpBefore.body as { capacityProfiles: Array<Record<string, unknown>> }
-
+ 
+    // Capture exact canonical state before apply
+    const stateBefore = await captureCanonicalState(projectId)
+ 
     // ── Apply should be rejected ──────────────────────────────────────
     const applyRes = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
@@ -2346,54 +2523,30 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
       .send(buildApplyPayload(rtId, [
         { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
       ], { name: 'Malformed Provenance Test' }))
-
+ 
     expect(applyRes.status).toBe(409)
-
-    // ── Canonical state must be preserved exactly ──────────────────────
-    const profilesAfter = await fetchProfiles(projectId)
-    expect(profilesAfter.length).toBe(profilesBefore.length)
-
+    expect(applyRes.body?.error).toBeDefined()
+ 
+    // ── Capture canonical state after and compare exactly ──────────────
+    const stateAfter = await captureCanonicalState(projectId)
+    expect(stateAfter).toEqual(stateBefore)
+ 
+    // Profile must NOT have been converted to SQUAD_PLANNER
     const badProfile = await prisma.capacityProfile.findUnique({
       where: { id: badProfileId },
     })
     expect(badProfile).toBeDefined()
-    // Profile must NOT have been converted to SQUAD_PLANNER
     expect(badProfile!.source).toBe('LEGACY')
     expect(badProfile!.planningBasis).toBe('CAPACITY_PROFILE')
     expect(badProfile!.defaultPercent).toBeNull()
-
-    // No PLANNED_RESOURCE profiles created
-    const plannedProfiles = await prisma.capacityProfile.findMany({
-      where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
-    })
-    expect(plannedProfiles.length).toBe(0)
-
-    // No active plan
-    const activePlanId = await fetchActivePlanId(projectId)
-    expect(activePlanId).toBeNull()
-
-    // GET /capacity-profiles returns identical state
-    const cpAfter = await request(app)
-      .get(`/api/projects/${projectId}/capacity-profiles`)
-      .set('Authorization', authHeader)
-    expect(cpAfter.status).toBe(200)
-    // Compare the bad profile in both responses (DTO format, id field may not be DB id)
-    const badInBefore = cpBeforeBody.capacityProfiles.find(
-      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role' && (p.owner as Record<string, unknown>).id === rtId,
-    )
-    const badInAfter = (cpAfter.body as { capacityProfiles: Array<Record<string, unknown>> }).capacityProfiles.find(
-      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'role' && (p.owner as Record<string, unknown>).id === rtId,
-    )
-    expect(badInBefore).toBeDefined()
-    expect(badInAfter).toBeDefined()
   })
-
+ 
   it('returns 409 for non-null ROLE legacy.allocationPct and preserves state', async () => {
     if (!runIntegration) return
     const projectId = await createProject()
     const rtId = await createResourceType(projectId, 'rt-malformed-pct-20', 'MalformedPct')
     await createEpicBacklog(projectId, rtId)
-
+ 
     // Profile with non-null allocationPct (normally null for ROLE)
     await prisma.capacityProfile.create({
       data: {
@@ -2418,30 +2571,87 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
         },
       },
     })
-
+ 
+    const stateBefore = await captureCanonicalState(projectId)
+ 
     const applyRes = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
       .set('Authorization', authHeader)
       .send(buildApplyPayload(rtId, [
         { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
       ], { name: 'Non-null allocationPct for ROLE' }))
-
+ 
     expect(applyRes.status).toBe(409)
-
-    // State unchanged
-    const activePlanId = await fetchActivePlanId(projectId)
-    expect(activePlanId).toBeNull()
+    expect(applyRes.body?.error).toBeDefined()
+ 
+    const stateAfter = await captureCanonicalState(projectId)
+    expect(stateAfter).toEqual(stateBefore)
+  })
+ 
+  it('returns 409 for startWeek null mismatch (profile=null, legacy=non-null) and preserves state', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-startweek-20', 'StartWeekMismatch')
+    await createEpicBacklog(projectId, rtId)
+ 
+    // Profile with startWeek=null but legacy.allocationStartWeek=1
+    await prisma.capacityProfile.create({
+      data: {
+        id: 'cp-startweek-20',
+        projectId,
+        ownerKind: 'ROLE',
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        source: 'LEGACY',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 100,
+        startWeek: null,              // ← profile startWeek is null
+        endWeek: 10,
+        legacy: {
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 100,
+          allocationPct: null,
+          allocationStartWeek: 1,      // ← but legacy allocationStartWeek is 1 (non-null)
+          allocationEndWeek: 10,
+          startWeek: null,
+          endWeek: null,
+        },
+      },
+    })
+ 
+    const stateBefore = await captureCanonicalState(projectId)
+ 
+    const applyRes = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ], { name: 'StartWeek Null Mismatch' }))
+ 
+    expect(applyRes.status).toBe(409)
+    expect(applyRes.body?.error).toBeDefined()
+ 
+    const stateAfter = await captureCanonicalState(projectId)
+    expect(stateAfter).toEqual(stateBefore)
   })
 })
 // ═════════════════════════════════════════════════════════════════════════════
 // Scenario 17 — Explicit ROLE pair regressions (evidence-backed policy)
 // ═════════════════════════════════════════════════════════════════════════════
+// Under the valid mapper provenance policy, mapper-produced FIXED,
+// AVAILABILITY_WINDOW, FULL_PROJECT and CAPACITY_PLAN (via LEGACY/CAPACITY_PROFILE)
+// ROLE pairs may be adopted when they carry a complete seven-key legacy payload
+// matching the profile fields.
 //
-// Under the evidence-backed legacy adoption policy, only LEGACY/DEMAND_FOLLOWING
-// with prior planner evidence may be adopted. All other ROLE provenance pairs
-// (FIXED/DEMAND_FOLLOWING, FIXED/WHOLE_PROJECT_ALLOCATION,
-// AVAILABILITY_WINDOW/AVAILABILITY_WINDOW, IMPORTED on any basis) must be
-// rejected with 409, no state change, and no snapshot leak.
+// The fixtures in this scenario are constructed without a legacy payload via
+// createProfile(), so isValidMapperProvenance returns false for all of them.
+// They are rejected because source/basis alone is insufficient — valid mapper
+// provenance requires the complete legacy object.
+//
+// Prior planner authority is a separate fallback that applies only to the
+// documented LEGACY/DEMAND_FOLLOWING pair (the original pre-#359 mapper pair).
+// These explicit-pair fixtures have different source/basis and lack prior
+// planner evidence, so both pathways reject them.
 
 describeIf('Scenario 17 — Explicit ROLE pair rejection', () => {
   const explicitPairs: Array<{
