@@ -38,7 +38,7 @@ export default function ResourceProfileTab({
       <header className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">Capacity profile summary</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Capacity profiles, planning basis, and resource allocation by role</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Capacity profiles, availability patterns, and resource allocation by role</p>
         </div>
       </header>
       <div className="px-6 py-3 bg-blue-50 dark:bg-blue-950/30 border-b border-blue-100 dark:border-blue-900">
@@ -176,11 +176,11 @@ export default function ResourceProfileTab({
                         const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
                         const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
                         const badge = (() => {
-                          if (mode === 'EFFORT') return { label: planningBasisLabel ?? 'Demand-following', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
-                          if (mode === 'TIMELINE') return { label: `${planningBasisLabel ?? 'Availability window'} · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
-                          if (mode === 'FULL_PROJECT') return { label: `${planningBasisLabel ?? 'Whole-project allocation'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
-                          if (mode === 'CAPACITY_PLAN') return { label: `${planningBasisLabel ?? 'Capacity profile'} · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
-                          return { label: `${planningBasisLabel ?? 'Whole-project allocation'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'EFFORT') return { label: planningBasisLabel ?? 'As needed', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
+                          if (mode === 'TIMELINE') return { label: `${planningBasisLabel ?? 'Fixed for selected weeks'} · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
+                          if (mode === 'FULL_PROJECT') return { label: `${planningBasisLabel ?? 'Fixed for whole project'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'CAPACITY_PLAN') return { label: `${planningBasisLabel ?? 'Varies by week'} · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
+                          return { label: `${planningBasisLabel ?? 'Fixed for whole project'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
                         })()
                         return (
                           <div>
@@ -259,17 +259,17 @@ export default function ResourceProfileTab({
                       <td colSpan={columnCount} className="px-6 py-4">
                         <div className="flex flex-wrap items-end gap-4">
                           <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Planning basis</label>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Availability pattern</label>
                             <select value={allocationDraft.allocationMode} onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
                               className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                              <option value="EFFORT">Demand-following</option>
-                              <option value="TIMELINE">Availability window</option>
-                              <option value="FULL_PROJECT">Whole-project allocation</option>
-                              <option value="CAPACITY_PLAN">Capacity profile</option>
+                              <option value="EFFORT">As needed</option>
+                              <option value="TIMELINE">Fixed for selected weeks</option>
+                              <option value="FULL_PROJECT">Fixed for whole project</option>
+                              <option value="CAPACITY_PLAN">Varies by week</option>
                             </select>
                           </div>
                           <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Capacity %</label>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Available %</label>
                             <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
                               onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
                               className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -278,7 +278,7 @@ export default function ResourceProfileTab({
                             <>
                               <div>
                                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                                  Start Week override
+                                  Available from
                                   {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
                                 </label>
                                 <input type="number" min={0} step={0.5} value={allocationDraft.allocationStartWeek ?? ''} placeholder="auto"
@@ -287,7 +287,7 @@ export default function ResourceProfileTab({
                               </div>
                               <div>
                                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                                  End Week override
+                                  Available to
                                   {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
                                 </label>
                                 <input type="number" min={0} step={0.5} value={allocationDraft.allocationEndWeek ?? ''} placeholder="auto"

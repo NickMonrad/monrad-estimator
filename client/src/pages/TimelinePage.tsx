@@ -128,9 +128,9 @@ function NamedResourcesPanel({
               {people.map((nr, i) => {
                 const mode = nr.allocationMode ?? 'EFFORT'
                 const modeLabel = mode === 'EFFORT' ? 'As needed'
-                  : mode === 'FULL_PROJECT' ? `Whole-project allocation · ${nr.allocationPct}%`
-                  : mode === 'CAPACITY_PLAN' ? `Capacity profile · ${nr.allocationPct}%`
-                  : `Availability window · ${nr.allocationPct}%`
+                  : mode === 'FULL_PROJECT' ? `Fixed for whole project · ${nr.allocationPct}%`
+                  : mode === 'CAPACITY_PLAN' ? 'Varies by week'
+                  : `Fixed for selected weeks · ${nr.allocationPct}%`
                 return (
                   <div
                     key={`${rtName}-${nr.name}-${i}`}
@@ -1253,6 +1253,7 @@ export default function TimelinePage() {
                                             <input
                                               key={`${nr.id}-start-${nr.allocationStartWeek ?? nr.startWeek ?? 'null'}`}
                                               type="number"
+                                              min={1}
                                               placeholder="W1"
                                               defaultValue={nr.allocationStartWeek ?? nr.startWeek ?? ''}
                                               aria-label={`Available from week for ${nr.name}`}
@@ -1288,6 +1289,7 @@ export default function TimelinePage() {
                                             <input
                                               key={`${nr.id}-end-${nr.allocationEndWeek ?? nr.endWeek ?? 'null'}`}
                                               type="number"
+                                              min={1}
                                               placeholder="W∞"
                                               defaultValue={nr.allocationEndWeek ?? nr.endWeek ?? ''}
                                               aria-label={`Available to week for ${nr.name}`}

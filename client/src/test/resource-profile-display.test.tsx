@@ -54,7 +54,7 @@ function createProps(
     updateAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     updateNrAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     startEditAllocation: vi.fn(),
-    getAllocationBadge: () => ({ label: 'Demand-following', color: 'bg-gray-100 text-gray-600', sub: null }),
+    getAllocationBadge: () => ({ label: 'As needed', color: 'bg-gray-100 text-gray-600', sub: null }),
     ...overrides,
   }
 }
@@ -114,8 +114,8 @@ describe('Capacity Profile Display', () => {
       />,
     )
 
-    // Badge should show 'Demand-following' from profile, not 'Availability window' from stale allocationMode
-    expect(screen.getByText(/Demand-following/i)).toBeInTheDocument()
+    // Badge should show 'As needed' from profile, not 'Fixed for selected weeks' from stale allocationMode
+    expect(screen.getByText(/As needed/i)).toBeInTheDocument()
     // Button title is the stable action label
     const button = screen.getByTitle('Click to edit allocation')
     expect(button).toBeInTheDocument()

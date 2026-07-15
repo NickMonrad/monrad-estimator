@@ -3,6 +3,7 @@ import type { ResourceProfile, Project } from '../types/backlog'
 import JSZip from 'jszip'
 import {
   formatPlanningBasis as fmtPlanningBasis,
+  formatAllocationMode as fmtAllocMode,
   formatCapacityProfileSource as fmtCapSource,
 } from '../lib/capacityProfileFormatting'
 
@@ -76,10 +77,10 @@ function formatPlanningBasis(
   if (capacityProfile) return fmtPlanningBasis(capacityProfile.planningBasis)
   // Legacy fallback — map allocationMode to display label
   switch (allocationMode) {
-    case 'EFFORT': return 'Demand-following'
-    case 'TIMELINE': return 'Availability window'
-    case 'FULL_PROJECT': return 'Whole-project allocation'
-    case 'CAPACITY_PLAN': return 'Capacity profile'
+    case 'EFFORT': return fmtAllocMode('EFFORT')
+    case 'TIMELINE': return fmtAllocMode('TIMELINE')
+    case 'FULL_PROJECT': return fmtAllocMode('FULL_PROJECT')
+    case 'CAPACITY_PLAN': return fmtAllocMode('CAPACITY_PLAN')
     default: return allocationMode
   }
 }
@@ -90,8 +91,8 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       'Section', 'Role', 'Resource name', 'Resource identity', 'Category',
       'Resource count', 'Hours per day', 'Effort days', 'Assigned days', 'Billable days',
       'Day rate', 'Subtotal',
-      'Planning basis', 'Profile source', 'Default capacity %', 'Profile start', 'Profile end',
-      'Availability window start', 'Availability window end',
+      'Availability pattern', 'Profile source', 'Default capacity %', 'Profile start', 'Profile end',
+      'Available from', 'Available to',
       'Assigned start', 'Assigned end', 'Capacity profile segments', 'Assignment segments', 'Assigned weeks',
       'Billing basis', 'Handover notes',
     ],

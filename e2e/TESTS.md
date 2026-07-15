@@ -160,7 +160,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 |------|-------------|
 | allocation mode dropdown changes from Timeline to Fixed for whole project | Clicks the allocation badge for the Developer row to open the inline editor; changes mode to `FULL_PROJECT` and sets FTE % to 50; clicks Save |
 | Fixed for selected weeks mode shows start/end week inputs and persists | Opens the Developer allocation editor; selects Fixed for selected weeks (TIMELINE); fills start week 2 and end week 10; clicks Save |
-| allocation % input persists independently | Opens the Developer allocation editor; changes to Fixed for whole project (FULL_PROJECT); sets FTE % to 75; saves and re-opens to verify the 75% value persists |
+| Available % input persists independently | Opens the Developer allocation editor; changes to Fixed for whole project (FULL_PROJECT); sets FTE % to 75; saves and re-opens to verify the 75% value persists |
 
 
 ---

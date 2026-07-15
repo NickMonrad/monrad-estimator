@@ -109,7 +109,7 @@ function createProps(
     updateAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     updateNrAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     startEditAllocation: vi.fn(),
-    getAllocationBadge: () => ({ label: 'Demand-following', color: 'bg-gray-100 text-gray-600', sub: null }),
+    getAllocationBadge: () => ({ label: 'As needed', color: 'bg-gray-100 text-gray-600', sub: null }),
     ...overrides,
   }
 }
@@ -514,14 +514,14 @@ describe('ResourceProfileTab Planning Context', () => {
   })
 })
 
-describe('Capacity Profile labels', () => {
+describe('Capacity Profile labels — availability terminology', () => {
   it('shows Resource Profile heading and capacity profile help text', () => {
     render(<ResourceProfileTab {...createProps(1)} />)
     expect(screen.getByText('Capacity profile summary')).toBeInTheDocument()
     // Help text: the <strong> element contains "Capacity profiles"
     expect(screen.getByText('Capacity profiles')).toBeInTheDocument()
-    // "Planning basis" appears in both subtitle and column header
-    expect(screen.getAllByText(/planning basis/i)).toHaveLength(2)
+    // "availability patterns" appears in the subtitle
+    expect(screen.getByText(/availability patterns/i)).toBeInTheDocument()
   })
 
   it('shows resource identity as Role-level capacity when no named resources exist', () => {
@@ -617,9 +617,9 @@ describe('Capacity Profile labels', () => {
     expect(screen.getByText('Planned resource')).toBeInTheDocument()
   })
 
-  it('shows Demand-following planning basis badge by default', () => {
+  it('shows As needed badge by default (EFFORT)', () => {
     render(<ResourceProfileTab {...createProps(1)} />)
-    expect(screen.getByText(/Demand-following/i)).toBeInTheDocument()
+    expect(screen.getByText(/As needed/i)).toBeInTheDocument()
   })
 
   it('rejects forbidden internal terms in the Resource Profile UI', () => {
@@ -634,7 +634,7 @@ describe('Capacity Profile labels', () => {
     }
   })
 
-  it('shows Availability window badge for TIMELINE allocation mode', () => {
+  it('shows Fixed for selected weeks badge for TIMELINE allocation mode', () => {
     render(<ResourceProfileTab {...createProps(1, {
       profile: {
         projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 0,
@@ -659,10 +659,10 @@ describe('Capacity Profile labels', () => {
         epics: [], namedResources: [],
       }],
     })} />)
-    expect(screen.getByText(/Availability window · 100%/)).toBeInTheDocument()
+    expect(screen.getByText(/Fixed for selected weeks · 100%/)).toBeInTheDocument()
   })
 
-  it('shows Whole-project allocation badge for FULL_PROJECT mode with percent', () => {
+  it('shows Fixed for whole project badge for FULL_PROJECT mode with percent', () => {
     render(<ResourceProfileTab {...createProps(1, {
       profile: {
         projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 10,
@@ -687,6 +687,6 @@ describe('Capacity Profile labels', () => {
         epics: [], namedResources: [],
       }],
     })} />)
-    expect(screen.getByText(/Whole-project allocation · 75%/)).toBeInTheDocument()
+    expect(screen.getByText(/Fixed for whole project · 75%/)).toBeInTheDocument()
   })
 })

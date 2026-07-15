@@ -254,7 +254,7 @@ describe('NamedResourcesPanel capacity profile display', () => {
     })
 
     // Capacity profile: planning basis badge
-    expect(screen.getByText('Availability window')).toBeInTheDocument()
+    expect(screen.getByText('Fixed for selected weeks')).toBeInTheDocument()
     // Source badge
     expect(screen.getByText('Squad Planner')).toBeInTheDocument()
     // Resolution source indicator
