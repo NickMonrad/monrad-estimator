@@ -138,8 +138,8 @@ async function setupDeterministicCapacityPlan(page: Page): Promise<string> {
     )
     const cpId = cpRes.rows[0].id
     await client.query(
-      `INSERT INTO "CapacitySegment" ("capacityProfileId", "startWeek", "endWeek", "capacityPercent", "source", "createdAt", "updatedAt")
-       VALUES ($1, 0, 10, 100, 'SQUAD_PLANNER', NOW(), NOW())`,
+      `INSERT INTO "CapacitySegment" ("id", "capacityProfileId", "startWeek", "endWeek", "capacityPercent", "source", "createdAt", "updatedAt")
+       VALUES (gen_random_uuid(), $1, 0, 10, 100, 'SQUAD_PLANNER', NOW(), NOW())`,
       [cpId],
     )
   } finally {
