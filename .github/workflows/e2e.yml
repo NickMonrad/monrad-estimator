@@ -36,9 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       # ── Audit dependencies ───────────────────────────────────────
@@ -55,6 +55,18 @@ jobs:
       # ── Backup regression tests (deterministic, no Docker/DB needed) ──
       - name: Backup regression tests
         run: npm run test:backup
+
+      # ── Chrome installer lifecycle tests ────────────────────────────
+      - name: Chrome installer lifecycle tests
+        run: npm run test:install-chrome
+
+      # ── PDF browser cleanup tests ────────────────────────────────────
+      - name: PDF browser cleanup tests
+        run: npm run test:pdf-cleanup
+
+      # ── PDF generation smoke test (real Chromium) ────────────────
+      - name: PDF generation smoke test
+        run: npm run test:pdf-smoke
 
       # ── Client clone commercial parity test ──────────────────────
       - name: Client clone commercial parity test
@@ -188,10 +200,54 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Verify Windows native optional packages
+        shell: pwsh
+        run: |
+          $expected = @{
+            '@esbuild/win32-x64' = '0.28.1'
+            '@rolldown/binding-win32-x64-msvc' = '1.1.5'
+            '@tailwindcss/oxide-win32-x64-msvc' = '4.3.2'
+            'lightningcss-win32-x64-msvc' = '1.32.0'
+          }
+
+          $failed = $false
+
+          foreach ($pkg in $expected.Keys) {
+            $expectedVersion = $expected[$pkg]
+
+            try {
+              $actualVersion = node -e "console.log(require('$pkg/package.json').version)"
+            } catch {
+              $actualVersion = ''
+            }
+
+            if ([string]::IsNullOrWhiteSpace($actualVersion)) {
+              Write-Host "::error::Could not resolve $pkg"
+              $failed = $true
+              continue
+            }
+
+            $actualVersion = $actualVersion.Trim()
+
+            if ($actualVersion -ne $expectedVersion) {
+              Write-Host "::error::$pkg resolved to $actualVersion; expected $expectedVersion"
+              $failed = $true
+            } else {
+              Write-Host "Verified $pkg@$actualVersion"
+            }
+          }
+
+          if ($failed) {
+            exit 1
+          }
 
       - name: Backup regression tests
         run: npm run test:backup
