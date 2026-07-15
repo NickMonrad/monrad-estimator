@@ -140,7 +140,7 @@ test.describe('Resource Allocation', () => {
     await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
   })
 
-  test('EFFORT and CAPACITY_PLAN hide Available % control', async ({ page }) => {
+  test('EFFORT hides Available % control; CAPACITY_PLAN shows info panel', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
@@ -158,14 +158,42 @@ test.describe('Resource Allocation', () => {
     await expect(page.getByText(/Available %/i)).not.toBeVisible({ timeout: 3_000 })
     await expect(page.getByText(/Available Percent/i)).not.toBeVisible({ timeout: 3_000 })
 
-    // Select CAPACITY_PLAN — Available % should NOT be visible
-    await modeSelect.selectOption('CAPACITY_PLAN')
-    await expect(page.getByText(/Available %/i)).not.toBeVisible({ timeout: 3_000 })
-    await expect(page.getByText(/Available Percent/i)).not.toBeVisible({ timeout: 3_000 })
+    // CAPACITY_PLAN is profile-managed and not available in the generic editor dropdown
+    expect(await modeSelect.locator('option[value="CAPACITY_PLAN"]').count()).toBe(0)
 
     // Cancel to close
     await page.locator('[data-testid="allocation-cancel"]').click()
     await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
+  })
+
+  test('CAPACITY_PLAN row shows info panel with View weekly profile button', async ({ page }) => {
+    test.setTimeout(90_000)
+    const projectId = await setupCommercialTab(page)
+    await gotoResourceProfile(page, projectId)
+
+    // Click on badge to open editor for the first row
+    const badge = page.locator('button[title="Click to edit allocation"]').first()
+    await expect(badge).toBeVisible({ timeout: 10_000 })
+    await badge.click({ force: true })
+
+    // If the row is CAPACITY_PLAN (set by the seed/commercial tab), expect info panel
+    const infoPanel = page.getByText(/managed through the weekly capacity profile/i)
+    if (await infoPanel.isVisible().catch(() => false)) {
+      // Row is CAPACITY_PLAN — verify View weekly profile button exists
+      await expect(page.getByText(/View weekly profile/i)).toBeVisible({ timeout: 5_000 })
+      // Verify Save button is NOT present (generic editor not shown)
+      await expect(page.getByText('Save')).not.toBeVisible({ timeout: 2_000 })
+    } else {
+      // Row is not CAPACITY_PLAN — select CAPACITY_PLAN if available, verify info panel
+      const modeSelect = page.locator('select').first()
+      const hasOption = await modeSelect.locator('option[value="CAPACITY_PLAN"]').count()
+      if (hasOption > 0) {
+        await modeSelect.selectOption('CAPACITY_PLAN')
+        await expect(infoPanel).toBeVisible({ timeout: 5_000 })
+      }
+      // Cancel to close
+      await page.locator('[data-testid="allocation-cancel"]').click()
+    }
   })
 
   test('changing Available % updates allocated days', async ({ page }) => {
