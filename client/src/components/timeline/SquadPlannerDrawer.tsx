@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { flushSync } from 'react-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import { getPlannerResourceTypeVisibility, type SquadPlannerSeedSettings } from './timelineUx'
@@ -226,7 +225,6 @@ export default function SquadPlannerDrawer({
   const [showAllResourceTypes, setShowAllResourceTypes] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [seedBanner, setSeedBanner] = useState<string | null>(null)
-  const [applySucceeded, setApplySucceeded] = useState(false)
 
   const qc = useQueryClient()
   const skipNextPersistRef = useRef(false)
@@ -300,12 +298,6 @@ export default function SquadPlannerDrawer({
       return () => document.removeEventListener('keydown', handleKeyDown)
     }
   }, [open, handleKeyDown])
-  // ── reset apply-succeeded guard when the drawer opens ──────────────────
-  useEffect(() => {
-    if (open) {
-      setApplySucceeded(false)
-    }
-  }, [open])
 
   // ── generate mutation ───────────────────────────────────────────────────
   const generate = useMutation({
@@ -406,17 +398,7 @@ export default function SquadPlannerDrawer({
           setActive: true,
         })
         .then(r => r.data),
-    onSuccess: () => {
-      setApplySucceeded(true)
-      flushSync(() => { onClose() })
-      Promise.all([
-        qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
-        qc.refetchQueries({ queryKey: ['timeline', projectId] }),
-        qc.refetchQueries({ queryKey: ['resource-types', projectId] }),
-      ]).catch(() => {
-        /* refetch failures are non-critical after successful apply */
-      })
-    },
+    onSuccess: () => setError(null),
     onError: (err: unknown) => {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
@@ -447,7 +429,7 @@ export default function SquadPlannerDrawer({
     }
   }
 
-  if (!open || applySucceeded) return null
+  if (!open) return null
 
   const result = generate.data
 
@@ -456,7 +438,6 @@ export default function SquadPlannerDrawer({
     ? Array.from(new Set(result.periods.flatMap(p => p.resources.map(r => r.resourceTypeName))))
     : []
 
-  // Build a quick lookup: rtName → periodIndex → resource
   const lookup = new Map<string, Map<number, PeriodResource>>()
   if (result) {
     for (const p of result.periods) {
@@ -886,9 +867,22 @@ export default function SquadPlannerDrawer({
               {/* Action buttons */}
               <div className="flex gap-2">
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!window.confirm('Apply this capacity profile? Resource profiles will be updated.')) return
-                    apply.mutate(result)
+                    try {
+                      await apply.mutateAsync(result)
+                      onClose()
+                      Promise.all([
+                        qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
+                        qc.refetchQueries({ queryKey: ['timeline', projectId] }),
+                        qc.refetchQueries({ queryKey: ['resource-types', projectId] }),
+                      ]).catch(() => {
+                        /* refetch failures are non-critical after successful apply */
+                      })
+                      setTimeout(() => alert('✅ Plan applied — timeline and resource counts updated.'), 100)
+                    } catch {
+                      /* error state handled by mutation onError callback */
+                    }
                   }}
                   disabled={apply.isPending}
                   className="flex-1 bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
