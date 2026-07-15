@@ -31,9 +31,10 @@ import {
 import {
   conflictPreflightCheck,
   findOrCreatePlannedResources,
-  materializeProfilesForResourceType,
   writePlannerProfiles,
+  materializeProfilesForResourceType,
   clearSurplusCompatibilityFields,
+  projectCompatibilityFields,
   clearOmittedPlannerCapacity,
   revalidatePlannerPlan,
   capturePlannerAuthority,
@@ -803,6 +804,14 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             materialized.surplusResources,
             undefined,
             transactionAuthority ?? undefined,
+          )
+
+          // Project compatibility fields from just-written profiles
+          await projectCompatibilityFields(
+            tx,
+            projectId,
+            [materialized.roleProfile],
+            materialized.plannedProfiles,
           )
 
           // Clear surplus resource windows so legacy readers see no stale capacity

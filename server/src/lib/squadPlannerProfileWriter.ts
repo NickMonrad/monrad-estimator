@@ -1232,20 +1232,47 @@ export async function clearOmittedPlannerCapacity(
   const priorActivePlanResourceTypeIds = authority.activePlanResourceTypeIds
   const omittedResourceTypeIds = [...authority.allPlannerResourceTypeIds]
     .filter(id => !activeResourceTypeIds.has(id))
-  const zeroRoleProfiles: RoleProfileWriteSet[] = [...authority.plannerRoleResourceTypeIds]
-      .filter(resourceTypeId => !activeResourceTypeIds.has(resourceTypeId))
-      .map(resourceTypeId => ({
-        resourceTypeId,
-        defaultPercent: 0,
-        startWeek: null,
-        endWeek: null,
-        segments: [],
-      }))
+  
+  // Query existing LEGACY/DEMAND_FOLLOWING ROLE profiles for omitted RTs
+  const existingOmittedRoleProfiles = omittedResourceTypeIds.length > 0
+    ? await tx.capacityProfile.findMany({
+        where: {
+          projectId,
+          resourceTypeId: { in: omittedResourceTypeIds },
+          namedResourceId: null,
+          source: 'LEGACY',
+          planningBasis: 'DEMAND_FOLLOWING',
+        },
+        select: {
+          resourceTypeId: true,
+          defaultPercent: true,
+          startWeek: true,
+          endWeek: true,
+        },
+      })
+    : []
+
+  // Merge planner-owned and LEGACY/DEMAND_FOLLOWING ROLE RTs into zero-cap profiles
+  // without synthesizing absent ROLE rows.
+  const roleRtIds = new Set([
+    ...[...authority.plannerRoleResourceTypeIds].filter(id => !activeResourceTypeIds.has(id)),
+    ...existingOmittedRoleProfiles
+      .map(p => p.resourceTypeId)
+      .filter((id): id is string => id !== null),
+  ])
+  const zeroRoleProfiles: RoleProfileWriteSet[] = [...roleRtIds]
+    .map(resourceTypeId => ({
+      resourceTypeId,
+      defaultPercent: 0,
+      startWeek: null,
+      endWeek: null,
+      segments: [],
+    }))
   const zeroPlannedProfiles: PlannedResourceProfileWriteSet[] = []
   const zeroResourceIds: string[] = []
 
   for (const resourceTypeId of omittedResourceTypeIds) {
-    const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+    const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId, authority)
     if (ownerConflicts.length > 0) {
       throw new PlannerConflictError(
         `Protected ROLE profile blocks omitted-role cleanup for resource type "${resourceTypeId}".`,
@@ -1291,7 +1318,7 @@ export async function clearOmittedPlannerCapacity(
     }
   }
 
-  await writePlannerProfiles(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles, [])
+  await writePlannerProfiles(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles, [], undefined, authority)
   await projectCompatibilityFields(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles)
   await clearSurplusCompatibilityFields(tx, zeroResourceIds)
 }
