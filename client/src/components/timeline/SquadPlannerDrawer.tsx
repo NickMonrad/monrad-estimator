@@ -407,7 +407,6 @@ export default function SquadPlannerDrawer({
       ]).catch(() => {
         /* refetch failures are non-critical after successful apply */
       })
-      setTimeout(() => alert('✅ Plan applied — timeline and resource counts updated.'), 100)
     },
     onError: (err: unknown) => {
       const msg =
