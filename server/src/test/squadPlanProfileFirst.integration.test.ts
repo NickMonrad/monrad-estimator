@@ -21,6 +21,8 @@
  *     the concurrent explicit profile.
  *   - setActive:false saves the plan only and does not mutate any capacity
  *     profiles, resource types, or named resources.
+ *   - Two concurrent valid applies are serialized: each returns 201 or retryable
+ *     409, and the database contains one active plan with one owner profile set.
  * All tests are skipped unless INTEGRATION_TEST=true.  Follows the same
  * isolation and cleanup pattern as snapshotRollback.integration.test.ts and
  * projects.clone.integration.test.ts.
@@ -1660,6 +1662,59 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     expect(explicitDto!.source).toBe('manual')
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 12 — Concurrent valid applies under Serializable isolation
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario 12 — concurrent valid applies under Serializable isolation', () => {
+  let projectId: string
+  let rtId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    rtId = await createResourceType(projectId, 'rt-serializable-12', 'Engineer')
+    await createEpicBacklog(projectId, rtId)
+  })
+
+  it('allows one or both serialised commits and rejects no request with a server error', async () => {
+    if (!runIntegration) return
+
+    const responses = await Promise.all([
+      request(app)
+        .post(`/api/projects/${projectId}/squad-plan/apply`)
+        .set('Authorization', authHeader)
+        .send(buildApplyPayload(rtId, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ], { name: 'Serializable Apply A' })),
+      request(app)
+        .post(`/api/projects/${projectId}/squad-plan/apply`)
+        .set('Authorization', authHeader)
+        .send(buildApplyPayload(rtId, [
+          { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        ], { name: 'Serializable Apply B' })),
+    ])
+
+    const statuses = responses.map(response => response.status).sort((a, b) => a - b)
+    expect(statuses.some(status => status === 201)).toBe(true)
+    expect(statuses.every(status => status === 201 || status === 409)).toBe(true)
+
+    const activePlans = await prisma.capacityPlan.findMany({
+      where: { projectId, isActive: true },
+    })
+    expect(activePlans).toHaveLength(1)
+
+    const profiles = await fetchProfiles(projectId)
+    expect(profiles.filter(profile =>
+      profile.ownerKind === 'ROLE' && profile.resourceTypeId === rtId,
+    )).toHaveLength(1)
+    expect(profiles.filter(profile =>
+      profile.ownerKind === 'PLANNED_RESOURCE' && profile.source === 'SQUAD_PLANNER',
+    )).toHaveLength(1)
+  })
+})
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Test coverage is skipped when INTEGRATION_TEST is not 'true'.
 // ═════════════════════════════════════════════════════════════════════════════

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   buildRoleProfileData,
   buildPlannedResourceProfileData,
@@ -10,6 +10,7 @@ import {
   isLegacyPlannerProfile,
   isPlannerManaged,
   materializeProfilesForResourceType,
+  validatePlannerOwnerState,
 } from '../lib/squadPlannerProfileWriter.js'
 import type { CapacityPlanPeriodInput } from '../lib/capacityPlanMaterialisation.js'
 
@@ -227,8 +228,13 @@ describe('classifyNamedResource', () => {
     expect(classifyNamedResource(resource, [plannerProfile])).toBe('planner_managed')
   })
 
-  it('classifies no profiles with CAPACITY_PLAN mode as capacity_plan_untouched', () => {
-    expect(classifyNamedResource({ allocationMode: 'CAPACITY_PLAN' }, [])).toBe('capacity_plan_untouched')
+  it('requires prior active-plan provenance for a profile-free CAPACITY_PLAN resource', () => {
+    expect(classifyNamedResource({ allocationMode: 'CAPACITY_PLAN' }, [])).toBe('other')
+    expect(classifyNamedResource(
+      { allocationMode: 'CAPACITY_PLAN' },
+      [],
+      { priorActivePlan: true },
+    )).toBe('capacity_plan_untouched')
   })
 
   it('classifies EFFORT allocation with no profiles as other', () => {
@@ -271,8 +277,13 @@ describe('isPlannerManaged', () => {
     )).toBe(true)
   })
 
-  it('returns true for capacity_plan_untouched resources', () => {
-    expect(isPlannerManaged({ allocationMode: 'CAPACITY_PLAN' }, [])).toBe(true)
+  it('returns true for capacity_plan_untouched resources with provenance', () => {
+    expect(isPlannerManaged(
+      { allocationMode: 'CAPACITY_PLAN' },
+      [],
+      { priorActivePlan: true },
+    )).toBe(true)
+    expect(isPlannerManaged({ allocationMode: 'CAPACITY_PLAN' }, [])).toBe(false)
   })
 
   it('returns false for explicit_person resources', () => {
@@ -420,7 +431,14 @@ describe('buildPlannerResourcePlan', () => {
       { namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
     ]
 
-    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 1)
+    const result = buildPlannerResourcePlan(
+      namedResources,
+      profiles,
+      rtDev,
+      rtName,
+      1,
+      { priorActivePlan: true },
+    )
 
     expect(result.hasConflict).toBe(false)
     expect(result.plannerResources).toHaveLength(1)
@@ -456,7 +474,14 @@ describe('buildPlannerResourcePlan', () => {
       { namedResourceId: 'nr-legacy', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
     ]
 
-    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 2)
+    const result = buildPlannerResourcePlan(
+      namedResources,
+      profiles,
+      rtDev,
+      rtName,
+      2,
+      { priorActivePlan: true },
+    )
 
     expect(result.hasConflict).toBe(false)
     expect(result.plannerResources).toHaveLength(2)
@@ -500,7 +525,14 @@ describe('buildPlannerResourcePlan', () => {
     ]
     const profiles: Array<{ namedResourceId: string | null; ownerKind: string; source: string; planningBasis?: string }> = []
 
-    const result = buildPlannerResourcePlan(namedResources, profiles, rtDev, rtName, 2)
+    const result = buildPlannerResourcePlan(
+      namedResources,
+      profiles,
+      rtDev,
+      rtName,
+      2,
+      { priorActivePlan: true },
+    )
 
     expect(result.hasConflict).toBe(false)
     expect(result.plannerResources).toHaveLength(2)
@@ -604,5 +636,71 @@ describe('materializeProfilesForResourceType', () => {
     expect(result.plannedProfiles).toHaveLength(1)
     expect(result.plannedProfiles[0].namedResourceId).toBe('nr-1')
     expect(result.surplusResources).toEqual(['nr-2', 'nr-3'])
+  })
+})
+
+// ─── Ownership validation tests ────────────────────────────────────────────
+
+describe('validatePlannerOwnerState', () => {
+  function makeTransaction(profiles: Array<Record<string, unknown>>) {
+    return {
+      resourceType: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'rt-dev',
+          name: 'Developer',
+          projectId: 'project-1',
+        }),
+      },
+      namedResource: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'nr-dev-1', name: 'Developer 1' },
+        ]),
+      },
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue(profiles),
+      },
+    } as never
+  }
+
+  it('rejects a ROLE profile that also claims a named resource', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-malformed-role',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: 'nr-dev-1',
+        ownerKind: 'ROLE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+      }]),
+      'project-1',
+      'rt-dev',
+    )
+
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      resourceTypeName: 'Developer',
+      namedResourceName: 'Developer 1',
+    })
+  })
+
+  it('rejects a planner resource profile with non-planner provenance', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-malformed-planned',
+        projectId: 'project-1',
+        resourceTypeId: null,
+        namedResourceId: 'nr-dev-1',
+        ownerKind: 'PLANNED_RESOURCE',
+        source: 'MANUAL',
+        planningBasis: 'CAPACITY_PROFILE',
+      }]),
+      'project-1',
+      'rt-dev',
+    )
+
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0].namedResourceName).toBe('Developer 1')
   })
 })

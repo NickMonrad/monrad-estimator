@@ -548,6 +548,23 @@ legacy compatibility projections, Timeline rows, and `weeklyDemandCache`.
 8. Before any apply mutation, the transaction revalidates planner ownership. A committed
    explicit-owner race aborts with HTTP 409; only the new pre-apply snapshot is removed,
    while older snapshots and the concurrent explicit profile remain intact.
+9. The domain transaction runs at PostgreSQL `Serializable` isolation. A
+   serialization failure (`P2034`) aborts all domain writes, removes only the new
+   pre-apply snapshot, and returns a retryable HTTP 409 response.
+10. Omitted-role cleanup is evidence-backed: planner-owned `ROLE` profiles,
+    legacy planner `NAMED_PERSON` profiles, or entries in the prior active
+    `CapacityPlan` establish ownership. A bare `CAPACITY_PLAN` row with no
+    profile and no prior active-plan entry is not adopted.
+11. Malformed owner shapes, invalid planner provenance, and duplicate physical
+    owners fail closed with HTTP 409. Apply does not repair or implicitly adopt
+    ambiguous state.
+
+Commercial remains outside this migration boundary. Squad Planner changes capacity
+availability and compatibility projections; it does not change `pricingModel`,
+billing basis, pricing formulas, discounts, tax, or commercial totals. The real
+PostgreSQL clone integration executes production `computeCommercialData` against
+source and clone DTOs and verifies exact parity after ID normalisation for the
+supported `ACTUAL_DAYS` and `PRO_RATA` billing models.
 
 ### Phase 6 — Reverse reconciliation direction
 
@@ -623,6 +640,10 @@ Tracked separately by #342.
 | Stable planned-resource identity | NR IDs stable across repeated applies |
 | Repeated apply behaviour defined | Second apply does not duplicate or corrupt |
 | Preview (non-apply) unchanged | Preview does not write to DB, uses temporary IDs |
+| Evidence-backed omitted-role cleanup | Planner-owned profiles and prior active-plan evidence clear; unrelated bare `CAPACITY_PLAN` state remains untouched |
+| Bare `CAPACITY_PLAN` adoption guard | No-profile rows are adopted only when a prior active `CapacityPlan` entry proves planner ownership |
+| Malformed owner/provenance rejection | Invalid owner shapes, planner provenance, and duplicate physical owners return HTTP 409 without repair |
+| Serializable concurrent apply | Real concurrent valid applies produce only committed 201 or retryable 409 responses and leave one active plan |
 
 ### Operational
 

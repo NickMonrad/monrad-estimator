@@ -424,6 +424,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
         count: (args: any) => filter(store().namedResources, args?.where ?? {}).length,
       },
       capacityPlan: {
+        findFirst: () => null,
         updateMany: (args: any) => {
           for (const r of filter(store().capacityPlans, args.where)) {
             const idx = store().capacityPlans.findIndex((x: any) => x.id === r.id)
@@ -439,6 +440,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
           store().backlogSnapshots.push(rec)
           return rec
         },
+        delete: async (args: any) => deleteOne('backlogSnapshots', args.where ?? args),
       },
       capacityProfile: {
         findFirst: (args: any) => findOne(store().capacityProfiles, args?.where ?? {}),
@@ -888,6 +890,12 @@ describe('persisted capacity-profile DTO integration', () => {
     it('apply route creates profiles with segments in shared store; GET returns them', async () => {
       addResourceType(rtId, userName, 1)
       addNamedResource('nr-1', 'Engineer 1', rtId, { allocationMode: 'CAPACITY_PLAN' })
+      addPersistedProfile('cp-nr-1', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+      })
 
       const applyRes = await request(app)
         .post(`/api/projects/${projectId}/squad-plan/apply`)

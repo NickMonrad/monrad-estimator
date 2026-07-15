@@ -380,6 +380,69 @@ describe('canonical commercial consistency', () => {
     }
   })
 
+  it('legitimate capacity reduction changes ACTUAL_DAYS billing without changing PRO_RATA basis', () => {
+    const base = buildCanonicalProfile()
+    const baseResult = computeCommercialData(base, [], { taxRate: null, taxLabel: 'GST' })
+
+    // Capacity availability falls to 80%; the scheduler consequently assigns
+    // Alice two fewer actual days. Bob remains planned-basis billing.
+    const changedCapacity: ResourceProfile = {
+      ...base,
+      resourceRows: base.resourceRows.map(row => ({
+        ...row,
+        capacityProfile: {
+          planningBasis: 'capacityProfile',
+          source: 'squadPlanner',
+          segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 80 }],
+        },
+        namedResources: row.namedResources.map(nr => nr.id === 'nr-alice'
+          ? {
+              ...nr,
+              actualAllocatedDays: 8,
+              actualAllocationStartWeek: 0,
+              actualAllocationEndWeek: 4,
+              actualAllocatedWeeks: [
+                { week: 0, days: 2, capacityDays: 4 },
+                { week: 1, days: 2, capacityDays: 4 },
+                { week: 2, days: 2, capacityDays: 4 },
+                { week: 3, days: 2, capacityDays: 4 },
+              ],
+              actualAllocationSegments: [{ startWeek: 0, endWeek: 4, days: 8 }],
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 80 }],
+              },
+            }
+          : {
+              ...nr,
+              capacityProfile: {
+                planningBasis: 'capacityProfile',
+                source: 'squadPlanner',
+                segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 80 }],
+              },
+            }),
+      })),
+    }
+    const changedResult = computeCommercialData(changedCapacity, [], { taxRate: null, taxLabel: 'GST' })
+
+    expect(baseResult).not.toBeNull()
+    expect(changedResult).not.toBeNull()
+    expect(changedResult!.subtotal).toBe(9000)
+    expect(changedResult!.grandTotal).toBe(9000)
+    expect(changedResult!.rows.map(row => row.id)).toEqual(['nr-alice', 'nr-bob'])
+
+    const alice = changedResult!.rows.find(row => row.id === 'nr-alice')
+    expect(alice!.allocatedDays).toBe(8)
+    expect(alice!.subtotal).toBe(8 * 500)
+    expect(alice!.pricingModel).toBe('ACTUAL_DAYS')
+
+    const bob = changedResult!.rows.find(row => row.id === 'nr-bob')
+    expect(bob!.allocatedDays).toBe(10)
+    expect(bob!.subtotal).toBe(10 * 500)
+    expect(bob!.pricingModel).toBe('PRO_RATA')
+  })
+
   it('rollback parity: restored Scenario A DTO produces identical commercial totals before and after mutation', () => {
     // ── State A: restored snapshot DTO ──────────────────────────────
     const profileA = buildScenarioAProfile()

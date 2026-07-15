@@ -42,12 +42,16 @@ function makeTx(overrides: Record<string, unknown> = {}) {
       count: vi.fn().mockResolvedValue(0),
     },
     resourceType: {
+      findUnique: vi.fn().mockResolvedValue({ id: 'rt-dev', name: 'Developer', projectId: 'proj-1' }),
       findMany: vi.fn().mockResolvedValue([]),
       upsert: vi.fn().mockResolvedValue({}),
       deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
+    capacityPlan: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
-    capacityPlan: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     epic: { findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn() },
     feature: { create: vi.fn() },
     userStory: { create: vi.fn() },
@@ -73,11 +77,16 @@ describe('conflictPreflightCheck', () => {
     const tx = makeTx({
       capacityProfile: {
         findMany: vi.fn()
-          .mockResolvedValueOnce([])  // ROLE profiles
-          .mockResolvedValueOnce([   // resource profiles
-            { id: 'cp-1', namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
-            { id: 'cp-2', namedResourceId: 'nr-bob', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
-            { id: 'cp-3', namedResourceId: 'nr-carol', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+          .mockResolvedValueOnce([
+            { id: 'cp-1', projectId: 'proj-1', resourceTypeId: null, namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
+            { id: 'cp-2', projectId: 'proj-1', resourceTypeId: null, namedResourceId: 'nr-bob', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+            { id: 'cp-3', projectId: 'proj-1', resourceTypeId: null, namedResourceId: 'nr-carol', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+          ])
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            { namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
+            { namedResourceId: 'nr-bob', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+            { namedResourceId: 'nr-carol', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
           ]),
       },
       namedResource: {
@@ -89,21 +98,13 @@ describe('conflictPreflightCheck', () => {
       },
     })
 
-    const result = await conflictPreflightCheck(
-      tx as never,
-      'proj-1',
-      [
-        {
-          periodIndex: 0,
-          startWeek: 0,
-          endWeek: 4,
-          entries: [{ resourceTypeId: 'rt-dev', headcount: 2}],
-        },
-      ],
-    )
+    const result = await conflictPreflightCheck(tx as never, 'proj-1', [{
+      periodIndex: 0,
+      startWeek: 0,
+      endWeek: 4,
+      entries: [{ resourceTypeId: 'rt-dev', headcount: 2 }],
+    }])
 
-    // 2 trajectories, 2 planner resources (Bob, Carol) — Alice is explicit_person
-    // plannerResources.length (2) >= trajectoryCount (2) → no conflict
     expect(result).toBeUndefined()
   })
 
@@ -111,10 +112,14 @@ describe('conflictPreflightCheck', () => {
     const tx = makeTx({
       capacityProfile: {
         findMany: vi.fn()
-          .mockResolvedValueOnce([])  // ROLE profiles
-          .mockResolvedValueOnce([   // resource profiles
-            { id: 'cp-1', namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
-            { id: 'cp-2', namedResourceId: 'nr-bob', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+          .mockResolvedValueOnce([
+            { id: 'cp-1', projectId: 'proj-1', resourceTypeId: null, namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
+            { id: 'cp-2', projectId: 'proj-1', resourceTypeId: null, namedResourceId: 'nr-bob', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+          ])
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            { namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
+            { namedResourceId: 'nr-bob', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
           ]),
       },
       namedResource: {
@@ -125,21 +130,13 @@ describe('conflictPreflightCheck', () => {
       },
     })
 
-    const result = await conflictPreflightCheck(
-      tx as never,
-      'proj-1',
-      [
-        {
-          periodIndex: 0,
-          startWeek: 0,
-          endWeek: 8,
-          entries: [{ resourceTypeId: 'rt-dev', headcount: 3}],
-        },
-      ],
-    )
+    const result = await conflictPreflightCheck(tx as never, 'proj-1', [{
+      periodIndex: 0,
+      startWeek: 0,
+      endWeek: 8,
+      entries: [{ resourceTypeId: 'rt-dev', headcount: 3 }],
+    }])
 
-    // 3 trajectories, 1 planner resource (Bob) — Alice is explicit_person.
-    // Explicit people are protected; the planner creates placeholders for the shortfall.
     expect(result).toBeUndefined()
   })
 
@@ -147,6 +144,10 @@ describe('conflictPreflightCheck', () => {
     const tx = makeTx({
       capacityProfile: {
         findMany: vi.fn()
+          .mockResolvedValueOnce([
+            { id: 'cp-1', projectId: 'proj-1', resourceTypeId: 'rt-dev', namedResourceId: null, ownerKind: 'ROLE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+            { id: 'cp-2', projectId: 'proj-1', resourceTypeId: 'rt-dev', namedResourceId: null, ownerKind: 'ROLE', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
+          ])
           .mockResolvedValueOnce([{ id: 'cp-1' }, { id: 'cp-2' }])
           .mockResolvedValueOnce([]),
       },
@@ -155,22 +156,16 @@ describe('conflictPreflightCheck', () => {
       },
     })
 
-    const result = await conflictPreflightCheck(
-      tx as never,
-      'proj-1',
-      [
-        {
-          periodIndex: 0,
-          startWeek: 0,
-          endWeek: 4,
-          entries: [{ resourceTypeId: 'rt-dev', headcount: 1}],
-        },
-      ],
-    )
+    const result = await conflictPreflightCheck(tx as never, 'proj-1', [{
+      periodIndex: 0,
+      startWeek: 0,
+      endWeek: 4,
+      entries: [{ resourceTypeId: 'rt-dev', headcount: 1 }],
+    }])
 
     expect(result).toBeDefined()
     expect(result!.hasConflict).toBe(true)
-    expect(result!.duplicateOwnerProfiles).toHaveLength(1)
+    expect(result!.duplicateOwnerProfiles).toHaveLength(2)
   })
 })
 
@@ -247,15 +242,17 @@ describe('findOrCreatePlannedResources', () => {
           .mockResolvedValueOnce([
             { namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
             { namedResourceId: 'nr-bob', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
+            { namedResourceId: 'nr-carol', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
           ])
           .mockResolvedValueOnce([
             { namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
             { namedResourceId: 'nr-bob', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'AVAILABILITY_WINDOW' },
+            { namedResourceId: 'nr-carol', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
           ]),
       },
     }
 
-    // Carol has no profile + CAPACITY_PLAN allocation → capacity_plan_untouched → planner-managed
+    // Carol has an evidence-backed legacy planner profile and is adoptable.
     const result = await findOrCreatePlannedResources(
       tx as never,
       'rt-dev',

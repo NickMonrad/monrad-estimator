@@ -7,6 +7,7 @@
  */
 
 import { Router, Response } from 'express'
+import { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
@@ -746,6 +747,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             rtId,
             rtName,
             trajectories.length,
+            projectId,
           )
           // Build profile write sets (role + per-resource), including all
           // planner-managed resources so shrink operations zero surplus rows.
@@ -815,7 +817,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       }
 
       return createdPlan
-    })
+    }, { isolationLevel: 'Serializable' })
   } catch (err: unknown) {
     if (err instanceof PlannerConflictError) {
       // Transaction-time conflict: abort before active-plan deactivation.
@@ -826,6 +828,17 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         })
       }
       res.status(409).json({ error: err.message })
+      return
+    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+      // PostgreSQL Serializable transactions can abort on a concurrent write.
+      // The new snapshot is outside the transaction and must be cleaned up explicitly.
+      if (newSnapshotId) {
+        await prisma.backlogSnapshot.delete({ where: { id: newSnapshotId } }).catch(() => {
+          // Snapshot may already be deleted by another path; ignore deletion failure
+        })
+      }
+      res.status(409).json({ error: 'Concurrent planner apply detected; retry the operation.' })
       return
     }
     throw err // Unexpected errors propagate as 500

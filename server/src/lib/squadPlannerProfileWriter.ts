@@ -99,7 +99,12 @@ export function isLegacyPlannerProfile(
     && namedResource.allocationMode === 'CAPACITY_PLAN'
 }
 
+export interface PlannerProvenance {
+  /** True only when the previous active CapacityPlan contained this role. */
+  priorActivePlan: boolean
+}
 
+const noPlannerProvenance: PlannerProvenance = { priorActivePlan: false }
 // ─── Shared planner-managed resource classification ─────────────────────────
 
 /**
@@ -108,10 +113,11 @@ export function isLegacyPlannerProfile(
  * full profile set, ordered by priority:
  *
  * 1. PROTECTED_PROFILE_SOURCES   → 'explicit_person'   (never matched)
- * 2. Non-legacy NAMED_PERSON     → 'explicit_person'   (never matched)
- * 3. Legacy adoptable (all markers) → 'legacy_adoptable'  (matched)
- * 4. PLANNED_RESOURCE+SQUAD_PLANNER → 'planner_managed'   (matched)
- * 5. No profiles + CAPACITY_PLAN mode → 'capacity_plan_untouched' (matched)
+ * 2. Non-legacy NAMED_PERSON     → 'explicit_person' (never matched)
+ * 3. Legacy adoptable (all markers) → 'legacy_adoptable' (matched)
+ * 4. PLANNED_RESOURCE+SQUAD_PLANNER → 'planner_managed' (matched)
+ * 5. No profiles + CAPACITY_PLAN mode + prior active-plan provenance
+ *    → 'capacity_plan_untouched' (matched)
  * 6. Everything else → 'other'
  */
 export type PlannerResourceKind =
@@ -129,6 +135,7 @@ export type PlannerResourceKind =
 export function classifyNamedResource(
   namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
   profiles: ReadonlyArray<Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>>,
+  provenance: PlannerProvenance = noPlannerProvenance,
 ): PlannerResourceKind {
   for (const profile of profiles) {
     if (profile.source && PROTECTED_PROFILE_SOURCES[profile.source]) {
@@ -150,7 +157,9 @@ export function classifyNamedResource(
       return 'planner_managed'
     }
   }
-  if (profiles.length === 0 && namedResource.allocationMode === 'CAPACITY_PLAN') {
+  if (profiles.length === 0
+    && namedResource.allocationMode === 'CAPACITY_PLAN'
+    && provenance.priorActivePlan) {
     return 'capacity_plan_untouched'
   }
   return 'other'
@@ -158,15 +167,14 @@ export function classifyNamedResource(
 
 /**
  * True if a resource is planner-managed (legacy-adoptable, existing planner-owned,
- * or capacity-plan-untouched). Excludes explicit/protected resources.
- * Stable domain concept used by both findOrCreatePlannedResources and
- * clearOmittedPlannerCapacity.
+ * or an unprofiled legacy row backed by prior active-plan provenance).
  */
 export function isPlannerManaged(
   namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
   profiles: ReadonlyArray<Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>>,
+  provenance: PlannerProvenance = noPlannerProvenance,
 ): boolean {
-  const kind = classifyNamedResource(namedResource, profiles)
+  const kind = classifyNamedResource(namedResource, profiles, provenance)
   return kind === 'legacy_adoptable'
     || kind === 'planner_managed'
     || kind === 'capacity_plan_untouched'
@@ -350,6 +358,133 @@ export function classifyProfileConflicts(
   }
 }
 
+/**
+ * Validate every profile claiming ownership of one affected resource type.
+ * This is the single fail-closed ownership validator used before adoption,
+ * matching, and writes. It deliberately never repairs malformed rows.
+ */
+export async function validatePlannerOwnerState(
+  tx: PrismaTransactionClient,
+  projectId: string,
+  resourceTypeId: string,
+): Promise<ConflictResourceInfo[]> {
+  const resourceType = await tx.resourceType.findUnique({
+    where: { id: resourceTypeId },
+    select: { id: true, name: true, projectId: true },
+  })
+  if (!resourceType || resourceType.projectId !== projectId) {
+    return [{ resourceTypeId, resourceTypeName: 'resource-type' }]
+  }
+
+  const namedResources = (await tx.namedResource.findMany({
+    where: { resourceTypeId },
+    select: { id: true, name: true },
+  })) ?? []
+  const namedResourceById = new Map(namedResources.map(resource => [resource.id, resource]))
+  const namedResourceIds = namedResources.map(resource => resource.id)
+  const profiles = (await tx.capacityProfile.findMany({
+    where: {
+      OR: [
+        { resourceTypeId },
+        ...(namedResourceIds.length > 0 ? [{ namedResourceId: { in: namedResourceIds } }] : []),
+      ],
+    },
+    select: {
+      id: true,
+      projectId: true,
+      resourceTypeId: true,
+      namedResourceId: true,
+      ownerKind: true,
+      source: true,
+      planningBasis: true,
+    },
+  })) ?? []
+  const conflicts: ConflictResourceInfo[] = []
+  const seen = new Set<string>()
+  const mark = (profileId: string, namedResourceName?: string) => {
+    if (seen.has(profileId)) return
+    seen.add(profileId)
+    conflicts.push({
+      resourceTypeId,
+      resourceTypeName: resourceType.name,
+      namedResourceName,
+    })
+  }
+
+  const profilesByNamedResource = new Map<string, typeof profiles>()
+  for (const profile of profiles) {
+    if (profile.namedResourceId) {
+      const list = profilesByNamedResource.get(profile.namedResourceId) ?? []
+      list.push(profile)
+      profilesByNamedResource.set(profile.namedResourceId, list)
+    }
+    if (profile.projectId !== projectId) {
+      mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
+    }
+
+    if (profile.resourceTypeId === resourceTypeId) {
+      if (profile.namedResourceId !== null || profile.ownerKind !== 'ROLE') {
+        mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
+      }
+    }
+
+    if (profile.namedResourceId) {
+      const namedResource = namedResourceById.get(profile.namedResourceId)
+      if (!namedResource || profile.resourceTypeId !== null || profile.ownerKind === 'ROLE') {
+        mark(profile.id, namedResource?.name)
+      } else if (
+        profile.ownerKind === 'PLANNED_RESOURCE'
+        && (profile.source !== 'SQUAD_PLANNER' || profile.planningBasis !== 'CAPACITY_PROFILE')
+      ) {
+        mark(profile.id, namedResource.name)
+      } else if (
+        profile.ownerKind === 'NAMED_PERSON'
+        && profile.source === 'SQUAD_PLANNER'
+        && profile.planningBasis !== 'CAPACITY_PROFILE'
+      ) {
+        mark(profile.id, namedResource.name)
+      } else if (profile.ownerKind !== 'PLANNED_RESOURCE' && profile.ownerKind !== 'NAMED_PERSON') {
+        mark(profile.id, namedResource.name)
+      }
+    }
+  }
+
+  const roleProfiles = profiles.filter(profile => profile.resourceTypeId === resourceTypeId)
+  if (roleProfiles.length > 1) {
+    for (const profile of roleProfiles.slice(1)) mark(profile.id)
+  }
+  for (const [namedResourceId, resourceProfiles] of profilesByNamedResource) {
+    if (resourceProfiles.length > 1) {
+      for (const profile of resourceProfiles.slice(1)) {
+        mark(profile.id, namedResourceById.get(namedResourceId)?.name)
+      }
+    }
+  }
+
+  return conflicts
+}
+
+async function hasPriorActivePlanEvidence(
+  tx: PrismaTransactionClient,
+  projectId: string,
+  resourceTypeId: string,
+): Promise<boolean> {
+  const activePlan = await tx.capacityPlan.findFirst({
+    where: { projectId, isActive: true },
+    select: {
+      periods: {
+        select: {
+          entries: {
+            where: { resourceTypeId },
+            select: { id: true },
+          },
+        },
+      },
+    },
+  })
+  return activePlan?.periods.some(period => period.entries.length > 0) ?? false
+}
+
 // ─── Async: conflict preflight (reads DB via tx) ─────────────────────────────
 
 /**
@@ -368,6 +503,7 @@ export async function conflictPreflightCheck(
   const allDuplicates: ConflictResourceInfo[] = []
 
   for (const rtId of resourceTypeIds) {
+    allDuplicates.push(...await validatePlannerOwnerState(tx, projectId, rtId))
     // Fetch existing ROLE profiles for this resource type
     const roleProfiles = (await tx.capacityProfile.findMany({
       where: { projectId, resourceTypeId: rtId, ownerKind: 'ROLE' },
@@ -408,13 +544,13 @@ export async function conflictPreflightCheck(
           select: { namedResourceId: true, source: true, ownerKind: true, planningBasis: true },
         })) ?? []
 
-    // Use the shared deterministic planner resource plan
     const plan = buildPlannerResourcePlan(
       namedResources,
       resourceProfiles,
       rtId,
       'role',
       trajectoryCount,
+      { priorActivePlan: await hasPriorActivePlanEvidence(tx, projectId, rtId) },
     )
 
     allDuplicates.push(...plan.conflicts)
@@ -452,6 +588,7 @@ export async function findOrCreatePlannedResources(
   resourceTypeId: string,
   resourceTypeName: string,
   requiredCount: number,
+  projectId?: string,
 ): Promise<PlannedResourceMatchResult> {
   const existingNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
@@ -464,6 +601,18 @@ export async function findOrCreatePlannedResources(
       where: { namedResourceId: { in: existingNRs.map(nr => nr.id) } },
       select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
     })
+  const ownerConflicts = projectId
+    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+    : []
+  if (ownerConflicts.length > 0) {
+    throw new PlannerConflictError(
+      `Invalid planner ownership for resource type "${resourceTypeName}" — repair required before applying.`,
+      ownerConflicts,
+    )
+  }
+  const priorActivePlan = projectId
+    ? await hasPriorActivePlanEvidence(tx, projectId, resourceTypeId)
+    : false
 
   const plan = buildPlannerResourcePlan(
     existingNRs,
@@ -471,6 +620,7 @@ export async function findOrCreatePlannedResources(
     resourceTypeId,
     resourceTypeName,
     requiredCount,
+    { priorActivePlan },
   )
 
   if (plan.hasConflict) {
@@ -502,9 +652,18 @@ export async function findOrCreatePlannedResources(
   const allProfiles = allNRs.length === 0
     ? []
     : await tx.capacityProfile.findMany({
-      where: { namedResourceId: { in: allNRs.map(nr => nr.id) } },
-      select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
-    })
+        where: { namedResourceId: { in: allNRs.map(nr => nr.id) } },
+        select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
+      })
+  const finalOwnerConflicts = projectId
+    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+    : []
+  if (finalOwnerConflicts.length > 0) {
+    throw new PlannerConflictError(
+      `Planner resource ownership changed while applying resource type "${resourceTypeName}".`,
+      finalOwnerConflicts,
+    )
+  }
 
   const finalPlan = buildPlannerResourcePlan(
     allNRs,
@@ -512,6 +671,7 @@ export async function findOrCreatePlannedResources(
     resourceTypeId,
     resourceTypeName,
     requiredCount,
+    { priorActivePlan },
   )
 
   if (finalPlan.hasConflict || finalPlan.plannerResources.length < requiredCount) {
@@ -564,6 +724,32 @@ export async function writePlannerProfiles(
   let segmentsWritten = 0
   let surplusProfilesWritten = 0
   const prismaSource = source as CapacityProfileSource
+  const plannedResourceIds = plannedProfiles.map(profile => profile.namedResourceId)
+  const plannedOwners = plannedResourceIds.length === 0
+    ? []
+    : await tx.namedResource.findMany({
+        where: { id: { in: plannedResourceIds } },
+        select: { id: true, resourceTypeId: true },
+      })
+  if (plannedOwners.length !== plannedResourceIds.length) {
+    throw new PlannerConflictError(
+      'A planner-owned NamedResource is missing or belongs to an unrelated project.',
+      [{ resourceTypeId: '', resourceTypeName: 'named-resource' }],
+    )
+  }
+  const ownerResourceTypeIds = new Set([
+    ...roleProfiles.map(profile => profile.resourceTypeId),
+    ...plannedOwners.map(owner => owner.resourceTypeId),
+  ])
+  for (const resourceTypeId of ownerResourceTypeIds) {
+    const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+    if (ownerConflicts.length > 0) {
+      throw new PlannerConflictError(
+        'Invalid planner ownership state — repair required before applying.',
+        ownerConflicts,
+      )
+    }
+  }
 
   for (const rp of roleProfiles) {
     const existingList = await tx.capacityProfile.findMany({
@@ -894,34 +1080,48 @@ export async function clearOmittedPlannerCapacity(
       ownerKind: 'ROLE',
       planningBasis: 'CAPACITY_PROFILE',
       source: 'SQUAD_PLANNER',
+      namedResourceId: null,
     },
     select: { resourceTypeId: true },
   })
-  // Pre-#359 planner writes had no role CapacityProfile row. Treat an
-  // omitted resource type as planner-owned only when its legacy compatibility
-  // fields carry capacity-plan evidence; explicit/manual profiles are not
-  // selected by this query.
-  const legacyResourceTypes = await tx.resourceType.findMany({
+  const activePlan = await tx.capacityPlan.findFirst({
+    where: { projectId, isActive: true },
+    select: {
+      periods: {
+        select: {
+          entries: {
+            select: { resourceTypeId: true },
+          },
+        },
+      },
+    },
+  })
+  const priorActivePlanResourceTypeIds = new Set(
+    activePlan?.periods.flatMap(period => period.entries.map(entry => entry.resourceTypeId)) ?? [],
+  )
+  const legacyPlannerProfiles = await tx.capacityProfile.findMany({
     where: {
       projectId,
-      id: { notIn: [...activeResourceTypeIds] },
-      allocationMode: 'CAPACITY_PLAN',
-      OR: [
-        { allocationPercent: { gt: 0 } },
-        { allocationStartWeek: { not: null } },
-        { allocationEndWeek: { not: null } },
-      ],
+      ownerKind: 'NAMED_PERSON',
+      source: 'SQUAD_PLANNER',
+      planningBasis: 'CAPACITY_PROFILE',
+      namedResourceId: { not: null },
     },
-    select: { id: true },
+    select: {
+      namedResource: { select: { resourceTypeId: true } },
+    },
   })
-  const legacyResourceTypeIds = legacyResourceTypes.map(resourceType => resourceType.id)
+  const legacyPlannerResourceTypeIds = legacyPlannerProfiles
+    .map(profile => profile.namedResource?.resourceTypeId)
+    .filter((id): id is string => id !== undefined)
 
   const omittedResourceTypeIds = [...new Set([
-    ...legacyResourceTypeIds,
+    ...priorActivePlanResourceTypeIds,
+    ...legacyPlannerResourceTypeIds,
     ...roleProfiles
       .map(profile => profile.resourceTypeId)
-      .filter((id): id is string => id !== null && !activeResourceTypeIds.has(id)),
-  ])]
+      .filter((id): id is string => id !== null),
+  ])].filter(id => !activeResourceTypeIds.has(id))
 
   const zeroRoleProfiles: RoleProfileWriteSet[] = omittedResourceTypeIds.map(resourceTypeId => ({
     resourceTypeId,
@@ -962,7 +1162,11 @@ export async function clearOmittedPlannerCapacity(
     }
     for (const namedResource of namedResources) {
       const profiles = profilesByNrId.get(namedResource.id) ?? []
-      if (isPlannerManaged(namedResource, profiles)) {
+      if (isPlannerManaged(
+        namedResource,
+        profiles,
+        { priorActivePlan: priorActivePlanResourceTypeIds.has(resourceTypeId) },
+      )) {
         zeroPlannedProfiles.push(buildZeroCapacityProfileData(namedResource.id))
         zeroResourceIds.push(namedResource.id)
       }
@@ -1028,6 +1232,7 @@ export function buildPlannerResourcePlan(
   resourceTypeId: string,
   resourceTypeName: string,
   requiredCount: number,
+  provenance: PlannerProvenance = noPlannerProvenance,
 ): PlannerResourcePlan {
   const profilesByResource = new Map<string, Array<{
     namedResourceId: string | null
@@ -1073,11 +1278,10 @@ export function buildPlannerResourcePlan(
         namedResourceName: nr.name,
       })
     }
-
-    const kind = classifyNamedResource(nr, profiles)
+    const kind = classifyNamedResource(nr, profiles, provenance)
     if (kind === 'explicit_person') {
       explicitResources.push({ id: nr.id, name: nr.name })
-    } else if (isPlannerManaged(nr, profiles)) {
+    } else if (isPlannerManaged(nr, profiles, provenance)) {
       plannerResources.push({ id: nr.id, name: nr.name })
     }
     // 'other' resources are ignored — they aren't planner-managed and not explicit
@@ -1130,6 +1334,7 @@ export async function revalidatePlannerPlan(
   const allConflicts: ConflictResourceInfo[] = []
 
   for (const rtId of resourceTypeIds) {
+    allConflicts.push(...await validatePlannerOwnerState(tx, projectId, rtId))
     // Check ROLE profile duplicates (existing profiles query)
     const roleProfiles = await tx.capacityProfile.findMany({
       where: { projectId, resourceTypeId: rtId, ownerKind: 'ROLE' },
@@ -1166,13 +1371,13 @@ export async function revalidatePlannerPlan(
         where: { namedResourceId: { in: namedResources.map(nr => nr.id) } },
         select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
       })
-
     const plan = buildPlannerResourcePlan(
       namedResources,
       resourceProfiles,
       rtId,
       'role',
       trajectoryCount,
+      { priorActivePlan: await hasPriorActivePlanEvidence(tx, projectId, rtId) },
     )
     allConflicts.push(...plan.conflicts)
   }

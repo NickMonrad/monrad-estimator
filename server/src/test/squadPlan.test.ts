@@ -77,6 +77,8 @@ const futureCapacityPlanWindow = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(prisma.resourceType.findUnique).mockResolvedValue({ id: 'rt-dev', name: 'Developer', projectId: 'proj-1' } as never)
+  vi.mocked(prisma.backlogSnapshot.delete).mockResolvedValue({} as never)
 })
 
 describe('stripCapacityPlanMaterialization', () => {
@@ -359,8 +361,17 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     let capturedTx!: Record<string, any>
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => {
       capturedTx = {
-      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
-      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
+      capacityPlan: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findFirst: vi.fn().mockResolvedValue({ periods: [{ entries: [{ id: 'prior-entry' }] }] }),
+        create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }),
+      },
+      resourceType: {
+        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn().mockResolvedValue({ id: 'rt-dev', name: 'Developer', projectId: 'proj-1' }),
+      },
       namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev', allocationMode: 'CAPACITY_PLAN' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
       capacityProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn().mockResolvedValue({}), deleteMany: vi.fn() },
       capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn(), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
@@ -498,9 +509,32 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     let capturedTx!: Record<string, any>
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => {
       capturedTx = {
-      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
-      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
-      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev-1', allocationMode: 'CAPACITY_PLAN' }, { id: 'nr-dev-2', allocationMode: 'CAPACITY_PLAN' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      capacityPlan: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findFirst: vi.fn().mockResolvedValue({ periods: [{ entries: [{ id: 'prior-entry' }] }] }),
+        create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }),
+      },
+      resourceType: {
+        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn().mockResolvedValue({ id: 'rt-dev', name: 'Developer', projectId: 'proj-1' }),
+      },
+      namedResource: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findMany: vi.fn().mockImplementation(async (args: any) => {
+          const ids = args?.where?.id?.in as string[] | undefined
+          if (ids) return ids.map(id => ({ id, resourceTypeId: 'rt-dev' }))
+          return [
+            { id: 'nr-dev-1', name: 'Developer 1', allocationMode: 'CAPACITY_PLAN' },
+            { id: 'nr-dev-2', name: 'Developer 2', allocationMode: 'CAPACITY_PLAN' },
+          ]
+        }),
+        createMany: vi.fn().mockResolvedValue({ count: 0 }),
+        update: vi.fn().mockResolvedValue({}),
+        delete: vi.fn(),
+        count: vi.fn().mockResolvedValue(0),
+      },
       capacityProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn().mockResolvedValue({}), deleteMany: vi.fn() },
       capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn(), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
       project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
