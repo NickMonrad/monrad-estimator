@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { flushSync } from 'react-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import { getPlannerResourceTypeVisibility, type SquadPlannerSeedSettings } from './timelineUx'
@@ -399,7 +400,7 @@ export default function SquadPlannerDrawer({
         })
         .then(r => r.data),
     onSuccess: () => {
-      onClose()
+      flushSync(() => { onClose() })
       Promise.all([
         qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
         qc.refetchQueries({ queryKey: ['timeline', projectId] }),
