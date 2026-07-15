@@ -9,6 +9,11 @@ updates:
       # Keep pinned at ^7 until upstream issue is resolved
       - dependency-name: "express-rate-limit"
         versions: ["8.x", "9.x"]
+      # Keep @types/node aligned with the repository's Node 24 runtime baseline.
+      # Remove this rule only as part of a deliberate runtime-baseline upgrade.
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
     groups:
       server-deps:
         patterns:
