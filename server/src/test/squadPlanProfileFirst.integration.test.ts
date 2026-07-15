@@ -1164,19 +1164,11 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
       .toHaveLength(0)
   })
 
-  it('clears role B legacy ROLE profile to zero capacity', async () => {
+  it('does not invent a ROLE profile when omitted legacy role B had none', async () => {
     const profiles = await fetchProfiles(projectId)
-    const roleBProfile = profiles.find(
+    expect(profiles.find(
       p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtB,
-    )
-    expect(roleBProfile).toMatchObject({
-      defaultPercent: 0,
-      startWeek: null,
-      endWeek: null,
-      planningBasis: 'CAPACITY_PROFILE',
-      source: 'SQUAD_PLANNER',
-    })
-    expect(await fetchSegments(roleBProfile!.id)).toHaveLength(0)
+    )).toBeUndefined()
   })
 
   it('clears role B legacy named resource to zero-capacity PLANNED_RESOURCE', async () => {

@@ -679,10 +679,12 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       try {
     plan = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
       // A deterministic test seam can commit a concurrent profile mutation
-      // before validation reads ownership state.
-      const authority = shouldActivate ? await capturePlannerAuthority(tx, projectId) : null
+      // before the authority snapshot and ownership validation reads.
       if (shouldActivate) {
         await runPreValidationConflictSeam()
+      }
+      const authority = shouldActivate ? await capturePlannerAuthority(tx, projectId) : null
+      if (shouldActivate) {
         await revalidatePlannerPlan(
           tx,
           projectId,

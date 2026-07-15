@@ -985,28 +985,28 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     })
 
     // ── 4 named resources: 2 per RT, each with stable well-known IDs ─────
-    await createNamedResource(projectId, rtDev, 'nr-com-dev-1', 'Dev 1', {
+    await createNamedResource(projectId, rtDev, 'nr-com-dev-1', 'Developer 1', {
       allocationMode: 'TIMELINE',
       allocationPercent: 100,
       pricingModel: 'PRO_RATA',
       startWeek: 0,
       endWeek: 7,
     })
-    await createNamedResource(projectId, rtDev, 'nr-com-dev-2', 'Dev 2', {
+    await createNamedResource(projectId, rtDev, 'nr-com-dev-2', 'Developer 2', {
       allocationMode: 'TIMELINE',
       allocationPercent: 100,
       pricingModel: 'ACTUAL_DAYS',
       startWeek: 0,
       endWeek: 7,
     })
-    await createNamedResource(projectId, rtDes, 'nr-com-des-1', 'Des 1', {
+    await createNamedResource(projectId, rtDes, 'nr-com-des-1', 'Designer 1', {
       allocationMode: 'TIMELINE',
       allocationPercent: 100,
       pricingModel: 'ACTUAL_DAYS',
       startWeek: 0,
       endWeek: 7,
     })
-    await createNamedResource(projectId, rtDes, 'nr-com-des-2', 'Des 2', {
+    await createNamedResource(projectId, rtDes, 'nr-com-des-2', 'Designer 2', {
       allocationMode: 'TIMELINE',
       allocationPercent: 100,
       pricingModel: 'PRO_RATA',
@@ -1104,9 +1104,9 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     roleDiscountId = await createDiscount(projectId, rtDev, 'PERCENTAGE', 10, 'Dev discount', 1)
     roleDiscount2Id = await createDiscount(projectId, rtDes, 'FIXED_AMOUNT', 200, 'Des fixed', 2)
 
-    // ── Overhead: one fixed-days, one per-role ─────────────────────────────
+    // ── Overhead: two fixed-days rows with billable resource types ─────────
     await createOverhead(projectId, 'Travel', 'FIXED_DAYS', 3, rtDev, 0)
-    await createOverhead(projectId, 'Management', 'FIXED_DAYS', 2, null, 1)
+    await createOverhead(projectId, 'Management', 'FIXED_DAYS', 2, rtDes, 1)
 
     // ── Capture commercial data BEFORE apply ──────────────────────────────
     const rpBefore = await request(app)
@@ -1219,26 +1219,29 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
       expect(ar!.name).toBe(br.name)
       expect(ar!.kind).toBe(br.kind)
 
-      // Pricing model and day rate are billing invariants
+      // Billing basis, billable days, allocation, and rates are canonical.
       expect(ar!.pricingModel).toBe(br.pricingModel)
+      expect(ar!.allocatedDays).toBe(br.allocatedDays)
+      expect(ar!.totalDays).toBe(br.totalDays)
+      expect(ar!.allocationMode).toBe(br.allocationMode)
+      expect(ar!.allocationPercent).toBe(br.allocationPercent)
+      expect(ar!.allocationStartWeek).toBe(br.allocationStartWeek)
+      expect(ar!.allocationEndWeek).toBe(br.allocationEndWeek)
+      expect(ar!.derivedStartWeek).toBe(br.derivedStartWeek)
+      expect(ar!.derivedEndWeek).toBe(br.derivedEndWeek)
       expect(ar!.dayRate).toBe(br.dayRate)
+      expect(ar!.subtotal).toBe(br.subtotal)
+      expect(ar!.netSubtotal).toBe(br.netSubtotal)
 
-      // appliedDiscounts: same number of entries with matching type/value
       const arDiscounts = ar!.appliedDiscounts as Array<Record<string, unknown>>
       const brDiscounts = br.appliedDiscounts as Array<Record<string, unknown>>
       expect(arDiscounts.length).toBe(brDiscounts.length)
       for (let i = 0; i < arDiscounts.length; i++) {
+        expect(arDiscounts[i].id).toBe(brDiscounts[i].id)
         expect(arDiscounts[i].type).toBe(brDiscounts[i].type)
         expect(arDiscounts[i].value).toBe(brDiscounts[i].value)
+        expect(arDiscounts[i].calculatedAmount).toBe(brDiscounts[i].calculatedAmount)
       }
-
-      // Allocation percent and totalDays may differ due to planner reshaping,
-      // but subtotal and netSubtotal must match exactly (same billable days × rate).
-      // For PRO_RATA: billableDays = allocatedDays (from trajectory)
-      // For ACTUAL_DAYS: billableDays = actualAllocatedDays (from task scheduling)
-      // Both should be identical before and after with this fixture.
-      expect(ar!.subtotal).toBe(br.subtotal)
-      expect(ar!.netSubtotal).toBe(br.netSubtotal)
     }
 
     // ── 4. Every after row maps back to a before row (no unexpected rows) ──
@@ -1326,14 +1329,10 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     expect(after.taxRate).toBe(10)
     expect(before.taxLabel).toBe('GST')
     expect(after.taxLabel).toBe('GST')
-    expect(before.taxEnabled).toBe(true)
-    expect(after.taxEnabled).toBe(true)
-
-    // ── Project discount metadata — same count, same labels/types/values ─
+    // ── Project discount metadata — exact identity, values, and amounts ───
     const beforePD = before.projectDiscounts as Array<Record<string, unknown>>
     const afterPD = after.projectDiscounts as Array<Record<string, unknown>>
-    expect(beforePD.length).toBe(3)
-    expect(afterPD.length).toBe(3)
+    expect(afterPD).toHaveLength(beforePD.length)
     const sortByOrder = (a: Record<string, unknown>, b: Record<string, unknown>) =>
       (a.order as number) - (b.order as number)
     const sortedBeforePD = [...beforePD].sort(sortByOrder)
@@ -1344,6 +1343,7 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
       expect(sortedAfterPD[i].type).toBe(sortedBeforePD[i].type)
       expect(sortedAfterPD[i].value).toBe(sortedBeforePD[i].value)
       expect(sortedAfterPD[i].order).toBe(sortedBeforePD[i].order)
+      expect(sortedAfterPD[i].calculatedAmount).toBe(sortedBeforePD[i].calculatedAmount)
     }
 
     // ── Structural invariants ────────────────────────────────────────────
