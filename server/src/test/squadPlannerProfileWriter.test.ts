@@ -817,3 +817,151 @@ describe('validatePlannerOwnerState — accepted ROLE profile', () => {
     expect(conflicts).toHaveLength(0)
   })
 })
+
+describe('validatePlannerOwnerState — legacy role adoption (allowLegacyRole)', () => {
+  it.each([
+    { source: 'AVAILABILITY_WINDOW' as const, planningBasis: 'AVAILABILITY_WINDOW' as const },
+    { source: 'FIXED' as const, planningBasis: 'DEMAND_FOLLOWING' as const },
+    { source: 'FIXED' as const, planningBasis: 'WHOLE_PROJECT_ALLOCATION' as const },
+    { source: 'LEGACY' as const, planningBasis: 'DEMAND_FOLLOWING' as const },
+  ])('accepts legacy ROLE pair ($source, $planningBasis) when allowLegacyRole=true', async ({ source, planningBasis }) => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-legacy-role',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source,
+        planningBasis,
+      }]),
+      'project-1',
+      'rt-dev',
+      true,
+    )
+    expect(conflicts).toHaveLength(0)
+  })
+
+  it.each([
+    { source: 'AVAILABILITY_WINDOW' as const, planningBasis: 'AVAILABILITY_WINDOW' as const },
+    { source: 'FIXED' as const, planningBasis: 'DEMAND_FOLLOWING' as const },
+    { source: 'FIXED' as const, planningBasis: 'WHOLE_PROJECT_ALLOCATION' as const },
+    { source: 'LEGACY' as const, planningBasis: 'DEMAND_FOLLOWING' as const },
+  ])('rejects legacy ROLE pair ($source, $planningBasis) when allowLegacyRole=false/omitted', async ({ source, planningBasis }) => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-legacy-role-strict',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source,
+        planningBasis,
+      }]),
+      'project-1',
+      'rt-dev',
+    )
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      resourceTypeName: 'Developer',
+    })
+  })
+
+  it('still rejects a legacy ROLE profile with namedResourceId even with allowLegacyRole=true', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-malformed-legacy',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: 'nr-dev-1',
+        ownerKind: 'ROLE',
+        source: 'LEGACY',
+        planningBasis: 'DEMAND_FOLLOWING',
+      }]),
+      'project-1',
+      'rt-dev',
+      true,
+    )
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      resourceTypeName: 'Developer',
+      namedResourceName: 'Developer 1',
+    })
+  })
+
+  it('still rejects duplicate legacy ROLE profiles even with allowLegacyRole=true', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([
+        {
+          id: 'profile-legacy-role-1',
+          projectId: 'project-1',
+          resourceTypeId: 'rt-dev',
+          namedResourceId: null,
+          ownerKind: 'ROLE',
+          source: 'LEGACY',
+          planningBasis: 'DEMAND_FOLLOWING',
+        },
+        {
+          id: 'profile-legacy-role-2',
+          projectId: 'project-1',
+          resourceTypeId: 'rt-dev',
+          namedResourceId: null,
+          ownerKind: 'ROLE',
+          source: 'LEGACY',
+          planningBasis: 'DEMAND_FOLLOWING',
+        },
+      ]),
+      'project-1',
+      'rt-dev',
+      true,
+    )
+    // Duplicate ROLE profiles are always rejected (duplicate check after loop)
+    expect(conflicts.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('still rejects protected MANUAL/FIXED/IMPORTED ROLE profiles even with allowLegacyRole=true', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-manual-role',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'MANUAL',
+        planningBasis: 'CAPACITY_PROFILE',
+      }]),
+      'project-1',
+      'rt-dev',
+      true,
+    )
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      resourceTypeName: 'Developer',
+    })
+  })
+
+  it('still rejects planner-mismatched ROLE (SQUAD_PLANNER + DEMAND_FOLLOWING) even with allowLegacyRole=true', async () => {
+    const conflicts = await validatePlannerOwnerState(
+      makeTransaction([{
+        id: 'profile-wrong-basis',
+        projectId: 'project-1',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'DEMAND_FOLLOWING',
+      }]),
+      'project-1',
+      'rt-dev',
+      true,
+    )
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      resourceTypeName: 'Developer',
+    })
+  })
+})

@@ -458,6 +458,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       prisma,
       projectId,
       normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+      true,
     )
     if (conflictResult?.hasConflict) {
       const messages: string[] = []
@@ -690,6 +691,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
           projectId,
           normalisedPeriods as unknown as CapacityPlanPeriodInput[],
           authority ?? undefined,
+          true,
         )
 
         // ── Pre-write conflict test seam ─────────────────────────────────
@@ -769,6 +771,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             trajectories.length,
             projectId,
             authority ?? undefined,
+            true,
           )
           // Build profile write sets (role + per-resource), including all
           // planner-managed resources so shrink operations zero surplus rows.
@@ -786,6 +789,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             [materialized.roleProfile],
             materialized.plannedProfiles,
             materialized.surplusResources,
+            undefined,
+            true,
           )
 
           // Project compatibility fields from just-written profiles

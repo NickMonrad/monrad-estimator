@@ -80,6 +80,27 @@ const PROTECTED_PROFILE_SOURCES: Record<string, true> = {
   IMPORTED: true,
 }
 
+/**
+ * The exact (source, planningBasis) pairs produced by the mapper for a
+ * legacy ROLE capacity profile when the ResourceType has no active Capacity
+ * Plan slots. These are the only ROLE provenance combinations the planner
+ * may safely adopt under allowLegacyRole — all other non-SQUAD_PLANNER
+ * ROLE profiles remain rejected to preserve fail-closed ownership.
+ */
+const LEGACY_ROLE_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ['AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
+  ['FIXED', 'DEMAND_FOLLOWING'],
+  ['FIXED', 'WHOLE_PROJECT_ALLOCATION'],
+  ['LEGACY', 'DEMAND_FOLLOWING'],
+]
+
+/** True when the (source, planningBasis) pair is one of the four legacy
+ * mapper-produced ROLE pairs. Used only by `validatePlannerOwnerState` when
+ * `allowLegacyRole` is enabled. */
+function isLegacyRoleProfile(source: string, planningBasis: string): boolean {
+  return LEGACY_ROLE_PAIRS.some(([s, p]) => source === s && planningBasis === p)
+}
+
 /** Minimal NamedResource shape for deterministic ordering. */
 interface NamedResourceSummary {
   id: string
@@ -511,6 +532,7 @@ export async function validatePlannerOwnerState(
   tx: PrismaTransactionClient,
   projectId: string,
   resourceTypeId: string,
+  allowLegacyRole?: boolean,
 ): Promise<ConflictResourceInfo[]> {
   const resourceType = await tx.resourceType.findUnique({
     where: { id: resourceTypeId },
@@ -569,8 +591,12 @@ export async function validatePlannerOwnerState(
     if (profile.resourceTypeId === resourceTypeId) {
       if (profile.namedResourceId !== null || profile.ownerKind !== 'ROLE') {
         mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
-      } else if (profile.ownerKind === 'ROLE' && (profile.source !== 'SQUAD_PLANNER' || profile.planningBasis !== 'CAPACITY_PROFILE')) {
-        mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
+      } else if (profile.ownerKind === 'ROLE') {
+        const validSquadPlanner = profile.source === 'SQUAD_PLANNER' && profile.planningBasis === 'CAPACITY_PROFILE'
+        const validLegacyRole = allowLegacyRole && isLegacyRoleProfile(profile.source, profile.planningBasis)
+        if (!validSquadPlanner && !validLegacyRole) {
+          mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
+        }
       }
     }
     if (profile.namedResourceId) {
@@ -643,12 +669,13 @@ export async function conflictPreflightCheck(
   tx: PrismaTransactionClient,
   projectId: string,
   periods: CapacityPlanPeriodInput[],
+  allowLegacyRole?: boolean,
 ): Promise<ConflictCheckResult | undefined> {
   const resourceTypeIds = [...new Set(periods.flatMap(p => p.entries.map(e => e.resourceTypeId)))]
   const allDuplicates: ConflictResourceInfo[] = []
 
   for (const rtId of resourceTypeIds) {
-    allDuplicates.push(...await validatePlannerOwnerState(tx, projectId, rtId))
+    allDuplicates.push(...await validatePlannerOwnerState(tx, projectId, rtId, allowLegacyRole))
     // Fetch existing ROLE profiles for this resource type
     const roleProfiles = (await tx.capacityProfile.findMany({
       where: { projectId, resourceTypeId: rtId, ownerKind: 'ROLE' },
@@ -735,6 +762,7 @@ export async function findOrCreatePlannedResources(
   requiredCount: number,
   projectId?: string,
   authority?: PriorPlannerAuthority,
+  allowLegacyRole?: boolean,
 ): Promise<PlannedResourceMatchResult> {
   const existingNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
@@ -748,7 +776,7 @@ export async function findOrCreatePlannedResources(
       select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
     })
   const ownerConflicts = projectId
-    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId, allowLegacyRole)
     : []
   if (ownerConflicts.length > 0) {
     throw new PlannerConflictError(
@@ -810,7 +838,7 @@ export async function findOrCreatePlannedResources(
         select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
       })
   const finalOwnerConflicts = projectId
-    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId, allowLegacyRole)
     : []
   if (finalOwnerConflicts.length > 0) {
     throw new PlannerConflictError(
@@ -872,6 +900,7 @@ export async function writePlannerProfiles(
   plannedProfiles: PlannedResourceProfileWriteSet[],
   surplusResourceIds: string[],
   source: 'SQUAD_PLANNER' = 'SQUAD_PLANNER',
+  allowLegacyRole?: boolean,
 ): Promise<ProfileWriteResult> {
   let roleProfilesWritten = 0
   let plannedResourceProfilesWritten = 0
@@ -896,7 +925,7 @@ export async function writePlannerProfiles(
     ...plannedOwners.map(owner => owner.resourceTypeId),
   ])
   for (const resourceTypeId of ownerResourceTypeIds) {
-    const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+    const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId, allowLegacyRole)
     if (ownerConflicts.length > 0) {
       throw new PlannerConflictError(
         'Invalid planner ownership state — repair required before applying.',
@@ -1449,12 +1478,13 @@ export async function revalidatePlannerPlan(
   projectId: string,
   periods: ReadonlyArray<CapacityPlanPeriodInput>,
   authority?: PriorPlannerAuthority,
-): Promise<void> {
+  allowLegacyRole?: boolean,
 
+): Promise<void> {
   const resourceTypeIds = [...new Set(periods.flatMap(p => p.entries.map(e => e.resourceTypeId)))]
   const allConflicts: ConflictResourceInfo[] = []
   for (const rtId of resourceTypeIds) {
-    allConflicts.push(...await validatePlannerOwnerState(tx, projectId, rtId))
+    allConflicts.push(...await validatePlannerOwnerState(tx, projectId, rtId, allowLegacyRole))
     // Check ROLE profile duplicates (existing profiles query)
     const roleProfiles = await tx.capacityProfile.findMany({
       where: { projectId, resourceTypeId: rtId, ownerKind: 'ROLE' },
