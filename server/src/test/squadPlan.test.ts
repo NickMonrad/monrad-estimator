@@ -22,6 +22,7 @@ vi.mock('../lib/squadPlannerProfileWriter.js', async importOriginal => {
   return {
     ...actual,
     revalidatePlannerPlan: vi.fn().mockResolvedValue(undefined),
+    capturePlannerAuthority: vi.fn().mockResolvedValue({ activePlanId: 'plan-previous', activePlanResourceTypeIds: new Set<string>(['rt-dev']), plannerRoleResourceTypeIds: new Set<string>(), allPlannerResourceTypeIds: new Set<string>() }),
   }
 })
 
@@ -243,6 +244,13 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
 })
 
 describe('POST /api/projects/:projectId/squad-plan/apply', () => {
+  beforeEach(() => {
+    vi.mocked(prisma.resourceType.findUnique).mockResolvedValue({
+      id: 'rt-dev',
+      name: 'Developer',
+      projectId: 'proj-1',
+    } as never)
+  })
   it('returns 400 when plan periods include resource types outside the project', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)

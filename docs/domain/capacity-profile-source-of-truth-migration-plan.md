@@ -541,11 +541,17 @@ legacy compatibility projections, Timeline rows, and `weeklyDemandCache`.
 2. Apply creates/reuses named resources with deterministic `(createdAt, id)` ordering.
 3. Apply writes CapacityProfile/CapacitySegment rows as the authority.
 4. Apply projects compatibility fields for legacy consumers.
-5. Before deactivating the prior active plan, each Serializable attempt captures
-   the prior active-plan authority as one immutable value containing prior active
-   plan ID, its resource-type membership, and valid planner provenance. This
-   capture happens inside each retry attempt — retries recapture it from the
-   current committed state.
+5. The apply captures planner authority in two phases. A **read-only preflight**
+   authority is captured (using the application-level Prisma client) before the
+   conflict preflight and v3 snapshot, providing evidence for the preflight
+   conflict check only. Then, inside each `Serializable` transaction attempt,
+   a **fresh transaction-local authority** is captured (using the transaction
+   Prisma client) after the pre-validation seam and before deactivating the
+   prior active plan. This transaction-local value — containing the prior active
+   plan ID, its resource-type membership, and valid planner provenance — drives
+   revalidation, profile matching, profile writes, and omitted-role cleanup
+   within that attempt, with retries recapturing a fresh authority from the new
+   committed state. No post-mutation `isActive` query is issued.
 6. Apply clears omitted/surplus planner capacity using the captured prior
    authority to determine planner-owned ROLE profiles and admissions from the
    prior active plan. Bare compatibility fields (legacy `allocationMode`,
@@ -569,24 +575,52 @@ legacy compatibility projections, Timeline rows, and `weeklyDemandCache`.
     entries in the prior active `CapacityPlan` (from the captured authority)
     establish ownership. A bare `CAPACITY_PLAN` row with no profile and no
     prior active-plan entry is not adopted.
-12. **Protected ROLE profiles** — ROLE profiles whose `source` is not
-    `SQUAD_PLANNER` or whose `planningBasis` is not `CAPACITY_PROFILE` are never
-    converted, zeroed, deleted, or normalised by the apply path. `MANUAL`,
-    `FIXED`, `IMPORTED`, `AVAILABILITY_WINDOW`, unknown source, or
-    non-`CAPACITY_PROFILE` basis profiles that conflict with the planner's
-    intended role capacity throw `PlannerConflictError` atomically and return
-    HTTP 409 without mutating any data. Only ROLE profiles with `source:
-    'SQUAD_PLANNER'` and `planningBasis: 'CAPACITY_PROFILE'` are
-    planner-updatable.
-13. **Missing ROLE profile creation** — A ROLE profile absent from the project
+12. **Evidence-backed ROLE ownership** — Planner authority is captured at two
+    distinct points. A **read-only preflight authority** is captured (using the
+    application-level Prisma client) before the conflict preflight and v3
+    snapshot, providing evidence for the preflight conflict check only. Then,
+    inside each `Serializable` transaction attempt, a **fresh transaction-local
+    authority** is captured (using the transaction Prisma client) after the
+    pre-validation seam and before deactivating the prior active plan. This
+    transaction-local `PriorPlannerAuthority` — containing `activePlanResourceTypeIds`
+    (resource types in the prior active `CapacityPlan`) and `allPlannerResourceTypeIds`
+    (union of active-plan RTs, ROLE+SQUAD_PLANNER+CAPACITY_PROFILE profile RTs,
+    PLANNED_RESOURCE+SQUAD_PLANNER profile RTs, and NAMED_PERSON+SQUAD_PLANNER+
+    CAPACITY_PROFILE profile RTs) — drives revalidation, owner matching, profile
+    writes, and omitted-role cleanup within that attempt, with retries recapturing
+    current committed state. No post-mutation `isActive` query is issued.
+13. **Protected ROLE profiles** — ROLE profiles whose `source` is not
+    `SQUAD_PLANNER` and whose `planningBasis` is not `CAPACITY_PROFILE` are never
+    converted, zeroed, deleted, or normalised by the apply path, *unless* they
+    match the single adoptable legacy pair and satisfy the evidence requirement.
+    - **Adoptable pair:** Only `source='LEGACY'` + `planningBasis='DEMAND_FOLLOWING'`
+      ROLE profiles may be adopted by the planner.
+    - **Evidence requirement:** The resource type must appear in the captured
+      `PriorPlannerAuthority.allPlannerResourceTypeIds` set (active plan membership
+      or any planner-owned profile evidence). Fresh projects without any planner
+      history fail closed — a bare `LEGACY`/`DEMAND_FOLLOWING` ROLE profile with
+      no evidence returns HTTP 409.
+    - **Adoption effect:** The same profile ID is reused; `source` is set to
+      `'SQUAD_PLANNER'` and `planningBasis` to `'CAPACITY_PROFILE'`.
+    - **Non-adoptable explicit pairs** (`FIXED`/`DEMAND_FOLLOWING`,
+      `FIXED`/`WHOLE_PROJECT_ALLOCATION`, `AVAILABILITY_WINDOW`/`AVAILABILITY_WINDOW`,
+      `IMPORTED` on any basis) always return HTTP 409 with no state change,
+      regardless of authority evidence.
+    - `MANUAL`, `IMPORTED`, `AVAILABILITY_WINDOW`, unknown source, or
+      non-`CAPACITY_PROFILE` basis profiles that do not match the adoptable pair
+      throw `PlannerConflictError` atomically and return
+      HTTP 409 without mutating any data. Only ROLE profiles with `source:
+      'SQUAD_PLANNER'` and `planningBasis: 'CAPACITY_PROFILE'` are
+      planner-updatable (the adoptable pair is updated to this value on adoption).
+14. **Missing ROLE profile creation** — A ROLE profile absent from the project
     may be created only when no conflicting owner (same `resourceTypeId` with
     unprotected source/basis) exists. If a conflicting unprotected
     owner-resource-type profile is present, the attempt throws
     `PlannerConflictError` with a project-scoped message and returns HTTP 409.
-14. All planner ownership errors (`PlannerConflictError`) are project-scoped:
+15. All planner ownership errors (`PlannerConflictError`) are project-scoped:
     the error message identifies the conflicting owner kind, key, source, and
     basis without exposing internal row identifiers beyond the project boundary.
-15. Malformed owner shapes, invalid planner provenance, and duplicate physical
+16. Malformed owner shapes, invalid planner provenance, and duplicate physical
     owners fail closed with HTTP 409. Apply does not repair or implicitly adopt
     ambiguous state.
 

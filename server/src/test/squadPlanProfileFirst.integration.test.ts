@@ -320,6 +320,69 @@ async function fetchActivePlanId(projectId: string): Promise<string | null> {
   return plan?.id ?? null
 }
 
+/**
+ * Capture a canonical snapshot of all capacity/timeline/snapshot state for a
+ * project, excluding volatile timestamps. Used for exact before/after equality
+ * assertions after conflict 409 responses.
+ */
+async function captureCanonicalState(projectId: string): Promise<Record<string, unknown>> {
+  const strip = (obj: unknown) =>
+    JSON.parse(JSON.stringify(obj, (key, val) =>
+      (key === 'createdAt' || key === 'updatedAt') ? undefined : val,
+    ))
+
+  const plans = await prisma.capacityPlan.findMany({
+    where: { projectId },
+    include: {
+      periods: {
+        include: { entries: true },
+        orderBy: { periodIndex: 'asc' },
+      },
+    },
+    orderBy: { id: 'asc' },
+  })
+  const profiles = await prisma.capacityProfile.findMany({
+    where: { projectId },
+    include: { segments: { orderBy: { startWeek: 'asc' } } },
+    orderBy: [{ ownerKind: 'asc' }, { id: 'asc' }],
+  })
+  const resourceTypes = await prisma.resourceType.findMany({
+    where: { projectId },
+    orderBy: { id: 'asc' },
+  })
+  const namedResources = await prisma.namedResource.findMany({
+    where: { resourceType: { projectId } },
+    orderBy: { id: 'asc' },
+  })
+  const timelineEntries = await prisma.timelineEntry.findMany({
+    where: { projectId },
+    orderBy: { id: 'asc' },
+  })
+  const storyTimelineEntries = await prisma.storyTimelineEntry.findMany({
+    where: { projectId },
+    orderBy: { id: 'asc' },
+  })
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { weeklyDemandCache: true },
+  })
+  const snapshots = await prisma.backlogSnapshot.findMany({
+    where: { projectId },
+    orderBy: { id: 'asc' },
+  })
+
+  return {
+    plans: strip(plans),
+    profiles: strip(profiles),
+    resourceTypes: strip(resourceTypes),
+    namedResources: strip(namedResources),
+    timelineEntries: strip(timelineEntries),
+    storyTimelineEntries: strip(storyTimelineEntries),
+    weeklyDemandCache: project?.weeklyDemandCache ?? null,
+    snapshots: strip(snapshots),
+  }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Scenario 1 — Activated apply writes ROLE + PLANNED_RESOURCE profiles
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2033,6 +2096,292 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     const secondPlanId = await fetchActivePlanId(projectId)
     expect(secondPlanId).not.toBeNull()
     expect(secondPlanId).not.toBe(firstPlanId)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Test coverage is skipped when INTEGRATION_TEST is not 'true'.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 17 — Explicit ROLE pair regressions (evidence-backed policy)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Under the evidence-backed legacy adoption policy, only LEGACY/DEMAND_FOLLOWING
+// with prior planner evidence may be adopted. All other ROLE provenance pairs
+// (FIXED/DEMAND_FOLLOWING, FIXED/WHOLE_PROJECT_ALLOCATION,
+// AVAILABILITY_WINDOW/AVAILABILITY_WINDOW, IMPORTED on any basis) must be
+// rejected with 409, no state change, and no snapshot leak.
+
+describeIf('Scenario 17 — Explicit ROLE pair rejection', () => {
+  const explicitPairs: Array<{
+    name: string
+    source: $Enums.CapacityProfileSource
+    planningBasis: $Enums.CapacityProfilePlanningBasis
+  }> = [
+    { name: 'FIXED/DEMAND_FOLLOWING', source: 'FIXED', planningBasis: 'DEMAND_FOLLOWING' },
+    { name: 'FIXED/WHOLE_PROJECT_ALLOCATION', source: 'FIXED', planningBasis: 'WHOLE_PROJECT_ALLOCATION' },
+    { name: 'AVAILABILITY_WINDOW/AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', planningBasis: 'AVAILABILITY_WINDOW' },
+    { name: 'IMPORTED/CAPACITY_PROFILE', source: 'IMPORTED', planningBasis: 'CAPACITY_PROFILE' },
+  ]
+
+  it.each(explicitPairs)('returns 409 for $name ROLE profile at preflight with exact state preservation', async ({ source, planningBasis }) => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, `rt-explicit-${source}-${planningBasis}`, 'ExplicitRole')
+    await createEpicBacklog(projectId, rtId)
+
+    // Create ROLE profile with explicit (non-adoptable) provenance
+    await createProfile(
+      projectId,
+      `cp-explicit-${source}-${planningBasis}`,
+      'ROLE',
+      rtId,
+      null,
+      { source, planningBasis },
+    )
+
+    // Capture canonical pre-apply state (plans, profiles, segments, RT, NR,
+    // timeline, story timeline, weeklyDemandCache, snapshots)
+    const beforeState = await captureCanonicalState(projectId)
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ]))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('owner')
+
+    // ── Post-409 state equals pre-apply state exactly (no mutations) ──
+    const afterState = await captureCanonicalState(projectId)
+    expect(afterState).toEqual(beforeState)
+
+    // ── No active plan created ──────────────────────────────────
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).toBeNull()
+
+    // ── No snapshot leaked (preflight runs before snapshot) ─────
+    const allSnapshots = await prisma.backlogSnapshot.findMany({
+      where: { projectId },
+    })
+    expect(allSnapshots).toHaveLength(0)
+
+    // ── ROLE profile unchanged ──────────────────────────────────
+    const profile = await prisma.capacityProfile.findUnique({
+      where: { id: `cp-explicit-${source}-${planningBasis}` },
+    })
+    expect(profile).toMatchObject({
+      source,
+      planningBasis,
+      ownerKind: 'ROLE',
+    })
+
+    // ── Compatibility fields unchanged (defaults untouched) ─────
+    const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
+    expect(rt).toMatchObject({
+      allocationMode: 'TIMELINE',
+      count: 2,
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      proposedName: null,
+    })
+  })
+
+  it('returns 409 for LEGACY/DEMAND_FOLLOWING ROLE without prior planner evidence, state unchanged', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-legacy-no-evidence', 'LegacyNoEvidence')
+    await createEpicBacklog(projectId, rtId)
+
+    // Create a LEGACY/DEMAND_FOLLOWING ROLE profile with NO prior planner
+    // evidence (no planner profiles, no active plan).
+    await createProfile(
+      projectId,
+      'cp-legacy-no-evidence',
+      'ROLE',
+      rtId,
+      null,
+      { source: 'LEGACY', planningBasis: 'DEMAND_FOLLOWING' },
+    )
+
+    // Capture canonical pre-apply state
+    const beforeState = await captureCanonicalState(projectId)
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ]))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('owner')
+
+    // ── Post-409 state equals pre-apply state exactly (no mutations) ──
+    const afterState = await captureCanonicalState(projectId)
+    expect(afterState).toEqual(beforeState)
+
+    // ── No active plan or snapshot leaked ────────────────────────
+    expect(await fetchActivePlanId(projectId)).toBeNull()
+    expect(await prisma.backlogSnapshot.count({ where: { projectId } })).toBe(0)
+
+    // ── ROLE profile unchanged ───────────────────────────────────
+    const profile = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-legacy-no-evidence' },
+    })
+    expect(profile).toMatchObject({
+      source: 'LEGACY',
+      planningBasis: 'DEMAND_FOLLOWING',
+      ownerKind: 'ROLE',
+    })
+
+    // ── Compatibility fields unchanged ───────────────────────────
+    const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
+    expect(rt).toMatchObject({
+      allocationMode: 'TIMELINE',
+      count: 2,
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      proposedName: null,
+    })
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 18 — Genuine LEGACY/DEMAND_FOLLOWING ROLE adoption with authority
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// When a LEGACY/DEMAND_FOLLOWING ROLE profile exists on a resource type with
+// prior planner evidence (via active plan or planner-owned profiles), the
+// profile is adoptable. The same profile ID is reused; source/basis become
+// SQUAD_PLANNER/CAPACITY_PROFILE.
+
+describeIf('Scenario 18 — LEGACY/DEMAND_FOLLOWING ROLE adoption with prior planner evidence', () => {
+  let projectId: string
+  let rtId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    rtId = await createResourceType(projectId, 'rt-legacy-role-18', 'LegacyRole')
+    await createEpicBacklog(projectId, rtId)
+
+    // Create a LEGACY/DEMAND_FOLLOWING ROLE profile (simulates pre-#359 state)
+    await createProfile(
+      projectId,
+      'cp-legacy-role-18',
+      'ROLE',
+      rtId,
+      null,
+      { source: 'LEGACY', planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 50 },
+    )
+
+    // ══ Establish prior planner evidence ══════════════════════════════
+    // A named resource with CAPACITY_PLAN allocation mode + a SQUAD_PLANNER
+    // NAMED_PERSON profile constitutes the planner-owned evidence that
+    // enables LEGACY/DEMAND_FOLLOWING ROLE adoption under the
+    // evidence-backed policy.
+    await createNamedResource(projectId, rtId, 'nr-legacy-role-18', 'Legacy Role Engineer 1', {
+      allocationMode: 'CAPACITY_PLAN',
+    })
+    await createProfile(
+      projectId,
+      'cp-legacy-person-18',
+      'NAMED_PERSON',
+      null,
+      'nr-legacy-role-18',
+      { source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+    )
+
+    // Document the evidence state before apply (planner-owned named-resource marker)
+    const evidenceNr = await prisma.namedResource.findUnique({
+      where: { id: 'nr-legacy-role-18' },
+      select: { allocationMode: true, allocationPercent: true },
+    })
+    expect(evidenceNr).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+    })
+    const evidenceProfile = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-legacy-person-18' },
+      select: { source: true, planningBasis: true, ownerKind: true },
+    })
+    expect(evidenceProfile).toMatchObject({
+      source: 'SQUAD_PLANNER',
+      planningBasis: 'CAPACITY_PROFILE',
+      ownerKind: 'NAMED_PERSON',
+    })
+
+    // Apply the plan — the authority captures the NAMED_PERSON profile as
+    // planner-owned evidence, enabling ROLE adoption.
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ]))
+    expect(res.status).toBe(201)
+  })
+
+  it('reuses the LEGACY ROLE profile, converting source/basis to SQUAD_PLANNER/CAPACITY_PROFILE', async () => {
+    const profile = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-legacy-role-18' },
+    })
+    expect(profile).toMatchObject({
+      ownerKind: 'ROLE',
+      source: 'SQUAD_PLANNER',
+      planningBasis: 'CAPACITY_PROFILE',
+    })
+    // Ensure defaultPercent is preserved from the legacy profile
+    expect(profile!.defaultPercent).not.toBeNull()
+
+    // A PLANNED_RESOURCE profile was created for the named resource
+    const plannedProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
+    })
+    expect(plannedProfiles.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('the NAMED_PERSON planner evidence profile is now converted to PLANNED_RESOURCE', async () => {
+    // The previous NAMED_PERSON profile should be updated to PLANNED_RESOURCE
+    const personProfile = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-legacy-person-18' },
+    })
+    expect(personProfile).not.toBeNull()
+    expect(personProfile!.ownerKind).toBe('PLANNED_RESOURCE')
+  })
+
+  it('the active capacity plan and preserved named-resource marker document the adoption evidence path', async () => {
+    // The active plan proves planner authority was captured before adoption
+    const activePlanId = await fetchActivePlanId(projectId)
+    expect(activePlanId).not.toBeNull()
+
+    // The named resource preserves its planner-owned CAPACITY_PLAN marker
+    const nr = await prisma.namedResource.findUnique({
+      where: { id: 'nr-legacy-role-18' },
+      select: { allocationMode: true, allocationPercent: true },
+    })
+    expect(nr).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+    })
+
+    // The converted ROLE profile now carries SQUAD_PLANNER source,
+    // proving the evidence path was applied correctly
+    const adoptedRole = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-legacy-role-18' },
+      select: { source: true, planningBasis: true, ownerKind: true },
+    })
+    expect(adoptedRole).toMatchObject({
+      source: 'SQUAD_PLANNER',
+      planningBasis: 'CAPACITY_PROFILE',
+      ownerKind: 'ROLE',
+    })
   })
 })
 

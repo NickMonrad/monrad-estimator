@@ -81,25 +81,17 @@ const PROTECTED_PROFILE_SOURCES: Record<string, true> = {
 }
 
 /**
- * The exact (source, planningBasis) pairs produced by the mapper for a
- * legacy ROLE capacity profile when the ResourceType has no active Capacity
- * Plan slots. These are the only ROLE provenance combinations the planner
- * may safely adopt under allowLegacyRole — all other non-SQUAD_PLANNER
- * ROLE profiles remain rejected to preserve fail-closed ownership.
+ * The only ROLE (source, planningBasis) pair produced by the legacy mapper
+ * that the Squad Planner may adopt. All other non-SQUAD_PLANNER ROLE profiles
+ * represent explicit/manual ownership and must be rejected.
+ *
+ * Adoption additionally requires independent planner evidence: the resource
+ * type must be present in the captured PriorPlannerAuthority's
+ * allPlannerResourceTypeIds set (active plan membership or planner-owned
+ * profiles). Fresh projects without evidence fail closed.
  */
-const LEGACY_ROLE_PAIRS: ReadonlyArray<readonly [string, string]> = [
-  ['AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
-  ['FIXED', 'DEMAND_FOLLOWING'],
-  ['FIXED', 'WHOLE_PROJECT_ALLOCATION'],
-  ['LEGACY', 'DEMAND_FOLLOWING'],
-]
+const LEGACY_ADOPTABLE_PAIR: readonly [string, string] = ['LEGACY', 'DEMAND_FOLLOWING'] as const
 
-/** True when the (source, planningBasis) pair is one of the four legacy
- * mapper-produced ROLE pairs. Used only by `validatePlannerOwnerState` when
- * `allowLegacyRole` is enabled. */
-function isLegacyRoleProfile(source: string, planningBasis: string): boolean {
-  return LEGACY_ROLE_PAIRS.some(([s, p]) => source === s && planningBasis === p)
-}
 
 /** Minimal NamedResource shape for deterministic ordering. */
 interface NamedResourceSummary {
@@ -532,7 +524,7 @@ export async function validatePlannerOwnerState(
   tx: PrismaTransactionClient,
   projectId: string,
   resourceTypeId: string,
-  allowLegacyRole?: boolean,
+  authority?: PriorPlannerAuthority,
 ): Promise<ConflictResourceInfo[]> {
   const resourceType = await tx.resourceType.findUnique({
     where: { id: resourceTypeId },
@@ -593,7 +585,9 @@ export async function validatePlannerOwnerState(
         mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
       } else if (profile.ownerKind === 'ROLE') {
         const validSquadPlanner = profile.source === 'SQUAD_PLANNER' && profile.planningBasis === 'CAPACITY_PROFILE'
-        const validLegacyRole = allowLegacyRole && isLegacyRoleProfile(profile.source, profile.planningBasis)
+        const hasLegacyPair = profile.source === LEGACY_ADOPTABLE_PAIR[0] && profile.planningBasis === LEGACY_ADOPTABLE_PAIR[1]
+        const hasAuthorityEvidence = authority != null && authority.allPlannerResourceTypeIds.has(resourceTypeId)
+        const validLegacyRole = hasLegacyPair && hasAuthorityEvidence
         if (!validSquadPlanner && !validLegacyRole) {
           mark(profile.id, profile.namedResourceId ? namedResourceById.get(profile.namedResourceId)?.name : undefined)
         }
@@ -635,26 +629,7 @@ export async function validatePlannerOwnerState(
   return conflicts
 }
 
-async function hasPriorActivePlanEvidence(
-  tx: PrismaTransactionClient,
-  projectId: string,
-  resourceTypeId: string,
-): Promise<boolean> {
-  const activePlan = await tx.capacityPlan.findFirst({
-    where: { projectId, isActive: true },
-    select: {
-      periods: {
-        select: {
-          entries: {
-            where: { resourceTypeId },
-            select: { id: true },
-          },
-        },
-      },
-    },
-  })
-  return activePlan?.periods.some(period => period.entries.length > 0) ?? false
-}
+
 
 // ─── Async: conflict preflight (reads DB via tx) ─────────────────────────────
 
@@ -669,13 +644,13 @@ export async function conflictPreflightCheck(
   tx: PrismaTransactionClient,
   projectId: string,
   periods: CapacityPlanPeriodInput[],
-  allowLegacyRole?: boolean,
+  authority?: PriorPlannerAuthority,
 ): Promise<ConflictCheckResult | undefined> {
   const resourceTypeIds = [...new Set(periods.flatMap(p => p.entries.map(e => e.resourceTypeId)))]
   const allDuplicates: ConflictResourceInfo[] = []
 
   for (const rtId of resourceTypeIds) {
-    allDuplicates.push(...await validatePlannerOwnerState(tx, projectId, rtId, allowLegacyRole))
+    allDuplicates.push(...await validatePlannerOwnerState(tx, projectId, rtId, authority))
     // Fetch existing ROLE profiles for this resource type
     const roleProfiles = (await tx.capacityProfile.findMany({
       where: { projectId, resourceTypeId: rtId, ownerKind: 'ROLE' },
@@ -722,7 +697,7 @@ export async function conflictPreflightCheck(
       rtId,
       'role',
       trajectoryCount,
-      { priorActivePlan: await hasPriorActivePlanEvidence(tx, projectId, rtId) },
+      { priorActivePlan: authority?.activePlanResourceTypeIds.has(rtId) ?? false },
     )
 
     allDuplicates.push(...plan.conflicts)
@@ -762,7 +737,6 @@ export async function findOrCreatePlannedResources(
   requiredCount: number,
   projectId?: string,
   authority?: PriorPlannerAuthority,
-  allowLegacyRole?: boolean,
 ): Promise<PlannedResourceMatchResult> {
   const existingNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
@@ -776,7 +750,7 @@ export async function findOrCreatePlannedResources(
       select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
     })
   const ownerConflicts = projectId
-    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId, allowLegacyRole)
+    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId, authority)
     : []
   if (ownerConflicts.length > 0) {
     throw new PlannerConflictError(
@@ -784,11 +758,7 @@ export async function findOrCreatePlannedResources(
       ownerConflicts,
     )
   }
-  const priorActivePlan = authority
-    ? authority.activePlanResourceTypeIds.has(resourceTypeId)
-    : projectId
-      ? await hasPriorActivePlanEvidence(tx, projectId, resourceTypeId)
-      : false
+  const priorActivePlan = authority?.activePlanResourceTypeIds.has(resourceTypeId) ?? false
 
   const plan = buildPlannerResourcePlan(
     existingNRs,
@@ -838,7 +808,7 @@ export async function findOrCreatePlannedResources(
         select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
       })
   const finalOwnerConflicts = projectId
-    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId, allowLegacyRole)
+    ? await validatePlannerOwnerState(tx, projectId, resourceTypeId, authority)
     : []
   if (finalOwnerConflicts.length > 0) {
     throw new PlannerConflictError(
@@ -900,7 +870,7 @@ export async function writePlannerProfiles(
   plannedProfiles: PlannedResourceProfileWriteSet[],
   surplusResourceIds: string[],
   source: 'SQUAD_PLANNER' = 'SQUAD_PLANNER',
-  allowLegacyRole?: boolean,
+  authority?: PriorPlannerAuthority,
 ): Promise<ProfileWriteResult> {
   let roleProfilesWritten = 0
   let plannedResourceProfilesWritten = 0
@@ -925,7 +895,7 @@ export async function writePlannerProfiles(
     ...plannedOwners.map(owner => owner.resourceTypeId),
   ])
   for (const resourceTypeId of ownerResourceTypeIds) {
-    const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId, allowLegacyRole)
+    const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId, authority)
     if (ownerConflicts.length > 0) {
       throw new PlannerConflictError(
         'Invalid planner ownership state — repair required before applying.',
@@ -1478,13 +1448,11 @@ export async function revalidatePlannerPlan(
   projectId: string,
   periods: ReadonlyArray<CapacityPlanPeriodInput>,
   authority?: PriorPlannerAuthority,
-  allowLegacyRole?: boolean,
-
 ): Promise<void> {
   const resourceTypeIds = [...new Set(periods.flatMap(p => p.entries.map(e => e.resourceTypeId)))]
   const allConflicts: ConflictResourceInfo[] = []
   for (const rtId of resourceTypeIds) {
-    allConflicts.push(...await validatePlannerOwnerState(tx, projectId, rtId, allowLegacyRole))
+    allConflicts.push(...await validatePlannerOwnerState(tx, projectId, rtId, authority))
     // Check ROLE profile duplicates (existing profiles query)
     const roleProfiles = await tx.capacityProfile.findMany({
       where: { projectId, resourceTypeId: rtId, ownerKind: 'ROLE' },
@@ -1527,9 +1495,7 @@ export async function revalidatePlannerPlan(
       rtId,
       'role',
       trajectoryCount,
-      { priorActivePlan: authority
-        ? authority.activePlanResourceTypeIds.has(rtId)
-        : await hasPriorActivePlanEvidence(tx, projectId, rtId) },
+      { priorActivePlan: authority?.activePlanResourceTypeIds.has(rtId) ?? false },
     )
     allConflicts.push(...plan.conflicts)
   }

@@ -33,7 +33,6 @@ import {
   findOrCreatePlannedResources,
   materializeProfilesForResourceType,
   writePlannerProfiles,
-  projectCompatibilityFields,
   clearSurplusCompatibilityFields,
   clearOmittedPlannerCapacity,
   revalidatePlannerPlan,
@@ -43,6 +42,7 @@ import {
   runPreWriteConflictSeam,
   __applyFailureSeam,
   type PrismaTransactionClient,
+  type PriorPlannerAuthority,
 } from '../lib/squadPlannerProfileWriter.js'
 
 type ApplyPeriodEntry = {
@@ -452,13 +452,21 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const shouldActivate = setActive ?? true
 
+  // ── Capture preflight planner authority before conflict check and snapshot ──
+  // This immutable evidence is used by the preflight conflict check only.
+  // A fresh, transaction-local authority is captured inside the transaction
+  // to avoid stale evidence from concurrent plan mutations.
+  const preflightAuthority: PriorPlannerAuthority | null = shouldActivate
+    ? await capturePlannerAuthority(prisma as unknown as PrismaTransactionClient, projectId)
+    : null
+
   // ── 1a. Conflict preflight (before snapshot) ─────────────────────────────
   if (shouldActivate) {
     const conflictResult = await conflictPreflightCheck(
-      prisma,
+      prisma as unknown as PrismaTransactionClient,
       projectId,
       normalisedPeriods as unknown as CapacityPlanPeriodInput[],
-      true,
+      preflightAuthority ?? undefined,
     )
     if (conflictResult?.hasConflict) {
       const messages: string[] = []
@@ -684,14 +692,22 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       if (shouldActivate) {
         await runPreValidationConflictSeam()
       }
-      const authority = shouldActivate ? await capturePlannerAuthority(tx, projectId) : null
+
+      // ── Capture transaction-local planner authority after pre-validation seam ──
+      // This fresh capture runs inside the Serializable transaction, after any
+      // concurrent mutations the pre-validation seam may have introduced, so that
+      // ownership evidence for revalidation, profile writes, and omitted cleanup
+      // is consistent and immune to preflight-to-transaction races.
+      const transactionAuthority: PriorPlannerAuthority | null = shouldActivate
+        ? await capturePlannerAuthority(tx, projectId)
+        : null
+
       if (shouldActivate) {
         await revalidatePlannerPlan(
           tx,
           projectId,
           normalisedPeriods as unknown as CapacityPlanPeriodInput[],
-          authority ?? undefined,
-          true,
+          transactionAuthority ?? undefined,
         )
 
         // ── Pre-write conflict test seam ─────────────────────────────────
@@ -770,18 +786,14 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             rtName,
             trajectories.length,
             projectId,
-            authority ?? undefined,
-            true,
+            transactionAuthority ?? undefined,
           )
-          // Build profile write sets (role + per-resource), including all
-          // planner-managed resources so shrink operations zero surplus rows.
           const materialized = materializeProfilesForResourceType(
             rtId,
             rtName,
             normalisedPeriods as unknown as CapacityPlanPeriodInput[],
             allNamedResources,
           )
-
           // Authoritative profile + segment persistence
           await writePlannerProfiles(
             tx,
@@ -790,15 +802,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             materialized.plannedProfiles,
             materialized.surplusResources,
             undefined,
-            true,
-          )
-
-          // Project compatibility fields from just-written profiles
-          await projectCompatibilityFields(
-            tx,
-            projectId,
-            [materialized.roleProfile],
-            materialized.plannedProfiles,
+            transactionAuthority ?? undefined,
           )
 
           // Clear surplus resource windows so legacy readers see no stale capacity
@@ -806,7 +810,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             await clearSurplusCompatibilityFields(tx, materialized.surplusResources)
           }
         }
-        await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()), authority!)
+        await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()), transactionAuthority!)
       }
 
       // ── Timeline + cache persistence using precomputed data ────────────
