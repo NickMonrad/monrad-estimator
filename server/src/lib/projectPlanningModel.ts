@@ -24,6 +24,8 @@ import {
   materializeCapacityPlanResources,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
+import { buildResourceCapacityProfileMap } from './capacityProfileResourceAdapter.js'
+import type { CapacityProfileAdapterInput } from './capacityProfileResourceAdapter.js'
 import { deriveNamedResourceAssignments } from './namedResourceAssignments.js'
 import { effectiveDays } from '../utils/round.js'
 
@@ -117,6 +119,8 @@ export interface ResourceTypePlanningFact {
   allocationStartWeek: number | null
   allocationEndWeek: number | null
   namedResources: PlanningNamedResource[]
+  /** True when valid persisted named-resource profiles own availability. */
+  capacityProfileBacked?: boolean
   /** Materialized capacity plan data for this RT (undefined if no active plan) */
   capacityPlanMaterialized: MaterializedCapacityPlanResource | undefined
 }
@@ -504,6 +508,18 @@ export async function buildProjectPlanningModel(
   // ── 1. Load project with ownership check ───────────────────────────────
   const project = await prisma.project.findFirst({
     where: { id: projectId, ownerId: userId },
+    include: {
+      capacityProfiles: {
+        include: {
+          segments: {
+            orderBy: [
+              { startWeek: 'asc' },
+              { endWeek: 'asc' },
+            ],
+          },
+        },
+      },
+    },
   })
 
   if (!project) {
@@ -581,6 +597,23 @@ export async function buildProjectPlanningModel(
     },
   })
   const capacityPlanByRt = materializeCapacityPlanResources(activeCapacityPlan?.periods ?? [])
+  const { namedResourceProfiles } = buildResourceCapacityProfileMap({
+    id: project.id,
+    hoursPerDay: project.hoursPerDay,
+    resourceTypes,
+    capacityProfiles: project.capacityProfiles,
+    capacityPlans: activeCapacityPlan ? [activeCapacityPlan] : [],
+  } as unknown as CapacityProfileAdapterInput)
+  const capacityProfileBackedResourceTypeIds = new Set(
+    resourceTypes
+      .filter(rt =>
+        rt.namedResources.length > 0 &&
+        rt.namedResources.every(
+          namedResource => namedResourceProfiles.get(namedResource.id)?.resolutionSource === 'PROFILE',
+        ),
+      )
+      .map(rt => rt.id),
+  )
 
   // ── 6. Resolved entries (with display metadata) ──────────────────────
   const resolvedEntries: FeatureEntryDetail[] = activeEntries.map(e => ({
@@ -626,6 +659,7 @@ export async function buildProjectPlanningModel(
       pricingModel: nr.pricingModel,
       synthetic: false,
     })),
+    capacityProfileBacked: capacityProfileBackedResourceTypeIds.has(rt.id),
     capacityPlanMaterialized: capacityPlanByRt.get(rt.id),
   }))
 
@@ -701,7 +735,10 @@ export async function buildProjectPlanningModel(
 
   // ── 12. Derive named resource assignments ────────────────────────────
   const namedResourceAssignments = deriveNamedResourceAssignments({
-    resourceTypes: resourceTypes as unknown as Parameters<typeof deriveNamedResourceAssignments>[0]['resourceTypes'],
+    resourceTypes: resourceTypes.map(rt => ({
+      ...rt,
+      capacityProfileBacked: capacityProfileBackedResourceTypeIds.has(rt.id),
+    })) as unknown as Parameters<typeof deriveNamedResourceAssignments>[0]['resourceTypes'],
     weeklyDemand,
     capacityPlanByRt,
   })

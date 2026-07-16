@@ -379,60 +379,60 @@ It produces a structured report with:
 
 ### Important notes
 
-- **Legacy fields remain authoritative** for scheduler, leveller, Timeline, Squad Planner,
-  and Commercial calculations. PR #355 established profile-first writes for ResourceType
-  and NamedResource write paths; legacy fields are compatibility projections for unmigrated
-  data.
-- **After PR #355**, write-path routes (`PUT/PATCH/DELETE` resource-types and
-  named-resources) use `syncCapacityProfilesForProject` to keep the additive read model
-  in sync. PR #356 extended read adoption to the Resource Profile route
-  and export hook.
-- **No schema or migration changes** are required for the backfill/reconciliation.
+- **Capacity profiles are authoritative for availability when structurally valid.**
+  `ResourceType` and `NamedResource` allocation fields remain compatibility
+  projections for older consumers; `ResourceType.count` remains role metadata.
+- **Timeline/Planning owns assignment reality.** Scheduled windows, actual weekly
+  demand, and `weeklyDemandCache` are planning outputs, not profile fields.
+- **Commercial owns billing.** Rates, billing basis, billable days, and commercial
+  totals remain separate from capacity availability.
+- **After PR #355**, ResourceType and NamedResource write paths maintain profile-backed
+  availability and project legacy fields for compatibility. PR #356 extended persisted
+  profile adoption to Resource Profile and exports. PR #359 applies the same boundary to
+  Squad Planner.
+- **Reconciliation remains a backfill/diagnostic report**, not a lossy read gate.
+  Structural validity (IDs, owner shape, enums, segments, and references) is the
+  safety check for the persisted endpoint.
+- **No schema or migration changes** are required for backfill/reconciliation.
 - The backfill is idempotent — running it multiple times is safe.
-- The `--dry-run` flag currently implements reconcile-only mode. True dry-run (showing what would be written without writing) is deferred for a future PR if needed.
+- The `--dry-run` flag currently implements reconcile-only mode. True dry-run (showing what
+  would be written without writing) is deferred for a future PR if needed.
 
 ## Persisted-read endpoint
 
-The read-only `GET /api/projects/:projectId/capacity-profiles` endpoint now prefers
-persisted `CapacityProfile`/`CapacitySegment` rows when they exist and pass reconciliation.
+The read-only `GET /api/projects/:projectId/capacity-profiles` endpoint treats the
+persisted `CapacityProfile`/`CapacitySegment` rows as the authority when their
+structure is valid. It does not compare the persisted rows to a legacy-derived
+expectation, because that comparison can reject intentional profile-first edits.
 
 ### Decision flow
 
 1. Fetch the project with its resource types, named resources, active capacity plans,
    and persisted capacity profiles (with segments).
-2. If no persisted profiles exist → return legacy mapper-derived DTOs.
+2. If no persisted profiles exist → use the deterministic legacy/active-plan fallback.
 3. If persisted profiles exist:
-   a. Run `compareCapacityProfiles` (from the reconciliation helper) against the
-      already-fetched data.
-   b. If zero mismatches → map persisted rows to `CapacityProfileDTO[]` and return.
-   c. If mismatches → `console.warn` with project id + mismatch count,
-      then fall back to legacy mapper-derived DTOs (200, not 500).
+   a. Validate IDs, owner shape, enum values, segment ranges, and owner references.
+   b. If structurally valid → map persisted rows to `CapacityProfileDTO[]` and return.
+   c. If structurally invalid → warn with project id + validation reason, then use the
+      deterministic fallback (200, not 500).
 
 ### Key properties
 
 - **No database writes.** The endpoint is read-only. Write methods (`create`, `update`,
   `delete`, `deleteMany` for both `CapacityProfile` and `CapacitySegment`) are never called.
 - **DTO shape unchanged.** The response contract remains `{ capacityProfiles: CapacityProfileDTO[] }`.
-- **Legacy fields remain authoritative.** The fallback path uses the existing
-  `mapProjectToCapacityProfiles` mapper. Runtime write adoption is deferred.
+- **Persisted authority is structural, not comparative.** Missing or invalid persisted
+  rows use the active-plan/legacy fallback; valid rows are returned directly.
 - **Auth and ownership preserved.** The same `authenticate` middleware and
   `ownerId`-scoped project lookup apply to both paths.
 
-### Reuse of reconciliation logic
+### Reuse of validation and reconciliation logic
 
-The endpoint does **not** call the all-project `reconcileCapacityProfiles`. Instead:
+The endpoint uses structural validation from `projectCapacityProfileValidation.ts`.
+The all-project `reconcileCapacityProfiles` runner remains available as a diagnostic
+backfill report and may use `compareCapacityProfiles`, but its mismatch result is not
+an endpoint read gate.
 
-- The `compareCapacityProfiles` pure function (in `reconcileCapacityProfiles.ts`)
-  was extracted from the per-project loop of `reconcileCapacityProfiles`.
-- It accepts already-fetched data (expected DTOs + persisted raw rows) and
-  returns a `PerProjectComparison` (no DB access).
-- `reconcileCapacityProfiles` iterates over all projects and delegates to
-  `compareCapacityProfiles` per project.
-- The endpoint reuses `compareCapacityProfiles` on its already-fetched project data,
-  avoiding a second query.
-
-The existing all-project `reconcileCapacityProfiles` and `formatReconciliationReport`
-remain unchanged for the backfill runner.
 
 ### Persisted-to-DTO mapping
 
@@ -475,10 +475,16 @@ The helper is called inside existing write transactions:
 
 ### Write transactionality
 
-- Routes that use `prisma.$transaction` have the sync call inside the same transaction, so sync failure rolls back the legacy write.
-- Named-resource DELETE ensures sync runs after the resource-type count is updated, so the persisted profile reflects the final count.
-- Owner-key normalization uses `prismaOwnerKindToDtoKind` to map Prisma enum values (`NAMED_PERSON`, `PLANNED_RESOURCE`) to DTO format (`namedPerson`, `plannedResource`), ensuring stable persisted IDs across syncs.
-- Squad-plan apply wraps plan creation, RT/NR updates, and sync in a single `$transaction`. Timeline materialisation (epic start weeks, timeline entries, weekly demand cache) runs after the transaction — these downstream writes do not affect capacity profile output.
+- Routes that use `prisma.$transaction` keep profile writes in the same transaction,
+  so profile failure rolls back the source update.
+- Named-resource DELETE ensures profile reconciliation runs after the resource-type
+  count is updated, so persisted ownership reflects the final count.
+- Owner-key normalization uses `prismaOwnerKindToDtoKind` to map Prisma enum values
+  (`NAMED_PERSON`, `PLANNED_RESOURCE`) to DTO format (`namedPerson`, `plannedResource`),
+  ensuring stable persisted IDs across syncs.
+- Squad-plan apply writes the plan, role/named-resource projections, capacity profiles,
+  timeline entries, and `weeklyDemandCache` in one transaction. The pre-apply v3
+  snapshot is created before that transaction and survives a failed apply for undo.
 
 ### Backfill refactor
 
@@ -488,25 +494,26 @@ The helper is called inside existing write transactions:
 
 Planned resources (`ownerKind: PLANNED_RESOURCE`) have stable `namedResourceId` values from persisted `NamedResource` rows, so they persist without ambiguity.
 
-### Legacy field authority
+### Authority and remaining work
 
-Legacy `ResourceType`/`NamedResource`/`CapacityPlan` fields remain authoritative. The sync helper is a derived write that keeps the additive read model in sync, not a source-of-truth migration.
+`CapacityProfile`/`CapacitySegment` are the persisted authority for availability when
+structurally valid. `ResourceType`/`NamedResource` allocation fields are compatibility
+projections; `CapacityPlan` is the Squad Planner generation/history record. Timeline
+owns assignment reality and weekly demand; Commercial owns billing.
 
-### Future work
-
-- Runtime write adoption: make save/update operations write to `CapacityProfile` tables.
-- True dry-run support in the backfill runner (showing what would be written).
+- True dry-run support in the backfill runner (showing what would be written) remains
+  deferred for a future PR if needed.
 
 ### Integration test coverage
 
-Runtime persisted DTO integration tests now cover:
+Runtime persisted DTO integration tests cover:
 - ResourceType writes (PATCH count) — profiles persisted, endpoint returns persisted DTOs
 - NamedResource writes (PUT update, PATCH allocation) — named-person/planned-resource profiles correct
 - NamedResource delete — stale persisted profiles removed
 - Squad Planner apply — capacity-profile segments persisted and returned
-- Persisted-read success path — endpoint returns persisted DTOs on reconciliation
-- Legacy fallback — endpoint returns legacy-derived DTOs on reconciliation mismatch
-- Repair cycle — write after corruption restores persisted path
+- Persisted-read success path — structurally valid persisted DTOs are returned directly
+- Structural fallback — invalid persisted shape falls back safely without a 500
+- Repair cycle — a write after corruption restores the persisted path
 
 Tests use the real `syncCapacityProfilesForProject` helper (not mocked). See `server/src/test/capacityProfilePersistedDtoIntegration.test.ts` (58 tests).
 
@@ -541,8 +548,9 @@ planned resource).
 
 The adapter does **not** run `compareCapacityProfiles` or any reconciliation check.
 It uses persisted data directly when the owner-specific profile exists, without
-comparing against legacy-derived expectations. This differs from the
-`GET /capacity-profiles` endpoint (which still uses a reconciliation gate).
+comparing against legacy-derived expectations. The endpoint also uses structural
+validation only: a valid persisted set is authoritative, while missing or invalid
+persisted data falls back to the legacy mapper.
 
 **Resolution source semantics:**
 
@@ -856,11 +864,13 @@ No segments are created. No active Capacity Plan materialisation. Planned-resour
 - **No Prisma schema migration in #367.** Capacity profiles live in the existing
   `BacklogSnapshot.snapshot` JSON column. Types, validation, and capacity helpers
   are pure runtime additions.
-- **Capacity Plan history is owned by #359.** PR #367 does not snapshot or restore
-  the `CapacityPlan` table or its periods/entries.
+- **PR #359 extends v3 rollback** to exact `CapacityPlan`, `CapacityPlanPeriod`, and
+  `CapacityPlanEntry` history plus the project's optional `weeklyDemandCache`.
+  V3 snapshots without those optional fields remain backward-compatible and leave
+  that dimension untouched on restore.
 - **Duplicate owner consolidation is owned by #361.**
 - **BuildSnapshot produces v3** for all new snapshots (manual, `csv_import`,
-  `template_apply`, `optimiser_apply`, `pre_rollback` triggers).
+  `template_apply`, `optimiser_apply`, `pre_rollback`, and planner-apply snapshots).
 - **Existing V1 and V2 snapshots remain readable** and restore successfully with
   version-appropriate profile handling.
 

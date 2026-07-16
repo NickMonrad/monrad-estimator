@@ -954,3 +954,337 @@ test.describe('Timeline — Resource-counts layout', () => {
     await expectElementToFit(page.getByTestId('resource-counts'))
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Squad Planner — profile-first apply with capacity plan
+// Covers: generate, apply and verify planned resource identities on Resource
+// Profile, reapply with changed settings, Snapshot History presence/rollback.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Squad Planner — profile-first apply and resource identity', () => {
+  test('generate, apply, verify planned resources, reapply, and snapshot history', async ({ page }) => {
+    test.setTimeout(150_000)
+
+    const projectName = `E2E SquadPlan ${Date.now()}`
+
+    // ── Login and create project ──
+    await login(page)
+    await createProject(page, projectName)
+
+    // ── Navigate to Backlog and seed CSV with Developer + Tech Lead tasks ──
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
+    const tmpFile = path.join(os.tmpdir(), `squad-plan-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
+
+    // ── Navigate to Timeline ──
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole('button', { name: /timeline/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /timeline/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    // ── Set start date and Update timeline ──
+    const dateInput = page.locator('input[type="date"]')
+    await expect(dateInput).toBeVisible({ timeout: 8_000 })
+    await dateInput.fill('2026-06-01')
+    await expect(dateInput).toHaveValue('2026-06-01')
+    await quickSchedule(page)
+    await expect(
+      page.getByRole('button', { name: /sequential|parallel/i }).first(),
+    ).toBeVisible({ timeout: 15_000 })
+
+    // ── Open Squad Planner drawer ──
+    await page.getByRole('button', { name: /open squad planner/i }).click()
+
+    const drawer = page.getByRole('dialog', { name: /squad planner/i })
+    await expect(drawer).toBeVisible({ timeout: 5_000 })
+    await expect(drawer.getByRole('heading', { name: /squad planner/i })).toBeVisible()
+
+    // ── Generate capacity profile ──
+    const generateBtn = drawer.getByRole('button', { name: /generate capacity profile/i })
+    await expect(generateBtn).toBeVisible()
+
+    const planResponse = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan') && !resp.url().includes('/apply') && resp.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await generateBtn.click()
+    await planResponse
+
+    // Wait for result KPIs — Peak, Delivery, Planned squad cost, Avg Utilisation
+    await expect(drawer.getByText(/Peak/i)).toBeVisible({ timeout: 10_000 })
+    await expect(drawer.getByText(/Delivery/i)).toBeVisible()
+    await expect(drawer.getByText(/Planned squad cost/i)).toBeVisible()
+
+    // ── Apply capacity profile ──
+    const applyBtn = drawer.getByRole('button', { name: /apply capacity profile/i })
+    await expect(applyBtn).toBeVisible()
+
+    // Accept both confirm and the post-apply alert
+    page.on('dialog', dialog => dialog.accept())
+
+    const applyResponse = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan/apply') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
+    await applyBtn.click()
+    const response = await applyResponse
+    expect(response.status()).toBe(201)
+    const applyBody = await response.json()
+    // Response body is the Prisma CapacityPlan object
+    type SquadPlanApplyResponse = {
+      id: string
+      isActive: boolean
+      name: string
+    }
+    const applyData = applyBody as SquadPlanApplyResponse
+    expect(applyData.id).toBeTruthy()
+    expect(typeof applyData.id).toBe('string')
+    expect(applyData.isActive).toBe(true)
+    expect(applyData.name).toBeTruthy()
+
+    // Drawer closes after successful apply
+    await expect(drawer).not.toBeVisible({ timeout: 10_000 })
+
+    // ── Navigate to Resource Profile and assert planned-resource identities ──
+    // Capture the GET resource-profile response for persisted-data verification
+    interface SegmentData {
+      startWeek: number
+      endWeek: number
+      capacityPercent: number
+    }
+    interface CapacityProfileData {
+      planningBasis: string
+      source: string
+      segments: SegmentData[]
+    }
+    interface NamedResourceData {
+      id: string
+      name: string
+      resourceIdentity: string
+      capacityProfile?: CapacityProfileData
+    }
+    interface ResourceRowData {
+      name: string
+      namedResources?: NamedResourceData[]
+    }
+    interface ResourceProfileResponse {
+      resourceRows: ResourceRowData[]
+    }
+
+    // Start waiting for API before navigation
+    const rpAfterApplyP = page.waitForResponse(
+      resp => resp.url().includes(`/api/projects/${projectId}/resource-profile`) && resp.request().method() === 'GET' && resp.ok(),
+      { timeout: 20_000 },
+    )
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const rpAfterApplyResp = await rpAfterApplyP
+    const rpAfterApplyData = await rpAfterApplyResp.json() as unknown as ResourceProfileResponse
+
+    // Find the Developer row and extract the first planned resource
+    const devRowAPI1 = rpAfterApplyData.resourceRows.find(
+      (r: ResourceRowData) => r.name?.toLowerCase().includes('developer'),
+    )
+    expect(devRowAPI1).toBeDefined()
+    const plannedResource1 = devRowAPI1!.namedResources?.find(
+      (nr: NamedResourceData) => nr.resourceIdentity === 'PLANNED_RESOURCE',
+    )
+    expect(plannedResource1).toBeDefined()
+    const beforeReapply = {
+      id: plannedResource1!.id,
+      name: plannedResource1!.name,
+      resourceIdentity: plannedResource1!.resourceIdentity,
+      segments: plannedResource1!.capacityProfile?.segments ?? [],
+    }
+    expect(beforeReapply.segments.length).toBeGreaterThan(0)
+
+    // ── UI assertions on Resource Profile page ──
+    // Find the Developer row in the DOM and expand named resources
+    const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(devRow).toBeVisible({ timeout: 15_000 })
+
+    // Click "People ↗" to reveal the NamedResourcesPanel
+    await devRow.getByTitle('Show named resources').click()
+
+    // The panel heading confirms it opened
+    await expect(page.getByText('Named Resources')).toBeVisible({ timeout: 8_000 })
+
+    // Check for "Planned resource" badge — each planned resource gets this
+    await expect(page.getByText('Planned resource').first()).toBeVisible({ timeout: 5_000 })
+
+    // Check for "Squad Planner" source badge — the capacity profile source tag
+    await expect(page.getByText('Squad Planner').first()).toBeVisible({ timeout: 5_000 })
+
+    // Name input must be disabled for planned resources (cannot be renamed)
+    const namedResourcesRow = page.locator('tr').filter({
+      has: page.getByText('Named Resources', { exact: true }),
+    })
+    const nameInput = namedResourcesRow.locator('input[type="text"]').first()
+    await expect(nameInput).toBeDisabled()
+
+    // ── Reapply — open Squad Planner with changed settings ──
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    // Open Squad Planner again
+    await page.getByRole('button', { name: /open squad planner/i }).click()
+    await expect(drawer).toBeVisible({ timeout: 5_000 })
+    // Change Target Duration to exercise a second profile-first apply
+    const twelveMonthBtn = drawer.getByRole('button', { name: '12mo' })
+    await expect(twelveMonthBtn).toBeVisible()
+    await twelveMonthBtn.click()
+
+    // Generate the second capacity profile
+    const planResponse2 = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan') && !resp.url().includes('/apply') && resp.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /generate capacity profile/i }).click()
+    await planResponse2
+    await expect(drawer.getByText(/Delivery/i)).toBeVisible({ timeout: 10_000 })
+
+    // Apply the second profile
+    const applyResponse2 = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan/apply') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
+    await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
+    const response2 = await applyResponse2
+    expect(response2.status()).toBe(201)
+    const applyBody2 = await response2.json() as SquadPlanApplyResponse
+    expect(applyBody2.id).toBeTruthy()
+    expect(applyBody2.id).not.toBe(applyData.id)
+    await expect(drawer).not.toBeVisible({ timeout: 10_000 })
+
+    // ── Verify stable identity + updated capacity on Resource Profile ──
+    // Capture the API response to verify identity continuity and trajectory change
+    const rpAfterReapplyP = page.waitForResponse(
+      resp => resp.url().includes(`/api/projects/${projectId}/resource-profile`) && resp.request().method() === 'GET' && resp.ok(),
+      { timeout: 20_000 },
+    )
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const rpAfterReapplyResp = await rpAfterReapplyP
+    const rpAfterReapplyData = await rpAfterReapplyResp.json() as unknown as ResourceProfileResponse
+
+    // Find Developer row and the same planned resource by ID
+    const devRowAPI2 = rpAfterReapplyData.resourceRows.find(
+      (r: ResourceRowData) => r.name?.toLowerCase().includes('developer'),
+    )
+    expect(devRowAPI2).toBeDefined()
+
+    // The same persisted ID must appear exactly once (no duplicates)
+    const matchingResources2 = devRowAPI2!.namedResources?.filter(
+      (nr: NamedResourceData) => nr.id === beforeReapply.id,
+    ) ?? []
+    expect(matchingResources2).toHaveLength(1)
+
+    // Same display identity
+    expect(matchingResources2[0].name).toBe(beforeReapply.name)
+    expect(matchingResources2[0].resourceIdentity).toBe(beforeReapply.resourceIdentity)
+
+    // Reapply preserves a non-empty persisted trajectory alongside the stable identity
+    const afterReapplySegments = matchingResources2[0].capacityProfile?.segments ?? []
+    expect(afterReapplySegments.length).toBeGreaterThan(0)
+
+    // ── UI assertions ──
+    const devRow2 = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(devRow2).toBeVisible({ timeout: 15_000 })
+    await devRow2.getByTitle('Show named resources').click()
+
+    // Identity remains stable — still "Planned resource"
+    await expect(page.getByText('Planned resource').first()).toBeVisible({ timeout: 8_000 })
+    // Source badge still "Squad Planner"
+    await expect(page.getByText('Squad Planner').first()).toBeVisible({ timeout: 5_000 })
+    // Name input remains disabled for planned resources
+    const namedResourcesRow2 = page.locator('tr').filter({
+      has: page.getByText('Named Resources', { exact: true }),
+    })
+    await expect(namedResourcesRow2.locator('input[type="text"]').first()).toBeDisabled()
+
+    // ── Exercise Snapshot History and rollback ──
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    // Open History panel
+    await page.getByRole('button', { name: /history/i }).click()
+
+    // SnapshotHistoryPanel heading
+    await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
+
+    // Squad Plan apply creates a snapshot with trigger 'optimiser_apply'
+    await expect(page.getByText('optimiser_apply').first()).toBeVisible({ timeout: 8_000 })
+
+    // ── Rollback: wait for POST response, then verify state via Resource Profile ──
+    // Start waiting for the rollback POST before clicking
+    const rollbackResponseP = page.waitForResponse(
+      resp => resp.url().includes('/snapshots/') && resp.url().includes('/rollback') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
+    await page.getByRole('button', { name: /rollback/i }).first().click()
+    await rollbackResponseP
+
+    // After rollback the panel refreshes — wait for re-render
+    await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
+
+    // ── Navigate to Resource Profile to verify state restoration ──
+    // Start waiting for API before navigation
+    const rpAfterRollbackP = page.waitForResponse(
+      resp => resp.url().includes(`/api/projects/${projectId}/resource-profile`) && resp.request().method() === 'GET' && resp.ok(),
+      { timeout: 20_000 },
+    )
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const rpAfterRollbackResp = await rpAfterRollbackP
+    const rpAfterRollbackData = await rpAfterRollbackResp.json() as unknown as ResourceProfileResponse
+
+
+    // Rollback (.first() targets pre-second-apply snapshot) restores the
+    // state after the first plan, so the original planned resource persists.
+    const devRowAfterRollback = rpAfterRollbackData.resourceRows.find(
+      (r: ResourceRowData) => r.name?.toLowerCase().includes('developer'),
+    )
+    expect(devRowAfterRollback).toBeDefined()
+
+    // The first-plan resource must exist exactly once (no duplicates)
+    const plannedAfterRollback = devRowAfterRollback!.namedResources?.filter(
+      (nr: NamedResourceData) => nr.id === beforeReapply.id,
+    ) ?? []
+    expect(plannedAfterRollback).toHaveLength(1)
+    // Same display identity
+    expect(plannedAfterRollback[0].name).toBe(beforeReapply.name)
+    expect(plannedAfterRollback[0].resourceIdentity).toBe(beforeReapply.resourceIdentity)
+
+    // Segments restored to pre-second-apply state (same as first plan)
+    const restoredSegments = plannedAfterRollback[0].capacityProfile?.segments ?? []
+    expect(restoredSegments.length).toBeGreaterThan(0)
+    const segmentsRestored = JSON.stringify(restoredSegments) === JSON.stringify(beforeReapply.segments)
+    expect(segmentsRestored).toBe(true)
+  })
+})

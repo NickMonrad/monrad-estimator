@@ -134,6 +134,26 @@ use different owner kinds and are independently keyed by `resourceTypeId` and
 key in the profile map (defensive guard), it treats the entry as absent and falls
 through to the next precedence tier rather than throwing or blocking.
 
+**All-or-nothing persistence authority:** The GET `/capacity-profiles` route
+validates the full persisted set via `validatePersistedCapacityProfiles`. Every
+profile must pass structural checks, or the entire set is discarded and the
+complete legacy projection is served. Per-owner persisted/legacy merging never
+occurs — it would silently drop or corrupt incomplete data. When valid,
+persisted profiles preserve stable IDs, segment boundaries, and capacity
+trajectories without lossy truncation.
+
+**Physical-owner duplicate rejection (structural validator):** The GET
+`/capacity-profiles` route's structural validator rejects duplicate physical
+owners by FK namespace + ID. The same `namedResourceId` cannot appear as both
+`NAMED_PERSON` and `PLANNED_RESOURCE`. This is distinct from the adapter's
+defensive map-merge fall-through — the validator rejects structurally, while
+the adapter degrades gracefully under map collision.
+
+**Owner-aware percentage bounds:** ROLE-kind `defaultPercent` and segment
+`capacityPercent` may exceed 100 (aggregate capacity for multiple people);
+`NAMED_PERSON`/`PLANNED_RESOURCE` percents are bounded to [0,100]. The
+validator enforces this; the adapter passes values through unchanged.
+
 ### Commercial owns billing and price presentation
 
 Commercial is the source of truth for pricing presentation and billable calculation choices.
@@ -317,16 +337,25 @@ Prefer fast integration/unit coverage around the shared planning model and API b
 ## Follow-up implementation sequence
 
 > **Note:** PR #356 (merged) introduced capacity-profile read adoption in
-> Resource Profile, as part of the #340 source-of-truth epic. It introduced profile-first
-> read precedence in the Resource Profile route and export hook, ahead of the #263
-> sequence above. This means Resource Profile display and export fields will resolve from
-> `CapacityProfile`/`CapacitySegment` when a persisted profile exists, rather than
-> exclusively from legacy `ResourceType`/`NamedResource` fields. Commercial calculations
-> (allocatedDays, actualAllocatedDays, totalDays, estimatedCost) remain unchanged.
-> Scheduler, leveller, Timeline, and Squad Planner also remain unchanged — they continue
-> to read legacy allocation fields directly. The sequence below is for the #263 epic
-> (ownership boundaries); the #340 epic (profile source-of-truth migration) runs in
-> parallel and may inform later #263 items.
+> Resource Profile and exports. PR #359 completes the profile-first Squad Planner
+> apply boundary. Each Serializable apply attempt captures the prior active-plan
+> authority (plan ID, resource-type membership, planner provenance) as one
+> immutable value before deactivation and passes it explicitly through
+> revalidation, owner matching, and omitted-role reconciliation; retries
+> recapture it. Protected ROLE profiles (non-`SQUAD_PLANNER` source or
+> non-`CAPACITY_PROFILE` basis) are never converted and throw
+> `PlannerConflictError` atomically with HTTP 409. Resource Profile
+> display/export resolve from structurally valid persisted
+> `CapacityProfile`/`CapacitySegment` rows, with deterministic fallback
+> only for missing or invalid persisted data. Commercial calculations
+> (allocatedDays, actualAllocatedDays, totalDays, estimatedCost) remain unchanged
+> and remain Commercial-owned. Timeline/Planning owns scheduling, assignment
+> windows, and weekly demand cache; the Squad Planner writes those outputs in the
+> same transaction as the plan and capacity profiles. Legacy allocation fields are
+> compatibility projections for unmigrated consumers.
+
+The sequence below is for the #263 ownership-boundary epic; the #340 profile
+source-of-truth migration runs in parallel and informs later #263 items.
 Recommended order under #263:
 
 1. #264 - Extract shared project planning read model.
@@ -409,6 +438,17 @@ branch and landed when PR #356 merged.
   named-resource profiles by `namedResourceId`; the two namespaces never collide.
 - Duplicate owner keys in the profile map fall through to the next precedence
   tier rather than blocking.
+- **Physical-owner duplicate rejection:** The structural validator in
+  `validatePersistedCapacityProfiles` rejects identical physical owner FKs
+  (same `namedResourceId` cannot be both `NAMED_PERSON` and
+  `PLANNED_RESOURCE`). This is distinct from the adapter's map-merge
+  fall-through — the validator rejects, the adapter degrades.
+- **Owner-aware percent bounds:** ROLE-kind percent fields are unbounded
+  (role may aggregate multiple people); NAMED_PERSON/PLANNED_RESOURCE percents
+  are bounded to [0,100].
+- **All-or-nothing persistence authority:** The entire persisted set must pass
+  structural validation, or the GET route falls back to the complete legacy
+  projection. No per-owner persisted/legacy merge occurs.
 
 **New files introduced:**
 
@@ -475,8 +515,10 @@ fidelity.
 - `ProjectDiscount` rows remain Commercial-owned and are not serialized into V3
   snapshots. Rollback leaves project-wide, target-role, and post-snapshot discounts
   unchanged; no discount is promoted to project-wide scope.
-- Capacity Plan history (Capacity Plan periods/entries) is **not** part of PR #367;
-  it is tracked by #359 separately.
+- Capacity Plan history is now included in the v3 rollback contract (#359):
+  exact plan, period, and entry rows plus the optional weekly demand cache are
+  restored when present. Older v3 snapshots without those optional fields remain
+  backward-compatible and leave that dimension untouched.
 
 See [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md#phase-2b-—-snapshot-v3-capacity-profile-preservation)
 and [`capacity-profile-design.md`](capacity-profile-design.md#snapshot-schema-v3--snapshot-rollback-capacity-safety) for details.
@@ -512,3 +554,46 @@ directly, respecting the established ownership boundaries:
 - The integration test fetches source/clone HTTP `GET /resource-profile` DTOs and executes production `buildProfileCsv` and `computeCommercialData` against them, verifying exact endpoint-derived CSV output and commercial parity.
 - The focused `clone-commercial-parity.test.ts` client Vitest test is only a pure-utility regression over ID-remapped, DTO-shaped fixtures; it is not real endpoint evidence.
 - CI runs the focused client Vitest step separately from the required/blocking server clone integration step, after Prisma migrations and client generation.
+
+### Squad Planner apply ✅ (PR #359)
+
+PR #359 completes the profile-first Squad Planner apply boundary by making the
+apply path's ownership model explicit and failure-safe. Key contract additions
+not reflected in earlier phases:
+
+**Prior active-plan authority capture.** Inside each Serializable transaction
+attempt, before the prior active plan is deactivated, one immutable value
+capturing prior active plan ID, resource-type membership, and valid planner
+provenance is recorded. This captured authority is passed explicitly through
+revalidation, owner matching, and omitted-role reconciliation. On retry (after
+a serialization failure), the authority is recaptured from the new committed
+state — never derived from the replacement `isActive: true` plan or from bare
+compatibility fields.
+
+**Protected ROLE profiles.** ROLE profiles whose `source` is not `SQUAD_PLANNER`
+or whose `planningBasis` is not `CAPACITY_PROFILE` are never converted, zeroed,
+deleted, or normalised by the apply path. `MANUAL`, `FIXED`, `IMPORTED`,
+`AVAILABILITY_WINDOW`, unknown source, or non-`CAPACITY_PROFILE` basis profiles
+that conflict with planner-intended role capacity throw `PlannerConflictError`
+atomically and return HTTP 409 without mutating any data. Only ROLE profiles
+with `source: 'SQUAD_PLANNER'` and `planningBasis: 'CAPACITY_PROFILE'` are
+planner-updatable.
+
+**Missing ROLE profile creation.** A ROLE profile absent from the project may
+be created only when no conflicting owner (same `resourceTypeId` with
+unprotected source/basis) exists. Conflicting unprotected profiles cause a
+project-scoped `PlannerConflictError` with HTTP 409. All planner ownership
+errors are project-scoped: the message identifies the conflicting owner kind,
+key, source, and basis without exposing row identifiers beyond the project
+boundary.
+
+**Commercial parity.** Exact commercial migration parity is proven through the
+authenticated apply and production `computeCommercialData` calculation path.
+The same backlog and resource state produce identical commercial output
+regardless of whether profiles were written by the Squad Planner or legacy
+paths. Intentional capacity-input changes produce expected commercial output —
+that variation is a separate testing contract, not part of the migration-parity
+assertion.
+
+See [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md#phase-5-—-squad-planner-apply--pr-359)
+for the complete flow description.
