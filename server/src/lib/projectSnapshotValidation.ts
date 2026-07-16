@@ -243,6 +243,57 @@ export function validateSnapshotV3(snapshot: SnapshotV3): void {
 
     validateProfile(profile, pfx, rtIds, nrIds, nrRtIds, seenProfileIds, seenSegmentIds)
   }
+
+  // ── Capacity plans (optional for backward-compatible v3 snapshots) ───────
+  if (snapshot.capacityPlans !== undefined) {
+    const seenPlanIds = new Set<string>()
+    const seenPeriodIds = new Set<string>()
+    const seenEntryIds = new Set<string>()
+    let activePlanCount = 0
+    for (let pi = 0; pi < snapshot.capacityPlans.length; pi++) {
+      const plan = snapshot.capacityPlans[pi]
+      const pfx = `capacityPlans[${pi}]`
+      if (typeof plan.id !== 'string' || plan.id.length === 0) fail(pfx, 'plan id must be a non-empty string')
+      if (seenPlanIds.has(plan.id)) fail(pfx, `duplicate plan id "${plan.id}"`)
+      seenPlanIds.add(plan.id)
+      if (typeof plan.name !== 'string') fail(pfx, 'name must be a string')
+      for (const [key, value] of [
+        ['targetWeeks', plan.targetWeeks],
+        ['periodWeeks', plan.periodWeeks],
+        ['maxDelta', plan.maxDelta],
+      ] as const) {
+        if (!Number.isInteger(value) || value < 0) fail(`${pfx}.${key}`, 'must be a non-negative integer')
+      }
+      if (typeof plan.isActive !== 'boolean') fail(`${pfx}.isActive`, 'must be boolean')
+      if (plan.isActive) activePlanCount++
+      if (plan.totalCost !== null && !isFiniteNumber(plan.totalCost)) fail(`${pfx}.totalCost`, 'must be null or finite')
+      if (plan.deliveryWeeks !== null && !isFiniteNumber(plan.deliveryWeeks)) fail(`${pfx}.deliveryWeeks`, 'must be null or finite')
+      if (typeof plan.createdAt !== 'string' || Number.isNaN(Date.parse(plan.createdAt))) fail(`${pfx}.createdAt`, 'must be an ISO date string')
+      for (let qi = 0; qi < plan.periods.length; qi++) {
+        const period = plan.periods[qi]
+        const qfx = `${pfx}.periods[${qi}]`
+        if (seenPeriodIds.has(period.id)) fail(qfx, `duplicate period id "${period.id}"`)
+        seenPeriodIds.add(period.id)
+        if (!Number.isInteger(period.periodIndex) || period.periodIndex < 0) fail(`${qfx}.periodIndex`, 'must be a non-negative integer')
+        if (!Number.isInteger(period.startWeek) || !Number.isInteger(period.endWeek) || period.startWeek < 0 || period.endWeek < period.startWeek) fail(qfx, 'week bounds are invalid')
+        for (let ei = 0; ei < period.entries.length; ei++) {
+          const entry = period.entries[ei]
+          const efx = `${qfx}.entries[${ei}]`
+          if (seenEntryIds.has(entry.id)) fail(efx, `duplicate entry id "${entry.id}"`)
+          seenEntryIds.add(entry.id)
+          if (!rtIds.has(entry.resourceTypeId)) fail(efx, `resourceTypeId "${entry.resourceTypeId}" not found in snapshot.resourceTypes`)
+          for (const [key, value] of [
+            ['headcount', entry.headcount],
+            ['demandFTE', entry.demandFTE],
+            ['utilisationPct', entry.utilisationPct],
+          ] as const) {
+            if (!isFiniteNumber(value) || value < 0) fail(`${efx}.${key}`, 'must be a finite number >= 0')
+          }
+        }
+      }
+    }
+    if (activePlanCount > 1) fail('capacityPlans', 'at most one plan may be active')
+  }
 }
 
 function validateProfile(

@@ -416,14 +416,14 @@ describe('persisted profiles', () => {
     })
   })
 
-  it('falls back to legacy mapper when planningBasis mismatches', async () => {
+  it('returns persisted profile even when planningBasis differs from legacy mapper', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
       resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
       capacityProfiles: [mockPersistedProfile('cp-1', {
         resourceTypeId: 'rt-1',
         ownerKind: 'ROLE',
-        planningBasis: 'AVAILABILITY_WINDOW', // wrong — should be DEMAND_FOLLOWING
-        source: 'FIXED',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
         defaultPercent: 100,
       })],
     }))
@@ -432,13 +432,14 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    // Falls back to legacy — should have the resource type id, not the persisted id
+    // Persisted profile IS structurally valid (exactly-one owner FK, valid enums,
+    // owner references existing RT) → returned as-authority, no fallback.
     expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
-    expect(res.body.capacityProfiles[0].planningBasis).toBe('demandFollowing')
+    expect(res.body.capacityProfiles[0].id).toBe('cp-1')
+    expect(res.body.capacityProfiles[0].planningBasis).toBe('availabilityWindow')
   })
 
-  it('falls back to legacy when persisted profile is missing (partial data)', async () => {
+  it('falls back to legacy when persisted data has no profile for a resource type', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
       resourceTypes: [
         mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' }),
@@ -451,20 +452,21 @@ describe('persisted profiles', () => {
         source: 'FIXED',
         defaultPercent: 100,
       })],
-      // No persisted profile for rt-2
+      // No persisted profile for rt-2 → incomplete coverage → fallback
     }))
 
     const res = await request(app)
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    // Falls back to legacy — returns both resource types
+    // rt-2 has no persisted profile → completeness check fails → legacy fallback
     expect(res.status).toBe(200)
     expect(res.body.capacityProfiles).toHaveLength(2)
-    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
-    expect(res.body.capacityProfiles[1].id).toBe('rt-2')
+    const ids = res.body.capacityProfiles.map((p: any) => p.id)
+    expect(ids).not.toContain('cp-1')
   })
 
+  // Falls back to legacy — duplicate owner keys fail structural validation
   it('falls back to legacy when duplicate persisted owner rows exist', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
       resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
@@ -491,6 +493,166 @@ describe('persisted profiles', () => {
       .set('Authorization', authHeader)
 
     // Falls back to legacy — duplicate means reconciliation fails
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+  })
+
+  it('falls back to legacy when persisted profile references non-existent resource type', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-missing', // orphan owner — no such RT
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+  })
+
+  it('falls back to legacy when persisted profile has both resourceTypeId and namedResourceId', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', {
+        allocationMode: 'EFFORT',
+        namedResources: [mockNr('nr-1', 'Alice')],
+      })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        namedResourceId: 'nr-1', // exactly-one FK violation: both set
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    // RT has named resource → legacy fallback returns named-person profile
+    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
+    expect(res.body.capacityProfiles[0].owner.id).toBe('nr-1')
+    // Corrupt persisted profile id is NOT exposed
+    const ids = res.body.capacityProfiles.map((p: any) => p.id)
+    expect(ids).not.toContain('cp-1')
+  })
+
+  it('falls back to legacy when persisted profile has invalid source enum', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'BOGUS', // invalid enum
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+  })
+
+  it('falls back to legacy when ROLE profile is missing resourceTypeId', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: null, // owner-kind shape violation: ROLE requires RT
+        namedResourceId: 'nr-missing',
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+  })
+
+  it('falls back to legacy when segment ranges overlap', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'CAPACITY_PLAN' })],
+      capacityPlans: [{
+        id: 'plan-1',
+        isActive: true,
+        periods: [{
+          periodIndex: 0,
+          startWeek: 0,
+          endWeek: 8,
+          entries: [{ resourceTypeId: 'rt-1', headcount: 1 }],
+        }],
+      }],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [
+          { id: 'seg-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 6, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          { id: 'seg-2', capacityProfileId: 'cp-1', startWeek: 4, endWeek: 8, capacityPercent: 50, source: 'SQUAD_PLANNER' },
+        ],
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    // Overlapping segments fail structural validation → fallback
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+  })
+
+  it('falls back to legacy when segment has duplicate week range', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'CAPACITY_PLAN' })],
+      capacityPlans: [{
+        id: 'plan-1',
+        isActive: true,
+        periods: [{
+          periodIndex: 0,
+          startWeek: 0,
+          endWeek: 8,
+          entries: [{ resourceTypeId: 'rt-1', headcount: 1 }],
+        }],
+      }],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [
+          { id: 'seg-1', startWeek: 0, endWeek: 6, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          { id: 'seg-2', startWeek: 0, endWeek: 6, capacityPercent: 50, source: 'SQUAD_PLANNER' },
+        ],
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    // Duplicate week range fails structural validation → fallback
     expect(res.status).toBe(200)
     expect(res.body.capacityProfiles[0].id).toBe('rt-1')
   })
@@ -554,6 +716,181 @@ describe('persisted profiles', () => {
       'seg-week-1b',
       'seg-week-3',
     ])
+  })
+
+
+  it('falls back to legacy when one of two named resources is missing a profile', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', {
+        allocationMode: 'EFFORT',
+        namedResources: [
+          mockNr('nr-1', 'Alice'),
+          mockNr('nr-2', 'Bob'),
+        ],
+      })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+      // nr-2 (Bob) has no persisted profile → incomplete
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    // Incomplete named-resource coverage → legacy fallback
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles).toHaveLength(2)
+    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
+    expect(res.body.capacityProfiles[1].owner.kind).toBe('namedPerson')
+    const ids = res.body.capacityProfiles.map((p: any) => p.id)
+    expect(ids).not.toContain('cp-1')
+  })
+
+  it('falls back when planner-owned named profiles omit the aggregate ROLE profile', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', {
+        allocationMode: 'CAPACITY_PLAN',
+        namedResources: [mockNr('nr-1', 'Planner 1', { allocationMode: 'CAPACITY_PLAN' })],
+      })],
+      capacityProfiles: [mockPersistedProfile('cp-planned', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [mockPersistedSegment()],
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
+    expect(res.body.capacityProfiles[0].owner.id).toBe('nr-1')
+    expect(res.body.capacityProfiles[0].legacy).toBeDefined()
+    expect(res.body.capacityProfiles[0].id).toBe('nr-1')
+  })
+
+  it('accepts explicit-only named-resource coverage without an aggregate ROLE profile', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [mockRt('rt-1', 'Engineer', {
+        allocationMode: 'EFFORT',
+        namedResources: [mockNr('nr-1', 'Alice')],
+      })],
+      capacityProfiles: [mockPersistedProfile('cp-alice', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'MANUAL',
+        defaultPercent: 100,
+      })],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles).toHaveLength(1)
+    expect(res.body.capacityProfiles[0].id).toBe('cp-alice')
+    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
+  })
+
+  it('returns complete ROLE + named/planned hybrid persisted profiles', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [
+        mockRt('rt-1', 'Engineer', {
+          allocationMode: 'EFFORT',
+          namedResources: [mockNr('nr-1', 'Alice')],
+        }),
+        mockRt('rt-2', 'Designer', { allocationMode: 'EFFORT' }),
+      ],
+      capacityProfiles: [
+        mockPersistedProfile('cp-role', {
+          resourceTypeId: 'rt-1',
+          ownerKind: 'ROLE',
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER',
+          defaultPercent: 100,
+          segments: [mockPersistedSegment({ id: 'seg-rt1', endWeek: 7 })],
+        }),
+        mockPersistedProfile('cp-alice', {
+          namedResourceId: 'nr-1',
+          ownerKind: 'NAMED_PERSON',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+        }),
+        mockPersistedProfile('cp-designer', {
+          resourceTypeId: 'rt-2',
+          ownerKind: 'ROLE',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+        }),
+      ],
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    // Complete coverage: RT-1 has ROLE + NR profile, RT-2 has ROLE profile
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles).toHaveLength(3)
+    // mapPersistedProfilesToDTOs sorts: role profiles first (by owner id), then namedPerson
+    expect(res.body.capacityProfiles[0].id).toBe('cp-role')
+    expect(res.body.capacityProfiles[1].id).toBe('cp-designer')
+    expect(res.body.capacityProfiles[2].id).toBe('cp-alice')
+    // Persisted IDs and trajectories preserved
+    expect(res.body.capacityProfiles[0].segments[0].id).toBe('seg-rt1')
+  })
+
+  it('preserves all owners in legacy fallback when persisted data is incomplete', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
+      resourceTypes: [
+        mockRt('rt-1', 'Engineer', {
+          allocationMode: 'EFFORT',
+          namedResources: [
+            mockNr('nr-1', 'Alice'),
+            mockNr('nr-2', 'Bob'),
+          ],
+        }),
+        mockRt('rt-2', 'Designer', { allocationMode: 'EFFORT' }),
+      ],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
+      // Only nr-1 profile exists; nr-2 and rt-2 have none → incomplete
+    }))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/capacity-profiles')
+      .set('Authorization', authHeader)
+
+    // Legacy fallback must include all owners
+    expect(res.status).toBe(200)
+    expect(res.body.capacityProfiles).toHaveLength(3)
+    const ownerKinds = res.body.capacityProfiles.map((p: any) => p.owner.kind)
+    const ownerIds = res.body.capacityProfiles.map((p: any) => p.owner.id)
+    // Alice and Bob as namedPerson owners
+    expect(ownerKinds.filter((k: string) => k === 'namedPerson')).toHaveLength(2)
+    // Designer as role owner
+    expect(ownerKinds.filter((k: string) => k === 'role')).toHaveLength(1)
+    expect(ownerIds).toContain('nr-1')
+    expect(ownerIds).toContain('nr-2')
+    expect(ownerIds).toContain('rt-2')
   })
 
 })
