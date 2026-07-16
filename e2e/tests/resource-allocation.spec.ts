@@ -142,9 +142,9 @@ async function setupSquadPlannerCapacityPlan(page: Page) {
           endWeek: 3,
           entries: [{
             resourceTypeId: planRt.resourceTypeId,
-            headcount: 1,
+            headcount: 0.5,
             demandFTE: 1,
-            utilisationPct: 50,
+            utilisationPct: 100,
           }],
         }, {
           periodIndex: 1,
@@ -152,7 +152,7 @@ async function setupSquadPlannerCapacityPlan(page: Page) {
           endWeek: 8,
           entries: [{
             resourceTypeId: planRt.resourceTypeId,
-            headcount: 1,
+            headcount: 1.0,
             demandFTE: 1,
             utilisationPct: 100,
           }],
@@ -163,11 +163,46 @@ async function setupSquadPlannerCapacityPlan(page: Page) {
   )
   expect(applyRes.ok()).toBeTruthy()
 
+  // Pre-UI API verification: verify exact segments before navigating.
+  // After the squad plan applies, segments are stored on named resources,
+  // not the role-level capacityProfile. We verify the aggregate total.
+  const verifyRes = await page.request.get(
+    `${API_BASE}/api/projects/${projectId}/resource-profile`,
+    { headers: authHeaders },
+  )
+  expect(verifyRes.ok()).toBeTruthy()
+  const verifyProfile = await verifyRes.json()
+  interface VerifySeg { startWeek: number; endWeek: number; capacityPercent: number }
+  const planRtFromVerify = verifyProfile.resourceRows.find(
+    (r: { resourceTypeId: string }) => r.resourceTypeId === planRt.resourceTypeId,
+  )
+  expect(planRtFromVerify, 'Plan RT should still exist in profile').toBeTruthy()
+  // Collect all segments from named resources + role-level profile
+  const allCPSegments: VerifySeg[] = [
+    ...(planRtFromVerify.namedResources ?? []).flatMap(
+      (nr: { capacityProfile?: { segments?: VerifySeg[] } | null }) => nr.capacityProfile?.segments ?? [],
+    ),
+    ...(planRtFromVerify.capacityProfile?.segments ?? []),
+  ]
+  expect(allCPSegments.length).toBeGreaterThanOrEqual(2)
+  // Verify we have exactly the expected segments: 50% for W0-W3 and 100% for W4-W8
+  const seg50 = allCPSegments.find(s => s.capacityPercent === 50)
+  const seg100 = allCPSegments.find(s => s.capacityPercent === 100)
+  expect(seg50, 'Segment with capacityPercent 50 should exist').toBeTruthy()
+  expect(seg50!.startWeek).toBe(0)
+  expect(seg50!.endWeek).toBe(2)
+  expect(seg100, 'Segment with capacityPercent 100 should exist').toBeTruthy()
+  expect(seg100!.startWeek).toBe(4)
+  expect(seg100!.endWeek).toBe(7)
+  const planResourceTypeId = planRt.resourceTypeId
+  const planResourceName = planRt.name
+  const beforeSegments: VerifySeg[] = allCPSegments
+  
   // Navigate back to Resource Profile with fresh data
   await page.goto(`/projects/${projectId}/resource-profile`)
   await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
-
-  return projectId
+  
+  return { projectId, planResourceTypeId, planResourceName, beforeSegments }
 }
 
 test.describe('Resource Allocation', () => {
@@ -302,9 +337,9 @@ test.describe('Resource Allocation', () => {
     await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
   })
 
-  test('CAPACITY_PLAN row shows info panel with safe editor', async ({ page }) => {
+  test('CAPACITY_PLAN row shows info panel with safe editor, round-trip preserves segments', async ({ page }) => {
     test.setTimeout(120_000)
-    const projectId = await setupSquadPlannerCapacityPlan(page)
+    const { projectId, planResourceTypeId, beforeSegments } = await setupSquadPlannerCapacityPlan(page)
   
     const scalarCalls: string[] = []
     page.on('request', req => {
@@ -314,6 +349,7 @@ test.describe('Resource Allocation', () => {
       }
     })
   
+    // Project Manager row has the "Varies by week" badge (no named resources)
     const pmRow = page.locator('table tbody tr').filter({ hasText: 'Project Manager' }).first()
     await expect(pmRow).toBeVisible({ timeout: 10_000 })
   
@@ -321,11 +357,11 @@ test.describe('Resource Allocation', () => {
     await expect(badge).toBeVisible({ timeout: 8_000 })
     await expect(badge).toHaveText('Varies by week')
   
-    await expect(pmRow.locator('span.uppercase').first()).toBeVisible({ timeout: 5_000 })
+    // No scalar percentage in badge
+    const badgeText = await badge.textContent()
+    expect(badgeText).not.toMatch(/\d+%/)
   
-    const pmRowText = await pmRow.textContent()
-    expect(pmRowText).not.toMatch(/\d+%/)
-  
+    // Click badge → profile-managed panel
     await badge.click({ force: true })
     await expect(page.getByText(/managed through the weekly capacity profile/i)).toBeVisible({ timeout: 8_000 })
   
@@ -344,14 +380,14 @@ test.describe('Resource Allocation', () => {
     await editorButton.click()
     await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
   
+    // Round-trip: navigate back to Resource Profile
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
   
-    // Verify 2+ segments exist via API response
+    // Verify exact segment preservation via API (segments live on named resources)
     const tokenAfter = await page.evaluate(() => localStorage.getItem('token'))
     const authHeadersAfter: Record<string, string> = {}
     if (tokenAfter) authHeadersAfter['Authorization'] = `Bearer ${tokenAfter}`
-    // Use evaluate to fetch profile data within the page context
     const tokenStr = tokenAfter || ''
     const profileAfter = await page.evaluate(async ({ pid, tok }) => {
       const res = await fetch(`/api/projects/${pid}/resource-profile`, {
@@ -360,36 +396,20 @@ test.describe('Resource Allocation', () => {
       if (!res.ok) throw new Error('Profile fetch failed: ' + res.status)
       return res.json()
     }, { pid: projectId, tok: tokenStr })
-    const tlRowData = profileAfter.resourceRows.find((r: { name: string }) => r.name === 'Tech Lead')
-    expect(tlRowData, 'Tech Lead row should exist in profile').toBeTruthy()
-    let segmentCount = 0
-    if (tlRowData.namedResources && tlRowData.namedResources.length > 0) {
-      for (const nr of tlRowData.namedResources) {
-        if (nr.capacityProfile?.segments?.length > 0) {
-          segmentCount += nr.capacityProfile.segments.length
-        }
-      }
-    }
-    if (tlRowData.capacityProfile?.segments?.length > 0) {
-      segmentCount += tlRowData.capacityProfile.segments.length
-    }
-    expect(segmentCount).toBeGreaterThanOrEqual(2)
-    const allSegments = [
-      ...(tlRowData.namedResources ?? []).flatMap((nr: any) => nr.capacityProfile?.segments ?? []),
-      ...(tlRowData.capacityProfile?.segments ?? []),
+    // Collect segments from named resources for the plan RT
+    const rtRowData = profileAfter.resourceRows.find(
+      (r: { resourceTypeId: string }) => r.resourceTypeId === planResourceTypeId,
+    )
+    expect(rtRowData, `Resource row ${planResourceTypeId} should exist after round-trip`).toBeTruthy()
+    const afterAllSegments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }> = [
+      ...(rtRowData.namedResources ?? []).flatMap(
+        (nr: { capacityProfile?: { segments?: Array<{ startWeek: number; endWeek: number; capacityPercent: number }> } | null }) => nr.capacityProfile?.segments ?? [],
+      ),
+      ...(rtRowData.capacityProfile?.segments ?? []),
     ]
-    // Verify at least 2 segments with distinct week ranges exist
-    // (capacityPercent is always 100 from headcount quanta; the distinction
-    // is in the week ranges derived from the 2 squad plan periods)
-    const uniqueWeekRanges = new Set(allSegments.map((s: any) => `${s.startWeek}-${s.endWeek}`))
-    expect(uniqueWeekRanges.size).toBeGreaterThanOrEqual(2)
-    // Verify a segment with endWeek >= 4 exists (from second period)
-    const hasLateSegment = allSegments.some((s: any) => s.startWeek >= 4)
-    expect(hasLateSegment, 'At least one segment with startWeek >= 4 should exist').toBeTruthy()
-    // Verify a segment with startWeek < 4 exists (from first period)
-    const hasEarlySegment = allSegments.some((s: any) => s.startWeek < 4)
-    expect(hasEarlySegment, 'At least one segment with startWeek < 4 should exist').toBeTruthy()
+    expect(afterAllSegments).toEqual(beforeSegments)
   
+    // UI badge still shows Varies by week after round-trip
     const pmRowAfter = page.locator('table tbody tr').filter({ hasText: 'Project Manager' }).first()
     await expect(pmRowAfter).toBeVisible({ timeout: 10_000 })
     const badgeAfter = pmRowAfter.locator('button[title="Click to edit allocation"]')
@@ -410,11 +430,11 @@ async function expectElementToFit(locator: Locator) {
   expect(ok).toBe(true)
 }
 
-async function measurePatternSelect(page: Page, viewport: { width: number; height: number }) {
+async function measurePatternSelect(page: Page, viewport: { width: number; height: number }, rowLoc: Locator) {
   await page.setViewportSize(viewport)
-  const nrSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+  const nrSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
   await expect(nrSelect).toBeVisible()
-
+  
   // Change to FULL_PROJECT (longest option) and wait for PATCH to settle
   const patchResp = page.waitForResponse(
     resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
@@ -422,10 +442,10 @@ async function measurePatternSelect(page: Page, viewport: { width: number; heigh
   )
   await nrSelect.selectOption('FULL_PROJECT')
   await patchResp
-
+  
   // Measure select clientWidth
   const selectWidth = await nrSelect.evaluate((el: HTMLSelectElement) => el.clientWidth)
-
+  
   // Create hidden mirror element with same computed font to measure text width
   const requiredWidth = await nrSelect.evaluate((el: HTMLSelectElement) => {
     const idx = el.selectedIndex
@@ -449,7 +469,7 @@ async function measurePatternSelect(page: Page, viewport: { width: number; heigh
     document.body.removeChild(mirror)
     return w
   })
-
+  
   expect(selectWidth).toBeGreaterThanOrEqual(requiredWidth)
 }
 
@@ -485,10 +505,10 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     const rowLoc = page.getByTestId(nrTestId)
 
     // Measure pattern select width against longest option
-    await measurePatternSelect(page, { width: 1280, height: 720 })
-
+    await measurePatternSelect(page, { width: 1280, height: 720 }, rowLoc)
+  
     // Re-acquire select locator after PATCH settled
-    const freshSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    const freshSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
     const selectBox = await freshSelect.boundingBox()
     expect(selectBox).not.toBeNull()
 
@@ -541,10 +561,10 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     const rowLoc = page.getByTestId(nrTestId)
 
     // Measure pattern select width against longest option
-    await measurePatternSelect(page, VP_820)
-
+    await measurePatternSelect(page, VP_820, rowLoc)
+  
     // Re-acquire select locator after PATCH settled
-    const freshSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    const freshSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
     const selectBox = await freshSelect.boundingBox()
     expect(selectBox).not.toBeNull()
 
@@ -617,7 +637,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     await expect(rowLoc.getByText('Avail to:')).toBeVisible()
 
     // Switch to CAPACITY_PLAN to check View Resource Profile button
-    const nrSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    const nrSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
     await expect(nrSelect).toBeVisible()
     const patchResp = page.waitForResponse(
       resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
@@ -627,23 +647,41 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     await patchResp
 
     // Re-acquire select after PATCH settles
-    const mobileSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    const mobileSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
     await expect(mobileSelect).toBeVisible()
     await expect(mobileSelect).toHaveValue('CAPACITY_PLAN')
-    // Selected option remains readable — verify text content not clipped
-    const txtFits = await mobileSelect.evaluate((el: HTMLSelectElement) => {
+    // Selected option remains readable — verify text content not clipped using mirror element
+    const selectWidth = await mobileSelect.evaluate((el: HTMLSelectElement) => el.clientWidth)
+    const requiredWidth = await mobileSelect.evaluate((el: HTMLSelectElement) => {
       const idx = el.selectedIndex
-      if (idx < 0) return true
-      return el.scrollWidth <= el.clientWidth + 1
+      const text = idx >= 0 ? el.options[idx].text : ''
+      const style = window.getComputedStyle(el)
+      const mirror = document.createElement('span')
+      mirror.textContent = text
+      mirror.style.cssText = [
+        'position:absolute',
+        'visibility:hidden',
+        'white-space:nowrap',
+        `font-family:${style.fontFamily}`,
+        `font-size:${style.fontSize}`,
+        `font-weight:${style.fontWeight}`,
+        `letter-spacing:${style.letterSpacing}`,
+        'left:-9999px',
+        'top:-9999px',
+      ].join(';')
+      document.body.appendChild(mirror)
+      const w = mirror.offsetWidth + 24
+      document.body.removeChild(mirror)
+      return w
     })
-    expect(txtFits).toBe(true)
-
+    expect(selectWidth).toBeGreaterThanOrEqual(requiredWidth)
+  
     // Help text wraps within row
     const helpText = rowLoc.getByText(/Availability varies by week/i)
     await expect(helpText).toBeVisible()
     const helpFits = await helpText.evaluate((el: Element) => (el as HTMLElement).scrollWidth <= (el as HTMLElement).clientWidth + 1)
     expect(helpFits).toBe(true)
-
+  
     // Pattern, Avail, Avail from, Avail to groups stack vertically
     const basisGroup = rowLoc.getByText('Pattern:').locator('..')
     const allocGroup = rowLoc.getByText('Avail:').locator('..')
@@ -660,11 +698,14 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(allocBox!.y).toBeGreaterThanOrEqual(basisBox!.y + basisBox!.height - 2)
     expect(startBox!.y).toBeGreaterThanOrEqual(allocBox!.y + allocBox!.height - 2)
     expect(endBox!.y).toBeGreaterThanOrEqual(startBox!.y + startBox!.height - 2)
-
+  
     // View Resource Profile button visible and clickable
     const rpButton = page.getByRole('button', { name: /view resource profile/i })
     await expect(rpButton).toBeVisible()
     await expect(rpButton).toBeEnabled()
+    // Click and verify navigation to resource profile
+    await rpButton.click()
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/resource-profile`))
     // No horizontal page overflow in resource-counts panel
     const countsPanel = page.getByTestId('resource-counts')
     await expectElementToFit(countsPanel)
@@ -682,7 +723,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     const rowLoc = page.getByTestId(nrTestId)
 
     // Switch to CAPACITY_PLAN
-    const nrSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    const nrSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
     await expect(nrSelect).toBeVisible()
     const patchResp = page.waitForResponse(
       resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
@@ -721,7 +762,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     await page.setViewportSize(VP_820)
 
     await expect(page.getByRole('button', { name: /view resource profile/i })).toBeVisible()
-    await expect(page.locator('select[aria-label*="Availability pattern for"]').first()).toBeVisible()
+    await expect(rowLoc.locator('select[aria-label*="Availability pattern for"]')).toBeVisible()
     await expect(rowLoc.getByText(/Availability varies by week/i)).toBeVisible()
 
     // Help text fits inside row at 820px

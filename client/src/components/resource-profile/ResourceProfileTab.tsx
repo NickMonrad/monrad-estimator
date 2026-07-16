@@ -181,13 +181,20 @@ export default function ResourceProfileTab({
                         const planningBasisLabel = effective.hasAuthoritativeProfile && row.capacityProfile
                           ? formatPlanningBasis(row.capacityProfile.planningBasis)
                           : null
-                        const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
-                        const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
+                        const effectivePercent = effective.hasAuthoritativeProfile
+                          ? (row.capacityProfile?.defaultPercent ?? row.allocationPercent ?? 100)
+                          : (row.allocationPercent ?? 100)
+                        const effectiveStart = effective.hasAuthoritativeProfile
+                          ? (row.capacityProfile?.startWeek ?? row.allocationStartWeek ?? row.derivedStartWeek ?? null)
+                          : (row.allocationStartWeek ?? row.derivedStartWeek ?? null)
+                        const effectiveEnd = effective.hasAuthoritativeProfile
+                          ? (row.capacityProfile?.endWeek ?? row.allocationEndWeek ?? row.derivedEndWeek ?? null)
+                          : (row.allocationEndWeek ?? row.derivedEndWeek ?? null)
                         const modeLabel = planningBasisLabel ?? formatAllocationMode(mode)
                         const badge = (() => {
                           if (mode === 'EFFORT') return { label: modeLabel, color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
-                          if (mode === 'TIMELINE') return { label: `${modeLabel} · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
-                          if (mode === 'FULL_PROJECT') return { label: `${modeLabel} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
+                          if (mode === 'TIMELINE') return { label: `${modeLabel} · ${effectivePercent}%`, color: 'bg-blue-100 text-blue-700' }
+                          if (mode === 'FULL_PROJECT') return { label: `${modeLabel} · ${effectivePercent}%`, color: 'bg-purple-100 text-purple-700' }
                           if (mode === 'CAPACITY_PLAN') return { label: modeLabel, color: 'bg-green-100 text-green-700' }
                           return { label: modeLabel, color: 'bg-purple-100 text-purple-700' }
                         })()
@@ -290,7 +297,7 @@ export default function ResourceProfileTab({
                               </span>
                             </div>
                             <p className="text-xs text-gray-500 dark:text-gray-400">
-                              {formatAllocationModeDescription('CAPACITY_PLAN')}
+                              Availability varies by week. Open the weekly profile editor to review or configure the pattern.
                             </p>
                             <div className="flex gap-2">
                               <button
@@ -361,6 +368,15 @@ export default function ResourceProfileTab({
                                 </div>
                               </>
                             )}
+                            <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                              {allocationDraft.allocationMode === 'EFFORT' && formatAllocationModeDescription('EFFORT')}
+                              {allocationDraft.allocationMode === 'FULL_PROJECT' && formatAllocationModeDescription('FULL_PROJECT')}
+                              {allocationDraft.allocationMode === 'TIMELINE' && (
+                                allocationDraft.allocationStartWeek != null && allocationDraft.allocationEndWeek != null
+                                  ? `Available at ${allocationDraft.allocationPercent}% from W${Math.floor(allocationDraft.allocationStartWeek)} to W${Math.floor(allocationDraft.allocationEndWeek)}. Work is assigned only when demand exists.`
+                                  : formatAllocationModeDescription('TIMELINE')
+                              )}
+                            </p>
                             <div className="flex gap-2 ml-auto">
                               <button data-testid="allocation-save" onClick={() => {
                                 updateAllocationMutation.mutate(
