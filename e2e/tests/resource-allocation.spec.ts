@@ -1,5 +1,5 @@
-import { test, expect, type Page } from '@playwright/test'
-import { login, createProject, API_BASE } from './helpers'
+import { test, expect, type Page, type Locator } from '@playwright/test'
+import { login, createProject, quickSchedule, API_BASE } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -77,6 +77,7 @@ async function setupCommercialTab(page: Page) {
   await expect(
     page.getByRole('heading', { name: /cost summary/i })
   ).toBeVisible({ timeout: 10_000 })
+
   await expect(
     page.getByText(/^(As needed|Fixed for selected weeks ·|Fixed for whole project ·|Varies by week)/).first()
   ).toBeVisible({ timeout: 15_000 })
@@ -122,27 +123,38 @@ async function setupSquadPlannerCapacityPlan(page: Page) {
   const planRt = profile.resourceRows.find((r: { name: string }) => r.name !== 'Project Manager')
   expect(planRt, 'Expected at least one non-Project Manager resource type').toBeTruthy()
 
-  // Apply a squad plan with only one RT so the other RTs (Project Manager) get
-  // CAPACITY_PLAN via the "all others not in the plan" branch of the apply handler,
-  // WITHOUT having auto-created named resources.
+  // Apply a squad plan with 2 distinct periods for the same RT to create
+  // at least 2 capacity segments with differing capacity values:
+  //   Period 1: W0-W3 at 50%
+  //   Period 2: W4-W8 at 100%
   const applyRes = await page.request.post(
     `${API_BASE}/api/projects/${projectId}/squad-plan/apply`,
     {
       headers: authHeaders,
       data: {
         name: 'E2E test plan',
-        targetWeeks: 12,
-        periodWeeks: 13,
+        targetWeeks: 8,
+        periodWeeks: 4,
         maxDelta: 1,
         periods: [{
           periodIndex: 0,
           startWeek: 0,
-          endWeek: 12,
+          endWeek: 3,
           entries: [{
             resourceTypeId: planRt.resourceTypeId,
             headcount: 1,
             demandFTE: 1,
-            utilisationPct: 80,
+            utilisationPct: 50,
+          }],
+        }, {
+          periodIndex: 1,
+          startWeek: 4,
+          endWeek: 8,
+          entries: [{
+            resourceTypeId: planRt.resourceTypeId,
+            headcount: 1,
+            demandFTE: 1,
+            utilisationPct: 100,
           }],
         }],
         setActive: true,
@@ -293,42 +305,436 @@ test.describe('Resource Allocation', () => {
   test('CAPACITY_PLAN row shows info panel with safe editor', async ({ page }) => {
     test.setTimeout(120_000)
     const projectId = await setupSquadPlannerCapacityPlan(page)
-
-    // Locate the Project Manager role row
+  
+    const scalarCalls: string[] = []
+    page.on('request', req => {
+      const url = req.url()
+      if (url.includes('/resource-types/') && !url.includes('/named-resources/') && req.method() === 'PUT') {
+        scalarCalls.push(url)
+      }
+    })
+  
     const pmRow = page.locator('table tbody tr').filter({ hasText: 'Project Manager' }).first()
     await expect(pmRow).toBeVisible({ timeout: 10_000 })
-
-    // Find the allocation badge within that row
+  
     const badge = pmRow.locator('button[title="Click to edit allocation"]')
     await expect(badge).toBeVisible({ timeout: 8_000 })
-    // Assert badge shows 'Varies by week' without percentage suffix
     await expect(badge).toHaveText('Varies by week')
-    // Capacity profile source badge should be visible (legacy-based source display)
+  
     await expect(pmRow.locator('span.uppercase').first()).toBeVisible({ timeout: 5_000 })
-
-    // Open the info panel by clicking the badge
+  
+    const pmRowText = await pmRow.textContent()
+    expect(pmRowText).not.toMatch(/\d+%/)
+  
     await badge.click({ force: true })
-
-    // Assert info panel content
     await expect(page.getByText(/managed through the weekly capacity profile/i)).toBeVisible({ timeout: 8_000 })
-
-    // CAPACITY_PLAN must NOT show the availability pattern dropdown
+  
     await expect(page.locator('select[aria-label="Availability pattern"]')).not.toBeVisible({ timeout: 3_000 })
-
-    // CAPACITY_PLAN must NOT show Available % controls
     await expect(page.getByText(/Available %/i)).not.toBeVisible({ timeout: 3_000 })
     await expect(page.getByText(/Available Percent/i)).not.toBeVisible({ timeout: 3_000 })
-
-    // No Save button (CAPACITY_PLAN can't be changed via generic editor)
+    await expect(page.getByText(/Available from/i)).not.toBeVisible({ timeout: 3_000 })
+    await expect(page.getByText(/Available to/i)).not.toBeVisible({ timeout: 3_000 })
     await expect(page.locator('[data-testid="allocation-save"]')).not.toBeVisible({ timeout: 3_000 })
-
-    // 'Open weekly profile editor' button must be visible
+  
     const editorButton = page.getByRole('button', { name: /open weekly profile editor/i })
     await expect(editorButton).toBeVisible({ timeout: 5_000 })
-
-    // Clicking it navigates to timeline with squad-planner panel
+  
+    expect(scalarCalls).toHaveLength(0)
+  
     await editorButton.click()
     await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
+  
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
+  
+    // Verify 2+ segments exist via API response
+    const tokenAfter = await page.evaluate(() => localStorage.getItem('token'))
+    const authHeadersAfter: Record<string, string> = {}
+    if (tokenAfter) authHeadersAfter['Authorization'] = `Bearer ${tokenAfter}`
+    // Use evaluate to fetch profile data within the page context
+    const tokenStr = tokenAfter || ''
+    const profileAfter = await page.evaluate(async ({ pid, tok }) => {
+      const res = await fetch(`/api/projects/${pid}/resource-profile`, {
+        headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+      })
+      if (!res.ok) throw new Error('Profile fetch failed: ' + res.status)
+      return res.json()
+    }, { pid: projectId, tok: tokenStr })
+    const tlRowData = profileAfter.resourceRows.find((r: { name: string }) => r.name === 'Tech Lead')
+    expect(tlRowData, 'Tech Lead row should exist in profile').toBeTruthy()
+    let segmentCount = 0
+    if (tlRowData.namedResources && tlRowData.namedResources.length > 0) {
+      for (const nr of tlRowData.namedResources) {
+        if (nr.capacityProfile?.segments?.length > 0) {
+          segmentCount += nr.capacityProfile.segments.length
+        }
+      }
+    }
+    if (tlRowData.capacityProfile?.segments?.length > 0) {
+      segmentCount += tlRowData.capacityProfile.segments.length
+    }
+    expect(segmentCount).toBeGreaterThanOrEqual(2)
+    const allSegments = [
+      ...(tlRowData.namedResources ?? []).flatMap((nr: any) => nr.capacityProfile?.segments ?? []),
+      ...(tlRowData.capacityProfile?.segments ?? []),
+    ]
+    // Verify at least 2 segments with distinct week ranges exist
+    // (capacityPercent is always 100 from headcount quanta; the distinction
+    // is in the week ranges derived from the 2 squad plan periods)
+    const uniqueWeekRanges = new Set(allSegments.map((s: any) => `${s.startWeek}-${s.endWeek}`))
+    expect(uniqueWeekRanges.size).toBeGreaterThanOrEqual(2)
+    // Verify a segment with endWeek >= 4 exists (from second period)
+    const hasLateSegment = allSegments.some((s: any) => s.startWeek >= 4)
+    expect(hasLateSegment, 'At least one segment with startWeek >= 4 should exist').toBeTruthy()
+    // Verify a segment with startWeek < 4 exists (from first period)
+    const hasEarlySegment = allSegments.some((s: any) => s.startWeek < 4)
+    expect(hasEarlySegment, 'At least one segment with startWeek < 4 should exist').toBeTruthy()
+  
+    const pmRowAfter = page.locator('table tbody tr').filter({ hasText: 'Project Manager' }).first()
+    await expect(pmRowAfter).toBeVisible({ timeout: 10_000 })
+    const badgeAfter = pmRowAfter.locator('button[title="Click to edit allocation"]')
+    await expect(badgeAfter).toBeVisible({ timeout: 5_000 })
+    await expect(badgeAfter).toHaveText('Varies by week')
   })
 
+})
+
+// ── Responsive measurements: Timeline resource-counts panel ──
+const VP_820 = { width: 820, height: 900 }
+const VP_390 = { width: 390, height: 844 }
+
+async function expectElementToFit(locator: Locator) {
+  const ok = await locator.evaluate(
+    (el: Element) => (el as HTMLElement).scrollWidth <= (el as HTMLElement).clientWidth + 1,
+  )
+  expect(ok).toBe(true)
+}
+
+async function measurePatternSelect(page: Page, viewport: { width: number; height: number }) {
+  await page.setViewportSize(viewport)
+  const nrSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+  await expect(nrSelect).toBeVisible()
+
+  // Change to FULL_PROJECT (longest option) and wait for PATCH to settle
+  const patchResp = page.waitForResponse(
+    resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
+    { timeout: 10_000 },
+  )
+  await nrSelect.selectOption('FULL_PROJECT')
+  await patchResp
+
+  // Measure select clientWidth
+  const selectWidth = await nrSelect.evaluate((el: HTMLSelectElement) => el.clientWidth)
+
+  // Create hidden mirror element with same computed font to measure text width
+  const requiredWidth = await nrSelect.evaluate((el: HTMLSelectElement) => {
+    const idx = el.selectedIndex
+    const text = idx >= 0 ? el.options[idx].text : ''
+    const style = window.getComputedStyle(el)
+    const mirror = document.createElement('span')
+    mirror.textContent = text
+    mirror.style.cssText = [
+      'position:absolute',
+      'visibility:hidden',
+      'white-space:nowrap',
+      `font-family:${style.fontFamily}`,
+      `font-size:${style.fontSize}`,
+      `font-weight:${style.fontWeight}`,
+      `letter-spacing:${style.letterSpacing}`,
+      'left:-9999px',
+      'top:-9999px',
+    ].join(';')
+    document.body.appendChild(mirror)
+    const w = mirror.offsetWidth + 24
+    document.body.removeChild(mirror)
+    return w
+  })
+
+  expect(selectWidth).toBeGreaterThanOrEqual(requiredWidth)
+}
+
+async function addNamedResourceSimple(page: Page): Promise<string> {
+  const counts = page.getByTestId('resource-counts')
+  const addButton = counts.getByRole('button', { name: /add named resource/i }).first()
+  await expect(addButton).toBeVisible({ timeout: 10_000 })
+
+  const postResp = page.waitForResponse(
+    resp => resp.request().method() === 'POST' && resp.url().includes('/named-resources'),
+    { timeout: 10_000 },
+  )
+  await addButton.click()
+  await postResp
+
+  const nrRow = counts.locator('[data-testid^="named-resource-row-"]').first()
+  await expect(nrRow).toBeVisible({ timeout: 10_000 })
+  const testId = await nrRow.getAttribute('data-testid')
+  expect(testId).toBeTruthy()
+  return testId!
+}
+
+test.describe('Responsive measurements — Timeline resource-counts', () => {
+  test('desktop: pattern select accommodates longest option with no overflow', async ({ page }) => {
+    test.setTimeout(120_000)
+    const projectId = await setupCommercialTab(page)
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
+    await quickSchedule(page)
+    await expect(page.getByText(/\d+ features scheduled/i)).toBeVisible({ timeout: 15_000 })
+
+    const nrTestId = await addNamedResourceSimple(page)
+    const rowLoc = page.getByTestId(nrTestId)
+
+    // Measure pattern select width against longest option
+    await measurePatternSelect(page, { width: 1280, height: 720 })
+
+    // Re-acquire select locator after PATCH settled
+    const freshSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    const selectBox = await freshSelect.boundingBox()
+    expect(selectBox).not.toBeNull()
+
+    // Select does not overlap Available % grid cell
+    const availPctCell = rowLoc.locator('> span ~ div').nth(1)
+    const pctBox = await availPctCell.boundingBox()
+    expect(pctBox).not.toBeNull()
+    expect(selectBox!.x + selectBox!.width).toBeLessThanOrEqual(pctBox!.x + 1)
+
+    // Select does not overlap Available from grid cell
+    const availFromCell = rowLoc.locator('> span ~ div').nth(2)
+    const fromBox = await availFromCell.boundingBox()
+    expect(fromBox).not.toBeNull()
+    expect(selectBox!.x + selectBox!.width).toBeLessThanOrEqual(fromBox!.x + 1)
+
+    // Availability pattern header does not overlap adjacent headers
+    const headers = page.getByTestId('named-resource-headers')
+    const patternHeader = headers.locator('> *').nth(1)
+    const availHeader = headers.locator('> *').nth(2)
+    const patHBox = await patternHeader.boundingBox()
+    const avHBox = await availHeader.boundingBox()
+    expect(patHBox).not.toBeNull()
+    expect(avHBox).not.toBeNull()
+    expect(patHBox!.x + patHBox!.width).toBeLessThanOrEqual(avHBox!.x + 1)
+
+    // Contextual help scrollWidth <= clientWidth (no overflow)
+    const helpText = rowLoc.getByText(/Available at the selected percentage/i)
+    await expectElementToFit(helpText)
+
+    // Row has no horizontal overflow
+    await expectElementToFit(rowLoc)
+
+    // Document has no horizontal overflow
+    const docSW = await page.evaluate(() => document.documentElement.scrollWidth)
+    const docCW = await page.evaluate(() => window.innerWidth)
+    expect(docSW <= docCW + 1).toBe(true)
+  })
+
+  test('820px viewport: pattern select, controls visible with no overflow', async ({ page }) => {
+    test.setTimeout(120_000)
+    const projectId = await setupCommercialTab(page)
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
+    await quickSchedule(page)
+    await expect(page.getByText(/\d+ features scheduled/i)).toBeVisible({ timeout: 15_000 })
+
+    await page.setViewportSize(VP_820)
+
+    const nrTestId = await addNamedResourceSimple(page)
+    const rowLoc = page.getByTestId(nrTestId)
+
+    // Measure pattern select width against longest option
+    await measurePatternSelect(page, VP_820)
+
+    // Re-acquire select locator after PATCH settled
+    const freshSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    const selectBox = await freshSelect.boundingBox()
+    expect(selectBox).not.toBeNull()
+
+    // Select does not overlap Available % grid cell
+    const availPctCell = rowLoc.locator('> span ~ div').nth(1)
+    const pctBox = await availPctCell.boundingBox()
+    expect(pctBox).not.toBeNull()
+    expect(selectBox!.x + selectBox!.width).toBeLessThanOrEqual(pctBox!.x + 1)
+
+    // Select does not overlap Available from grid cell
+    const availFromCell = rowLoc.locator('> span ~ div').nth(2)
+    const fromBox = await availFromCell.boundingBox()
+    expect(fromBox).not.toBeNull()
+    expect(selectBox!.x + selectBox!.width).toBeLessThanOrEqual(fromBox!.x + 1)
+
+    // Availability pattern header does not overlap adjacent headers
+    const headers = page.getByTestId('named-resource-headers')
+    const patternHeader = headers.locator('> *').nth(1)
+    const availHeader = headers.locator('> *').nth(2)
+    const patHBox = await patternHeader.boundingBox()
+    const avHBox = await availHeader.boundingBox()
+    expect(patHBox).not.toBeNull()
+    expect(avHBox).not.toBeNull()
+    expect(patHBox!.x + patHBox!.width).toBeLessThanOrEqual(avHBox!.x + 1)
+
+    // Contextual help fits
+    const helpText = rowLoc.getByText(/Available at the selected percentage/i)
+    await expectElementToFit(helpText)
+
+    // Row fits
+    await expectElementToFit(rowLoc)
+
+    // Document has no overflow
+    const docSW = await page.evaluate(() => document.documentElement.scrollWidth)
+    const docCW = await page.evaluate(() => window.innerWidth)
+    expect(docSW <= docCW + 1).toBe(true)
+
+    // Select still visible after resize
+    await expect(freshSelect).toBeVisible()
+
+    // All controls visible
+    await expect(
+      rowLoc.getByRole('spinbutton', { name: /available percentage for/i }).first(),
+    ).toBeVisible()
+    await expect(
+      rowLoc.getByRole('spinbutton', { name: /available from week for/i }).first(),
+    ).toBeVisible()
+    await expect(
+      rowLoc.getByRole('spinbutton', { name: /available to week for/i }).first(),
+    ).toBeVisible()
+  })
+
+  test('390px viewport: mobile stacking with readable select and View Resource Profile', async ({ page }) => {
+    test.setTimeout(120_000)
+    const projectId = await setupCommercialTab(page)
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
+    await quickSchedule(page)
+    await expect(page.getByText(/\d+ features scheduled/i)).toBeVisible({ timeout: 15_000 })
+
+    await page.setViewportSize(VP_390)
+
+    const nrTestId = await addNamedResourceSimple(page)
+    const rowLoc = page.getByTestId(nrTestId)
+
+    // Mobile inline labels visible
+    await expect(rowLoc.getByText('Pattern:')).toBeVisible()
+    await expect(rowLoc.getByText('Avail:')).toBeVisible()
+    await expect(rowLoc.getByText('Avail from:')).toBeVisible()
+    await expect(rowLoc.getByText('Avail to:')).toBeVisible()
+
+    // Switch to CAPACITY_PLAN to check View Resource Profile button
+    const nrSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    await expect(nrSelect).toBeVisible()
+    const patchResp = page.waitForResponse(
+      resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
+      { timeout: 10_000 },
+    )
+    await nrSelect.selectOption('CAPACITY_PLAN')
+    await patchResp
+
+    // Re-acquire select after PATCH settles
+    const mobileSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    await expect(mobileSelect).toBeVisible()
+    await expect(mobileSelect).toHaveValue('CAPACITY_PLAN')
+    // Selected option remains readable — verify text content not clipped
+    const txtFits = await mobileSelect.evaluate((el: HTMLSelectElement) => {
+      const idx = el.selectedIndex
+      if (idx < 0) return true
+      return el.scrollWidth <= el.clientWidth + 1
+    })
+    expect(txtFits).toBe(true)
+
+    // Help text wraps within row
+    const helpText = rowLoc.getByText(/Availability varies by week/i)
+    await expect(helpText).toBeVisible()
+    const helpFits = await helpText.evaluate((el: Element) => (el as HTMLElement).scrollWidth <= (el as HTMLElement).clientWidth + 1)
+    expect(helpFits).toBe(true)
+
+    // Pattern, Avail, Avail from, Avail to groups stack vertically
+    const basisGroup = rowLoc.getByText('Pattern:').locator('..')
+    const allocGroup = rowLoc.getByText('Avail:').locator('..')
+    const startGroup = rowLoc.getByText('Avail from:').locator('..')
+    const endGroup = rowLoc.getByText('Avail to:').locator('..')
+    const basisBox = await basisGroup.boundingBox()
+    const allocBox = await allocGroup.boundingBox()
+    const startBox = await startGroup.boundingBox()
+    const endBox = await endGroup.boundingBox()
+    expect(basisBox).not.toBeNull()
+    expect(allocBox).not.toBeNull()
+    expect(startBox).not.toBeNull()
+    expect(endBox).not.toBeNull()
+    expect(allocBox!.y).toBeGreaterThanOrEqual(basisBox!.y + basisBox!.height - 2)
+    expect(startBox!.y).toBeGreaterThanOrEqual(allocBox!.y + allocBox!.height - 2)
+    expect(endBox!.y).toBeGreaterThanOrEqual(startBox!.y + startBox!.height - 2)
+
+    // View Resource Profile button visible and clickable
+    const rpButton = page.getByRole('button', { name: /view resource profile/i })
+    await expect(rpButton).toBeVisible()
+    await expect(rpButton).toBeEnabled()
+    // No horizontal page overflow in resource-counts panel
+    const countsPanel = page.getByTestId('resource-counts')
+    await expectElementToFit(countsPanel)
+  })
+
+  test('CAPACITY_PLAN: help text and View Resource Profile at desktop and 820px', async ({ page }) => {
+    test.setTimeout(120_000)
+    const projectId = await setupCommercialTab(page)
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(page.getByText(/Timeline Planner/i)).toBeVisible({ timeout: 10_000 })
+    await quickSchedule(page)
+    await expect(page.getByText(/\d+ features scheduled/i)).toBeVisible({ timeout: 15_000 })
+
+    const nrTestId = await addNamedResourceSimple(page)
+    const rowLoc = page.getByTestId(nrTestId)
+
+    // Switch to CAPACITY_PLAN
+    const nrSelect = page.locator('select[aria-label*="Availability pattern for"]').first()
+    await expect(nrSelect).toBeVisible()
+    const patchResp = page.waitForResponse(
+      resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
+      { timeout: 10_000 },
+    )
+    await nrSelect.selectOption('CAPACITY_PLAN')
+    await patchResp
+
+    // ── Desktop (default viewport) ──
+    // Varies by week help text visible
+    const cpHelp = rowLoc.getByText(/Availability varies by week/i)
+    await expect(cpHelp).toBeVisible()
+
+    // Contextual help inside row
+    const rowBox = await rowLoc.boundingBox()
+    const helpBox = await cpHelp.boundingBox()
+    expect(rowBox).not.toBeNull()
+    expect(helpBox).not.toBeNull()
+    expect(helpBox!.x).toBeGreaterThanOrEqual(rowBox!.x - 1)
+    expect(helpBox!.x + helpBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width + 1)
+    expect(helpBox!.y).toBeGreaterThanOrEqual(rowBox!.y - 1)
+    expect(helpBox!.y + helpBox!.height).toBeLessThanOrEqual(rowBox!.y + rowBox!.height + 1)
+
+    // View Resource Profile visible and not overlapping adjacent grid column
+    const rpBtn = page.getByRole('button', { name: /view resource profile/i })
+    await expect(rpBtn).toBeVisible()
+    const patternCell = rowLoc.locator('> div').first()
+    const patternBox = await patternCell.boundingBox()
+    const rpBox = await rpBtn.boundingBox()
+    expect(patternBox).not.toBeNull()
+    expect(rpBox).not.toBeNull()
+    expect(rpBox!.x).toBeGreaterThanOrEqual(patternBox!.x - 1)
+    expect(rpBox!.x + rpBox!.width).toBeLessThanOrEqual(patternBox!.x + patternBox!.width + 1)
+
+    // ── 820px viewport ──
+    await page.setViewportSize(VP_820)
+
+    await expect(page.getByRole('button', { name: /view resource profile/i })).toBeVisible()
+    await expect(page.locator('select[aria-label*="Availability pattern for"]').first()).toBeVisible()
+    await expect(rowLoc.getByText(/Availability varies by week/i)).toBeVisible()
+
+    // Help text fits inside row at 820px
+    await expectElementToFit(rowLoc.getByText(/Availability varies by week/i))
+
+    // View Resource Profile visible and within row bounds
+    const rpBtn820 = page.getByRole('button', { name: /view resource profile/i })
+    await expect(rpBtn820).toBeVisible()
+    const rp820Box = await rpBtn820.boundingBox()
+    const row820Box = await rowLoc.boundingBox()
+    expect(rp820Box).not.toBeNull()
+    expect(row820Box).not.toBeNull()
+    expect(rp820Box!.x).toBeGreaterThanOrEqual(row820Box!.x - 1)
+    expect(rp820Box!.x + rp820Box!.width).toBeLessThanOrEqual(row820Box!.x + row820Box!.width + 1)
+  })
 })

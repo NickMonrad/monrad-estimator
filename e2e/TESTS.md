@@ -220,9 +220,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
-### `resource-allocation.spec.ts` — Resource Allocation (5 tests)
-
-All tests log in, create a fresh project, import a CSV with Tech Lead + Project Manager tasks, navigate to Resource Profile, and switch to the Commercial tab before running assertions.
+### `resource-allocation.spec.ts` — Resource Allocation & Responsive measurements (11 tests)
 
 | Test | Description |
 |------|-------------|
@@ -231,9 +229,19 @@ All tests log in, create a fresh project, import a CSV with Tech Lead + Project 
 | changing FTE % updates allocated days | Opens the editor, sets FTE % to 50, clicks Save → asserts the editor closes and the badge is still present (row remains intact after save) |
 | cancel closes editor without changing mode badge | Opens editor, switches mode to Fixed for whole project, clicks Cancel → asserts editor is gone and badge text is unchanged |
 | summary tab shows Availability pattern column | Navigates back to Resource Profile tab → asserts the `<th>` with text "Availability pattern" is visible in the summary table |
+| allocation editor — EFFORT hides Available % control | Opens the inline editor, selects EFFORT mode — asserts Available % and Available Percent controls are absent |
+| CAPACITY_PLAN row shows info panel with safe editor | Applies a squad plan via API so "Project Manager" row gets CAPACITY_PLAN mode, asserts badge shows "Varies by week", clicking opens info panel — no mode select, no Available %, no Save button, "Open weekly profile editor" button visible and navigates to Timeline with squad-planner panel |
+
+#### `Responsive measurements — Timeline resource-counts` describe block (4 tests)
+
+| Test | Description |
+|------|-------------|
+| desktop: pattern select accommodates longest option with no overflow | At 1280x720, sets FULL_PROJECT mode, measures select width via hidden mirror ≥ text +24px, checks select does not overlap Avail % / Avail from grid cells, header columns don't overlap, contextual help fits, row fits, document has no overflow |
+| 820px viewport: pattern select, controls visible with no overflow | At 820x900, same measurement + overlap checks + select and all allocation controls remain visible |
+| 390px viewport: mobile stacking with readable select and View Resource Profile | At 390x844, shows inline mobile labels (Pattern:/Avail:/Avail from:/Avail to:), switches to CAPACITY_PLAN, verifies select readable (no clip), help text wraps, groups stack vertically, View Resource Profile button visible and enabled, no panel overflow |
+| CAPACITY_PLAN: help text and View Resource Profile at desktop and 820px | At 1280x720 and 820x900, selects CAPACITY_PLAN, verifies "Varies by week" help text visible and inside row bounds, View Resource Profile button visible and within column boundary |
 
 ---
-
 ### `effort-review.spec.ts` — Effort Review (7 tests)
 
 | Test | Description |

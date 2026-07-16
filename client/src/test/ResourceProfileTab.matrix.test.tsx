@@ -1,6 +1,6 @@
 import React, { type ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }))
@@ -14,6 +14,7 @@ vi.mock('react-router-dom', async () => {
 })
 import ResourceProfileTab from '@/components/resource-profile/ResourceProfileTab'
 import type { CapacityProfilePlanningBasis, CapacityProfileResolutionSource } from '@/types/backlog'
+import { formatAllocationModeDescription } from '@/lib/capacityProfileFormatting'
 
 /** Wrap in MemoryRouter for useNavigate support. */
 function renderWithRouter(ui: React.ReactElement) {
@@ -518,5 +519,525 @@ describe('ResourceProfileTab CAPACITY_PLAN info panel', () => {
     // Click the first one and verify navigation
     fireEvent.click(navButtons[0])
     expect(mockNavigate).toHaveBeenCalledWith('/projects/project-1/timeline?panel=squad-planner')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 5 — Authoritative scalar mismatch (profile resolves to different mode than stale row)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('ResourceProfileTab authoritative scalar mismatch', () => {
+  it('PROFILE + demandFollowing + no segments + stale TIMELINE maps to EFFORT scalar editor', () => {
+    const capacityProfile = {
+      resolutionSource: 'PROFILE' as const,
+      planningBasis: 'demandFollowing' as const,
+      source: 'squadPlanner' as const,
+      defaultPercent: null as number | null,
+      startWeek: null as number | null,
+      endWeek: null as number | null,
+      segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number }>,
+    }
+    const rowBase = {
+      resourceTypeId: 'rt-dev',
+      name: 'Developer',
+      category: 'ENG',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 500,
+      totalHours: 80,
+      totalDays: 10,
+      effortDays: 10,
+      allocatedDays: 10,
+      allocationMode: 'TIMELINE' as const,
+      allocationPercent: 100,
+      allocationStartWeek: 2,
+      allocationEndWeek: 8,
+      derivedStartWeek: null,
+      derivedEndWeek: null,
+      estimatedCost: 5000,
+      epics: [] as Array<never>,
+      namedResources: [] as Array<never>,
+      capacityProfile,
+    }
+    const profile = {
+      projectId: 'p',
+      hoursPerDay: 8,
+      projectDurationWeeks: 10,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceRows: [rowBase],
+      overheadRows: [] as Array<never>,
+      summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: false },
+    }
+    const filteredResourceRows = [rowBase]
+    const setAllocationDraft = vi.fn()
+    const setEditingAllocation = vi.fn()
+
+    // Part 1: render with editor closed, click badge
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      setAllocationDraft,
+      setEditingAllocation,
+    })} />)
+
+    const badge = container.querySelector('button[title="Click to edit allocation"]')
+    expect(badge).toBeTruthy()
+    // Badge shows planning-basis label 'As needed', not stale TIMELINE label
+    expect(badge!.textContent).toContain('As needed')
+
+    fireEvent.click(badge!)
+    expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
+    expect(setAllocationDraft).toHaveBeenCalledWith({
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    // Part 2: re-render with editor open — verify scalar controls
+    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      editingAllocation: 'rt-dev',
+      allocationDraft: { allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      setAllocationDraft,
+      setEditingAllocation,
+    })} />)
+
+    expect(screen.queryByLabelText('Available %')).toBeNull()
+    expect(screen.queryByText('Available from')).toBeNull()
+    expect(screen.queryByText('Available to')).toBeNull()
+  })
+
+  it('PROFILE + availabilityWindow + no segments + stale EFFORT maps to TIMELINE scalar editor', () => {
+    const capacityProfile = {
+      resolutionSource: 'PROFILE' as const,
+      planningBasis: 'availabilityWindow' as const,
+      source: 'squadPlanner' as const,
+      defaultPercent: 75,
+      startWeek: 3,
+      endWeek: 8,
+      segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number }>,
+    }
+    const rowBase = {
+      resourceTypeId: 'rt-dev',
+      name: 'Developer',
+      category: 'ENG',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 500,
+      totalHours: 80,
+      totalDays: 10,
+      effortDays: 10,
+      allocatedDays: 10,
+      allocationMode: 'EFFORT' as const,
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      derivedStartWeek: null,
+      derivedEndWeek: null,
+      estimatedCost: 5000,
+      epics: [] as Array<never>,
+      namedResources: [] as Array<never>,
+      capacityProfile,
+    }
+    const profile = {
+      projectId: 'p',
+      hoursPerDay: 8,
+      projectDurationWeeks: 10,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceRows: [rowBase],
+      overheadRows: [] as Array<never>,
+      summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: false },
+    }
+    const filteredResourceRows = [rowBase]
+    const setAllocationDraft = vi.fn()
+    const setEditingAllocation = vi.fn()
+
+    // Part 1: click badge
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      setAllocationDraft,
+      setEditingAllocation,
+    })} />)
+
+    const badge = container.querySelector('button[title="Click to edit allocation"]')
+    expect(badge).toBeTruthy()
+    expect(badge!.textContent).toContain('Fixed for selected weeks')
+
+    fireEvent.click(badge!)
+    expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
+    expect(setAllocationDraft).toHaveBeenCalledWith({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 75,
+      allocationStartWeek: 3,
+      allocationEndWeek: 8,
+    })
+
+    // Part 2: open editor
+    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      editingAllocation: 'rt-dev',
+      allocationDraft: { allocationMode: 'TIMELINE', allocationPercent: 75, allocationStartWeek: 3, allocationEndWeek: 8 },
+      setAllocationDraft,
+      setEditingAllocation,
+    })} />)
+
+    expect(screen.getByText('Available %')).toBeInTheDocument()
+    expect(screen.getByText('Available from')).toBeInTheDocument()
+    expect(screen.getByText('Available to')).toBeInTheDocument()
+  })
+
+  it('PROFILE + wholeProjectAllocation + no segments + stale EFFORT maps to FULL_PROJECT scalar editor', () => {
+    const capacityProfile = {
+      resolutionSource: 'PROFILE' as const,
+      planningBasis: 'wholeProjectAllocation' as const,
+      source: 'squadPlanner' as const,
+      defaultPercent: 80,
+      startWeek: null as number | null,
+      endWeek: null as number | null,
+      segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number }>,
+    }
+    const rowBase = {
+      resourceTypeId: 'rt-dev',
+      name: 'Developer',
+      category: 'ENG',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 500,
+      totalHours: 80,
+      totalDays: 10,
+      effortDays: 10,
+      allocatedDays: 10,
+      allocationMode: 'EFFORT' as const,
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      derivedStartWeek: null,
+      derivedEndWeek: null,
+      estimatedCost: 5000,
+      epics: [] as Array<never>,
+      namedResources: [] as Array<never>,
+      capacityProfile,
+    }
+    const profile = {
+      projectId: 'p',
+      hoursPerDay: 8,
+      projectDurationWeeks: 10,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceRows: [rowBase],
+      overheadRows: [] as Array<never>,
+      summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: false },
+    }
+    const filteredResourceRows = [rowBase]
+    const setAllocationDraft = vi.fn()
+    const setEditingAllocation = vi.fn()
+
+    // Part 1: click badge
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      setAllocationDraft,
+      setEditingAllocation,
+    })} />)
+
+    const badge = container.querySelector('button[title="Click to edit allocation"]')
+    expect(badge).toBeTruthy()
+    expect(badge!.textContent).toContain('Fixed for whole project')
+
+    fireEvent.click(badge!)
+    expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
+    expect(setAllocationDraft).toHaveBeenCalledWith({
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 80,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    // Part 2: open editor
+    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      editingAllocation: 'rt-dev',
+      allocationDraft: { allocationMode: 'FULL_PROJECT', allocationPercent: 80, allocationStartWeek: null, allocationEndWeek: null },
+      setAllocationDraft,
+      setEditingAllocation,
+    })} />)
+
+    expect(screen.getByText('Available %')).toBeInTheDocument()
+    expect(screen.queryByText('Available from')).toBeNull()
+    expect(screen.queryByText('Available to')).toBeNull()
+  })
+
+  it('PROFILE + capacityProfile + no segments (profile-managed, no scalar editor)', () => {
+    const capacityProfile = {
+      resolutionSource: 'PROFILE' as const,
+      planningBasis: 'capacityProfile' as const,
+      source: 'squadPlanner' as const,
+      defaultPercent: null as number | null,
+      startWeek: null as number | null,
+      endWeek: null as number | null,
+      segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number }>,
+    }
+    const rowBase = {
+      resourceTypeId: 'rt-dev',
+      name: 'Developer',
+      category: 'ENG',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 500,
+      totalHours: 80,
+      totalDays: 10,
+      effortDays: 10,
+      allocatedDays: 10,
+      allocationMode: 'EFFORT' as const,
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      derivedStartWeek: null,
+      derivedEndWeek: null,
+      estimatedCost: 5000,
+      epics: [] as Array<never>,
+      namedResources: [] as Array<never>,
+      capacityProfile,
+    }
+    const profile = {
+      projectId: 'p',
+      hoursPerDay: 8,
+      projectDurationWeeks: 10,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceRows: [rowBase],
+      overheadRows: [] as Array<never>,
+      summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: false },
+    }
+    const filteredResourceRows = [rowBase]
+    const setAllocationDraft = vi.fn()
+    const setEditingAllocation = vi.fn()
+
+    // Part 1: click badge
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      setAllocationDraft,
+      setEditingAllocation,
+    })} />)
+
+    const badge = container.querySelector('button[title="Click to edit allocation"]')
+    expect(badge).toBeTruthy()
+    expect(badge!.textContent).toContain('Varies by week')
+
+    fireEvent.click(badge!)
+    expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
+    expect(setAllocationDraft).toHaveBeenCalledWith({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    // Part 2: re-render with editor open — verify info panel, no scalar controls
+    const { container: c2 } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      editingAllocation: 'rt-dev',
+      allocationDraft: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      setAllocationDraft,
+      setEditingAllocation,
+    })} />)
+
+    expect(screen.getByText(/managed through the weekly capacity profile/i)).toBeInTheDocument()
+    expect(c2.querySelector('select[aria-label="Availability pattern"]')).toBeNull()
+    expect(screen.queryByText('Save')).toBeNull()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 6 — Help/control matrix: each editable mode's UI behavior
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('ResourceProfileTab help/control matrix', () => {
+  it('EFFORT editor: label, description, no scalar controls, switch clears dates', () => {
+    const setAllocationDraft = vi.fn()
+    // Render with a TIMELINE draft that has dates — then switch to EFFORT
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      editingAllocation: 'rt-dev',
+      allocationDraft: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 2, allocationEndWeek: 8 },
+      setAllocationDraft,
+    })} />)
+
+    const select = container.querySelector('select[aria-label="Availability pattern"]')
+    expect(select).toBeTruthy()
+
+    // Switch select to EFFORT
+    fireEvent.change(select!, { target: { value: 'EFFORT' } })
+
+    // Verify the updater clears dates and resets percent to 100
+    expect(setAllocationDraft).toHaveBeenCalled()
+    const updater = setAllocationDraft.mock.calls[0][0]
+    const result = updater({ allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 2, allocationEndWeek: 8 })
+    expect(result).toEqual({
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    // Re-render with EFFORT draft — fresh container
+    const { container: c2 } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      editingAllocation: 'rt-dev',
+      allocationDraft: result,
+    })} />)
+
+    // Label 'As needed' appears in the select option
+    const effortOption = c2.querySelector('option[value="EFFORT"]')
+    expect(effortOption).toBeTruthy()
+    expect(effortOption!.textContent).toBe('As needed')
+    // Description is a non-empty string
+    expect(formatAllocationModeDescription('EFFORT').length).toBeGreaterThan(0)
+    // Percentage hidden
+    expect(within(c2).queryByText('Available %')).toBeNull()
+    // Dates hidden
+    expect(within(c2).queryByText('Available from')).toBeNull()
+    expect(within(c2).queryByText('Available to')).toBeNull()
+    // Save button present
+    expect(within(c2).getByTestId('allocation-save')).toBeInTheDocument()
+  })
+
+  it('FULL_PROJECT editor: label, description, visible pct, hidden dates, stale dates cleared', () => {
+    const setAllocationDraft = vi.fn()
+    // Render with a TIMELINE draft that has dates — then switch to FULL_PROJECT
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      editingAllocation: 'rt-dev',
+      allocationDraft: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 2, allocationEndWeek: 8 },
+      setAllocationDraft,
+    })} />)
+
+    const select = container.querySelector('select[aria-label="Availability pattern"]')
+    expect(select).toBeTruthy()
+
+    fireEvent.change(select!, { target: { value: 'FULL_PROJECT' } })
+
+    // Verify updater clears dates for non-TIMELINE mode
+    expect(setAllocationDraft).toHaveBeenCalled()
+    const updater = setAllocationDraft.mock.calls[0][0]
+    const result = updater({ allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 2, allocationEndWeek: 8 })
+    expect(result).toEqual({
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 50,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    // Re-render with FULL_PROJECT draft — fresh container
+    const { container: c2 } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      editingAllocation: 'rt-dev',
+      allocationDraft: result,
+    })} />)
+
+    const fpOption = c2.querySelector('option[value="FULL_PROJECT"]')
+    expect(fpOption).toBeTruthy()
+    expect(fpOption!.textContent).toBe('Fixed for whole project')
+    expect(formatAllocationModeDescription('FULL_PROJECT').length).toBeGreaterThan(0)
+    // Percentage visible
+    expect(within(c2).getByText('Available %')).toBeInTheDocument()
+    // Dates hidden
+    expect(within(c2).queryByText('Available from')).toBeNull()
+    expect(within(c2).queryByText('Available to')).toBeNull()
+    expect(within(c2).getByTestId('allocation-save')).toBeInTheDocument()
+})
+
+  it('TIMELINE editor: label, description, visible pct, accessible date fields', () => {
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      editingAllocation: 'rt-dev',
+      allocationDraft: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 2, allocationEndWeek: 8 },
+    })} />)
+
+    const tlOption = container.querySelector('option[value="TIMELINE"]')
+    expect(tlOption).toBeTruthy()
+    expect(tlOption!.textContent).toBe('Fixed for selected weeks')
+    expect(formatAllocationModeDescription('TIMELINE').length).toBeGreaterThan(0)
+    // Percentage visible (label text, not label+for association)
+    expect(screen.getByText('Available %')).toBeInTheDocument()
+    // Date fields visible
+    expect(screen.getByText('Available from')).toBeInTheDocument()
+    expect(screen.getByText('Available to')).toBeInTheDocument()
+    expect(screen.getByTestId('allocation-save')).toBeInTheDocument()
+  })
+
+  it('CAPACITY_PLAN editor: label, description, no scalar controls, no Save, nav button', () => {
+    const segments = [
+      { startWeek: 2, endWeek: 4, capacityPercent: 80 },
+      { startWeek: 5, endWeek: 8, capacityPercent: 100 },
+    ]
+    const capacityProfile = {
+      resolutionSource: 'PROFILE' as const,
+      planningBasis: 'capacityProfile' as const,
+      source: 'squadPlanner' as const,
+      defaultPercent: null as number | null,
+      startWeek: null as number | null,
+      endWeek: null as number | null,
+      segments,
+    }
+    const rowBase = {
+      resourceTypeId: 'rt-dev',
+      name: 'Developer',
+      category: 'ENG',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 500,
+      totalHours: 80,
+      totalDays: 10,
+      effortDays: 10,
+      allocatedDays: 10,
+      allocationMode: 'EFFORT' as const,
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      derivedStartWeek: null,
+      derivedEndWeek: null,
+      estimatedCost: 5000,
+      epics: [] as Array<never>,
+      namedResources: [] as Array<never>,
+      capacityProfile,
+    }
+    const profile = {
+      projectId: 'p',
+      hoursPerDay: 8,
+      projectDurationWeeks: 10,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceRows: [rowBase],
+      overheadRows: [] as Array<never>,
+      summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: false },
+    }
+    const filteredResourceRows = [rowBase]
+
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+      editingAllocation: 'rt-dev',
+      allocationDraft: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+    })} />)
+
+    // Label
+    expect(screen.getAllByText('Varies by week').length).toBeGreaterThanOrEqual(1)
+    // Description — rendered only in CAPACITY_PLAN info panel
+    expect(screen.getByText(formatAllocationModeDescription('CAPACITY_PLAN'))).toBeInTheDocument()
+    // No scalar controls
+    expect(container.querySelector('select[aria-label="Availability pattern"]')).toBeNull()
+    // No Save (CAPACITY_PLAN uses Close, not Save)
+    expect(screen.queryByTestId('allocation-save')).toBeNull()
+    // Segment summary visible
+    expect(screen.getByText(/W3-W5: 80%/)).toBeInTheDocument()
+    expect(screen.getByText(/W6-W9: 100%/)).toBeInTheDocument()
+    // Navigation button present
+    const navButtons = screen.getAllByText(/Open weekly profile editor/i)
+    expect(navButtons.length).toBeGreaterThanOrEqual(1)
   })
 })

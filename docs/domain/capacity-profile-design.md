@@ -970,13 +970,13 @@ the Squad Planner, not through the generic resource-counts panel.
 Scalar editing is available only where the effective profile has no segments and
 the planning basis maps safely to a scalar mode:
 
-| Planning basis | Scalar mapping |
-|---|---|
-| `demandFollowing` | `EFFORT` |
-| `availabilityWindow` | `TIMELINE` |
-| `wholeProjectAllocation` | `FULL_PROJECT` |
-| `capacityProfile` | `CAPACITY_PLAN` |
+| Planning basis | Effective mode | Generic scalar editing |
+|---|---|---|
+| `demandFollowing` | `EFFORT` | Allowed when segmentless |
+| `availabilityWindow` | `TIMELINE` | Allowed when segmentless |
+| `wholeProjectAllocation` | `FULL_PROJECT` | Allowed when segmentless |
+| `capacityProfile` | `CAPACITY_PLAN` | Not allowed |
 
 Availability pattern, assignment, and Billing basis remain separate concepts.
-Scarability is about profile editing safety, not about combining these concerns.
+Scalar editability is about profile editing safety, not about combining these concerns.
 

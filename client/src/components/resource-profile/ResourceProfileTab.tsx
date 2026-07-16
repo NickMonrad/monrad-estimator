@@ -200,11 +200,24 @@ export default function ResourceProfileTab({
                                   setAllocationDraft(null)
                                 } else {
                                   setEditingAllocation(row.resourceTypeId)
+                                  // Initialise draft from effective state, not stale legacy row.allocationMode.
+                                  // For authoritative segmentless profiles, derive defaults from the profile.
+                                  const canEdit = !effective.isProfileManaged
+                                  const draftMode = effective.effectiveMode
+                                  const draftPct = effective.hasAuthoritativeProfile
+                                    ? (row.capacityProfile?.defaultPercent ?? row.allocationPercent ?? 100)
+                                    : (row.allocationPercent ?? 100)
+                                  const draftStart = canEdit && draftMode === 'TIMELINE'
+                                    ? (effective.hasAuthoritativeProfile ? row.capacityProfile?.startWeek : null) ?? row.allocationStartWeek ?? null
+                                    : null
+                                  const draftEnd = canEdit && draftMode === 'TIMELINE'
+                                    ? (effective.hasAuthoritativeProfile ? row.capacityProfile?.endWeek : null) ?? row.allocationEndWeek ?? null
+                                    : null
                                   setAllocationDraft({
-                                    allocationMode: effective.isProfileManaged ? 'CAPACITY_PLAN' : (row.allocationMode ?? 'EFFORT'),
-                                    allocationPercent: row.allocationPercent ?? 100,
-                                    allocationStartWeek: row.allocationStartWeek ?? null,
-                                    allocationEndWeek: row.allocationEndWeek ?? null,
+                                    allocationMode: draftMode,
+                                    allocationPercent: draftPct,
+                                    allocationStartWeek: draftStart,
+                                    allocationEndWeek: draftEnd,
                                   })
                                 }
                               }}

@@ -760,6 +760,173 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(fromInput).toHaveValue(2)
     expect(toInput).toHaveValue(10)
   })
+
+  // ---------------------------------------------------------------------------
+  // Help/control-state matrix — each mode renders exactly one help message,
+  // the correct controls, and the matching selected option label.
+  // ---------------------------------------------------------------------------
+
+  it('EFFORT mode: exact label, help text, absent controls, single help message', async () => {
+    setupWithNamedResource({ allocationMode: 'EFFORT' })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // Select value and option label
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i }) as HTMLSelectElement
+    expect(select).toHaveValue('EFFORT')
+    expect(select.options[select.selectedIndex]).toHaveTextContent('As needed')
+
+    // Exactly one help message (no leftover from other modes)
+    const helpTexts = screen.getAllByText('Assigned only when scheduled work requires this resource.')
+    expect(helpTexts).toHaveLength(1)
+
+    // No percentage input visible
+    const percentInputs = screen.queryAllByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(percentInputs).toHaveLength(0)
+
+    // Date inputs are disabled with — placeholder
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
+
+    // No stale banner on initial load
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('FULL_PROJECT mode: exact label, help text, percentage present, dates disabled, single help message', async () => {
+    setupWithNamedResource({ allocationMode: 'FULL_PROJECT', allocationPercent: 75 })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // Select value and option label
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i }) as HTMLSelectElement
+    expect(select).toHaveValue('FULL_PROJECT')
+    expect(select.options[select.selectedIndex]).toHaveTextContent('Fixed for whole project')
+
+    // Exactly one help message
+    const helpTexts = screen.getAllByText('Available at the selected percentage from the beginning to the end of the project. Work is assigned only when demand exists.')
+    expect(helpTexts).toHaveLength(1)
+
+    // Percentage input visible with correct value
+    const pctInput = screen.getByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(pctInput).toHaveValue(75)
+
+    // Date inputs are disabled
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
+
+    // No stale banner on initial load
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('TIMELINE mode: exact label, dynamic help text, percentage present, dates enabled, single help message', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // Select value and option label
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i }) as HTMLSelectElement
+    expect(select).toHaveValue('TIMELINE')
+    expect(select.options[select.selectedIndex]).toHaveTextContent('Fixed for selected weeks')
+
+    // Dynamic TIMELINE help text with inline values
+    const helpText = screen.getByText(/Available at 80% from W2 to W10\. Work is assigned only when demand exists\./)
+    expect(helpText).toBeInTheDocument()
+
+    // Only one matching help message (no other mode's help text visible)
+    const allDescs = screen.queryAllByText(/Assigned only when scheduled work requires this resource/)
+    expect(allDescs).toHaveLength(0)
+
+    // Percentage input visible
+    const pctInput = screen.getByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(pctInput).toHaveValue(80)
+
+    // Date inputs enabled with correct values
+    const fromInput = screen.getByPlaceholderText('W1')
+    const toInput = screen.getByPlaceholderText('W∞')
+    expect(fromInput).not.toBeDisabled()
+    expect(toInput).not.toBeDisabled()
+    expect(fromInput).toHaveValue(2)
+    expect(toInput).toHaveValue(10)
+
+    // No stale banner on initial load
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('CAPACITY_PLAN mode: exact label, help text, no percentage, dates disabled, View Resource Profile link, single help message', async () => {
+    setupWithNamedResource({ allocationMode: 'CAPACITY_PLAN' })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // Select value and option label
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i }) as HTMLSelectElement
+    expect(select).toHaveValue('CAPACITY_PLAN')
+    expect(select.options[select.selectedIndex]).toHaveTextContent('Varies by week')
+
+    // Exactly one help message
+    const helpTexts = screen.getAllByText(/Availability varies by week/i)
+    expect(helpTexts).toHaveLength(1)
+    expect(helpTexts[0]).toHaveTextContent(
+      'Availability varies by week. Open the Resource Profile tab to review or configure the weekly pattern.'
+    )
+
+    // No percentage input visible
+    const percentInputs = screen.queryAllByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(percentInputs).toHaveLength(0)
+
+    // Date inputs are disabled
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
+
+    // "View Resource Profile" link navigates
+    const viewProfileBtn = screen.getByText(/View Resource Profile/)
+    expect(viewProfileBtn).toBeInTheDocument()
+    fireEvent.click(viewProfileBtn)
+    expect(mockNavigate).toHaveBeenCalledWith(`/projects/${projectId}/resource-profile`)
+
+    // No stale banner on initial load
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('mode switch TIMELINE→EFFORT clears TIMELINE help text, shows EFFORT help text, and clears weeks', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // TIMELINE help text is visible initially
+    expect(screen.getByText(/Available at 80% from W2 to W10/)).toBeInTheDocument()
+
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i })
+    fireEvent.change(select, { target: { value: 'EFFORT' } })
+
+    // Wait for mutation and re-render
+    await waitFor(() => {
+      expect(select).toHaveValue('EFFORT')
+    })
+
+    // TIMELINE help text disappears
+    expect(screen.queryByText(/Available at 80% from W2 to W10/)).not.toBeInTheDocument()
+
+    // EFFORT help text appears
+    expect(screen.getByText('Assigned only when scheduled work requires this resource.')).toBeInTheDocument()
+
+    // Dates are cleared — disabled with — placeholder
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
+  })
 })
 
 // ---------------------------------------------------------------------------
