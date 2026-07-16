@@ -13,6 +13,7 @@ const mockPatch = vi.hoisted(() => vi.fn())
 const mockPost = vi.hoisted(() => vi.fn())
 const mockPut = vi.hoisted(() => vi.fn())
 const mockDelete = vi.hoisted(() => vi.fn())
+const mockNavigate = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -41,7 +42,8 @@ vi.mock('@/components/timeline/TimelineOptimiserDrawer', () => ({
 }))
 
 vi.mock('@/components/timeline/SquadPlannerDrawer', () => ({
-  default: () => null,
+  default: ({ open, onClose }: { open: boolean; onClose?: () => void }) =>
+    open ? <div data-testid="squad-planner-drawer"><button onClick={onClose}>Close Squad Planner</button></div> : null,
 }))
 
 vi.mock('@/components/SnapshotHistoryPanel', () => ({
@@ -51,6 +53,10 @@ vi.mock('@/components/SnapshotHistoryPanel', () => ({
 vi.mock('@/components/timeline/TimelineTooltip', () => ({
   default: () => null,
 }))
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom')
+  return { ...actual, useNavigate: () => mockNavigate }
+})
 
 // ---------------------------------------------------------------------------
 // Mock data
@@ -421,10 +427,10 @@ describe('TimelinePage — named-resource allocation controls', () => {
 
 
     expect(await screen.findByText('Named resource')).toBeInTheDocument()
-    expect(screen.getByText('Planning basis')).toBeInTheDocument()
-    expect(screen.getByText('Allocation %')).toBeInTheDocument()
-    expect(screen.getByText('Start')).toBeInTheDocument()
-    expect(screen.getByText('End')).toBeInTheDocument()
+    expect(screen.getByText('Availability pattern')).toBeInTheDocument()
+    expect(screen.getByText('Available %')).toBeInTheDocument()
+    expect(screen.getByText('Available from')).toBeInTheDocument()
+    expect(screen.getByText('Available to')).toBeInTheDocument()
   })
 
   it('renders the named-resource name in its row', async () => {
@@ -434,10 +440,10 @@ describe('TimelinePage — named-resource allocation controls', () => {
 
     const alice = await screen.findAllByText('Alice')
     expect(alice.length).toBeGreaterThan(0)
-    expect(screen.getByText(/No assigned weeks.*Demand-following/i)).toBeInTheDocument()
+    expect(screen.getByText(/No assigned weeks.*As needed/i)).toBeInTheDocument()
   })
 
-  it('shows a planning basis select defaulting to Demand-following', async () => {
+  it('shows a planning basis select defaulting to As needed', async () => {
     setupWithNamedResource({ allocationMode: 'EFFORT' })
     renderPage()
 
@@ -509,7 +515,7 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(within(row!).getByPlaceholderText('W∞')).toHaveValue(12)
   })
 
-  it('switches to Capacity profile without losing the allocation percent', async () => {
+  it('switching to CAPACITY_PLAN preserves allocationPercent in API payload for server compatibility', async () => {
     setupWithNamedResource({
       allocationMode: 'TIMELINE',
       allocationPercent: 80,
@@ -557,6 +563,33 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(percentInputs.length).toBe(0)
   })
 
+  it('CAPACITY_PLAN mode label shows Varies by week without percentage suffix', async () => {
+    setupWithNamedResource({ allocationMode: 'CAPACITY_PLAN' })
+    renderPage()
+    await screen.findAllByText('Alice')
+    // The summary label should not contain a percentage
+    const summaryLabels = screen.getAllByText(/Varies by week/)
+    for (const el of summaryLabels) {
+      if (el.tagName === 'OPTION') continue // skip the dropdown option
+      expect(el.textContent).not.toMatch(/%/)
+    }
+  })
+
+  it('CAPACITY_PLAN has truthful help text', async () => {
+    setupWithNamedResource({ allocationMode: 'CAPACITY_PLAN' })
+    renderPage()
+    await screen.findAllByText('Alice')
+    const helpText = await screen.findByText(/Availability varies by week/i)
+    expect(helpText).toBeInTheDocument()
+    // Must NOT claim a saved profile exists
+    expect(helpText.textContent).not.toMatch(/saved weekly capacity profile/i)
+    // "View Resource Profile" button navigates to the resource profile tab
+    const viewProfileBtn = screen.getByText(/View Resource Profile/)
+    expect(viewProfileBtn).toBeInTheDocument()
+    fireEvent.click(viewProfileBtn)
+    expect(mockNavigate).toHaveBeenCalledWith(`/projects/${projectId}/resource-profile`)
+  })
+
   it('marks timeline stale after allocation mode change', async () => {
     setupWithNamedResource({ allocationMode: 'EFFORT' })
     renderPage()
@@ -573,6 +606,326 @@ describe('TimelinePage — named-resource allocation controls', () => {
     await waitFor(() => {
       expect(screen.getByText(/timeline inputs changed/i)).toBeInTheDocument()
     })
+  })
+
+
+  // ---------------------------------------------------------------------------
+  // Exact-payload verification for allocation mode changes — issue #382
+  // ---------------------------------------------------------------------------
+  it('sends exact payload with allocationPercent=100 when switching to EFFORT', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('TIMELINE')
+
+    fireEvent.change(select, { target: { value: 'EFFORT' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        {
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      )
+    })
+  })
+
+  it('sends exact payload with preserved percent and null weeks when switching to FULL_PROJECT', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('TIMELINE')
+
+    fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        {
+          allocationMode: 'FULL_PROJECT',
+          allocationPercent: 80,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      )
+    })
+  })
+
+  it('sends exact payload with preserved percent and weeks when switching to TIMELINE', async () => {
+    setupWithNamedResource({
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 80,
+      allocationStartWeek: 3,
+      allocationEndWeek: 12,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('FULL_PROJECT')
+
+    fireEvent.change(select, { target: { value: 'TIMELINE' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        {
+          allocationMode: 'TIMELINE',
+          allocationPercent: 80,
+          allocationStartWeek: 3,
+          allocationEndWeek: 12,
+        },
+      )
+    })
+  })
+
+  it('sends exact payload with allocationPercent=100 when switching to CAPACITY_PLAN', async () => {
+    setupWithNamedResource({
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('EFFORT')
+
+    fireEvent.change(select, { target: { value: 'CAPACITY_PLAN' } })
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        {
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        },
+      )
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Field visibility per allocation mode — issue #382
+  // ---------------------------------------------------------------------------
+  it('shows percentage input for FULL_PROJECT mode', async () => {
+    setupWithNamedResource({ allocationMode: 'FULL_PROJECT', allocationPercent: 75 })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    const pctInput = screen.getByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(pctInput).toBeInTheDocument()
+    expect(pctInput).toHaveValue(75)
+  })
+
+  it('shows percentage input for TIMELINE mode', async () => {
+    setupWithNamedResource({ allocationMode: 'TIMELINE', allocationPercent: 80 })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    const pctInput = screen.getByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(pctInput).toBeInTheDocument()
+    expect(pctInput).toHaveValue(80)
+  })
+
+  it('shows enabled date controls for TIMELINE mode', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    const fromInput = screen.getByPlaceholderText('W1')
+    const toInput = screen.getByPlaceholderText('W∞')
+    expect(fromInput).not.toBeDisabled()
+    expect(toInput).not.toBeDisabled()
+    expect(fromInput).toHaveValue(2)
+    expect(toInput).toHaveValue(10)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Help/control-state matrix — each mode renders exactly one help message,
+  // the correct controls, and the matching selected option label.
+  // ---------------------------------------------------------------------------
+
+  it('EFFORT mode: exact label, help text, absent controls, single help message', async () => {
+    setupWithNamedResource({ allocationMode: 'EFFORT' })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // Select value and option label
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i }) as HTMLSelectElement
+    expect(select).toHaveValue('EFFORT')
+    expect(select.options[select.selectedIndex]).toHaveTextContent('As needed')
+
+    // Exactly one help message (no leftover from other modes)
+    const helpTexts = screen.getAllByText('Assigned only when scheduled work requires this resource.')
+    expect(helpTexts).toHaveLength(1)
+
+    // No percentage input visible
+    const percentInputs = screen.queryAllByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(percentInputs).toHaveLength(0)
+
+    // Date inputs are disabled with — placeholder
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
+
+    // No stale banner on initial load
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('FULL_PROJECT mode: exact label, help text, percentage present, dates disabled, single help message', async () => {
+    setupWithNamedResource({ allocationMode: 'FULL_PROJECT', allocationPercent: 75 })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // Select value and option label
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i }) as HTMLSelectElement
+    expect(select).toHaveValue('FULL_PROJECT')
+    expect(select.options[select.selectedIndex]).toHaveTextContent('Fixed for whole project')
+
+    // Exactly one help message
+    const helpTexts = screen.getAllByText('Available at the selected percentage from the beginning to the end of the project. Work is assigned only when demand exists.')
+    expect(helpTexts).toHaveLength(1)
+
+    // Percentage input visible with correct value
+    const pctInput = screen.getByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(pctInput).toHaveValue(75)
+
+    // Date inputs are disabled
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
+
+    // No stale banner on initial load
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('TIMELINE mode: exact label, dynamic help text, percentage present, dates enabled, single help message', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // Select value and option label
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i }) as HTMLSelectElement
+    expect(select).toHaveValue('TIMELINE')
+    expect(select.options[select.selectedIndex]).toHaveTextContent('Fixed for selected weeks')
+
+    // Dynamic TIMELINE help text with inline values
+    const helpText = screen.getByText(/Available at 80% from W2 to W10\. Work is assigned only when demand exists\./)
+    expect(helpText).toBeInTheDocument()
+
+    // Only one matching help message (no other mode's help text visible)
+    const allDescs = screen.queryAllByText(/Assigned only when scheduled work requires this resource/)
+    expect(allDescs).toHaveLength(0)
+
+    // Percentage input visible
+    const pctInput = screen.getByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(pctInput).toHaveValue(80)
+
+    // Date inputs enabled with correct values
+    const fromInput = screen.getByPlaceholderText('W1')
+    const toInput = screen.getByPlaceholderText('W∞')
+    expect(fromInput).not.toBeDisabled()
+    expect(toInput).not.toBeDisabled()
+    expect(fromInput).toHaveValue(2)
+    expect(toInput).toHaveValue(10)
+
+    // No stale banner on initial load
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('CAPACITY_PLAN mode: exact label, help text, no percentage, dates disabled, View Resource Profile link, single help message', async () => {
+    setupWithNamedResource({ allocationMode: 'CAPACITY_PLAN' })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // Select value and option label
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i }) as HTMLSelectElement
+    expect(select).toHaveValue('CAPACITY_PLAN')
+    expect(select.options[select.selectedIndex]).toHaveTextContent('Varies by week')
+
+    // Exactly one help message
+    const helpTexts = screen.getAllByText(/Availability varies by week/i)
+    expect(helpTexts).toHaveLength(1)
+    expect(helpTexts[0]).toHaveTextContent(
+      'Availability varies by week. Open the Resource Profile tab to review or configure the weekly pattern.'
+    )
+
+    // No percentage input visible
+    const percentInputs = screen.queryAllByRole('spinbutton', { name: /Available percentage for Alice/i })
+    expect(percentInputs).toHaveLength(0)
+
+    // Date inputs are disabled
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
+
+    // "View Resource Profile" link navigates
+    const viewProfileBtn = screen.getByText(/View Resource Profile/)
+    expect(viewProfileBtn).toBeInTheDocument()
+    fireEvent.click(viewProfileBtn)
+    expect(mockNavigate).toHaveBeenCalledWith(`/projects/${projectId}/resource-profile`)
+
+    // No stale banner on initial load
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('mode switch TIMELINE→EFFORT clears TIMELINE help text, shows EFFORT help text, and clears weeks', async () => {
+    setupWithNamedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    // TIMELINE help text is visible initially
+    expect(screen.getByText(/Available at 80% from W2 to W10/)).toBeInTheDocument()
+
+    const select = screen.getByRole('combobox', { name: /availability pattern for alice/i })
+    fireEvent.change(select, { target: { value: 'EFFORT' } })
+
+    // Wait for mutation and re-render
+    await waitFor(() => {
+      expect(select).toHaveValue('EFFORT')
+    })
+
+    // TIMELINE help text disappears
+    expect(screen.queryByText(/Available at 80% from W2 to W10/)).not.toBeInTheDocument()
+
+    // EFFORT help text appears
+    expect(screen.getByText('Assigned only when scheduled work requires this resource.')).toBeInTheDocument()
+
+    // Dates are cleared — disabled with — placeholder
+    const weekInputs = screen.getAllByPlaceholderText('—')
+    expect(weekInputs.length).toBeGreaterThanOrEqual(2)
+    weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
   })
 })
 
@@ -677,17 +1030,17 @@ describe('TimelinePage — resource-counts layout', () => {
 
     // Column headers are visible
     expect(await screen.findByText('Named resource')).toBeInTheDocument()
-    expect(screen.getByText('Planning basis')).toBeInTheDocument()
-    expect(screen.getByText('Allocation %')).toBeInTheDocument()
-    expect(screen.getByText('Start')).toBeInTheDocument()
-    expect(screen.getByText('End')).toBeInTheDocument()
+    expect(screen.getByText('Availability pattern')).toBeInTheDocument()
+    expect(screen.getByText('Available %')).toBeInTheDocument()
+    expect(screen.getByText('Available from')).toBeInTheDocument()
+    expect(screen.getByText('Available to')).toBeInTheDocument()
 
     // Named resource name is rendered (may appear in multiple panels)
     const bobNames = await screen.findAllByText('Bob')
     expect(bobNames.length).toBeGreaterThanOrEqual(1)
 
     // Planning basis select has contextual accessible name
-    const basisSelect = screen.getByRole('combobox', { name: /planning basis for bob/i })
+    const basisSelect = screen.getByRole('combobox', { name: /availability pattern for bob/i })
     expect(basisSelect).toBeInTheDocument()
     expect(basisSelect).toHaveValue('EFFORT')
 
@@ -725,13 +1078,13 @@ describe('TimelinePage — resource-counts layout', () => {
     await screen.findAllByText('Bob')
 
     // Mobile inline labels exist for each control
-    expect(screen.getByText('Basis:')).toBeInTheDocument()
-    expect(screen.getByText('Alloc:')).toBeInTheDocument()
-    expect(screen.getByText('Start:')).toBeInTheDocument()
-    expect(screen.getByText('End:')).toBeInTheDocument()
+    expect(screen.getByText('Pattern:')).toBeInTheDocument()
+    expect(screen.getByText('Avail:')).toBeInTheDocument()
+    expect(screen.getByText('Avail from:')).toBeInTheDocument()
+    expect(screen.getByText('Avail to:')).toBeInTheDocument()
 
     // Inline label spans have sm:hidden class
-    const basisLabel = screen.getByText('Basis:')
+    const basisLabel = screen.getByText('Pattern:')
     expect(basisLabel.className).toMatch(/\bsm:hidden\b/)
   })
 
@@ -749,15 +1102,15 @@ describe('TimelinePage — resource-counts layout', () => {
 
     await screen.findAllByText('Bob')
 
-    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    const pctInput = screen.getByRole('spinbutton', { name: /available percentage for bob/i })
     expect(pctInput).toBeInTheDocument()
     expect(pctInput).toHaveValue(75)
 
     // Start/end inputs have contextual accessible names and are disabled in non-TIMELINE mode
-    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    const startInput = screen.getByRole('spinbutton', { name: /available from week for bob/i })
     expect(startInput).toBeDisabled()
 
-    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    const endInput = screen.getByRole('spinbutton', { name: /available to week for bob/i })
     expect(endInput).toBeDisabled()
   })
 
@@ -772,13 +1125,13 @@ describe('TimelinePage — resource-counts layout', () => {
     await screen.findAllByText('Bob')
 
     // Both start/end inputs are disabled for non-TIMELINE mode
-    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    const startInput = screen.getByRole('spinbutton', { name: /available from week for bob/i })
     expect(startInput).toBeDisabled()
-    expect(startInput).toHaveAttribute('aria-label', 'Start week for Bob')
+    expect(startInput).toHaveAttribute('aria-label', 'Available from week for Bob')
 
-    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    const endInput = screen.getByRole('spinbutton', { name: /available to week for bob/i })
     expect(endInput).toBeDisabled()
-    expect(endInput).toHaveAttribute('aria-label', 'End week for Bob')
+    expect(endInput).toHaveAttribute('aria-label', 'Available to week for Bob')
   })
 
   it('preserves existing mutation behaviour when hours change', async () => {
@@ -804,7 +1157,7 @@ describe('TimelinePage — resource-counts layout', () => {
     })
   })
 
-  it('planning basis change submits exact mutation payload', async () => {
+  it('availability pattern change submits exact mutation payload', async () => {
     mockResourceTypes = [baseResourceType]
     mockTimeline = createTimeline({
       weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
@@ -814,7 +1167,7 @@ describe('TimelinePage — resource-counts layout', () => {
 
     await screen.findAllByText('Bob')
 
-    const select = screen.getByRole('combobox', { name: /planning basis for bob/i })
+    const select = screen.getByRole('combobox', { name: /availability pattern for bob/i })
     fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
 
     await waitFor(() => {
@@ -847,7 +1200,7 @@ describe('TimelinePage — resource-counts layout', () => {
     await screen.findAllByText('Bob')
 
     // Change allocation percent
-    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    const pctInput = screen.getByRole('spinbutton', { name: /available percentage for bob/i })
     fireEvent.change(pctInput, { target: { value: '60' } })
     fireEvent.blur(pctInput)
 
@@ -859,7 +1212,7 @@ describe('TimelinePage — resource-counts layout', () => {
     })
 
     // Change start week
-    const startInput = screen.getByRole('spinbutton', { name: /start week for bob/i })
+    const startInput = screen.getByRole('spinbutton', { name: /available from week for bob/i })
     fireEvent.change(startInput, { target: { value: '5' } })
     fireEvent.blur(startInput)
 
@@ -871,7 +1224,7 @@ describe('TimelinePage — resource-counts layout', () => {
     })
 
     // Change end week
-    const endInput = screen.getByRole('spinbutton', { name: /end week for bob/i })
+    const endInput = screen.getByRole('spinbutton', { name: /available to week for bob/i })
     fireEvent.change(endInput, { target: { value: '15' } })
     fireEvent.blur(endInput)
 
@@ -961,7 +1314,7 @@ describe('TimelinePage — resource-counts layout', () => {
     await screen.findAllByText('Bob')
 
     // Trigger update by changing allocation percent
-    const pctInput = screen.getByRole('spinbutton', { name: /allocation percentage for bob/i })
+    const pctInput = screen.getByRole('spinbutton', { name: /available percentage for bob/i })
     fireEvent.change(pctInput, { target: { value: '60' } })
     fireEvent.blur(pctInput)
 
@@ -1012,5 +1365,85 @@ describe('TimelinePage — resource-counts layout', () => {
     // Row should have the multi-column sm:grid-cols-[...] layout
     expect(row.className).toMatch(/sm:grid-cols-/)
     expect(row.getAttribute('data-testid')).toBe(`named-resource-row-${nrId}`)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Squad Planner deep link — issue #383
+// ---------------------------------------------------------------------------
+describe('TimelinePage — Squad Planner deep link', () => {
+  beforeEach(() => {
+    const localStorageStore: Record<string, string> = {}
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => localStorageStore[key] ?? null,
+      setItem: (key: string, value: string) => { localStorageStore[key] = value },
+      removeItem: (key: string) => { delete localStorageStore[key] },
+      clear: () => { Object.keys(localStorageStore).forEach(k => delete localStorageStore[k]) },
+      length: 0,
+      key: () => null,
+    })
+
+    vi.clearAllMocks()
+
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes('/timeline')) return Promise.resolve({ data: mockTimeline })
+      if (url.includes('/resource-types')) return Promise.resolve({ data: mockResourceTypes })
+      return Promise.resolve({ data: mockProject })
+    })
+
+    mockPost.mockImplementation(() => Promise.resolve({ data: mockTimeline }))
+    mockPatch.mockResolvedValue({ data: mockProject })
+    mockDelete.mockResolvedValue({ data: {} })
+    mockNavigate.mockClear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loading Timeline with ?panel=squad-planner opens Squad Planner drawer', async () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}/timeline?panel=squad-planner`]}>
+          <Routes>
+            <Route path="/projects/:id/timeline" element={<TimelinePage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByTestId('squad-planner-drawer')).toBeInTheDocument()
+  })
+
+  it('loading Timeline without panel param leaves Squad Planner closed', async () => {
+    renderPage()
+
+    // Wait for page to render
+    await screen.findByText('Planning Settings')
+
+    expect(screen.queryByTestId('squad-planner-drawer')).not.toBeInTheDocument()
+  })
+
+  it('closing Squad Planner does not immediately reopen it', async () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}/timeline?panel=squad-planner`]}>
+          <Routes>
+            <Route path="/projects/:id/timeline" element={<TimelinePage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    // Wait for auto-open
+    expect(await screen.findByTestId('squad-planner-drawer')).toBeInTheDocument()
+
+    // Close via the button
+    fireEvent.click(screen.getByText('Close Squad Planner'))
+
+    // Verify it closed and stays closed
+    await waitFor(() => {
+      expect(screen.queryByTestId('squad-planner-drawer')).not.toBeInTheDocument()
+    })
   })
 })

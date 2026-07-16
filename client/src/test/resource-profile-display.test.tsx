@@ -1,6 +1,7 @@
 import React, { type ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import ResourceProfileTab from '@/components/resource-profile/ResourceProfileTab'
 
 function createProps(
@@ -54,7 +55,7 @@ function createProps(
     updateAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     updateNrAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     startEditAllocation: vi.fn(),
-    getAllocationBadge: () => ({ label: 'Demand-following', color: 'bg-gray-100 text-gray-600', sub: null }),
+    getAllocationBadge: () => ({ label: 'As needed', color: 'bg-gray-100 text-gray-600', sub: null }),
     ...overrides,
   }
 }
@@ -96,26 +97,24 @@ describe('Capacity Profile Display', () => {
         resolutionSource: 'PROFILE',
       },
     }
-    render(
-      <ResourceProfileTab
-        {...createProps({
-          profile: {
-            projectId: 'project-1',
-            hoursPerDay: 8,
-            projectDurationWeeks: 12,
-            bufferWeeks: 0,
-            onboardingWeeks: 0,
-            resourceRows: [row],
-            overheadRows: [],
-            summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
-          },
-          filteredResourceRows: [row],
-        })}
-      />,
-    )
+    render(<MemoryRouter><ResourceProfileTab
+      {...createProps({
+        profile: {
+          projectId: 'project-1',
+          hoursPerDay: 8,
+          projectDurationWeeks: 12,
+          bufferWeeks: 0,
+          onboardingWeeks: 0,
+          resourceRows: [row],
+          overheadRows: [],
+          summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
+        },
+        filteredResourceRows: [row],
+      })}
+    />,</MemoryRouter>)
 
-    // Badge should show 'Demand-following' from profile, not 'Availability window' from stale allocationMode
-    expect(screen.getByText(/Demand-following/i)).toBeInTheDocument()
+    // Badge should show 'As needed' from profile, not 'Fixed for selected weeks' from stale allocationMode
+    expect(screen.getByText(/As needed/i)).toBeInTheDocument()
     // Button title is the stable action label
     const button = screen.getByTitle('Click to edit allocation')
     expect(button).toBeInTheDocument()
@@ -139,23 +138,21 @@ describe('Capacity Profile Display', () => {
         resolutionSource: 'PROFILE',
       },
     }
-    render(
-      <ResourceProfileTab
-        {...createProps({
-          profile: {
-            projectId: 'project-1',
-            hoursPerDay: 8,
-            projectDurationWeeks: 12,
-            bufferWeeks: 0,
-            onboardingWeeks: 0,
-            resourceRows: [row],
-            overheadRows: [],
-            summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
-          },
-          filteredResourceRows: [row],
-        })}
-      />,
-    )
+    render(<MemoryRouter><ResourceProfileTab
+      {...createProps({
+        profile: {
+          projectId: 'project-1',
+          hoursPerDay: 8,
+          projectDurationWeeks: 12,
+          bufferWeeks: 0,
+          onboardingWeeks: 0,
+          resourceRows: [row],
+          overheadRows: [],
+          summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
+        },
+        filteredResourceRows: [row],
+      })}
+    />,</MemoryRouter>)
 
     // The source tag badge shows 'Squad Planner' (formatted via shared helper)
     expect(screen.getByText('Squad Planner')).toBeInTheDocument()
@@ -186,23 +183,21 @@ describe('Capacity Profile Display', () => {
         resolutionSource: 'PROFILE',
       },
     }
-    render(
-      <ResourceProfileTab
-        {...createProps({
-          profile: {
-            projectId: 'project-1',
-            hoursPerDay: 8,
-            projectDurationWeeks: 12,
-            bufferWeeks: 0,
-            onboardingWeeks: 0,
-            resourceRows: [row],
-            overheadRows: [],
-            summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
-          },
-          filteredResourceRows: [row],
-        })}
-      />,
-    )
+    render(<MemoryRouter><ResourceProfileTab
+      {...createProps({
+        profile: {
+          projectId: 'project-1',
+          hoursPerDay: 8,
+          projectDurationWeeks: 12,
+          bufferWeeks: 0,
+          onboardingWeeks: 0,
+          resourceRows: [row],
+          overheadRows: [],
+          summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
+        },
+        filteredResourceRows: [row],
+      })}
+    />,</MemoryRouter>)
 
     // Segment labels display: W1-W4: 50% · W5-W8: 75% · W9-W12: 100%
     expect(screen.getByText('W1-W4: 50%')).toBeInTheDocument()
@@ -253,23 +248,21 @@ describe('Capacity Profile Display', () => {
         },
       ],
     }
-    render(
-      <ResourceProfileTab
-        {...createProps({
-          profile: {
-            projectId: 'project-1',
-            hoursPerDay: 8,
-            projectDurationWeeks: 12,
-            bufferWeeks: 0,
-            onboardingWeeks: 0,
-            resourceRows: [row],
-            overheadRows: [],
-            summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
-          },
-          filteredResourceRows: [row],
-        })}
-      />,
-    )
+    render(<MemoryRouter><ResourceProfileTab
+      {...createProps({
+        profile: {
+          projectId: 'project-1',
+          hoursPerDay: 8,
+          projectDurationWeeks: 12,
+          bufferWeeks: 0,
+          onboardingWeeks: 0,
+          resourceRows: [row],
+          overheadRows: [],
+          summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
+        },
+        filteredResourceRows: [row],
+      })}
+    />,</MemoryRouter>)
 
     // The named resource summary should show exactly one entry (Alice)
     const assignedText = screen.getByText(/Assigned:/)
@@ -329,23 +322,21 @@ describe('Capacity Profile Display', () => {
         },
       ],
     }
-    render(
-      <ResourceProfileTab
-        {...createProps({
-          profile: {
-            projectId: 'project-1',
-            hoursPerDay: 8,
-            projectDurationWeeks: 12,
-            bufferWeeks: 0,
-            onboardingWeeks: 0,
-            resourceRows: [roleRow, namedRow],
-            overheadRows: [],
-            summary: { totalHours: 160, totalDays: 20, totalCost: null, hasCost: false },
-          },
-          filteredResourceRows: [roleRow, namedRow],
-        })}
-      />,
-    )
+    render(<MemoryRouter><ResourceProfileTab
+      {...createProps({
+        profile: {
+          projectId: 'project-1',
+          hoursPerDay: 8,
+          projectDurationWeeks: 12,
+          bufferWeeks: 0,
+          onboardingWeeks: 0,
+          resourceRows: [roleRow, namedRow],
+          overheadRows: [],
+          summary: { totalHours: 160, totalDays: 20, totalCost: null, hasCost: false },
+        },
+        filteredResourceRows: [roleRow, namedRow],
+      })}
+    />,</MemoryRouter>)
 
     // Capacity profile segments on the role-level row
     expect(screen.getByText('W1-W6: 50%')).toBeInTheDocument()
@@ -373,25 +364,23 @@ describe('Capacity Profile Display', () => {
         resolutionSource: 'PROFILE',
       },
     }
-    render(
-      <ResourceProfileTab
-        {...createProps({
-          profile: {
-            projectId: 'project-1',
-            hoursPerDay: 8,
-            projectDurationWeeks: 12,
-            bufferWeeks: 0,
-            onboardingWeeks: 0,
-            resourceRows: [row],
-            overheadRows: [],
-            summary: { totalHours: 80, totalDays: 12, totalCost: 8000, hasCost: true },
-          },
-          filteredResourceRows: [row],
-          hasCost: true,
-          columnCount: 9,
-        })}
-      />,
-    )
+    render(<MemoryRouter><ResourceProfileTab
+      {...createProps({
+        profile: {
+          projectId: 'project-1',
+          hoursPerDay: 8,
+          projectDurationWeeks: 12,
+          bufferWeeks: 0,
+          onboardingWeeks: 0,
+          resourceRows: [row],
+          overheadRows: [],
+          summary: { totalHours: 80, totalDays: 12, totalCost: 8000, hasCost: true },
+        },
+        filteredResourceRows: [row],
+        hasCost: true,
+        columnCount: 9,
+      })}
+    />,</MemoryRouter>)
 
     // Commercial days display (allocated vs effort)
     expect(screen.getByText(/effort: 10/)).toBeInTheDocument()
@@ -458,20 +447,18 @@ describe('Named resource aggregate hint', () => {
         },
       ],
     }
-    render(
-      <ResourceProfileTab
-        {...createProps({
-          profile: {
-            projectId: 'project-1', hoursPerDay: 8, projectDurationWeeks: 12,
-            bufferWeeks: 0, onboardingWeeks: 0,
-            resourceRows: [row],
-            overheadRows: [],
-            summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
-          },
-          filteredResourceRows: [row],
-        })}
-      />,
-    )
+    render(<MemoryRouter><ResourceProfileTab
+      {...createProps({
+        profile: {
+          projectId: 'project-1', hoursPerDay: 8, projectDurationWeeks: 12,
+          bufferWeeks: 0, onboardingWeeks: 0,
+          resourceRows: [row],
+          overheadRows: [],
+          summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
+        },
+        filteredResourceRows: [row],
+      })}
+    />,</MemoryRouter>)
 
     // Aggregate hint shows count and profile count
     const hintSpan = screen.getByText(/2 people · 2 capacity profiles/)
@@ -514,20 +501,18 @@ describe('Named resource aggregate hint', () => {
         },
       ],
     }
-    render(
-      <ResourceProfileTab
-        {...createProps({
-          profile: {
-            projectId: 'project-1', hoursPerDay: 8, projectDurationWeeks: 12,
-            bufferWeeks: 0, onboardingWeeks: 0,
-            resourceRows: [row],
-            overheadRows: [],
-            summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
-          },
-          filteredResourceRows: [row],
-        })}
-      />,
-    )
+    render(<MemoryRouter><ResourceProfileTab
+      {...createProps({
+        profile: {
+          projectId: 'project-1', hoursPerDay: 8, projectDurationWeeks: 12,
+          bufferWeeks: 0, onboardingWeeks: 0,
+          resourceRows: [row],
+          overheadRows: [],
+          summary: { totalHours: 80, totalDays: 10, totalCost: null, hasCost: false },
+        },
+        filteredResourceRows: [row],
+      })}
+    />,</MemoryRouter>)
 
     // Aggregate hint: single person, no capacity profiles
     expect(screen.getByText(/1 person · No profiles/)).toBeInTheDocument()

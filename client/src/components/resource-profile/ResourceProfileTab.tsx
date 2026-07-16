@@ -1,12 +1,18 @@
 import { Fragment } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
 } from 'recharts'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
 import {
+  formatAllocationModeDescription,
   formatCapacityProfileSource,
-  formatPlanningBasis,
   formatResolutionSource,
+  ALLOCATION_MODE_OPTIONS,
+  getEffectiveAvailabilityDisplay,
+  getEffectiveAvailabilityBadge,
+  getEffectiveAvailabilityPeriod,
+  formatEffectiveAvailabilityPeriod,
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 
@@ -15,6 +21,9 @@ const TYPE_OPTIONS = [
   { label: 'Fixed total days', value: 'FIXED_DAYS' },
   { label: 'Days per week', value: 'DAYS_PER_WEEK' },
 ] as const
+
+/** Options for the generic editor dropdown — excludes CAPACITY_PLAN (profile-managed). */
+const MANUAL_ALLOCATION_OPTIONS = ALLOCATION_MODE_OPTIONS.filter(o => o.value !== 'CAPACITY_PLAN')
 
 interface Props extends UseResourceProfileReturn {
   projectId: string
@@ -32,13 +41,14 @@ export default function ResourceProfileTab({
   editingAllocation, setEditingAllocation, allocationDraft, setAllocationDraft,
   updateAllocationMutation,
 }: Props) {
+  const navigate = useNavigate()
   return (
     <>
     <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
       <header className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">Capacity profile summary</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Capacity profiles, planning basis, and resource allocation by role</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Capacity profiles, availability patterns, and resource allocation by role</p>
         </div>
       </header>
       <div className="px-6 py-3 bg-blue-50 dark:bg-blue-950/30 border-b border-blue-100 dark:border-blue-900">
@@ -63,16 +73,18 @@ export default function ResourceProfileTab({
                 <th className="text-left px-4 py-3 font-medium">Hrs/Day</th>
                 <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Hours</th>
                 <th className="text-right px-4 py-3 font-medium min-w-[5rem]">Days</th>
-                <th className="text-left px-4 py-3 font-medium">Planning basis</th>
+                <th className="text-left px-4 py-3 font-medium">Availability pattern</th>
                 <th className="text-left px-4 py-3 font-medium">Period</th>
                 <th className="text-right px-4 py-3 font-medium">Day Rate</th>
                 {hasCost && <th className="text-right px-6 py-3 font-medium">Cost</th>}
               </tr>
             </thead>
             <tbody>
-              {filteredResourceRows.map(row => (
+              {filteredResourceRows.map(row => {
+                const availability = getEffectiveAvailabilityDisplay(row)
+                return (
                 <Fragment key={row.resourceTypeId}>
-                  <tr className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                  <tr data-testid={`resource-profile-row-${row.resourceTypeId}`} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                     <td className="px-6 py-3">
                       <div className="font-medium text-gray-900 dark:text-white">
                         <button className="text-left hover:text-lab3-navy transition-colors font-medium" onClick={() => toggleRow(row.resourceTypeId)}>
@@ -167,21 +179,7 @@ export default function ResourceProfileTab({
                             </span>
                           )
                         }
-                        const profile = row.capacityProfile
-                        const isProfileAuthoritative = profile?.resolutionSource === 'PROFILE'
-                        const mode = row.allocationMode ?? 'EFFORT'
-                        const planningBasisLabel = isProfileAuthoritative && profile
-                          ? formatPlanningBasis(profile.planningBasis)
-                          : null
-                        const effectiveStart = row.allocationStartWeek ?? row.derivedStartWeek ?? null
-                        const effectiveEnd = row.allocationEndWeek ?? row.derivedEndWeek ?? null
-                        const badge = (() => {
-                          if (mode === 'EFFORT') return { label: planningBasisLabel ?? 'Demand-following', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
-                          if (mode === 'TIMELINE') return { label: `${planningBasisLabel ?? 'Availability window'} · ${row.allocationPercent ?? 100}%`, color: 'bg-blue-100 text-blue-700' }
-                          if (mode === 'FULL_PROJECT') return { label: `${planningBasisLabel ?? 'Whole-project allocation'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
-                          if (mode === 'CAPACITY_PLAN') return { label: `${planningBasisLabel ?? 'Capacity profile'} · ${row.allocationPercent ?? 100}%`, color: 'bg-green-100 text-green-700' }
-                          return { label: `${planningBasisLabel ?? 'Whole-project allocation'} · ${row.allocationPercent ?? 100}%`, color: 'bg-purple-100 text-purple-700' }
-                        })()
+                        const badge = getEffectiveAvailabilityBadge(availability, profile?.projectDurationWeeks)
                         return (
                           <div>
                             <button
@@ -191,11 +189,20 @@ export default function ResourceProfileTab({
                                   setAllocationDraft(null)
                                 } else {
                                   setEditingAllocation(row.resourceTypeId)
+                                  const canEdit = !availability.isProfileManaged
+                                  const draftMode = availability.effectiveMode
+                                  const draftPct = availability.percentage ?? 100
+                                  const draftStart = canEdit && draftMode === 'TIMELINE'
+                                    ? availability.startWeek
+                                    : null
+                                  const draftEnd = canEdit && draftMode === 'TIMELINE'
+                                    ? availability.endWeek
+                                    : null
                                   setAllocationDraft({
-                                    allocationMode: row.allocationMode ?? 'EFFORT',
-                                    allocationPercent: row.allocationPercent ?? 100,
-                                    allocationStartWeek: row.allocationStartWeek ?? null,
-                                    allocationEndWeek: row.allocationEndWeek ?? null,
+                                    allocationMode: draftMode,
+                                    allocationPercent: draftPct,
+                                    allocationStartWeek: draftStart,
+                                    allocationEndWeek: draftEnd,
                                   })
                                 }
                               }}
@@ -204,22 +211,22 @@ export default function ResourceProfileTab({
                             >
                               {badge.label}
                             </button>
-                            {profile && (
+                            {row.capacityProfile && (
                               <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 uppercase tracking-wide" aria-describedby={`profile-meta-${row.resourceTypeId}`}>
-                                {formatCapacityProfileSource(profile.source)}
+                                {formatCapacityProfileSource(row.capacityProfile.source)}
                               </span>
                             )}
-                            {profile && (
+                            {row.capacityProfile && (
                               <span id={`profile-meta-${row.resourceTypeId}`} className="sr-only">
-                                Profile source: {formatCapacityProfileSource(profile.source)} · Resolution source: {formatResolutionSource(profile.resolutionSource)}
+                                Profile source: {formatCapacityProfileSource(row.capacityProfile.source)} · Resolution source: {formatResolutionSource(row.capacityProfile.resolutionSource)}
                               </span>
                             )}
-                            {mode === 'TIMELINE' && effectiveStart != null && effectiveEnd != null && (
-                              <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.floor(effectiveStart)} → Wk {Math.floor(effectiveEnd)}</div>
+                            {badge.sub && (
+                              <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{badge.sub}</div>
                             )}
-                            {profile && profile.segments.length > 0 && (
+                            {row.capacityProfile && row.capacityProfile.segments.length > 0 && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                                {profile.segments.map((seg, i) => (
+                                {row.capacityProfile.segments.map((seg, i) => (
                                   <span key={i}>
                                     {i > 0 && <span className="mx-1">·</span>}
                                     W{seg.startWeek + 1}-W{seg.endWeek + 1}: {seg.capacityPercent}%
@@ -232,14 +239,10 @@ export default function ResourceProfileTab({
                       })()}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                      {(() => {
-                        const startWk = row.allocationStartWeek ?? row.derivedStartWeek
-                        const endWk = row.allocationEndWeek ?? row.derivedEndWeek
-                        const start = weekToDate(startWk); const end = weekToDate(endWk)
-                        if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                        if (startWk != null && endWk != null) return `Wk ${Math.floor(startWk)} – Wk ${Math.floor(endWk)}`
-                        return '—'
-                      })()}
+                      {formatEffectiveAvailabilityPeriod(
+                        getEffectiveAvailabilityPeriod(availability, profile?.projectDurationWeeks),
+                        { weekToDate, formatDate: fmtDate },
+                      )}
                     </td>
                     <td className="text-right px-4 py-3 text-gray-900 dark:text-white">
                       <input type="number" min="0" step="1" defaultValue={row.dayRate ?? ''} key={`dr-${row.resourceTypeId}-${row.dayRate}`}
@@ -255,65 +258,118 @@ export default function ResourceProfileTab({
                     {hasCost && <td className="text-right px-6 py-3 text-gray-900 dark:text-white">{row.estimatedCost != null ? `$${formatNumber(row.estimatedCost, 0)}` : '—'}</td>}
                   </tr>
                   {editingAllocation === row.resourceTypeId && allocationDraft && (
-                    <tr className="border-b border-blue-100 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30">
-                      <td colSpan={columnCount} className="px-6 py-4">
-                        <div className="flex flex-wrap items-end gap-4">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Planning basis</label>
-                            <select value={allocationDraft.allocationMode} onChange={e => setAllocationDraft(d => d ? { ...d, allocationMode: e.target.value } : d)}
-                              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                              <option value="EFFORT">Demand-following</option>
-                              <option value="TIMELINE">Availability window</option>
-                              <option value="FULL_PROJECT">Whole-project allocation</option>
-                              <option value="CAPACITY_PLAN">Capacity profile</option>
-                            </select>
+                    allocationDraft.allocationMode === 'CAPACITY_PLAN' ? (
+                      <tr className="border-b border-green-100 dark:border-green-900 bg-green-50 dark:bg-green-950/30">
+                        <td colSpan={columnCount} className="px-6 py-4">
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                                Varies by week
+                              </span>
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                — managed through the weekly capacity profile
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              Availability varies by week. Open the weekly profile editor to review or configure the pattern.
+                            </p>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => navigate(`/projects/${projectId}/timeline?panel=squad-planner`)}
+                                className="inline-flex items-center gap-1 px-4 py-1.5 rounded-lg text-sm font-medium bg-lab3-navy text-white hover:bg-lab3-blue transition-colors"
+                              >
+                                Open weekly profile editor ↗
+                              </button>
+                              <button data-testid="allocation-cancel" onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
+                                className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                Close
+                              </button>
+                            </div>
                           </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Capacity %</label>
-                            <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
-                              onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
-                              className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                          </div>
-                          {allocationDraft.allocationMode === 'TIMELINE' && (
-                            <>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr className="border-b border-blue-100 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30">
+                        <td colSpan={columnCount} className="px-6 py-4">
+                          <div className="flex flex-wrap items-end gap-4">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Availability pattern</label>
+                              <select value={allocationDraft.allocationMode} onChange={e => {
+                                const newMode = e.target.value
+                                setAllocationDraft(d => d ? {
+                                  ...d,
+                                  allocationMode: newMode,
+                                  allocationStartWeek: newMode === 'TIMELINE' ? d.allocationStartWeek : null,
+                                  allocationEndWeek: newMode === 'TIMELINE' ? d.allocationEndWeek : null,
+                                  allocationPercent: (newMode !== 'EFFORT' && newMode !== 'CAPACITY_PLAN') ? d.allocationPercent : 100,
+                                } : d)
+                              }}
+                                className="w-full text-xs border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[7rem]"
+                                aria-label="Availability pattern"
+                              >
+                                {MANUAL_ALLOCATION_OPTIONS.map(opt => (
+                                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                            {allocationDraft.allocationMode !== 'EFFORT' && allocationDraft.allocationMode !== 'CAPACITY_PLAN' && (
                               <div>
-                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                                  Start Week override
-                                  {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
-                                </label>
-                                <input type="number" min={0} step={0.5} value={allocationDraft.allocationStartWeek ?? ''} placeholder="auto"
-                                  onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
-                                  className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Available %</label>
+                                <input type="number" min={1} max={100} step={5} value={allocationDraft.allocationPercent}
+                                  onChange={e => setAllocationDraft(d => d ? { ...d, allocationPercent: Number(e.target.value) } : d)}
+                                  className="w-20 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
                               </div>
-                              <div>
-                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                                  End Week override
-                                  {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
-                                </label>
-                                <input type="number" min={0} step={0.5} value={allocationDraft.allocationEndWeek ?? ''} placeholder="auto"
-                                  onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
-                                  className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                              </div>
-                            </>
-                          )}
-                          <div className="flex gap-2 ml-auto">
-                            <button data-testid="allocation-save" onClick={() => {
-                              updateAllocationMutation.mutate(
-                                { rtId: row.resourceTypeId, data: { allocationMode: allocationDraft.allocationMode, allocationPercent: allocationDraft.allocationPercent, allocationStartWeek: allocationDraft.allocationStartWeek, allocationEndWeek: allocationDraft.allocationEndWeek } },
-                                { onSuccess: () => { setEditingAllocation(null); setAllocationDraft(null) } }
-                              )
-                            }} disabled={updateAllocationMutation.isPending}
-                              className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                              {updateAllocationMutation.isPending ? 'Saving…' : 'Save'}
-                            </button>
-                            <button data-testid="allocation-cancel" onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
-                              className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
-                              Cancel
-                            </button>
+                            )}
+                            {allocationDraft.allocationMode === 'TIMELINE' && (
+                              <>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                    Available from
+                                    {!availability.hasAuthoritativeProfile && row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
+                                  </label>
+                                  <input type="number" min={0} step={0.5} value={allocationDraft.allocationStartWeek ?? ''} placeholder="auto"
+                                    onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
+                                    className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                                    Available to
+                                    {!availability.hasAuthoritativeProfile && row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
+                                  </label>
+                                  <input type="number" min={0} step={0.5} value={allocationDraft.allocationEndWeek ?? ''} placeholder="auto"
+                                    onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
+                                    className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                                </div>
+                              </>
+                            )}
+                            <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                              {allocationDraft.allocationMode === 'EFFORT' && formatAllocationModeDescription('EFFORT')}
+                              {allocationDraft.allocationMode === 'FULL_PROJECT' && formatAllocationModeDescription('FULL_PROJECT')}
+                              {allocationDraft.allocationMode === 'TIMELINE' && (
+                                allocationDraft.allocationStartWeek != null && allocationDraft.allocationEndWeek != null
+                                  ? `Available at ${allocationDraft.allocationPercent}% from W${Math.floor(allocationDraft.allocationStartWeek)} to W${Math.floor(allocationDraft.allocationEndWeek)}. Work is assigned only when demand exists.`
+                                  : formatAllocationModeDescription('TIMELINE')
+                              )}
+                            </p>
+                            <div className="flex gap-2 ml-auto">
+                              <button data-testid="allocation-save" onClick={() => {
+                                updateAllocationMutation.mutate(
+                                  { rtId: row.resourceTypeId, data: { allocationMode: allocationDraft.allocationMode, allocationPercent: allocationDraft.allocationPercent, allocationStartWeek: allocationDraft.allocationStartWeek, allocationEndWeek: allocationDraft.allocationEndWeek } },
+                                  { onSuccess: () => { setEditingAllocation(null); setAllocationDraft(null) } }
+                                )
+                              }} disabled={updateAllocationMutation.isPending}
+                                className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
+                                {updateAllocationMutation.isPending ? 'Saving…' : 'Save'}
+                              </button>
+                              <button data-testid="allocation-cancel" onClick={() => { setEditingAllocation(null); setAllocationDraft(null) }}
+                                className="px-4 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                Cancel
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                    )
                   )}
                   {expandedNamedResources.has(row.resourceTypeId) && (
                     <NamedResourcesPanel
@@ -356,7 +412,8 @@ export default function ResourceProfileTab({
                     </tr>
                   )}
                 </Fragment>
-              ))}
+                )
+              })}
 
               {profile.overheadRows.map(row => {
                 const fteExceedsCount = row.currentCount != null && row.requiredFTE > row.currentCount

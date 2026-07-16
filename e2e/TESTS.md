@@ -140,9 +140,9 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 | Test | Description |
 |------|-------------|
-| desktop: add named resource, change basis, edit values, verify persistence after reload, remove | At 1440×900, calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts server-default planning basis is **TIMELINE**. Uses `setNamedResourceBasisAndWait` (PATCH + gated Timeline GET) to transition to EFFORT, re-acquires and asserts EFFORT, then same helper transitions back to TIMELINE. Each subsequent PATCH (allocation % → 80, start week → 2, end week → 10) installs both PATCH response and gated-Timeline-GET waiters before the action, then waits for both responses and re-acquires locators. Reloads the page, re-acquires controls, and asserts all four values persisted (TIMELINE, 80, 2, 10) via string `toHaveValue`. Before removal: asserts document scroll-fit + `expectElementToFit` on `resource-counts` panel and `named-resource-row-{nrId}`. Calls `removeNamedResource` (concurrent dialog acceptance, DELETE response, gated Timeline GET); asserts `named-resource-row-{id}` count zero. Post-delete: document fit + `expectElementToFit` on panel only. |
-| narrow viewport: column headers and named-resource controls visible, no overflow | At 820×900, verifies column headers (Named resource, Planning basis, Allocation %, Start, End) remain visible above `sm` breakpoint via `named-resource-headers` test ID. Calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts server-default basis is **TIMELINE**, uses `setNamedResourceBasisAndWait` to transition to EFFORT then back to TIMELINE. Verifies allocation/start/end controls become enabled. Before removal: `expectElementToFit` on panel and `named-resource-row-{nrId}`. Calls `removeNamedResource` (concurrent dialog/DELETE/Timeline GET); asserts row test ID count zero. Post-delete: document fit + `expectElementToFit` on panel. |
-| mobile viewport: desktop column headers hidden, inline labels visible, controls reachable, resource-counts panel and rows fit | At 390×844, verifies desktop column headers are **not** visible via stable `named-resource-headers` test ID (below `sm` breakpoint). Calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts inline mobile labels (Basis:, Alloc:, Start:, End:) via row-scoped `named-resource-row-{id}` test ID. Asserts server-default basis is **TIMELINE**, uses `setNamedResourceBasisAndWait` to transition to EFFORT then back to TIMELINE. Verifies allocation/start/end controls become enabled. Before removal: `expectElementToFit` on panel and `named-resource-row-{nrId}`. Proves vertical stacking order using parent-group bounding boxes (`locator('..')` from each label to its field-group `div`) with 2 px bottom-based group-tolerance (alloc `y ≥ basis·bottom − 2`, start `y ≥ alloc·bottom − 2`, end `y ≥ start·bottom − 2`). Calls `removeNamedResource` (concurrent dialog/DELETE/Timeline GET); asserts row test ID count zero. Post-delete: `expectElementToFit` on panel. |
+| desktop: add named resource, change basis, edit values, verify persistence after reload, remove | At 1440×900, calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts server-default availability pattern is **TIMELINE**. Uses `setNamedResourceBasisAndWait` (PATCH + gated Timeline GET) to transition to EFFORT, re-acquires and asserts EFFORT, then same helper transitions back to TIMELINE. Each subsequent PATCH (allocation % → 80, start week → 2, end week → 10) installs both PATCH response and gated-Timeline-GET waiters before the action, then waits for both responses and re-acquires locators. Reloads the page, re-acquires controls, and asserts all four values persisted (TIMELINE, 80, 2, 10) via string `toHaveValue`. Before removal: asserts document scroll-fit + `expectElementToFit` on `resource-counts` panel and `named-resource-row-{nrId}`. Calls `removeNamedResource` (concurrent dialog acceptance, DELETE response, gated Timeline GET); asserts `named-resource-row-{id}` count zero. Post-delete: document fit + `expectElementToFit` on panel only. |
+| narrow viewport: column headers and named-resource controls visible, no overflow | At 820×900, verifies column headers (Named resource, Availability pattern, Available %, Available from, Available to) remain visible above `sm` breakpoint via `named-resource-headers` test ID. Calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts server-default basis is **TIMELINE**, uses `setNamedResourceBasisAndWait` to transition to EFFORT then back to TIMELINE. Verifies allocation/start/end controls become enabled. Before removal: `expectElementToFit` on panel and `named-resource-row-{nrId}`. Calls `removeNamedResource` (concurrent dialog/DELETE/Timeline GET); asserts row test ID count zero. Post-delete: document fit + `expectElementToFit` on panel. |
+| mobile viewport: desktop column headers hidden, inline labels visible, controls reachable, resource-counts panel and rows fit | At 390×844, verifies desktop column headers are **not** visible via stable `named-resource-headers` test ID (below `sm` breakpoint). Calls `addNamedResourceAndWait` (POST + gated Timeline GET). Asserts inline mobile labels (Pattern:, Avail:, Avail from:, Avail to:) via row-scoped `named-resource-row-{id}` test ID. Asserts server-default basis is **TIMELINE**, uses `setNamedResourceBasisAndWait` to transition to EFFORT then back to TIMELINE. Verifies allocation/start/end controls become enabled. Before removal: `expectElementToFit` on panel and `named-resource-row-{nrId}`. Proves vertical stacking order using parent-group bounding boxes (`locator('..')` from each label to its field-group `div`) with 2 px bottom-based group-tolerance (alloc `y ≥ basis·bottom − 2`, start `y ≥ alloc·bottom − 2`, end `y ≥ start·bottom − 2`). Calls `removeNamedResource` (concurrent dialog/DELETE/Timeline GET); asserts row test ID count zero. Post-delete: `expectElementToFit` on panel. |
 
 #### `Timeline — cache invalidation` describe block (1 test)
 
@@ -158,9 +158,9 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 | Test | Description |
 |------|-------------|
-| allocation mode dropdown changes from Timeline to Whole-project allocation | Clicks the allocation badge for the Developer row to open the inline editor; changes mode to `FULL_PROJECT` and sets FTE % to 50; clicks Save |
-| Availability window mode shows start/end week inputs and persists | Opens the Developer allocation editor; selects Availability window (TIMELINE); fills start week 2 and end week 10; clicks Save |
-| allocation % input persists independently | Opens the Developer allocation editor; changes to Whole-project allocation (FULL_PROJECT); sets FTE % to 75; saves and re-opens to verify the 75% value persists |
+| allocation mode dropdown changes from Timeline to Fixed for whole project | Clicks the allocation badge for the Developer row to open the inline editor; changes mode to `FULL_PROJECT` and sets FTE % to 50; clicks Save |
+| Fixed for selected weeks mode shows start/end week inputs and persists | Opens the Developer allocation editor; selects Fixed for selected weeks (TIMELINE); fills start week 2 and end week 10; clicks Save |
+| Available % input persists independently | Opens the Developer allocation editor; changes to Fixed for whole project (FULL_PROJECT); sets FTE % to 75; saves and re-opens to verify the 75% value persists |
 
 
 #### `Squad Planner — profile-first apply and resource identity` describe block (1 test)
@@ -226,20 +226,28 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
-### `resource-allocation.spec.ts` — Resource Allocation (5 tests)
-
-All tests log in, create a fresh project, import a CSV with Tech Lead + Project Manager tasks, navigate to Resource Profile, and switch to the Commercial tab before running assertions.
+### `resource-allocation.spec.ts` — Resource Allocation & Responsive measurements (11 tests)
 
 | Test | Description |
 |------|-------------|
-| commercial tab shows allocation badge | Verifies at least one allocation badge is visible in the Commercial table, and its text matches `Demand-following`, `Availability window`, `Whole-project allocation`, or `Capacity profile` |
-| allocation editor opens on badge click | Clicks the first allocation badge → asserts the inline editor appears with a "Planning basis" label, "FTE %" label, mode `<select>`, FTE number input, and Save/Cancel buttons |
+| commercial tab shows allocation badge | Verifies at least one allocation badge is visible in the Commercial table, and its text matches `As needed`, `Fixed for selected weeks`, `Fixed for whole project`, or `Varies by week` |
+| allocation editor opens on badge click | Clicks the first allocation badge → asserts the inline editor appears with a "Availability pattern" label, "FTE %" label, mode `<select>`, FTE number input, and Save/Cancel buttons |
 | changing FTE % updates allocated days | Opens the editor, sets FTE % to 50, clicks Save → asserts the editor closes and the badge is still present (row remains intact after save) |
-| cancel closes editor without changing mode badge | Opens editor, switches mode to Whole-project allocation, clicks Cancel → asserts editor is gone and badge text is unchanged |
-| summary tab shows Planning basis column | Navigates back to Resource Profile tab → asserts the `<th>` with text "Planning basis" is visible in the summary table |
+| cancel closes editor without changing mode badge | Opens editor, switches mode to Fixed for whole project, clicks Cancel → asserts editor is gone and badge text is unchanged |
+| summary tab shows Availability pattern column | Navigates back to Resource Profile tab → asserts the `<th>` with text "Availability pattern" is visible in the summary table |
+| allocation editor — EFFORT hides Available % control | Opens the inline editor, selects EFFORT mode — asserts Available % and Available Percent controls are absent |
+| Squad Planner apply preserves a planned-resource segmented profile through the safe editor | Creates an isolated user and project, sends the real `POST /squad-plan/apply` payload with 0.5 then 1.0 headcount periods, resolves the exact planned-resource owner through both profile APIs, verifies profile-first segments and the safe `Varies by week` panel, captures no protected scalar role/named-resource writes, deep-links to the Squad Planner drawer, reloads the authoritative profile, and compares the canonical persisted profile before/after |
+
+#### `Responsive measurements — Timeline resource-counts` describe block (4 tests)
+
+| Test | Description |
+|------|-------------|
+| desktop: pattern select accommodates longest option with no overflow | At 1280x720, sets FULL_PROJECT mode, measures select width via hidden mirror ≥ text +24px, checks select does not overlap Avail % / Avail from grid cells, header columns don't overlap, contextual help fits, row fits, document has no overflow |
+| 820px viewport: pattern select, controls visible with no overflow | At 820x900, same measurement + overlap checks + select and all allocation controls remain visible |
+| 390px viewport: mobile stacking with readable select and View Resource Profile | At 390x844, shows inline mobile labels (Pattern:/Avail:/Avail from:/Avail to:), switches to CAPACITY_PLAN, verifies select readable (no clip), help text wraps, groups stack vertically, View Resource Profile button visible and enabled, no panel overflow |
+| CAPACITY_PLAN: help text and View Resource Profile at desktop and 820px | At 1280x720 and 820x900, selects CAPACITY_PLAN, verifies "Varies by week" help text visible and inside row bounds, View Resource Profile button visible and within column boundary |
 
 ---
-
 ### `effort-review.spec.ts` — Effort Review (7 tests)
 
 | Test | Description |

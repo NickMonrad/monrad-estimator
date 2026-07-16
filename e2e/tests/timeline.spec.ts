@@ -450,15 +450,15 @@ test.describe('Resource Profile allocation', () => {
     ).toBeVisible({ timeout: 10_000 })
   })
 
-  test('allocation mode dropdown changes from Timeline to Whole-project allocation', async ({ page }) => {
+  test('allocation mode dropdown changes from Timeline to Fixed for whole project', async ({ page }) => {
     // Find the Developer row and click its allocation badge
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
 
-    // The initial badge shows "Availability window · 100%" (database default for new resource types)
+    // The initial badge shows "Fixed for selected weeks · 100%" (database default for new resource types)
     const badge = devRow.locator('button[title="Click to edit allocation"]')
     await expect(badge).toBeVisible()
-    // The initial badge shows "Availability window · 100%" (database default for new resource types)
+    // The initial badge shows "Fixed for selected weeks · 100%" (database default for new resource types)
 
     // Click the badge to open the inline edit form
     await badge.click()
@@ -466,7 +466,7 @@ test.describe('Resource Profile allocation', () => {
     // The allocation mode dropdown should be visible
     const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
-    // Change to Whole-project allocation
+    // Change to Fixed for whole project
     await modeSelect.selectOption('FULL_PROJECT')
 
     // Set FTE to 50%
@@ -476,10 +476,10 @@ test.describe('Resource Profile allocation', () => {
     // Click Save (data-testid="allocation-save")
     await page.locator('[data-testid="allocation-save"]').click()
 
-    // After save, the badge should show "Whole-project allocation · 50%"
+    // After save, the badge should show "Fixed for whole project · 50%"
   })
 
-  test('Availability window mode shows start/end week inputs and persists', async ({ page }) => {
+  test('Fixed for selected weeks mode shows start/end week inputs and persists', async ({ page }) => {
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
     const badge = devRow.locator('button[title="Click to edit allocation"]')
@@ -489,7 +489,7 @@ test.describe('Resource Profile allocation', () => {
     // Change mode to Timeline
     const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
-    // Change mode to Availability window
+    // Change mode to Fixed for selected weeks
     // Start/end week inputs should appear
     const startInput = page.locator('input[placeholder="auto"]').first()
     const endInput = page.locator('input[placeholder="auto"]').last()
@@ -503,7 +503,7 @@ test.describe('Resource Profile allocation', () => {
     // Click Save
     await page.locator('[data-testid="allocation-save"]').click()
 
-    // Badge should show "Availability window · 100%" (default % when switching from EFFORT)
+    // Badge should show "Fixed for selected weeks · 100%" (default % when switching from EFFORT)
   })
 
   test('allocation % input persists independently', async ({ page }) => {
@@ -515,7 +515,7 @@ test.describe('Resource Profile allocation', () => {
     const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
 
-    // Change mode to Whole-project allocation (has % field)
+    // Change mode to Fixed for whole project (has % field)
     await modeSelect.selectOption('FULL_PROJECT')
 
     // Set FTE to 75%
@@ -535,7 +535,7 @@ test.describe('Resource Profile allocation', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Timeline Resource-counts layout — issue #369
-// Add named resource (server-default planning basis is TIMELINE), exercise
+// Add named resource (server-default availability pattern is TIMELINE), exercise
 // explicit basis transitions EFFORT→TIMELINE, set allocation 80%, start 2,
 // end 10, verify persistence after reload, remove. Tests run at desktop,
 // narrow, and mobile viewport sizes with geometry-fit assertions.
@@ -677,10 +677,10 @@ test.describe('Timeline — Resource-counts layout', () => {
   }
 
   /**
-   * Transition a named resource's planning basis with exact PATCH + Timeline GET
+   * Transition a named resource's availability pattern with exact PATCH + Timeline GET
    * synchronization. Server returns TIMELINE as the default for new named
    * resources; use this helper to switch to EFFORT and back.
-   * @param basisLocator - the specific combobox Locator for this named resource's basis
+   * @param basisLocator - the specific combobox Locator for this named resource's pattern
    */
   async function setNamedResourceBasisAndWait(page: Page, nrId: string, basisLocator: Locator, basis: 'EFFORT' | 'TIMELINE') {
     const tlMatcher = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
@@ -717,20 +717,20 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(nrName).toBeTruthy()
 
     // Assert initial basis is TIMELINE (server default for new named resources)
-    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
     await expect(basisSelect).toHaveValue('TIMELINE')
 
     // Transition to EFFORT
     await setNamedResourceBasisAndWait(page, nrId, basisSelect, 'EFFORT')
-    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })
     await expect(effortBasis).toHaveValue('EFFORT')
 
     // Transition back to TIMELINE for allocation/start/end editing
     await setNamedResourceBasisAndWait(page, nrId, effortBasis, 'TIMELINE')
-    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
+    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
     // PATCH allocation to 80%
-    const pctInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })
+    const pctInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`available percentage for ${nrName}`, 'i') })
     await expect(pctInput).toBeVisible()
     const tlPct = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchPct = page.waitForResponse(
@@ -752,11 +752,11 @@ test.describe('Timeline — Resource-counts layout', () => {
     const [patchPctResp] = await Promise.all([patchPct, tlPct.promise])
     expect(patchPctResp.status()).toBe(200)
     tlPct.cleanup()
-    const pctAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })
+    const pctAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`available percentage for ${nrName}`, 'i') })
     await expect(pctAfter).toHaveValue('80')
 
     // PATCH start week to 2
-    const startInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })
+    const startInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`available from week for ${nrName}`, 'i') })
     await expect(startInput).toBeEnabled()
     const tlStart = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchStart = page.waitForResponse(
@@ -778,11 +778,11 @@ test.describe('Timeline — Resource-counts layout', () => {
     const [patchStartResp] = await Promise.all([patchStart, tlStart.promise])
     expect(patchStartResp.status()).toBe(200)
     tlStart.cleanup()
-    const startAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })
+    const startAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`available from week for ${nrName}`, 'i') })
     await expect(startAfter).toHaveValue('2')
 
     // PATCH end week to 10
-    const endInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })
+    const endInput = devCard(page).getByRole('spinbutton', { name: new RegExp(`available to week for ${nrName}`, 'i') })
     await expect(endInput).toBeEnabled()
     const tlEnd = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchEnd = page.waitForResponse(
@@ -804,7 +804,7 @@ test.describe('Timeline — Resource-counts layout', () => {
     const [patchEndResp] = await Promise.all([patchEnd, tlEnd.promise])
     expect(patchEndResp.status()).toBe(200)
     tlEnd.cleanup()
-    const endAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })
+    const endAfter = devCard(page).getByRole('spinbutton', { name: new RegExp(`available to week for ${nrName}`, 'i') })
     await expect(endAfter).toHaveValue('10')
 
     await page.reload()
@@ -812,12 +812,12 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(page.url()).toContain(`/projects/${projectId}/timeline`)
 
     // Re-acquire locators after reload
-    const reloadBasis = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    const reloadBasis = devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })
     await expect(reloadBasis).toBeVisible({ timeout: 10_000 })
     await expect(reloadBasis).toHaveValue('TIMELINE')
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })).toHaveValue('80')
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })).toHaveValue('2')
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })).toHaveValue('10')
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available percentage for ${nrName}`, 'i') })).toHaveValue('80')
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available from week for ${nrName}`, 'i') })).toHaveValue('2')
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available to week for ${nrName}`, 'i') })).toHaveValue('10')
     await expect(devCard(page).getByRole('button', { name: new RegExp(`remove ${nrName}`, 'i') })).toBeVisible()
     await expect(devCard(page).getByRole('button', { name: /add named resource to developer/i })).toBeVisible()
 
@@ -851,29 +851,29 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(nrName).toBeTruthy()
 
     // Assert initial basis is TIMELINE (server default for new named resources)
-    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
     await expect(basisSelect).toHaveValue('TIMELINE')
 
     const headers = devCard(page).getByTestId('named-resource-headers')
     await expect(headers.getByText('Named resource', { exact: true })).toBeVisible()
-    await expect(headers.getByText('Planning basis', { exact: true })).toBeVisible()
-    await expect(headers.getByText('Allocation %', { exact: true })).toBeVisible()
-    await expect(headers.getByText('Start', { exact: true })).toBeVisible()
-    await expect(headers.getByText('End', { exact: true })).toBeVisible()
+    await expect(headers.getByText('Availability pattern', { exact: true })).toBeVisible()
+    await expect(headers.getByText('Available %', { exact: true })).toBeVisible()
+    await expect(headers.getByText('Available from', { exact: true })).toBeVisible()
+    await expect(headers.getByText('Available to', { exact: true })).toBeVisible()
 
     // Transition to EFFORT
     await setNamedResourceBasisAndWait(page, nrId, basisSelect, 'EFFORT')
-    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })
     await expect(effortBasis).toHaveValue('EFFORT')
 
     // Transition back to TIMELINE for full controls
     await setNamedResourceBasisAndWait(page, nrId, effortBasis, 'TIMELINE')
-    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
+    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
 
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })).toBeEnabled()
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })).toBeEnabled()
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available percentage for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available from week for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available to week for ${nrName}`, 'i') })).toBeEnabled()
     await expectElementToFit(page.getByTestId('resource-counts'))
     await expectElementToFit(page.getByTestId(`named-resource-row-${nrId}`))
 
@@ -899,42 +899,42 @@ test.describe('Timeline — Resource-counts layout', () => {
     expect(nrName).toBeTruthy()
 
     const row = counts.getByTestId(`named-resource-row-${nrId}`)
-    await expect(row.getByText('Basis:')).toBeVisible()
-    await expect(row.getByText('Alloc:')).toBeVisible()
-    await expect(row.getByText('Start:')).toBeVisible()
-    await expect(row.getByText('End:')).toBeVisible()
+    await expect(row.getByText('Pattern:')).toBeVisible()
+    await expect(row.getByText('Avail:')).toBeVisible()
+    await expect(row.getByText('Avail from:')).toBeVisible()
+    await expect(row.getByText('Avail to:')).toBeVisible()
     const headers = devCard(page).getByTestId('named-resource-headers')
     await expect(headers.getByText('Named resource', { exact: true })).not.toBeVisible()
-    await expect(headers.getByText('Planning basis', { exact: true })).not.toBeVisible()
-    await expect(headers.getByText('Allocation %', { exact: true })).not.toBeVisible()
+    await expect(headers.getByText('Availability pattern', { exact: true })).not.toBeVisible()
+    await expect(headers.getByText('Available %', { exact: true })).not.toBeVisible()
 
     // Assert initial basis is TIMELINE (server default for new named resources)
-    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    const basisSelect = devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })
     await expect(basisSelect).toBeVisible({ timeout: 10_000 })
     await expect(basisSelect).toHaveValue('TIMELINE')
 
     // Transition to EFFORT
     await setNamedResourceBasisAndWait(page, nrId, basisSelect, 'EFFORT')
-    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })
+    const effortBasis = devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })
     await expect(effortBasis).toHaveValue('EFFORT')
 
     // Transition back to TIMELINE for full controls
     await setNamedResourceBasisAndWait(page, nrId, effortBasis, 'TIMELINE')
-    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`planning basis for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
+    await expect(devCard(page).getByRole('combobox', { name: new RegExp(`availability pattern for ${nrName}`, 'i') })).toHaveValue('TIMELINE')
 
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`allocation percentage for ${nrName}`, 'i') })).toBeEnabled()
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`start week for ${nrName}`, 'i') })).toBeEnabled()
-    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`end week for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available percentage for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available from week for ${nrName}`, 'i') })).toBeEnabled()
+    await expect(devCard(page).getByRole('spinbutton', { name: new RegExp(`available to week for ${nrName}`, 'i') })).toBeEnabled()
 
     // Check resource-counts panel/row fit while populated
     await expectElementToFit(page.getByTestId('resource-counts'))
     await expectElementToFit(page.getByTestId(`named-resource-row-${nrId}`))
 
     // Change 6: strengthened mobile stacking with explicit null checks and proper vertical comparisons
-    const basisGroup = row.getByText('Basis:').locator('..')
-    const allocGroup = row.getByText('Alloc:').locator('..')
-    const startGroup = row.getByText('Start:').locator('..')
-    const endGroup = row.getByText('End:').locator('..')
+    const basisGroup = row.getByText('Pattern:').locator('..')
+    const allocGroup = row.getByText('Avail:').locator('..')
+    const startGroup = row.getByText('Avail from:').locator('..')
+    const endGroup = row.getByText('Avail to:').locator('..')
     const basisBox = await basisGroup.boundingBox()
     const allocBox = await allocGroup.boundingBox()
     const startBox = await startGroup.boundingBox()
