@@ -72,7 +72,13 @@ export function assertSafeIdentifier(name) {
 }
 
 export function quoteIdentifier(name) {
-  return `"${assertSafeIdentifier(name)}"`
+  if (!name || typeof name !== 'string') {
+    throw new Error('PostgreSQL identifier must be a non-empty string')
+  }
+  if (Buffer.byteLength(name) > IDENTIFIER_LIMIT) {
+    throw new Error(`PostgreSQL identifier exceeds ${IDENTIFIER_LIMIT} bytes`)
+  }
+  return `"${name.replace(/"/g, '""')}"`
 }
 
 export function createTestDatabaseName({ worktree = process.cwd(), pid = process.pid, random = crypto.randomUUID() } = {}) {
@@ -82,14 +88,22 @@ export function createTestDatabaseName({ worktree = process.cwd(), pid = process
 }
 
 export function resolveCommand(command, args, platform = process.platform, npmExecPath = process.env.npm_execpath) {
-  if (platform === 'win32' && command === 'npx') {
+  if (platform !== 'win32') return { command, args }
+  if (command === 'npm') {
+    if (!npmExecPath) throw new Error('npm_execpath is required to run npm commands on Windows')
+    return { command: process.execPath, args: [npmExecPath, ...args] }
+  }
+  if (command === 'npx') {
     if (!npmExecPath) throw new Error('npm_execpath is required to run npx commands on Windows')
     return { command: process.execPath, args: [npmExecPath, 'exec', '--', ...args] }
   }
   return { command, args }
 }
 
-export function runCommand(command, args, { cwd, env, inherit = true, platform, npmExecPath } = {}) {
+export function runCommand(command, args, { cwd, env, inherit = true, platform, npmExecPath, signal } = {}) {
+  if (signal?.aborted) {
+    return Promise.reject(new Error(`${command} was cancelled`))
+  }
   return new Promise((resolve, reject) => {
     const spec = resolveCommand(command, args, platform, npmExecPath)
     const child = spawn(spec.command, spec.args, { cwd, env, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'] })
@@ -98,11 +112,26 @@ export function runCommand(command, args, { cwd, env, inherit = true, platform, 
       child.stdout.on('data', chunk => { output += chunk; process.stdout.write(chunk) })
       child.stderr.on('data', chunk => { output += chunk; process.stderr.write(chunk) })
     }
-    child.once('error', error => reject(new Error(`${command} could not start: ${error.message}`)))
-    child.once('exit', code => code === 0 ? resolve(output) : reject(new Error(`${command} failed with exit code ${code}`)))
+
+    function onAbort() {
+      child.kill('SIGTERM')
+      reject(new Error(`${command} was cancelled`))
+    }
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+
+    child.once('error', error => {
+      signal?.removeEventListener('abort', onAbort)
+      reject(new Error(`${command} could not start: ${error.message}`))
+    })
+    child.once('exit', code => {
+      signal?.removeEventListener('abort', onAbort)
+      code === 0 ? resolve(output) : reject(new Error(`${command} failed with exit code ${code}`))
+    })
   })
 }
-
 async function defaultClientFactory(connectionString) {
   const { Client } = await import('pg')
   return new Client({ connectionString })
@@ -130,7 +159,9 @@ export async function ensureDatabase({ databaseUrl, clientFactory = defaultClien
 
 export function redactError(error, prefix = 'Database operation failed') {
   const message = error instanceof Error ? error.message : String(error)
-  return new Error(`${prefix}: ${message.replace(/(postgres(?:ql)?:\/\/[^\s@/:]+:)[^@\s]+@/gi, '$1***@')}`)
+  let redacted = message.replace(/(postgres(?:ql)?:\/\/[^\s@/:]+:)[^@\s]+@/gi, '$1***@')
+  redacted = redacted.replace(/([?&])password=([^&\s]*)/gi, '$1password=***')
+  return new Error(`${prefix}: ${redacted}`)
 }
 
 export async function preparePrisma({ root, env, run = runCommand }) {
@@ -174,7 +205,7 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
 }
 
 export async function stopDockerPostgres(container, { run = dockerCommand, environment = process.env } = {}) {
-  if (container?.name) await run('docker', ['rm', '--force', container.name], { env: { ...environment, ...container.dockerEnv } }).catch(() => {})
+  if (container?.name) await run('docker', ['rm', '--force', container.name], { env: { ...environment, ...container.dockerEnv } })
 }
 
 async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000) {
@@ -215,6 +246,7 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
   let container
   let maintenanceUrl
   let databaseName
+  let actionError
   try {
     try {
       maintenanceUrl = maintenanceDatabaseUrl(configuredUrl)
@@ -241,10 +273,64 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
     const testEnvironment = { ...resolvedEnvironment, DATABASE_URL: targetUrl, INTEGRATION_TEST: 'true' }
     await prepare({ root, env: testEnvironment, run })
     return await action(testEnvironment, { external: false, databaseName, docker: Boolean(container) })
+  } catch (err) {
+    actionError = err instanceof Error ? err : new Error(String(err))
+    throw actionError
   } finally {
+    const cleanupErrors = []
     if (databaseName && maintenanceUrl) {
-      await terminateAndDrop({ maintenanceUrl, databaseName, clientFactory }).catch(error => console.error(`[local-db] temporary database cleanup failed: ${redactError(error).message}`))
+      try {
+        await terminateAndDrop({ maintenanceUrl, databaseName, clientFactory })
+      } catch (dbErr) {
+        cleanupErrors.push(redactError(dbErr, 'Database cleanup failed'))
+      }
     }
-    if (container) await stopDocker(container, { run, environment: resolvedEnvironment })
+    if (container) {
+      try {
+        await stopDocker(container, { run, environment: resolvedEnvironment })
+      } catch (dockerErr) {
+        cleanupErrors.push(redactError(dockerErr, 'Docker cleanup failed'))
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      const combinedMessages = cleanupErrors.map(e => e.message).join('; ')
+      if (actionError) {
+        actionError.message = `${actionError.message} (cleanup: ${combinedMessages})`
+      } else {
+        throw new Error(`Cleanup failed: ${combinedMessages}`)
+      }
+    }
+  }
+}
+
+export function shutdownGuard({ process: proc = process } = {}) {
+  let triggered = false
+  let receivedSignal = null
+  let exitCode = null
+  const controller = new AbortController()
+
+  const handler = (signal) => {
+    if (triggered) return
+    triggered = true
+    receivedSignal = signal
+    exitCode = signal === 'SIGINT' ? 130 : 143
+    proc.exitCode = exitCode
+    controller.abort()
+  }
+
+  proc.on('SIGINT', handler)
+  proc.on('SIGTERM', handler)
+
+  return {
+    get triggered() { return triggered },
+    get signal() { return receivedSignal },
+    get signalExitCode() { return exitCode },
+    abortSignal: controller.signal,
+    dispose() {
+      proc.off('SIGINT', handler)
+      proc.off('SIGTERM', handler)
+    },
+    /** @internal exposed for deterministic testing */
+    _handler: handler,
   }
 }

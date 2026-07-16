@@ -17,7 +17,8 @@ import { spawn } from 'node:child_process'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadLocalEnvironment, withIsolatedTestDatabase } from './local-postgres.mjs'
+import { loadLocalEnvironment, shutdownGuard, withIsolatedTestDatabase } from './local-postgres.mjs'
+import { terminateProcess } from './terminate-process.mjs'
 
 
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -65,69 +66,91 @@ const clientPort = await findAvailablePort(preferredClientPort, new Set([apiPort
 const apiUrl = `http://${host}:${apiPort}`
 const baseUrl = `http://${host}:${clientPort}`
 const children = []
+const guard = shutdownGuard()
 
 console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (preferred :${preferredApiPort} was unavailable)`}`)
 console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
 
-await withIsolatedTestDatabase({ root }, async testEnv => {
-  try {
-    // ── Cleanup before seed ───────────────────────────────────────────────
-    await run('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv })
+try {
+  await withIsolatedTestDatabase({ root }, async testEnv => {
+    try {
+      // ── Cleanup before seed ───────────────────────────────────────────────
+      await run('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv })
+      if (guard.triggered) return
 
-    // ── Seed ──────────────────────────────────────────────────────────────
-    await run('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv })
+      // ── Seed ──────────────────────────────────────────────────────────────
+      await run('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv })
+      if (guard.triggered) return
 
-    // ── Start API ─────────────────────────────────────────────────────────
-    const api = start('npx', ['tsx', 'src/index.ts'], {
-      cwd: serverDir,
-      env: testEnv,
-      extraEnv: {
-        NODE_ENV: 'test',
-        PORT: String(apiPort),
-        CLIENT_URL: baseUrl,
-      },
-      label: 'api',
-    })
-    children.push(api)
+      // ── Start API ─────────────────────────────────────────────────────────
+      const api = start('npx', ['tsx', 'src/index.ts'], {
+        cwd: serverDir,
+        env: testEnv,
+        extraEnv: {
+          NODE_ENV: 'test',
+          PORT: String(apiPort),
+          CLIENT_URL: baseUrl,
+        },
+        label: 'api',
+      })
+      children.push(api)
+      if (guard.triggered) return
 
-    // ── Start Vite ────────────────────────────────────────────────────────
-    const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
-      cwd: clientDir,
-      env: testEnv,
-      extraEnv: {
-        VITE_API_URL: apiUrl,
-      },
-      label: 'vite',
-    })
-    children.push(client)
+      // ── Start Vite ────────────────────────────────────────────────────────
+      const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
+        cwd: clientDir,
+        env: testEnv,
+        extraEnv: {
+          VITE_API_URL: apiUrl,
+        },
+        label: 'vite',
+      })
+      children.push(client)
+      if (guard.triggered) return
 
-    await waitForMonradApi(apiUrl)
-    await waitForClient(baseUrl)
-    await waitForProxy(baseUrl)
+      await waitForMonradApi(apiUrl)
+      if (guard.triggered) return
+      await waitForClient(baseUrl)
+      if (guard.triggered) return
+      await waitForProxy(baseUrl)
+      if (guard.triggered) return
 
-    await run('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
-      cwd: e2eDir,
-      env: testEnv,
-      extraEnv: {
-        BASE_URL: baseUrl,
-        API_URL: apiUrl,
-        NODE_ENV: 'test',
-      },
-      inherit: true,
-    })
-  } finally {
-    await stopChildren()
+      await run('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
+        cwd: e2eDir,
+        env: testEnv,
+        extraEnv: {
+          BASE_URL: baseUrl,
+          API_URL: apiUrl,
+          NODE_ENV: 'test',
+        },
+        inherit: true,
+      })
+    } finally {
+      await stopChildren()
+    }
+  })
+} catch (error) {
+  if (!guard.triggered) {
+    console.error(`[e2e-local] ${error?.message ?? error}`)
+    process.exitCode = 1
   }
-})
+} finally {
+  guard.dispose()
+  if (guard.triggered) process.exit(guard.signalExitCode)
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function start(command, args, { cwd, env, extraEnv = {}, label }) {
   const spec = resolveCommand(command, args)
+  // Spawn detached so the child gets its own process group.
+  // Without this, `npx` wrappers can exit while the underlying tool
+  // (API/Vite) continues as an orphan with shared stdio pipes.
   const child = spawn(spec.command, spec.args, {
     cwd,
     env: { ...env, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   })
 
   child.stdout.on('data', data => process.stdout.write(`[${label}] ${data}`))
@@ -164,9 +187,25 @@ function run(command, args, { cwd, env, extraEnv = {}, inherit, allowFailure } =
         process.stderr.write(data)
       })
     }
-    child.on('error', reject)
 
+    function onAbort() {
+      child.kill('SIGTERM')
+      reject(new Error(`${command} was cancelled`))
+    }
+
+    if (guard.abortSignal.aborted) {
+      child.kill('SIGTERM')
+      reject(new Error(`${command} was cancelled`))
+      return
+    }
+    guard.abortSignal.addEventListener('abort', onAbort, { once: true })
+
+    child.on('error', error => {
+      guard.abortSignal.removeEventListener('abort', onAbort)
+      reject(error)
+    })
     child.on('exit', code => {
+      guard.abortSignal.removeEventListener('abort', onAbort)
       if (code === 0 || allowFailure) resolve(output)
       else reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}`))
     })
@@ -248,6 +287,7 @@ async function waitFor(label, check) {
   const deadline = Date.now() + 60_000
   let lastError
   while (Date.now() < deadline) {
+    if (guard.abortSignal.aborted) throw new Error(`Cancelled: ${label}`)
     try {
       await check()
       console.log(`[e2e-local] Ready: ${label}`)
@@ -260,14 +300,21 @@ async function waitFor(label, check) {
   throw new Error(`Timed out waiting for ${label}: ${lastError?.message ?? 'unknown error'}`)
 }
 
+
+
 async function stopChildren() {
   for (const child of children.reverse()) {
-    if (child.killed) continue
-    if (process.platform === 'win32' && child.pid) {
-      await run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { allowFailure: true })
+    // Windows: `taskkill /T` kills the entire job object — no early skip.
+    if (process.platform === 'win32') {
+      if (child.pid) {
+        await run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { allowFailure: true })
+      }
     } else {
-      child.kill('SIGTERM')
+      // POSIX: signal the child's process group so spawned wrappers
+      // (npx) that already exited do not orphan the actual tool
+      // (API/Vite).  terminateProcess handles the wrapper-exit case
+      // via pipe-close bounded completion.
+      await terminateProcess(child, undefined, { useProcessGroup: true })
     }
   }
-  await new Promise(resolve => setTimeout(resolve, 1_000))
 }

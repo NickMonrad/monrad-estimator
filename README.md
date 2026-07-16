@@ -159,22 +159,33 @@ Server logs are written to `logs/dev-servers.log` when running in the background
 npm run validate
 
 # PostgreSQL-backed integration suites use one disposable database per run.
-# They prefer host PostgreSQL and fall back to a unique postgres:15 container.
+# They prefer host PostgreSQL and are designed to fall back to a unique
+# postgres:15 container when no host server is reachable (not yet live-tested).
 npm run test:integration:local
 
 # E2E provisions the same disposable database before cleanup, seed, API, Vite, and Playwright.
 # It never targets the configured persistent development database.
 
 npm run test:e2e:local
+# Externally managed test database (migrations, seed, and cleanup are destructive):
+# MONRAD_TEST_DATABASE_URL="postgresql://user@host:5432/db_name" MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 npm run test:integration:local
+# When set, MONRAD_TEST_DATABASE_URL IS the exact externally managed database —
+# migrations, seed, and cleanup run directly against it; it is never auto-created
+# or auto-dropped. Both variables are required for opt-in.
 
-# Optional externally managed test database (migration and cleanup are destructive):
-# MONRAD_TEST_DATABASE_URL=... MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 npm run test:integration:local
-
-# E2E (requires both dev servers already running)
-npm run test:e2e
-```
-
-Temporary test databases are named uniquely per worktree/run, connections are terminated before dropping them, and cleanup runs after success or failure. If an interrupted process leaves a temporary database/container behind, it is safe to remove only resources whose names begin with `monrad_test_` or `monrad_pg_`; never clean the configured development database.
+Temporary test databases are named uniquely per worktree/run, connections are
+terminated before dropping them, and cleanup runs after success or failure. If
+an interrupted process leaves a temporary database or container behind, inspect
+the leftover resources first — list databases with
+`SELECT datname FROM pg_database WHERE datname LIKE 'monrad_test_%'` and
+containers with `docker ps -a --filter name=monrad_pg_` — then verify the exact
+name against the configured `DATABASE_URL` (the persistent database is never a
+cleanup target), terminate connections, and drop or force-remove each one.
+**Never delete by prefix without inspection** — the `monrad_test_` prefix alone
+does not prove a candidate is safe to drop. Only comparing the exact name
+against the configured `DATABASE_URL` and confirming the lifecycle module owns
+the candidate makes cleanup safe. The sample default (`monrad_estimator`) is a
+common persistent-development-database name, but any name may be configured.
 
 ---
 

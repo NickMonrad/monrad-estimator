@@ -78,9 +78,18 @@ For user-visible behaviour, navigation, permissions, persistence, or critical cr
 npm run test:e2e:local
 ```
 
-The local runner provisions one disposable database per worktree/run, then runs migrations, cleanup, seed, API, Vite, and Playwright only against that database. It prefers the configured host PostgreSQL authority and falls back to a unique `postgres:15` Docker container when Docker is usable. It terminates database connections, drops the disposable database, and removes its temporary container after success or failure; it never resets, drops, or cleans the persistent `DATABASE_URL` database.
+The local runner provisions one disposable database per worktree/run, then runs
+migrations, cleanup, seed, API, Vite, and Playwright only against that database.
+It prefers the configured host PostgreSQL authority and is designed to fall back
+to a unique `postgres:15` Docker container when Docker is usable (this fallback
+has not been live-tested). It terminates database connections, drops the
+disposable database, and removes its temporary container after success or
+failure; it never resets, drops, or cleans the persistent `DATABASE_URL`
+database.
 
-Use `npm run test:integration:local` for the PostgreSQL-backed snapshot rollback, clone, Squad Plan profile-first, and apply-parity suites. `npm run db:setup` safely creates the configured persistent development database if missing, then runs `prisma migrate deploy` and `prisma generate`. Shell variables override `server/.env` (or `MONRAD_ENV_FILE`). For an externally managed disposable database, set both `MONRAD_TEST_DATABASE_URL` and `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1`; migrations and cleanup remain destructive to that explicitly selected test-only database.
+Use `npm run test:integration:local` for the PostgreSQL-backed snapshot rollback, clone, Squad Plan profile-first, and apply-parity suites. `npm run db:setup` safely creates the configured persistent development database if missing, then runs `prisma migrate deploy` and `prisma generate`. Shell variables override `server/.env` (or `MONRAD_ENV_FILE`). For an externally managed test database, set both `MONRAD_TEST_DATABASE_URL` (the exact database that receives migrations, seed, and cleanup — never auto-created or auto-dropped) and `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` (required opt-in). Both variables together are required; the lifecycle module refuses to operate when only one is set.
+
+If a test run is interrupted (Ctrl+C, crash), a temporary database or container may persist. Inspect leftover resources first — list databases with `SELECT datname FROM pg_database WHERE datname LIKE 'monrad_test_%'` and containers with `docker ps -a --filter name=monrad_pg_` — then verify the exact name against the configured `DATABASE_URL` (the persistent database is never a cleanup target), terminate connections, and drop or force-remove each one. **Never delete by prefix without inspection** — the `monrad_test_` prefix alone does not prove a candidate is safe to drop. Verify that a candidate was created by the lifecycle module, not a pre-existing externally managed database.
 
 For documentation-only work, internal refactors with unchanged behaviour, or narrowly scoped server work, E2E may be marked not applicable when the PR explains why and lists the focused tests used instead.
 
