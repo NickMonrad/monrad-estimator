@@ -349,6 +349,60 @@ describe('NamedResourcesPanel capacity profile display', () => {
     expect(screen.getByTitle('Planned resources cannot be deleted')).toBeDisabled()
     expect(screen.queryByTitle('Delete')).not.toBeInTheDocument()
   })
+
+  it('shows weekly profile guidance for a persisted planned resource', async () => {
+    const plannedAllocation: ResourceProfileRow['namedResources'][number] = {
+      ...MOCK_ALLOCATIONS[0],
+      id: 'nr-persisted-profile',
+      name: 'Planned Tech Lead',
+      resourceIdentity: 'PLANNED_RESOURCE',
+      synthetic: false,
+      capacityProfile: {
+        planningBasis: 'capacityProfile',
+        source: 'squadPlanner',
+        defaultPercent: null,
+        startWeek: 0,
+        endWeek: 8,
+        segments: [
+          { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+          { startWeek: 4, endWeek: 8, capacityPercent: 100 },
+        ],
+        resolutionSource: 'PROFILE',
+      },
+    }
+
+    api.get.mockResolvedValue({
+      data: [{
+        id: 'nr-persisted-profile', resourceTypeId: 'rt-1', name: 'Planned Tech Lead',
+        startWeek: null, endWeek: null, allocationPct: 100,
+        pricingModel: 'ACTUAL_DAYS', createdAt: '', updatedAt: '',
+      }],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table><tbody><NamedResourcesPanel
+          projectId="proj-1" rtId="rt-1" rtCount={1} columnCount={8}
+          allocations={[plannedAllocation]}
+        /></tbody></table>
+      </QueryClientProvider>,
+    )
+
+    await screen.findByDisplayValue('Planned Tech Lead')
+    const owner = screen.getByTestId('profile-managed-owner-nr-persisted-profile')
+    expect(owner).toHaveTextContent('Varies by week')
+    expect(owner).not.toHaveTextContent('%')
+
+    fireEvent.click(owner)
+    expect(screen.getByTestId('profile-managed-panel-nr-persisted-profile')).toHaveTextContent(
+      'managed through the weekly capacity profile',
+    )
+    expect(screen.getByRole('link', { name: 'Open weekly profile editor ↗' })).toHaveAttribute(
+      'href',
+      '/projects/proj-1/timeline?panel=squad-planner',
+    )
+  })
 })
 
 describe('planned resource UI', () => {
