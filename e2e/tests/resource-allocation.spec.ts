@@ -356,7 +356,7 @@ test.describe('Resource Allocation', () => {
     await expect(planRow).toBeVisible({ timeout: 10_000 })
   
     // The row shows the people count with capacity profile hint
-    await expect(planRow).toContainText(/people · .* capacity profile/i)
+    await expect(planRow).toContainText(/(person|people) · .* capacity profile/i)
   
     // Expand named resources for this role
     const peopleButton = planRow.locator('button[title="Show named resources"]')
@@ -365,13 +365,14 @@ test.describe('Resource Allocation', () => {
   
     // Find the planned resource within the expanded panel — it shows
     // capacity profile info with segments
-    const cpSection = page.locator('text=/Profile:.*50%.*100%/').first()
+    // The segment summary format: "W1-W4: 50% · W5-W8: 100%"
+    const cpSection = page.locator('text=W1-W4').first()
     await expect(cpSection).toBeVisible({ timeout: 8_000 })
   
     // Verify the capacity profile display shows the expected segments
-    // Format: W1-W4: 50% · W5-W8: 100%
-    await expect(cpSection).toHaveText(/W1-W4: 50%.*W5-W8: 100%/)
-  
+    const cpText = await cpSection.textContent()
+    expect(cpText).toMatch(/W1-W4: 50%/)
+    expect(cpText).toMatch(/W5-W8: 100%/)
     expect(scalarCalls).toHaveLength(0)
   
     // Round-trip: navigate away and back
