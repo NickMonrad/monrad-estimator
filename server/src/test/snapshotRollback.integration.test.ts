@@ -920,7 +920,8 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     // ── Mutate every captured domain ──────────────────────────────
 
     // Add post-snapshot owners, compatibility metadata, a profile, and a discount.
-    // V3 rollback must preserve these rows while replacing only captured profiles.
+    // V3 rollback preserves resource types and compatibility rows while replacing
+    // captured profiles and pruning named resources created after the snapshot.
     extraRtId = await createResourceType(projectId, 'rt-extra', 'Post-snapshot role', {
       count: 1,
       hoursPerDay: 8,
@@ -1204,17 +1205,20 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       where: { resourceType: { projectId } },
     })
 
-    // Named-resource ownership and allocation metadata are not pruned.
-    expect(nrs).toHaveLength(9)
+    // Rollback restores the eight named resources captured in the snapshot.
+    expect(nrs).toHaveLength(8)
     expect(nrs.find(n => n.id === nrAliceId)!.pricingModel).toBe('ACTUAL_DAYS')
-    expect(nrs.find(n => n.id === extraNrId)).toMatchObject({
-      resourceTypeId: extraRtId,
-      name: 'Post-snapshot person',
-      allocationMode: 'TIMELINE',
-      allocationPercent: 45,
-      allocationStartWeek: 2,
-      allocationEndWeek: 7,
-    })
+    expect(nrs.find(n => n.id === extraNrId)).toBeUndefined()
+    expect(nrs.map(n => n.id).sort()).toEqual([
+      'nr-alice',
+      'nr-bob',
+      'nr-charlie',
+      'nr-dave',
+      'nr-eve',
+      'nr-frank',
+      'nr-grace',
+      'nr-heidi',
+    ])
 
 
     const profiles = await prisma.capacityProfile.findMany({
@@ -1425,24 +1429,16 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(overheads).toHaveLength(1)
     expect(overheads[0].value).toBe(15)
 
-    // ── Canonical deep comparison: captured state restored, extra owners retained ──
+    // ── Canonical deep comparison: captured state restored, post-snapshot named resources pruned ──
     const canonicalAfter = await captureCanonicalState(projectId)
     expect(canonicalAfter.resourceTypes.filter(r => r.id !== extraRtId))
       .toEqual(canonicalBefore.resourceTypes)
-    expect(canonicalAfter.namedResources.filter(n => n.id !== extraNrId))
-      .toEqual(canonicalBefore.namedResources)
+    expect(canonicalAfter.namedResources).toEqual(canonicalBefore.namedResources)
     expect(canonicalAfter.resourceTypes).toHaveLength(canonicalBefore.resourceTypes.length + 1)
-    expect(canonicalAfter.namedResources).toHaveLength(canonicalBefore.namedResources.length + 1)
+    expect(canonicalAfter.namedResources).toHaveLength(canonicalBefore.namedResources.length)
     expect(canonicalAfter.resourceTypes.find(r => r.id === extraRtId)).toMatchObject({
       name: 'Post-snapshot role',
       dayRate: 700,
-      allocationPercent: 45,
-      allocationStartWeek: 2,
-      allocationEndWeek: 7,
-    })
-    expect(canonicalAfter.namedResources.find(n => n.id === extraNrId)).toMatchObject({
-      resourceTypeId: extraRtId,
-      name: 'Post-snapshot person',
       allocationPercent: 45,
       allocationStartWeek: 2,
       allocationEndWeek: 7,

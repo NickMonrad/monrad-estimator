@@ -25,7 +25,8 @@ const router = Router({ mergeParams: true })
 router.use(authenticate)
 
 // ---------------------------------------------------------------------------
-// Schema versions: 1 (bare epic array), 2 (full state), 3 (v2 + capacityProfiles)
+// Schema versions: 1 (bare epic array), 2 (full state), 3 (v2 + capacityProfiles +
+// optional exact capacity-plan history and weeklyDemandCache)
 // Documented trigger values:
 //   'manual'           — user-initiated from the UI
 //   'csv_import'       — auto-saved before a CSV import

@@ -300,8 +300,16 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   weeklyDemand = weeklyDemand.filter(row => row.demandDays > 0)
+  const resourceTypesForAssignments = project.resourceTypes.map(resourceType => ({
+    ...resourceType,
+    capacityProfileBacked:
+      resourceType.namedResources.length > 0 &&
+      resourceType.namedResources.every(
+        namedResource => namedResourceProfiles.get(namedResource.id)?.resolutionSource === 'PROFILE',
+      ),
+  }))
   const namedResourceAssignments = deriveNamedResourceAssignments({
-    resourceTypes: project.resourceTypes,
+    resourceTypes: resourceTypesForAssignments,
     weeklyDemand,
     capacityPlanByRt,
   })
@@ -435,6 +443,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         name: string
         allocationMode: string
         allocationPercent: number
+        allocationPct: number
         allocationStartWeek: number | null
         allocationEndWeek: number | null
         pricingModel: 'ACTUAL_DAYS' | 'PRO_RATA'
@@ -510,6 +519,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             // Display fields: project from profile when available, fall back to legacy
             allocationMode: nrProfileProjection?.allocationMode ?? nrMode,
             allocationPercent: nrProfileProjection?.allocationPercent ?? nrPercent,
+            allocationPct: Math.round(nrProfileProjection?.allocationPercent ?? nrPercent),
             allocationStartWeek: nrProfileProjection !== null ? nrProfileProjection.allocationStartWeek : (nr.allocationStartWeek ?? null),
             allocationEndWeek: nrProfileProjection !== null ? nrProfileProjection.allocationEndWeek : (nr.allocationEndWeek ?? null),
             pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
@@ -556,6 +566,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
             name: actual.name,
             allocationMode: synthNrProfileProjection?.allocationMode ?? actual.allocationMode,
             allocationPercent: synthNrProfileProjection?.allocationPercent ?? actual.allocationPercent,
+            allocationPct: Math.round(synthNrProfileProjection?.allocationPercent ?? actual.allocationPercent),
             allocationStartWeek: synthNrProfileProjection !== null ? synthNrProfileProjection.allocationStartWeek : actual.allocationStartWeek,
             allocationEndWeek: synthNrProfileProjection !== null ? synthNrProfileProjection.allocationEndWeek : actual.allocationEndWeek,
             pricingModel: actual.pricingModel,
