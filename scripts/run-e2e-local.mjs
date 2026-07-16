@@ -14,10 +14,10 @@
  *   npm run test:e2e:local -- --grep "auth"
  */
 import { spawn } from 'node:child_process'
-import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadLocalEnvironment, withIsolatedTestDatabase } from './local-postgres.mjs'
 
 
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -27,55 +27,12 @@ const e2eDir = fileURLToPath(new URL('../e2e/', import.meta.url))
 
 // ── Environment loading ──────────────────────────────────────────────────────
 
-/** Read and parse server/.env, return a plain object. */
-function loadDotEnv() {
-  const envPath = path.join(root, 'server', '.env')
-  let raw
-  try {
-    raw = fs.readFileSync(envPath, 'utf8')
-  } catch {
-    // server/.env missing — that's fine, use process.env only
-    return {}
-  }
-
-  const parsed = {}
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    // Strip optional `export ` prefix
-    const cleaned = trimmed.startsWith('export ') ? trimmed.slice(7).trimStart() : trimmed
-
-    const sepIdx = cleaned.indexOf('=')
-    if (sepIdx <= 0) continue
-
-    const key = cleaned.slice(0, sepIdx).trim()
-    if (!key) continue
-
-    let value = cleaned.slice(sepIdx + 1).trim()
-
-    // Unwrap matching quotes (single or double)
-    if ((value.startsWith("'") && value.endsWith("'")) ||
-        (value.startsWith('"') && value.endsWith('"'))) {
-      value = value.slice(1, -1)
-    }
-
-    parsed[key] = value
-  }
-
-  return parsed
-}
-
-/** Merged env: file values first, shell env wins. */
-const fileEnv = loadDotEnv()
-const resolvedEnv = { ...fileEnv, ...process.env }
+const resolvedEnv = loadLocalEnvironment(root)
 
 // ── Validation mode ──────────────────────────────────────────────────────────
 // `--validate` loads and merges server/.env then exits — lets CI check the
 // runner can parse without starting servers.
 if (process.argv.includes('--validate')) {
-  const keys = Object.keys(fileEnv).sort()
-  console.log(`[e2e-local] server/.env loaded: ${keys.length} var(s)`)
   console.log(`[e2e-local] DATABASE_URL: ${resolvedEnv.DATABASE_URL ? 'set' : 'unset'}`)
   // Also validate JWT_SECRET — catches stale .env files with old placeholder
   const js = resolvedEnv.JWT_SECRET ?? ''
@@ -100,9 +57,9 @@ if (!jwtSecret || jwtSecret === 'change-me-in-production' || jwtSecret.length < 
 
 // ── Port discovery ──────────────────────────────────────────────────────────
 
-const host = process.env.E2E_HOST ?? '127.0.0.1'
-const preferredApiPort = Number(process.env.E2E_API_PORT ?? process.env.PORT ?? 3001)
-const preferredClientPort = Number(process.env.E2E_CLIENT_PORT ?? 5173)
+const host = resolvedEnv.E2E_HOST ?? '127.0.0.1'
+const preferredApiPort = Number(resolvedEnv.E2E_API_PORT ?? resolvedEnv.PORT ?? 3001)
+const preferredClientPort = Number(resolvedEnv.E2E_CLIENT_PORT ?? 5173)
 const apiPort = await findAvailablePort(preferredApiPort)
 const clientPort = await findAvailablePort(preferredClientPort, new Set([apiPort]))
 const apiUrl = `http://${host}:${apiPort}`
@@ -112,60 +69,56 @@ const children = []
 console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (preferred :${preferredApiPort} was unavailable)`}`)
 console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
 
-try {
-  // ── Prisma ──────────────────────────────────────────────────────────────
-  await run('npx', ['prisma', 'migrate', 'deploy'], { cwd: serverDir, env: resolvedEnv })
-  await run('npx', ['prisma', 'generate'], { cwd: serverDir, env: resolvedEnv })
+await withIsolatedTestDatabase({ root }, async testEnv => {
+  try {
+    // ── Cleanup before seed ───────────────────────────────────────────────
+    await run('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv })
 
-  // ── Cleanup before seed ─────────────────────────────────────────────────
-  await run('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: resolvedEnv })
+    // ── Seed ──────────────────────────────────────────────────────────────
+    await run('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv })
 
-  // ── Seed ────────────────────────────────────────────────────────────────
-  await run('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: resolvedEnv })
+    // ── Start API ─────────────────────────────────────────────────────────
+    const api = start('npx', ['tsx', 'src/index.ts'], {
+      cwd: serverDir,
+      env: testEnv,
+      extraEnv: {
+        NODE_ENV: 'test',
+        PORT: String(apiPort),
+        CLIENT_URL: baseUrl,
+      },
+      label: 'api',
+    })
+    children.push(api)
 
-  // ── Start API ───────────────────────────────────────────────────────────
-  const api = start('npx', ['tsx', 'src/index.ts'], {
-    cwd: serverDir,
-    env: resolvedEnv,
-    extraEnv: {
-      NODE_ENV: 'test',
-      PORT: String(apiPort),
-      CLIENT_URL: baseUrl,
-    },
-    label: 'api',
-  })
-  children.push(api)
+    // ── Start Vite ────────────────────────────────────────────────────────
+    const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
+      cwd: clientDir,
+      env: testEnv,
+      extraEnv: {
+        VITE_API_URL: apiUrl,
+      },
+      label: 'vite',
+    })
+    children.push(client)
 
-  // ── Start Vite ──────────────────────────────────────────────────────────
-  const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
-    cwd: clientDir,
-    env: resolvedEnv,
-    extraEnv: {
-      VITE_API_URL: apiUrl,
-    },
-    label: 'vite',
-  })
-  children.push(client)
+    await waitForMonradApi(apiUrl)
+    await waitForClient(baseUrl)
+    await waitForProxy(baseUrl)
 
-  // ── Wait for services ───────────────────────────────────────────────────
-  await waitForMonradApi(apiUrl)
-  await waitForClient(baseUrl)
-  await waitForProxy(baseUrl)
-
-  // ── Playwright ──────────────────────────────────────────────────────────
-  await run('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
-    cwd: e2eDir,
-    env: resolvedEnv,
-    extraEnv: {
-      BASE_URL: baseUrl,
-      API_URL: apiUrl,
-      NODE_ENV: 'test',
-    },
-    inherit: true,
-  })
-} finally {
-  await stopChildren()
-}
+    await run('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
+      cwd: e2eDir,
+      env: testEnv,
+      extraEnv: {
+        BASE_URL: baseUrl,
+        API_URL: apiUrl,
+        NODE_ENV: 'test',
+      },
+      inherit: true,
+    })
+  } finally {
+    await stopChildren()
+  }
+})
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -39,23 +39,21 @@ A full-stack project estimation tool that replaces a manual spreadsheet process.
 ## Getting Started
 
 ### Prerequisites
+
 - Node.js 24+
-- Docker (recommended — easiest way to run PostgreSQL locally)
+- PostgreSQL reachable from `DATABASE_URL`, or Docker for the optional development/test container workflow
 
-### 1. Start PostgreSQL
+### 1. Configure PostgreSQL
 
-**With Docker (recommended):**
+Use an existing host PostgreSQL server or start a development container:
+
 ```bash
-docker run -d \
-  --name monrad-pg \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=monrad_estimator \
-  -p 5432:5432 \
-  postgres:15
+docker run -d --name monrad-pg -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:15
 ```
 
-**Without Docker (existing PostgreSQL install):** ensure a database named `monrad_estimator` exists and update `DATABASE_URL` in step 2 with your credentials.
+Set `DATABASE_URL` in `server/.env` after installing dependencies.
+
+`db:setup` reads shell variables first, then `server/.env` (or `MONRAD_ENV_FILE`), creates only the configured development database when it is absent, and runs `prisma migrate deploy` plus `prisma generate`. It never resets, drops, or overwrites that database. It supports a host PostgreSQL installation; Docker is optional for development setup.
 
 ### 2. Install dependencies
 
@@ -78,6 +76,7 @@ This installs all workspace dependencies and automatically:
 
 ```bash
 cp server/.env.example server/.env
+npm run db:setup
 ```
 
 `server/.env.example` contains sensible defaults for local development. Edit it if your PostgreSQL credentials differ from the Docker command above.
@@ -123,13 +122,13 @@ Authority passwords are removed from the URI, and raw query-string `password` fi
 
 Backup regression tests cover credential handling, mode selection, configuration precedence, atomic no-overwrite finalisation, output verification, cleanup, and representative host and Docker failure paths. The backup suite runs in both Linux and Windows CI and is also included in the root `npm test` and `npm run validate` commands.
 
-### 5. Run database migrations
+### 5. Update the development schema
 
 ```bash
-cd server
-npx prisma migrate deploy
-npx prisma generate
+npm run db:setup
 ```
+
+Run `npm run db:backup` before a schema migration that changes persistent data. `prisma migrate reset` remains prohibited without explicit approval.
 
 ### 6. Start development servers
 
@@ -159,13 +158,23 @@ Server logs are written to `logs/dev-servers.log` when running in the background
 # Complete client/server validation: lint, typecheck, builds, unit tests, and backup regression tests
 npm run validate
 
-# E2E (preferred — local runner starts isolated API/Vite servers, chooses free ports)
-# Loads server/.env, runs e2e-cleanup before seed, passes resolved env to all processes
+# PostgreSQL-backed integration suites use one disposable database per run.
+# They prefer host PostgreSQL and fall back to a unique postgres:15 container.
+npm run test:integration:local
+
+# E2E provisions the same disposable database before cleanup, seed, API, Vite, and Playwright.
+# It never targets the configured persistent development database.
+
 npm run test:e2e:local
+
+# Optional externally managed test database (migration and cleanup are destructive):
+# MONRAD_TEST_DATABASE_URL=... MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 npm run test:integration:local
 
 # E2E (requires both dev servers already running)
 npm run test:e2e
 ```
+
+Temporary test databases are named uniquely per worktree/run, connections are terminated before dropping them, and cleanup runs after success or failure. If an interrupted process leaves a temporary database/container behind, it is safe to remove only resources whose names begin with `monrad_test_` or `monrad_pg_`; never clean the configured development database.
 
 ---
 

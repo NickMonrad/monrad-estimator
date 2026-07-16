@@ -78,7 +78,9 @@ For user-visible behaviour, navigation, permissions, persistence, or critical cr
 npm run test:e2e:local
 ```
 
-The local runner manages the database, ports, dev processes, test execution, and cleanup across Windows, macOS, and Linux.
+The local runner provisions one disposable database per worktree/run, then runs migrations, cleanup, seed, API, Vite, and Playwright only against that database. It prefers the configured host PostgreSQL authority and falls back to a unique `postgres:15` Docker container when Docker is usable. It terminates database connections, drops the disposable database, and removes its temporary container after success or failure; it never resets, drops, or cleans the persistent `DATABASE_URL` database.
+
+Use `npm run test:integration:local` for the PostgreSQL-backed snapshot rollback, clone, Squad Plan profile-first, and apply-parity suites. `npm run db:setup` safely creates the configured persistent development database if missing, then runs `prisma migrate deploy` and `prisma generate`. Shell variables override `server/.env` (or `MONRAD_ENV_FILE`). For an externally managed disposable database, set both `MONRAD_TEST_DATABASE_URL` and `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1`; migrations and cleanup remain destructive to that explicitly selected test-only database.
 
 For documentation-only work, internal refactors with unchanged behaviour, or narrowly scoped server work, E2E may be marked not applicable when the PR explains why and lists the focused tests used instead.
 
