@@ -4,6 +4,7 @@ import { redactError, runCommand, shutdownGuard, withIsolatedTestDatabase } from
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const guard = shutdownGuard()
+let cleanupErrors = []
 
 try {
   await withIsolatedTestDatabase({ root }, async environment => {
@@ -13,9 +14,19 @@ try {
     }
   })
 } catch (error) {
-  console.error(`[integration-local] ${redactError(error).message}`)
-  process.exitCode = 1
+  cleanupErrors.push({ type: 'runner', error: redactError(error).message })
 } finally {
   guard.dispose()
-  if (guard.triggered) process.exit(guard.signalExitCode)
+}
+
+// Report cleanup errors — never suppress database/Docker/process failures.
+for (const ce of cleanupErrors) {
+  if (guard.triggered && ce.type === 'runner' && ce.error.includes('was cancelled')) continue
+  console.error(`[integration-local] ${ce.type}: ${ce.error}`)
+}
+
+if (guard.triggered) {
+  process.exitCode = guard.signalExitCode
+} else if (cleanupErrors.length > 0) {
+  process.exitCode = 1
 }

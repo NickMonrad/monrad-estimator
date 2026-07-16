@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { terminateProcess } from './terminate-process.mjs'
+import { terminateProcess, windowsTerminateProcess } from './terminate-process.mjs'
 
 const POSTGRES_PROTOCOLS = new Set(['postgres:', 'postgresql:'])
 const IDENTIFIER_LIMIT = 63
@@ -106,6 +106,11 @@ export function runCommand(command, args, { cwd, env, inherit = true, platform, 
     return Promise.reject(new Error(`${command} was cancelled`))
   }
   return new Promise((resolve, reject) => {
+    let settled = false
+    let abortRequested = false
+    const resolveOnce = (value) => { if (!settled) { settled = true; resolve(value) } }
+    const rejectOnce = (reason) => { if (!settled) { settled = true; reject(reason) } }
+
     const spec = resolveCommand(command, args, platform, npmExecPath)
     const child = spawn(spec.command, spec.args, { cwd, env, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
     let output = ''
@@ -115,12 +120,24 @@ export function runCommand(command, args, { cwd, env, inherit = true, platform, 
     }
 
     function onAbort() {
-      if ((platform ?? process.platform) !== 'win32') {
-        terminateProcess(child, graceMs, { useProcessGroup: true }).catch(() => {})
-      } else {
-        child.kill('SIGTERM')
-      }
-      reject(new Error(`${command} was cancelled`))
+      signal?.removeEventListener('abort', onAbort)
+      if (settled) return
+      abortRequested = true
+
+      const isWin = (platform ?? process.platform) === 'win32'
+      const termPromise = isWin
+        ? windowsTerminateProcess(child)
+        : terminateProcess(child, graceMs, { useProcessGroup: true })
+
+      termPromise.then(
+        () => rejectOnce(new Error(`${command} was cancelled`)),
+        (termError) => {
+          // Termination failure — still reject with cancellation, not the
+          // termination error, so callers can distinguish cancellation from
+          // command failure.
+          rejectOnce(new Error(`${command} was cancelled`))
+        },
+      )
     }
 
     if (signal) {
@@ -129,11 +146,13 @@ export function runCommand(command, args, { cwd, env, inherit = true, platform, 
 
     child.once('error', error => {
       signal?.removeEventListener('abort', onAbort)
-      reject(new Error(`${command} could not start: ${error.message}`))
+      if (abortRequested) return
+      rejectOnce(new Error(`${command} could not start: ${error.message}`))
     })
     child.once('exit', code => {
       signal?.removeEventListener('abort', onAbort)
-      code === 0 ? resolve(output) : reject(new Error(`${command} failed with exit code ${code}`))
+      if (abortRequested) return
+      code === 0 ? resolveOnce(output) : rejectOnce(new Error(`${command} failed with exit code ${code}`))
     })
   })
 }

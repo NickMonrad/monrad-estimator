@@ -6,6 +6,12 @@
  *   - Starts API and Vite on dynamic ports, runs Playwright tests.
  *   - Cleans up child processes on exit.
  *
+ * Awaited commands use the shared `runCommand` from local-postgres.mjs
+ * for cross-platform process-tree termination.  Long-lived API/Vite
+ * processes use explicit handles cleaned via `stopChildren()` which
+ * uses `terminateProcess` (POSIX group) or `windowsTerminateProcess`
+ * (taskkill /T /F).
+ *
  * Usage:
  *   cd <repo-root>
  *   npm run test:e2e:local
@@ -17,8 +23,8 @@ import { spawn } from 'node:child_process'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadLocalEnvironment, shutdownGuard, withIsolatedTestDatabase } from './local-postgres.mjs'
-import { terminateProcess } from './terminate-process.mjs'
+import { loadLocalEnvironment, runCommand, shutdownGuard, withIsolatedTestDatabase } from './local-postgres.mjs'
+import { terminateProcess, windowsTerminateProcess } from './terminate-process.mjs'
 
 
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -67,6 +73,7 @@ const apiUrl = `http://${host}:${apiPort}`
 const baseUrl = `http://${host}:${clientPort}`
 const children = []
 const guard = shutdownGuard()
+let cleanupErrors = []
 
 console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (preferred :${preferredApiPort} was unavailable)`}`)
 console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
@@ -75,11 +82,11 @@ try {
   await withIsolatedTestDatabase({ root }, async testEnv => {
     try {
       // ── Cleanup before seed ───────────────────────────────────────────────
-      await run('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv })
+      await runCommand('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv, signal: guard.abortSignal })
       if (guard.triggered) return
 
       // ── Seed ──────────────────────────────────────────────────────────────
-      await run('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv })
+      await runCommand('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv, signal: guard.abortSignal })
       if (guard.triggered) return
 
       // ── Start API ─────────────────────────────────────────────────────────
@@ -115,7 +122,7 @@ try {
       await waitForProxy(baseUrl)
       if (guard.triggered) return
 
-      await run('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
+      await runCommand('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
         cwd: e2eDir,
         env: testEnv,
         extraEnv: {
@@ -124,19 +131,34 @@ try {
           NODE_ENV: 'test',
         },
         inherit: true,
+        signal: guard.abortSignal,
       })
     } finally {
-      await stopChildren()
+      // Always stop API/Vite children before database cleanup.
+      try {
+        await stopChildren()
+      } catch (childErr) {
+        cleanupErrors.push({ type: 'child-process termination', error: String(childErr) })
+      }
     }
   })
 } catch (error) {
-  if (!guard.triggered) {
-    console.error(`[e2e-local] ${error?.message ?? error}`)
-    process.exitCode = 1
-  }
+  cleanupErrors.push({ type: 'runner', error: error?.message ?? String(error) })
 } finally {
   guard.dispose()
-  if (guard.triggered) process.exit(guard.signalExitCode)
+}
+
+// ── Report and exit ─────────────────────────────────────────────────────────
+
+for (const ce of cleanupErrors) {
+  if (guard.triggered && ce.type === 'runner' && ce.error.includes('was cancelled')) continue
+  console.error(`[e2e-local] ${ce.type}: ${ce.error}`)
+}
+
+if (guard.triggered) {
+  process.exitCode = guard.signalExitCode
+} else if (cleanupErrors.length > 0) {
+  process.exitCode = 1
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -144,72 +166,41 @@ try {
 function start(command, args, { cwd, env, extraEnv = {}, label }) {
   const spec = resolveCommand(command, args)
   // Spawn detached so the child gets its own process group.
-  // Without this, `npx` wrappers can exit while the underlying tool
-  // (API/Vite) continues as an orphan with shared stdio pipes.
+  // On POSIX, `detached: true` creates a new group; on Windows,
+  // `detached: false` keeps it in the caller's job object.
   const child = spawn(spec.command, spec.args, {
     cwd,
     env: { ...env, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
+    detached: process.platform !== 'win32',
   })
 
   child.stdout.on('data', data => process.stdout.write(`[${label}] ${data}`))
   child.stderr.on('data', data => process.stderr.write(`[${label}] ${data}`))
   child.on('error', error => {
     console.error(`[${label}] failed to start: ${error.message}`)
+    // Signal run failure — the abort will propagate.
+    guard._handler('SIGTERM')
   })
   child.on('exit', code => {
     if (code !== null && code !== 0) {
       console.error(`[${label}] exited with code ${code}`)
+      // Unexpected exit before tests complete — fail the run.
+      guard._handler('SIGTERM')
     }
   })
 
   return child
 }
 
-function run(command, args, { cwd, env, extraEnv = {}, inherit, allowFailure } = {}) {
-  return new Promise((resolve, reject) => {
-    const spec = resolveCommand(command, args)
-    const child = spawn(spec.command, spec.args, {
-      cwd,
-      env: { ...env, ...extraEnv },
-      stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-    })
-
-    let output = ''
-    if (!inherit) {
-      child.stdout.on('data', data => {
-        output += data.toString()
-        process.stdout.write(data)
-      })
-      child.stderr.on('data', data => {
-        output += data.toString()
-        process.stderr.write(data)
-      })
+async function stopChildren() {
+  for (const child of children.reverse()) {
+    if (process.platform === 'win32') {
+      await windowsTerminateProcess(child)
+    } else {
+      await terminateProcess(child, undefined, { useProcessGroup: true })
     }
-
-    function onAbort() {
-      child.kill('SIGTERM')
-      reject(new Error(`${command} was cancelled`))
-    }
-
-    if (guard.abortSignal.aborted) {
-      child.kill('SIGTERM')
-      reject(new Error(`${command} was cancelled`))
-      return
-    }
-    guard.abortSignal.addEventListener('abort', onAbort, { once: true })
-
-    child.on('error', error => {
-      guard.abortSignal.removeEventListener('abort', onAbort)
-      reject(error)
-    })
-    child.on('exit', code => {
-      guard.abortSignal.removeEventListener('abort', onAbort)
-      if (code === 0 || allowFailure) resolve(output)
-      else reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}`))
-    })
-  })
+  }
 }
 
 function resolveCommand(command, args) {
@@ -298,23 +289,4 @@ async function waitFor(label, check) {
     }
   }
   throw new Error(`Timed out waiting for ${label}: ${lastError?.message ?? 'unknown error'}`)
-}
-
-
-
-async function stopChildren() {
-  for (const child of children.reverse()) {
-    // Windows: `taskkill /T` kills the entire job object — no early skip.
-    if (process.platform === 'win32') {
-      if (child.pid) {
-        await run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { allowFailure: true })
-      }
-    } else {
-      // POSIX: signal the child's process group so spawned wrappers
-      // (npx) that already exited do not orphan the actual tool
-      // (API/Vite).  terminateProcess handles the wrapper-exit case
-      // via pipe-close bounded completion.
-      await terminateProcess(child, undefined, { useProcessGroup: true })
-    }
-  }
 }

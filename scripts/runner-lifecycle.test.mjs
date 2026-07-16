@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { describe, it } from 'node:test'
 
-import { terminateProcess } from './terminate-process.mjs'
+import { checkProcessGroupExists, terminateProcess, waitForProcessGroupGone, buildWindowsTerminateArgs } from './terminate-process.mjs'
 
 // ── Mock helpers ─────────────────────────────────────────────────
 
@@ -200,18 +200,29 @@ describe('terminateProcess — pipe stream cleanup', () => {
 // ── Process group signaling ───────────────────────────────────────
 
 describe('terminateProcess — process group signaling', () => {
-  it('clean process-group shutdown — SIGTERM then pipe close', async () => {
-    // When useProcessGroup is true, signals are sent to the process group
-    // via process.kill(-child.pid). In this test ESRCH is swallowed.
-    // Resolution waits for pipe closure (descendants release FDs).
-    const child = mockChild()
+  /**
+   * Create a fake checkGroup that reports the fake group is still alive,
+   * and changes to "gone" when `releaseGroup()` is called.
+   */
+  function controlledGroup() {
+    let gone = false
+    return {
+      checkGroup: () => ({ exists: !gone }),
+      releaseGroup: () => { gone = true },
+    }
+  }
 
-    const promise = terminateProcess(child, 200, { useProcessGroup: true })
+  it('clean process-group shutdown — SIGTERM then pipe close', async () => {
+    const child = mockChild()
+    const group = controlledGroup()
+
+    const promise = terminateProcess(child, 200, { useProcessGroup: true, checkGroup: group.checkGroup })
 
     assert.equal(child.killed, false, 'must not call child.kill')
     assert.equal(child._capturedSignal(), null, 'must not send signal via child.kill')
 
-    // Descendants release inherited FDs.
+    // Group goes away and descendants release inherited FDs.
+    group.releaseGroup()
     child._closePipes()
     await promise
 
@@ -221,8 +232,6 @@ describe('terminateProcess — process group signaling', () => {
   })
 
   it('falls back to child.kill when useProcessGroup is false (default)', async () => {
-    // The default pathway must still call child.kill — existing
-    // callers (e.g. abort-signal handlers in `run()`) depend on it.
     const child = mockChild()
 
     const promise = terminateProcess(child, 50)
@@ -233,15 +242,15 @@ describe('terminateProcess — process group signaling', () => {
   })
 
   it('signals group even if wrapper child already exited', async () => {
-    // The wrapper (e.g. npx) has exited but the descendant tool may
-    // still be running with inherited pipe FDs in the process group.
     const child = mockChild({ exitCode: 0 })
+    const group = controlledGroup()
 
-    const promise = terminateProcess(child, 50, { useProcessGroup: true })
+    const promise = terminateProcess(child, 50, { useProcessGroup: true, checkGroup: group.checkGroup })
 
     assert.equal(child.killed, false, 'must use process.kill, not child.kill')
 
-    // Simulate descendant exiting and releasing inherited FDs.
+    // Descendant exits and group gone + pipes close.
+    group.releaseGroup()
     child._closePipes()
     await promise
 
@@ -252,25 +261,21 @@ describe('terminateProcess — process group signaling', () => {
   })
 
   it('leader-exit-with-live-descendant regression — signals group and awaits pipe close', async () => {
-    // Regression test for the hang scenario:
-    // npx wrapper exited → child.exitCode set, but the actual tool
-    // (tsx, Vite) continues in the same process group with inherited
-    // pipe FDs.  terminateProcess must still signal the group and wait
-    // for pipe closure, not short-circuit because the wrapper is dead.
     const child = mockChild({ exitCode: 0 })
+    const group = controlledGroup()
 
-    // Pipes are deliberately NOT closed — simulates inherited FDs.
-    const promise = terminateProcess(child, 200, { useProcessGroup: true })
+    const promise = terminateProcess(child, 200, { useProcessGroup: true, checkGroup: group.checkGroup })
 
     assert.equal(child.killed, false, 'must use process.kill(-pid), not child.kill')
 
-    // Wait briefly to prove the function hasn't raced ahead and
-    // returned without waiting — it must be blocked on pipe close.
+    // Wait briefly — group still exists and pipes still open, so termination
+    // must still be waiting.
     await new Promise(resolve => setTimeout(resolve, 30))
     assert.equal(child.stdout._destroyed, false, 'pipes not yet destroyed — still waiting')
     assert.equal(child.stderr._destroyed, false, 'pipes not yet destroyed — still waiting')
 
-    // Now simulate the descendant dying and closing inherited FDs.
+    // Now release the group and close pipes.
+    group.releaseGroup()
     child._closePipes()
     await promise
 
@@ -282,17 +287,19 @@ describe('terminateProcess — process group signaling', () => {
 
   it('escalates to SIGKILL for stuck process group', async () => {
     // When the process group doesn't respond to SIGTERM within the
-    // grace window, the group gets SIGKILL. Resolution waits for pipe
-    // closure even after escalation.
+    // grace window, the group gets SIGKILL. Resolution waits for the
+    // group to disappear even after escalation.
     const child = mockChild()
     const graceMs = 50
+    let groupExists = true
+    const checkGroup = () => ({ exists: groupExists })
 
-    const promise = terminateProcess(child, graceMs, { useProcessGroup: true })
+    const promise = terminateProcess(child, graceMs, { useProcessGroup: true, checkGroup })
 
     assert.equal(child.killed, false, 'child.kill not used for group signaling')
 
-    // After SIGKILL, descendants finally release FDs.
-    setTimeout(() => child._closePipes(), graceMs + 30)
+    // After grace, escalation will happen. Then release group.
+    setTimeout(() => { groupExists = false }, graceMs + 80)
     await promise
 
     assert.equal(child.killed, false, 'child.kill must still not be called')
@@ -304,24 +311,24 @@ describe('terminateProcess — process group signaling', () => {
 
   it('wrapper exit alone does not resolve — waits for pipe close in group mode', async () => {
     // Regression: in process-group mode the wrapper child's 'exit' event
-    // must NOT trigger resolution.  Only pipe closure (descendants
-    // releasing inherited FDs) or escalation may resolve the wait.
+    // must NOT trigger resolution.  Only the group going away or pipe
+    // closure (descendants releasing inherited FDs) may resolve the wait.
     const child = mockChild()
+    const group = controlledGroup()
 
-    const promise = terminateProcess(child, 200, { useProcessGroup: true })
+    const promise = terminateProcess(child, 200, { useProcessGroup: true, checkGroup: group.checkGroup })
 
-    // Wrapper exits — but pipes remain open (descendants hold FDs).
+    // Wrapper exits — but group still exists and pipes remain open.
     child._exitNow(0)
 
-    // Give event loop a tick so the exit event would propagate if
-    // it were a resolution trigger.
     await new Promise(resolve => setTimeout(resolve, 10))
     assert.equal(child.stdout._destroyed, false,
       'must not resolve on wrapper exit alone — pipes still open')
     assert.equal(child.stderr._destroyed, false,
       'must not resolve on wrapper exit alone — pipes still open')
 
-    // Descendants release inherited FDs.
+    // Release group and close pipes.
+    group.releaseGroup()
     child._closePipes()
     await promise
 
@@ -331,8 +338,6 @@ describe('terminateProcess — process group signaling', () => {
   })
 
   it('returns early when useProcessGroup is true but child has no pid', async () => {
-    // No-PID handling: without a PID we cannot reference a process
-    // group, so termination is a no-op.
     const child = mockChild()
     child.pid = null
 
@@ -345,16 +350,12 @@ describe('terminateProcess — process group signaling', () => {
   })
 
   it('non-group mode resolves on exit event before pipe close', async () => {
-    // Contrast regression: in default (non-group) mode the exit event
-    // IS the completion signal.  This test must keep passing.
     const child = mockChild()
 
     const promise = terminateProcess(child, 200)
 
     assert.equal(child._capturedSignal(), 'SIGTERM', 'must use child.kill')
 
-    // Child exits — pipes are still open, but non-group mode resolves
-    // on exit event alone.
     child._exitNow(0)
     await promise
 
@@ -362,5 +363,138 @@ describe('terminateProcess — process group signaling', () => {
     assert.ok(child.stdout._destroyed, 'streams cleaned after exit')
     assert.ok(child.stderr._destroyed, 'streams cleaned after exit')
     assert.ok(child.stdin._ended, 'stdin ended after exit')
+  })
+})
+
+// ── checkProcessGroupExists ───────────────────────────────────────
+
+describe('checkProcessGroupExists', () => {
+  it('returns { exists: true } for a PID that is a group leader', () => {
+    // The init process (PID 1) is always a group leader on POSIX.
+    // If we can't reach it (e.g. container without permission), skip.
+    const result = checkProcessGroupExists(1)
+    if (result.error) {
+      // Permission denied is also valid evidence the group exists.
+      assert.ok(result.error.code === 'EPERM' || result.error.code === 'EACCES',
+        'unexpected error: ' + (result.error?.code ?? result.error))
+    } else {
+      assert.equal(result.exists, true)
+    }
+  })
+  it('returns { exists: false } for a non-existent group', () => {
+    const result = checkProcessGroupExists(999_999_999)
+    assert.equal(result.exists, false)
+  })
+})
+
+// ── waitForProcessGroupGone ────────────────────────────────────────
+
+describe('waitForProcessGroupGone — injectable checkGroup', () => {
+  it('returns true when checkGroup reports group is gone immediately', async () => {
+    const result = await waitForProcessGroupGone(42_001, 100, () => ({ exists: false }))
+    assert.equal(result, true, 'must return true immediately when group is gone')
+  })
+
+  it('polls until checkGroup reports gone', async () => {
+    let callCount = 0
+    const checkGroup = () => {
+      callCount++
+      return { exists: callCount < 3 }
+    }
+    const result = await waitForProcessGroupGone(42_001, 500, checkGroup)
+    assert.equal(result, true, 'must return true when group eventually goes away')
+    assert.ok(callCount >= 3, 'must have polled multiple times')
+  })
+
+  it('returns false when group still exists after timeout', async () => {
+    const result = await waitForProcessGroupGone(42_001, 30, () => ({ exists: true }))
+    assert.equal(result, false, 'must return false when group persists past timeout')
+  })
+
+  it('rethrows checkGroup error immediately', async () => {
+    await assert.rejects(
+      waitForProcessGroupGone(42_001, 100, () => { throw new Error('boom') }),
+      /boom/,
+    )
+  })
+})
+
+// ── buildWindowsTerminateArgs ──────────────────────────────────────
+
+describe('buildWindowsTerminateArgs', () => {
+  it('returns taskkill with PID /T /F for a given PID', () => {
+    const args = buildWindowsTerminateArgs(42_001)
+    assert.deepEqual(args, ['taskkill', '/PID', '42001', '/T', '/F'])
+  })
+
+  it('returns expected structure for PID 1', () => {
+    const args = buildWindowsTerminateArgs(1)
+    assert.deepEqual(args, ['taskkill', '/PID', '1', '/T', '/F'])
+  })
+})
+
+// ── Inherited-stdio process group ───────────────────────────────────
+
+describe('terminateProcess — inherited stdio (null streams)', () => {
+  /**
+   * Create a mock child with null stdout/stderr, simulating inherited stdio.
+   */
+  function mockInheritedChild({ exitCode = null } = {}) {
+    const emitter = new EventEmitter()
+    const stdinEmitter = new EventEmitter()
+    stdinEmitter._ended = false
+    stdinEmitter.end = function () { this._ended = true }
+
+    const child = {
+      pid: 42_002,
+      exitCode,
+      signalCode: null,
+      killed: false,
+      stdout: null,
+      stderr: null,
+      stdin: stdinEmitter,
+      once(event, listener) { emitter.once(event, listener); return this },
+      kill(signal) { child.killed = true; return true },
+    }
+    return child
+  }
+
+  it('group-mode does not resolve immediately when group still exists — poll via checkGroup', async () => {
+    // Simulate a check function that reports "exists" for a while.
+    let groupGone = false
+    const checkGroup = () => ({ exists: !groupGone })
+
+    const child = mockInheritedChild()
+    const promise = terminateProcess(child, 200, { useProcessGroup: true, checkGroup })
+
+    // Give event loop a tick — termination should NOT be complete because
+    // group still exists and there are no pipe streams to short-circuit.
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(child.stdin._ended ?? false, false, 'must not complete while group still exists')
+
+    // Now release the group.
+    groupGone = true
+    await promise
+    assert.ok(child.stdin._ended, 'stdin ended after group terminated')
+  })
+
+  it('process group with no pipes eventually receives SIGKILL when stuck', async () => {
+    let groupExists = true
+    const checkGroup = () => ({ exists: groupExists })
+
+    const child = mockInheritedChild()
+    const graceMs = 30
+
+    const promise = terminateProcess(child, graceMs, { useProcessGroup: true, checkGroup })
+
+    // Wait for grace period to expire and escalation to happen.
+    await new Promise(resolve => setTimeout(resolve, graceMs + 100))
+
+    // Group still exists, but termination completes after bounded poll.
+    // The function will eventually return after SIGKILL + bounded 500ms poll.
+    groupExists = false
+    await promise
+
+    assert.ok(child.stdin._ended, 'stdin ended after escalation')
   })
 })
