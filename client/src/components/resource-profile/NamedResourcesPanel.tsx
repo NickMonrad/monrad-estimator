@@ -330,7 +330,7 @@ export default function NamedResourcesPanel({
                           ))}
                         </div>
                       )}
-                      {resource.synthetic && resource.allocation.capacityProfile.planningBasis === 'capacityProfile' && resource.allocation.capacityProfile.segments.length > 0 && (
+                      {resource.resourceIdentity === 'PLANNED_RESOURCE' && resource.allocation.capacityProfile.planningBasis === 'capacityProfile' && resource.allocation.capacityProfile.segments.length > 0 && (
                         <>
                           <button
                             type="button"
