@@ -14,7 +14,6 @@ vi.mock('react-router-dom', async () => {
 })
 import ResourceProfileTab from '@/components/resource-profile/ResourceProfileTab'
 import type { CapacityProfilePlanningBasis, CapacityProfileResolutionSource } from '@/types/backlog'
-import { formatAllocationModeDescription } from '@/lib/capacityProfileFormatting'
 
 /** Wrap in MemoryRouter for useNavigate support. */
 function renderWithRouter(ui: React.ReactElement) {
@@ -585,6 +584,8 @@ describe('ResourceProfileTab authoritative scalar mismatch', () => {
     expect(badge).toBeTruthy()
     // Badge shows planning-basis label 'As needed', not stale TIMELINE label
     expect(badge!.textContent).toContain('As needed')
+    // No percentage suffix for demand-following (EFFORT) mode
+    expect(badge!.textContent).not.toContain('%')
 
     fireEvent.click(badge!)
     expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
@@ -667,6 +668,10 @@ describe('ResourceProfileTab authoritative scalar mismatch', () => {
     const badge = container.querySelector('button[title="Click to edit allocation"]')
     expect(badge).toBeTruthy()
     expect(badge!.textContent).toContain('Fixed for selected weeks')
+    // Badge uses profile defaultPercent (75%) not stale row value (100%)
+    expect(badge!.textContent).toContain('75%')
+    // Week range shows profile values (W3-W8)
+    expect(screen.getByText(/Wk 3.*→.*Wk 8/)).toBeInTheDocument()
 
     fireEvent.click(badge!)
     expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
@@ -690,6 +695,67 @@ describe('ResourceProfileTab authoritative scalar mismatch', () => {
     expect(screen.getByText('Available %')).toBeInTheDocument()
     expect(screen.getByText('Available from')).toBeInTheDocument()
     expect(screen.getByText('Available to')).toBeInTheDocument()
+  })
+
+  it('PROFILE + availabilityWindow + stale TIMELINE + badge uses profile percent and dates', () => {
+    const capacityProfile = {
+      resolutionSource: 'PROFILE' as const,
+      planningBasis: 'availabilityWindow' as const,
+      source: 'squadPlanner' as const,
+      defaultPercent: 75,
+      startWeek: 3,
+      endWeek: 8,
+      segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number }>,
+    }
+    const rowBase = {
+      resourceTypeId: 'rt-dev',
+      name: 'Developer',
+      category: 'ENG',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 500,
+      totalHours: 80,
+      totalDays: 10,
+      effortDays: 10,
+      allocatedDays: 10,
+      allocationMode: 'TIMELINE' as const,
+      allocationPercent: 100,
+      allocationStartWeek: 2,
+      allocationEndWeek: 6,
+      derivedStartWeek: null,
+      derivedEndWeek: null,
+      estimatedCost: 5000,
+      epics: [] as Array<never>,
+      namedResources: [] as Array<never>,
+      capacityProfile,
+    }
+    const profile = {
+      projectId: 'p',
+      hoursPerDay: 8,
+      projectDurationWeeks: 10,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceRows: [rowBase],
+      overheadRows: [] as Array<never>,
+      summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: false },
+    }
+    const filteredResourceRows = [rowBase]
+
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      profile,
+      filteredResourceRows,
+    })} />)
+
+    const badge = container.querySelector('button[title="Click to edit allocation"]')
+    expect(badge).toBeTruthy()
+    // Badge shows planning-basis label, not stale TIMELINE label
+    expect(badge!.textContent).toContain('Fixed for selected weeks')
+    // Badge uses profile defaultPercent (75%), not stale row value (100%)
+    expect(badge!.textContent).toContain('75%')
+    expect(badge!.textContent).not.toContain('100%')
+    // Week range shows profile values (W3-W8), not legacy (W2-W6)
+    expect(screen.getByText(/Wk 3.*→.*Wk 8/)).toBeInTheDocument()
+    expect(screen.queryByText(/Wk 2.*→.*Wk 6/)).toBeNull()
   })
 
   it('PROFILE + wholeProjectAllocation + no segments + stale EFFORT maps to FULL_PROJECT scalar editor', () => {
@@ -749,6 +815,8 @@ describe('ResourceProfileTab authoritative scalar mismatch', () => {
     const badge = container.querySelector('button[title="Click to edit allocation"]')
     expect(badge).toBeTruthy()
     expect(badge!.textContent).toContain('Fixed for whole project')
+    // Badge uses profile defaultPercent (80%) not stale row value (100%)
+    expect(badge!.textContent).toContain('80%')
 
     fireEvent.click(badge!)
     expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
@@ -898,8 +966,8 @@ describe('ResourceProfileTab help/control matrix', () => {
     const effortOption = c2.querySelector('option[value="EFFORT"]')
     expect(effortOption).toBeTruthy()
     expect(effortOption!.textContent).toBe('As needed')
-    // Description is a non-empty string
-    expect(formatAllocationModeDescription('EFFORT').length).toBeGreaterThan(0)
+    // Description rendered in the editor panel
+    expect(within(c2).getByText(/Assigned only when scheduled work requires this resource/)).toBeVisible()
     // Percentage hidden
     expect(within(c2).queryByText('Available %')).toBeNull()
     // Dates hidden
@@ -942,8 +1010,8 @@ describe('ResourceProfileTab help/control matrix', () => {
 
     const fpOption = c2.querySelector('option[value="FULL_PROJECT"]')
     expect(fpOption).toBeTruthy()
-    expect(fpOption!.textContent).toBe('Fixed for whole project')
-    expect(formatAllocationModeDescription('FULL_PROJECT').length).toBeGreaterThan(0)
+    // Description rendered in the editor panel
+    expect(within(c2).getByText(/Available at the selected percentage from the beginning to the end/)).toBeVisible()
     // Percentage visible
     expect(within(c2).getByText('Available %')).toBeInTheDocument()
     // Dates hidden
@@ -960,8 +1028,8 @@ describe('ResourceProfileTab help/control matrix', () => {
 
     const tlOption = container.querySelector('option[value="TIMELINE"]')
     expect(tlOption).toBeTruthy()
-    expect(tlOption!.textContent).toBe('Fixed for selected weeks')
-    expect(formatAllocationModeDescription('TIMELINE').length).toBeGreaterThan(0)
+    // Description rendered in the editor panel with interpolated percent/dates
+    expect(screen.getByText(/Available at 50% from W2 to W8/)).toBeVisible()
     // Percentage visible (label text, not label+for association)
     expect(screen.getByText('Available %')).toBeInTheDocument()
     // Date fields visible
@@ -1027,8 +1095,7 @@ describe('ResourceProfileTab help/control matrix', () => {
 
     // Label
     expect(screen.getAllByText('Varies by week').length).toBeGreaterThanOrEqual(1)
-    // Description — rendered only in CAPACITY_PLAN info panel
-    expect(screen.getByText(formatAllocationModeDescription('CAPACITY_PLAN'))).toBeInTheDocument()
+    expect(screen.getByText(/Availability varies by week\. Open the weekly profile editor/i)).toBeVisible()
     // No scalar controls
     expect(container.querySelector('select[aria-label="Availability pattern"]')).toBeNull()
     // No Save (CAPACITY_PLAN uses Close, not Save)
