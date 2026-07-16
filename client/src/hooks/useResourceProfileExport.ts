@@ -5,6 +5,7 @@ import {
   formatPlanningBasis as fmtPlanningBasis,
   formatAllocationMode as fmtAllocMode,
   formatCapacityProfileSource as fmtCapSource,
+  getEffectiveAvailabilityDisplay,
 } from '../lib/capacityProfileFormatting'
 
 /**
@@ -101,16 +102,12 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
   profileData.resourceRows.forEach(row => {
     if (row.namedResources && row.namedResources.length > 0) {
       row.namedResources.forEach(nr => {
+        const availability = getEffectiveAvailabilityDisplay(nr)
         const capProfile = nr.capacityProfile
         const profileStart = capProfile?.startWeek != null ? formatWeekLabel(capProfile.startWeek) : ''
         const profileEnd = capProfile?.endWeek != null ? formatWeekLabel(capProfile.endWeek) : ''
-        // A resolved profile owns its window even when the authoritative value is null.
-        const availStart = capProfile
-          ? (capProfile.startWeek != null ? formatWeekLabel(capProfile.startWeek) : '')
-          : (nr.startWeek != null ? formatWeekLabel(nr.startWeek) : '')
-        const availEnd = capProfile
-          ? (capProfile.endWeek != null ? formatWeekLabel(capProfile.endWeek) : '')
-          : (nr.endWeek != null ? formatWeekLabel(nr.endWeek) : '')
+        const availStart = availability.startWeek != null ? formatWeekLabel(availability.startWeek) : ''
+        const availEnd = availability.endWeek != null ? formatWeekLabel(availability.endWeek) : ''
         rows.push([
           'Resource', row.name, nr.name, nr.resourceIdentity === 'PLANNED_RESOURCE' || nr.synthetic ? 'Planned resource' : 'Named person',
           row.category, String(row.count), String(row.hoursPerDay),

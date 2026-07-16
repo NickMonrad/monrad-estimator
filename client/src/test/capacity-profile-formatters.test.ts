@@ -9,6 +9,8 @@ import {
   isCapacityProfileSource,
   isResolutionSource,
   deriveEffectiveAvailabilityState,
+  getEffectiveAvailabilityDisplay,
+  getEffectiveAvailabilityBadge,
 } from '../lib/capacityProfileFormatting'
 
 describe('formatPlanningBasis', () => {
@@ -100,7 +102,7 @@ describe('formatCapacityProfileSource', () => {
   })
 
   it('formats availabilityWindow', () => {
-    expect(formatCapacityProfileSource('availabilityWindow')).toBe('Availability window')
+    expect(formatCapacityProfileSource('availabilityWindow')).toBe('Availability pattern')
   })
 
   it('formats imported', () => {
@@ -306,5 +308,78 @@ describe('deriveEffectiveAvailabilityState', () => {
     })
     expect(result.effectiveMode).toBe('EFFORT')
     expect(result.isProfileManaged).toBe(false)
+  })
+})
+
+
+describe('getEffectiveAvailabilityDisplay', () => {
+  const staleTimeline = {
+    allocationMode: 'TIMELINE',
+    allocationPercent: 25,
+    allocationStartWeek: 2,
+    allocationEndWeek: 6,
+    derivedStartWeek: 3,
+    derivedEndWeek: 7,
+  }
+
+  it.each([
+    ['demandFollowing', 'EFFORT', false],
+    ['wholeProjectAllocation', 'FULL_PROJECT', false],
+    ['availabilityWindow', 'TIMELINE', false],
+    ['capacityProfile', 'CAPACITY_PLAN', true],
+  ] as const)('keeps PROFILE %s null bounds authoritative over stale legacy dates', (planningBasis, mode, managed) => {
+    const result = getEffectiveAvailabilityDisplay({
+      ...staleTimeline,
+      capacityProfile: {
+        resolutionSource: 'PROFILE', planningBasis, defaultPercent: 75,
+        startWeek: null, endWeek: null, segments: [],
+      },
+    })
+
+    expect(result.effectiveMode).toBe(mode)
+    expect(result.isProfileManaged).toBe(managed)
+    expect(result.percentage).toBe(75)
+    expect(result.startWeek).toBeNull()
+    expect(result.endWeek).toBeNull()
+    expect(result.periodLabel).toBe(managed ? 'Varies by week' : null)
+  })
+
+  it('keeps ACTIVE_CAPACITY_PLAN null bounds authoritative over stale legacy dates', () => {
+    const result = getEffectiveAvailabilityDisplay({
+      ...staleTimeline,
+      capacityProfile: {
+        resolutionSource: 'ACTIVE_CAPACITY_PLAN', planningBasis: 'availabilityWindow',
+        defaultPercent: 50, startWeek: null, endWeek: null, segments: [],
+      },
+    })
+
+    expect(result.effectiveMode).toBe('CAPACITY_PLAN')
+    expect(result.isProfileManaged).toBe(true)
+    expect(result.percentage).toBe(50)
+    expect(result.startWeek).toBeNull()
+    expect(result.endWeek).toBeNull()
+    expect(result.periodLabel).toBe('Varies by week')
+  })
+
+  it('uses legacy fields only when no authoritative profile resolves', () => {
+    const result = getEffectiveAvailabilityDisplay(staleTimeline)
+    expect(result.startWeek).toBe(2)
+    expect(result.endWeek).toBe(6)
+    expect(result.percentage).toBe(25)
+    expect(result.periodLabel).toBeNull()
+  })
+})
+
+describe('getEffectiveAvailabilityBadge', () => {
+  it.each([
+    ['effort', { allocationMode: 'EFFORT' }, 'As needed'],
+    ['whole project', { allocationMode: 'FULL_PROJECT', allocationPercent: 75 }, 'Fixed for whole project · 75%'],
+    ['selected weeks', { allocationMode: 'TIMELINE', allocationPercent: 75 }, 'Fixed for selected weeks · 75%'],
+    ['weekly profile', {
+      allocationMode: 'TIMELINE',
+      capacityProfile: { resolutionSource: 'ACTIVE_CAPACITY_PLAN', planningBasis: 'capacityProfile', defaultPercent: 75 },
+    }, 'Varies by week'],
+  ] as const)('uses the canonical %s label', (_case, row, label) => {
+    expect(getEffectiveAvailabilityBadge(getEffectiveAvailabilityDisplay(row)).label).toBe(label)
   })
 })

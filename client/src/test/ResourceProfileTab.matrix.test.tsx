@@ -418,6 +418,111 @@ describe('ResourceProfileTab segmentless scalar profile', () => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Section 3f — Authoritative null windows never revive compatibility dates
+// ═══════════════════════════════════════════════════════════════════════════
+
+function nullWindowProfileRowOverrides(
+  resolutionSource: CapacityProfileResolutionSource,
+  planningBasis: CapacityProfilePlanningBasis,
+) {
+  const overrides = profileRowOverrides(resolutionSource, planningBasis, 'TIMELINE', false) as any
+  for (const row of [overrides.profile.resourceRows[0], overrides.filteredResourceRows[0]]) {
+    row.allocationPercent = 25
+    row.allocationStartWeek = 2
+    row.allocationEndWeek = 6
+    row.derivedStartWeek = 3
+    row.derivedEndWeek = 7
+    row.capacityProfile.defaultPercent = 75
+    row.capacityProfile.startWeek = null
+    row.capacityProfile.endWeek = null
+  }
+  return overrides
+}
+
+const NULL_WINDOW_SCALAR_CASES = [
+  ['demandFollowing', 'EFFORT', false],
+  ['wholeProjectAllocation', 'FULL_PROJECT', false],
+  ['availabilityWindow', 'TIMELINE', false],
+] as const
+
+describe('ResourceProfileTab authoritative null profile windows', () => {
+  it.each(NULL_WINDOW_SCALAR_CASES)(
+    'keeps PROFILE + %s null window out of the badge period and scalar draft',
+    (planningBasis, expectedMode) => {
+      const setAllocationDraft = vi.fn()
+      const overrides = nullWindowProfileRowOverrides('PROFILE', planningBasis)
+      const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+        ...overrides,
+        setAllocationDraft,
+      })} />)
+
+      const row = screen.getByTestId('resource-profile-row-rt-dev')
+      expect(row.querySelectorAll('td')[6]?.textContent).toBe('—')
+      const badge = container.querySelector('button[title="Click to edit allocation"]')!
+      expect(badge.textContent).not.toContain('25%')
+      fireEvent.click(badge)
+      expect(setAllocationDraft).toHaveBeenCalledWith({
+        allocationMode: expectedMode,
+        allocationPercent: 75,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      })
+    },
+  )
+
+  it('saves a scalar-safe null-window availability profile without stale dates', () => {
+    const mutate = vi.fn()
+    const overrides = nullWindowProfileRowOverrides('PROFILE', 'availabilityWindow')
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+      ...overrides,
+      editingAllocation: 'rt-dev',
+      allocationDraft: {
+        allocationMode: 'TIMELINE', allocationPercent: 75,
+        allocationStartWeek: null, allocationEndWeek: null,
+      },
+      updateAllocationMutation: { isPending: false, mutate } as never,
+    })} />)
+
+    expect(container.querySelector('select[aria-label="Availability pattern"]')).toBeTruthy()
+    const startInput = screen.getByText('Available from').parentElement?.querySelector('input')
+    const endInput = screen.getByText('Available to').parentElement?.querySelector('input')
+    expect(startInput).toHaveValue(null)
+    expect(endInput).toHaveValue(null)
+    fireEvent.click(screen.getByTestId('allocation-save'))
+    expect(mutate.mock.calls[0][0]).toEqual({
+      rtId: 'rt-dev',
+      data: {
+        allocationMode: 'TIMELINE', allocationPercent: 75,
+        allocationStartWeek: null, allocationEndWeek: null,
+      },
+    })
+  })
+
+  it('keeps PROFILE capacityProfile and ACTIVE_CAPACITY_PLAN null windows profile-managed', () => {
+    for (const [resolutionSource, planningBasis] of [
+      ['PROFILE', 'capacityProfile'],
+      ['ACTIVE_CAPACITY_PLAN', 'availabilityWindow'],
+    ] as const) {
+      const overrides = nullWindowProfileRowOverrides(resolutionSource, planningBasis)
+      const { container, unmount } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
+        ...overrides,
+        editingAllocation: 'rt-dev',
+        allocationDraft: {
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 75,
+          allocationStartWeek: null, allocationEndWeek: null,
+        },
+      })} />)
+
+      const row = screen.getByTestId('resource-profile-row-rt-dev')
+      expect(row.querySelectorAll('td')[6]?.textContent).toBe('Varies by week')
+      expect(container.querySelector('select[aria-label="Availability pattern"]')).toBeNull()
+      expect(screen.queryByTestId('allocation-save')).toBeNull()
+      unmount()
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Section 4 — CAPACITY_PLAN info panel acceptance
 // ═══════════════════════════════════════════════════════════════════════════
 

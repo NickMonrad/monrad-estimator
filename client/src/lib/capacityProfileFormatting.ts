@@ -78,7 +78,7 @@ const CAPACITY_SOURCE_LABELS: Record<CapacityProfileSource, string> = {
   squadPlanner: 'Squad Planner',
   fixed: 'Fixed',
   manual: 'Manual',
-  availabilityWindow: 'Availability window',
+  availabilityWindow: 'Availability pattern',
   imported: 'Imported',
   derived: 'Derived',
   legacy: 'Legacy fallback',
@@ -195,14 +195,36 @@ function planningBasisToEditableMode(basis: string | null | undefined): Allocati
  * representable by the scalar controls and editing is allowed. The `planningBasisToEditableMode`
  * mapping selects the appropriate allocation mode.
  */
-export function deriveEffectiveAvailabilityState(row: {
+export type EffectiveAvailabilityInput = {
   allocationMode?: string | null
+  allocationPercent?: number | null
+  allocationStartWeek?: number | null
+  allocationEndWeek?: number | null
+  startWeek?: number | null
+  endWeek?: number | null
+  derivedStartWeek?: number | null
+  derivedEndWeek?: number | null
   capacityProfile?: {
     resolutionSource?: string | null
     planningBasis?: string | null
+    defaultPercent?: number | null
+    startWeek?: number | null
+    endWeek?: number | null
     segments?: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
   } | null
-}): EffectiveAvailabilityState {
+}
+
+export interface EffectiveAvailabilityDisplay extends EffectiveAvailabilityState {
+  /** Scalar percentage from the authoritative profile, or legacy data when no profile resolves. */
+  percentage: number | null
+  /** Availability window from the authoritative profile, or legacy data when no profile resolves. */
+  startWeek: number | null
+  endWeek: number | null
+  /** Profile-managed capacity has a weekly pattern rather than one fixed period. */
+  periodLabel: 'Varies by week' | null
+}
+
+export function deriveEffectiveAvailabilityState(row: EffectiveAvailabilityInput): EffectiveAvailabilityState {
   const resolutionSource = row.capacityProfile?.resolutionSource as ('PROFILE' | 'ACTIVE_CAPACITY_PLAN' | null | undefined)
   const planningBasis = row.capacityProfile?.planningBasis
   const segments = row.capacityProfile?.segments ?? []
@@ -261,4 +283,71 @@ export function deriveEffectiveAvailabilityState(row: {
     hasAuthoritativeProfile: false,
     hasMeaningfulSegments: false,
   }
+}
+
+/**
+ * Resolve one availability presentation state for every UI surface.
+ *
+ * A PROFILE or ACTIVE_CAPACITY_PLAN owns all profile fields, including a
+ * deliberate null start/end window. Legacy compatibility values are consulted
+ * only when no authoritative profile resolved.
+ */
+export function getEffectiveAvailabilityDisplay(row: EffectiveAvailabilityInput): EffectiveAvailabilityDisplay {
+  const state = deriveEffectiveAvailabilityState(row)
+  const profile = row.capacityProfile
+
+  return {
+    ...state,
+    percentage: state.hasAuthoritativeProfile
+      ? profile?.defaultPercent ?? null
+      : row.allocationPercent ?? 100,
+    startWeek: state.hasAuthoritativeProfile
+      ? profile?.startWeek ?? null
+      : row.allocationStartWeek ?? row.startWeek ?? row.derivedStartWeek ?? null,
+    endWeek: state.hasAuthoritativeProfile
+      ? profile?.endWeek ?? null
+      : row.allocationEndWeek ?? row.endWeek ?? row.derivedEndWeek ?? null,
+    periodLabel: state.isProfileManaged ? 'Varies by week' : null,
+  }
+}
+
+
+export interface EffectiveAvailabilityBadge {
+  label: string
+  color: string
+  sub: string | null
+}
+
+/** Build the shared badge text used by Resource Profile and Commercial. */
+export function getEffectiveAvailabilityBadge(
+  availability: EffectiveAvailabilityDisplay,
+  projectDurationWeeks?: number | null,
+): EffectiveAvailabilityBadge {
+  if (availability.isProfileManaged) {
+    return { label: 'Varies by week', color: 'bg-green-100 text-green-700', sub: null }
+  }
+
+  const mode = availability.effectiveMode
+  if (mode === 'CAPACITY_PLAN') {
+    return { label: 'Varies by week', color: 'bg-green-100 text-green-700', sub: null }
+  }
+  const label = formatAllocationMode(mode)
+  if (mode === 'EFFORT') {
+    return { label, color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400', sub: null }
+  }
+
+  const percentLabel = availability.percentage != null ? `${label} · ${availability.percentage}%` : label
+  if (mode === 'TIMELINE') {
+    const sub = availability.startWeek != null && availability.endWeek != null
+      ? `Wk ${Math.floor(availability.startWeek)} → Wk ${Math.floor(availability.endWeek)}`
+      : null
+    return { label: percentLabel, color: 'bg-blue-100 text-blue-700', sub }
+  }
+
+  const sub = availability.hasAuthoritativeProfile
+    ? availability.startWeek != null && availability.endWeek != null
+      ? `Wk ${Math.floor(availability.startWeek)} → Wk ${Math.floor(availability.endWeek)}`
+      : null
+    : projectDurationWeeks != null ? `Wk 0 → Wk ${Math.floor(projectDurationWeeks)}` : null
+  return { label: percentLabel, color: 'bg-purple-100 text-purple-700', sub }
 }
