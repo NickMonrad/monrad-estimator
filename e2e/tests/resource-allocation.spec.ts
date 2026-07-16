@@ -339,7 +339,7 @@ test.describe('Resource Allocation', () => {
 
   test('CAPACITY_PLAN row shows info panel with safe editor, round-trip preserves segments', async ({ page }) => {
     test.setTimeout(120_000)
-    const { projectId, planResourceTypeId, beforeSegments } = await setupSquadPlannerCapacityPlan(page)
+    const { projectId, planResourceTypeId, planResourceName, beforeSegments } = await setupSquadPlannerCapacityPlan(page)
   
     const scalarCalls: string[] = []
     page.on('request', req => {
@@ -349,11 +349,11 @@ test.describe('Resource Allocation', () => {
       }
     })
   
-    // Project Manager row has the "Varies by week" badge (no named resources)
-    const pmRow = page.locator('table tbody tr').filter({ hasText: 'Project Manager' }).first()
-    await expect(pmRow).toBeVisible({ timeout: 10_000 })
+    // The planned resource row has the "Varies by week" badge
+    const planRow = page.locator('table tbody tr').filter({ hasText: planResourceName }).first()
+    await expect(planRow).toBeVisible({ timeout: 10_000 })
   
-    const badge = pmRow.locator('button[title="Click to edit allocation"]')
+    const badge = planRow.locator('button[title="Click to edit allocation"]')
     await expect(badge).toBeVisible({ timeout: 8_000 })
     await expect(badge).toHaveText('Varies by week')
   
@@ -384,7 +384,7 @@ test.describe('Resource Allocation', () => {
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
   
-    // Verify exact segment preservation via API (segments live on named resources)
+    // Verify exact segment preservation via API
     const tokenAfter = await page.evaluate(() => localStorage.getItem('token'))
     const authHeadersAfter: Record<string, string> = {}
     if (tokenAfter) authHeadersAfter['Authorization'] = `Bearer ${tokenAfter}`
@@ -410,9 +410,9 @@ test.describe('Resource Allocation', () => {
     expect(afterAllSegments).toEqual(beforeSegments)
   
     // UI badge still shows Varies by week after round-trip
-    const pmRowAfter = page.locator('table tbody tr').filter({ hasText: 'Project Manager' }).first()
-    await expect(pmRowAfter).toBeVisible({ timeout: 10_000 })
-    const badgeAfter = pmRowAfter.locator('button[title="Click to edit allocation"]')
+    const planRowAfter = page.locator('table tbody tr').filter({ hasText: planResourceName }).first()
+    await expect(planRowAfter).toBeVisible({ timeout: 10_000 })
+    const badgeAfter = planRowAfter.locator('button[title="Click to edit allocation"]')
     await expect(badgeAfter).toBeVisible({ timeout: 5_000 })
     await expect(badgeAfter).toHaveText('Varies by week')
   })
