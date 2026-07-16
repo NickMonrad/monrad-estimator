@@ -479,22 +479,20 @@ describe('terminateProcess — inherited stdio (null streams)', () => {
   })
 
   it('process group with no pipes eventually receives SIGKILL when stuck', async () => {
-    let groupExists = true
-    const checkGroup = () => ({ exists: groupExists })
-
+    // Group never goes away — even after SIGKILL the process tree persists.
     const child = mockInheritedChild()
     const graceMs = 30
 
-    const promise = terminateProcess(child, graceMs, { useProcessGroup: true, checkGroup })
+    const promise = terminateProcess(child, graceMs, {
+      useProcessGroup: true,
+      checkGroup: () => ({ exists: true }),
+    })
 
-    // Wait for grace period to expire and escalation to happen.
-    await new Promise(resolve => setTimeout(resolve, graceMs + 100))
-
-    // Group still exists, but termination completes after bounded poll.
-    // The function will eventually return after SIGKILL + bounded 500ms poll.
-    groupExists = false
-    await promise
-
-    assert.ok(child.stdin._ended, 'stdin ended after escalation')
+    await assert.rejects(
+      promise,
+      new RegExp(
+        `Process group ${child.pid} survived SIGTERM \\(${graceMs}ms\\) then SIGKILL \\(500ms\\)`
+      ),
+    )
   })
 })

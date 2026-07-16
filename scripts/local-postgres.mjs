@@ -101,7 +101,7 @@ export function resolveCommand(command, args, platform = process.platform, npmEx
   return { command, args }
 }
 
-export function runCommand(command, args, { cwd, env, inherit = true, platform, npmExecPath, signal, graceMs = 4_000 } = {}) {
+export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, platform, npmExecPath, signal, graceMs = 4_000 } = {}) {
   if (signal?.aborted) {
     return Promise.reject(new Error(`${command} was cancelled`))
   }
@@ -112,7 +112,8 @@ export function runCommand(command, args, { cwd, env, inherit = true, platform, 
     const rejectOnce = (reason) => { if (!settled) { settled = true; reject(reason) } }
 
     const spec = resolveCommand(command, args, platform, npmExecPath)
-    const child = spawn(spec.command, spec.args, { cwd, env, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
+    const mergedEnv = extraEnv ? { ...env, ...extraEnv } : env
+    const child = spawn(spec.command, spec.args, { cwd, env: mergedEnv, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
     let output = ''
     if (!inherit) {
       child.stdout.on('data', chunk => { output += chunk; process.stdout.write(chunk) })
@@ -128,14 +129,13 @@ export function runCommand(command, args, { cwd, env, inherit = true, platform, 
       const termPromise = isWin
         ? windowsTerminateProcess(child)
         : terminateProcess(child, graceMs, { useProcessGroup: true })
-
       termPromise.then(
         () => rejectOnce(new Error(`${command} was cancelled`)),
         (termError) => {
-          // Termination failure — still reject with cancellation, not the
-          // termination error, so callers can distinguish cancellation from
-          // command failure.
-          rejectOnce(new Error(`${command} was cancelled`))
+          const safeMsg = termError?.message ?? String(termError)
+          const err = new Error(`${command} was cancelled; process-tree termination failed: ${safeMsg}`)
+          err.cause = termError
+          rejectOnce(err)
         },
       )
     }

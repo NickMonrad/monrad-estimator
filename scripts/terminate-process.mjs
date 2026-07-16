@@ -41,6 +41,8 @@ export function checkProcessGroupExists(pid) {
     return { exists: true }
   } catch (err) {
     if (err.code === 'ESRCH') return { exists: false }
+    // EPERM/EACCES — group exists but we lack permission to check.
+    if (err.code === 'EPERM' || err.code === 'EACCES') return { exists: true }
     return { exists: false, error: err }
   }
 }
@@ -67,14 +69,17 @@ export async function waitForProcessGroupGone(pid, timeoutMs, checkGroup = check
   return !exists
 }
 
-// ── Signal sending ─────────────────────────────────────────────────────
-
 function sendSignal(child, signal, useProcessGroup) {
   if (useProcessGroup && child.pid) {
     try {
       process.kill(-child.pid, signal)
     } catch (err) {
-      if (err.code !== 'ESRCH') throw err
+      if (err.code === 'ESRCH') return
+      if (err.code === 'EPERM') {
+        console.error(`[terminate-process] EPERM sending ${signal} to group ${child.pid}: ${err.message}`)
+        return
+      }
+      throw err
     }
   } else {
     child.kill(signal)
@@ -98,29 +103,28 @@ export function buildWindowsTerminateArgs(pid) {
 /**
  * Spawn `taskkill /PID <pid> /T /F` and wait for it to complete.
  *
- * Tolerates an already-exited process.  If `taskkill` is not available
- * (ENOENT — not Windows), falls back to `child.kill('SIGTERM')` so that
- * tests using `platform: 'win32'` on POSIX still make progress.
+ * Tolerates an already-exited process.  Rejects if `taskkill` is not available
+ * (ENOENT — not Windows, or not installed).
  *
- * @param {{ pid?: number, kill?: Function }} child
- * @param {{ env?: Record<string, string> }} [options]
+ * @param {{ pid?: number }} child
+ * @param {{ env?: Record<string, string>, spawnProcess?: Function }} [options]
  * @returns {Promise<void>}
  */
-export async function windowsTerminateProcess(child, { env: environment } = {}) {
+export async function windowsTerminateProcess(child, { env: environment, spawnProcess = spawn } = {}) {
   if (!child.pid) return
   const args = buildWindowsTerminateArgs(child.pid)
   return new Promise((resolve, reject) => {
-    const proc = spawn('taskkill', args.slice(1), {
+    const proc = spawnProcess('taskkill', args.slice(1), {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...environment, LANG: 'C' },
     })
     let stderr = ''
     proc.stderr.on('data', chunk => { stderr += chunk.toString() })
     proc.on('error', err => {
-      // taskkill not available (not Windows). Fall back to normal kill.
+      // ENOENT = taskkill not available = not Windows.
       if (err.code === 'ENOENT') {
-        if (typeof child.kill === 'function') child.kill('SIGTERM')
-        return resolve()
+        reject(new Error('taskkill not available (not Windows)'))
+        return
       }
       reject(err)
     })
@@ -146,10 +150,10 @@ export async function windowsTerminateProcess(child, { env: environment } = {}) 
  *
  * **Process-group mode** (useProcessGroup: true):
  *   Send SIGTERM to the group (`-child.pid`).  Poll for the group to
- *   disappear via `checkGroup(pid)` — this is independent of pipe-stream
- *   state, so inherited stdio is handled correctly.  Pipe closure is an
- *   *additional* signal when pipe streams exist.  Escalate to SIGKILL
- *   on timeout, continue bounded polling.
+ *   disappear via `checkGroup(pid)` — this is the *only* authoritative
+ *   completion check.  Pipe closure triggers a re-check but does NOT
+ *   independently complete termination.  Escalate to SIGKILL on timeout.
+ *   If the group persists after SIGKILL, throw an error.
  *
  * @param {import('node:child_process').ChildProcess} child
  * @param {number} [graceMs=4000]
@@ -186,11 +190,11 @@ export async function terminateProcess(
   if (useProcessGroup) {
     sendSignal(child, 'SIGTERM', true)
 
-    // Primary = group-gone polling; secondary = pipe closure if pipes exist.
-    const completed = await Promise.race([
-      waitForProcessGroupGone(child.pid, graceMs, checkGroup),
-      ...(child.stdout || child.stderr ? [pipesClosed] : []),
-    ])
+    // Pipe closure triggers a re-check but does NOT complete termination.
+    pipesClosed.then(() => checkGroup(child.pid))
+
+    // Only waitForProcessGroupGone is authoritative.
+    const completed = await waitForProcessGroupGone(child.pid, graceMs, checkGroup)
 
     if (completed) {
       child.stdout?.destroy()
@@ -201,7 +205,16 @@ export async function terminateProcess(
 
     // Escalate to SIGKILL.
     sendSignal(child, 'SIGKILL', true)
-    await waitForProcessGroupGone(child.pid, 500, checkGroup)
+    const killed = await waitForProcessGroupGone(child.pid, 500, checkGroup)
+
+    if (!killed) {
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+      child.stdin?.end()
+      throw new Error(
+        `Process group ${child.pid} survived SIGTERM (${graceMs}ms) then SIGKILL (500ms)`
+      )
+    }
 
     child.stdout?.destroy()
     child.stderr?.destroy()

@@ -21,7 +21,7 @@ try {
 
 // Report cleanup errors — never suppress database/Docker/process failures.
 for (const ce of cleanupErrors) {
-  if (guard.triggered && ce.type === 'runner' && ce.error.includes('was cancelled')) continue
+  if (guard.triggered && ce.type === 'runner' && ce.error.endsWith('was cancelled')) continue
   console.error(`[integration-local] ${ce.type}: ${ce.error}`)
 }
 

@@ -21,9 +21,8 @@
  */
 import { spawn } from 'node:child_process'
 import net from 'node:net'
-import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadLocalEnvironment, runCommand, shutdownGuard, withIsolatedTestDatabase } from './local-postgres.mjs'
+import { loadLocalEnvironment, resolveCommand, runCommand, shutdownGuard, withIsolatedTestDatabase } from './local-postgres.mjs'
 import { terminateProcess, windowsTerminateProcess } from './terminate-process.mjs'
 
 
@@ -73,6 +72,15 @@ const apiUrl = `http://${host}:${apiPort}`
 const baseUrl = `http://${host}:${clientPort}`
 const children = []
 const guard = shutdownGuard()
+const internalAbort = new AbortController()
+function makeCombinedSignal(...signals) {
+  const ctrl = new AbortController()
+  for (const sig of signals) sig.addEventListener('abort', () => ctrl.abort(), { once: true })
+  return ctrl.signal
+}
+const combinedSignal = AbortSignal.any
+  ? AbortSignal.any([guard.abortSignal, internalAbort.signal])
+  : makeCombinedSignal(guard.abortSignal, internalAbort.signal)
 let cleanupErrors = []
 
 console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (preferred :${preferredApiPort} was unavailable)`}`)
@@ -82,11 +90,11 @@ try {
   await withIsolatedTestDatabase({ root }, async testEnv => {
     try {
       // ── Cleanup before seed ───────────────────────────────────────────────
-      await runCommand('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv, signal: guard.abortSignal })
+      await runCommand('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv, signal: combinedSignal })
       if (guard.triggered) return
 
       // ── Seed ──────────────────────────────────────────────────────────────
-      await runCommand('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv, signal: guard.abortSignal })
+      await runCommand('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv, signal: combinedSignal })
       if (guard.triggered) return
 
       // ── Start API ─────────────────────────────────────────────────────────
@@ -131,7 +139,7 @@ try {
           NODE_ENV: 'test',
         },
         inherit: true,
-        signal: guard.abortSignal,
+        signal: combinedSignal,
       })
     } finally {
       // Always stop API/Vite children before database cleanup.
@@ -151,7 +159,7 @@ try {
 // ── Report and exit ─────────────────────────────────────────────────────────
 
 for (const ce of cleanupErrors) {
-  if (guard.triggered && ce.type === 'runner' && ce.error.includes('was cancelled')) continue
+  if (guard.triggered && ce.type === 'runner' && ce.error.endsWith('was cancelled')) continue
   console.error(`[e2e-local] ${ce.type}: ${ce.error}`)
 }
 
@@ -177,40 +185,47 @@ function start(command, args, { cwd, env, extraEnv = {}, label }) {
 
   child.stdout.on('data', data => process.stdout.write(`[${label}] ${data}`))
   child.stderr.on('data', data => process.stderr.write(`[${label}] ${data}`))
-  child.on('error', error => {
-    console.error(`[${label}] failed to start: ${error.message}`)
-    // Signal run failure — the abort will propagate.
-    guard._handler('SIGTERM')
-  })
-  child.on('exit', code => {
-    if (code !== null && code !== 0) {
-      console.error(`[${label}] exited with code ${code}`)
-      // Unexpected exit before tests complete — fail the run.
-      guard._handler('SIGTERM')
-    }
+
+  let expectedShutdown = false
+  const failure = new Promise((_, reject) => {
+    child.on('error', err => {
+      if (!expectedShutdown) {
+        console.error(`[${label}] failed to start: ${err.message}`)
+        reject(err)
+      }
+    })
+    child.on('exit', code => {
+      if (!expectedShutdown && code !== 0) {
+        console.error(`[${label}] exited with code ${code}`)
+        reject(new Error(`${label} exited with code ${code}`))
+      }
+    })
   })
 
-  return child
+  // Wire failure to abort the run — startup failures propagate via internalAbort.
+  failure.catch(() => { internalAbort.abort() })
+
+  return { child, failure, markExpectedShutdown: () => { expectedShutdown = true } }
 }
 
 async function stopChildren() {
-  for (const child of children.reverse()) {
-    if (process.platform === 'win32') {
-      await windowsTerminateProcess(child)
-    } else {
-      await terminateProcess(child, undefined, { useProcessGroup: true })
-    }
+  const results = await Promise.allSettled(
+    children.reverse().map(async entry => {
+      entry.markExpectedShutdown?.()
+      if (process.platform === 'win32') {
+        await windowsTerminateProcess(entry.child)
+      } else {
+        await terminateProcess(entry.child, undefined, { useProcessGroup: true })
+      }
+    })
+  )
+  const failures = results.filter(r => r.status === 'rejected')
+  if (failures.length > 0) {
+    const messages = failures.map((r, i) => `child ${i}: ${r.reason?.message ?? r.reason}`).join('; ')
+    throw new Error(`Process termination failed: ${messages}`)
   }
 }
 
-function resolveCommand(command, args) {
-  if (process.platform === 'win32' && command === 'npx') {
-    const npmCli = process.env.npm_execpath
-    if (!npmCli) throw new Error('npm_execpath is required to run npx commands on Windows')
-    return { command: process.execPath, args: [npmCli, 'exec', '--', ...args] }
-  }
-  return { command, args }
-}
 
 async function findAvailablePort(startPort, reserved = new Set()) {
   for (let port = startPort; port < startPort + 100; port++) {
@@ -278,7 +293,7 @@ async function waitFor(label, check) {
   const deadline = Date.now() + 60_000
   let lastError
   while (Date.now() < deadline) {
-    if (guard.abortSignal.aborted) throw new Error(`Cancelled: ${label}`)
+    if (combinedSignal.aborted) throw new Error(`Cancelled: ${label}`)
     try {
       await check()
       console.log(`[e2e-local] Ready: ${label}`)
