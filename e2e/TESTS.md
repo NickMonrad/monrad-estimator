@@ -108,7 +108,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (14 tests)
+### `timeline.spec.ts` — Timeline (15 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -162,6 +162,12 @@ API-level tests using the `request` fixture. No browser UI involved.
 | Fixed for selected weeks mode shows start/end week inputs and persists | Opens the Developer allocation editor; selects Fixed for selected weeks (TIMELINE); fills start week 2 and end week 10; clicks Save |
 | Available % input persists independently | Opens the Developer allocation editor; changes to Fixed for whole project (FULL_PROJECT); sets FTE % to 75; saves and re-opens to verify the 75% value persists |
 
+
+#### `Squad Planner — profile-first apply and resource identity` describe block (1 test)
+
+| Test | Description |
+|------|-------------|
+| generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_apply` trigger snapshot visibility and rollback button click |
 
 ---
 

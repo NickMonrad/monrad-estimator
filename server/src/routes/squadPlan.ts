@@ -7,6 +7,7 @@
  */
 
 import { Router, Response } from 'express'
+import { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
@@ -23,10 +24,27 @@ import {
 } from '../lib/capacity-planner.js'
 import {
   materializeCapacityPlanResources,
+  materializeResourceTrajectories,
   type CapacityPlanSlotWindow,
   type CapacityPlanPeriodInput,
 } from '../lib/capacityPlanMaterialisation.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
+import {
+  conflictPreflightCheck,
+  findOrCreatePlannedResources,
+  writePlannerProfiles,
+  materializeProfilesForResourceType,
+  clearSurplusCompatibilityFields,
+  projectCompatibilityFields,
+  clearOmittedPlannerCapacity,
+  revalidatePlannerPlan,
+  capturePlannerAuthority,
+  PlannerConflictError,
+  runPreValidationConflictSeam,
+  runPreWriteConflictSeam,
+  __applyFailureSeam,
+  type PrismaTransactionClient,
+  type PriorPlannerAuthority,
+} from '../lib/squadPlannerProfileWriter.js'
 
 type ApplyPeriodEntry = {
   resourceTypeId: string
@@ -63,6 +81,18 @@ const isFiniteNumber = (value: unknown): value is number =>
 
 const isNonNegativeFiniteNumber = (value: unknown): value is number =>
   isFiniteNumber(value) && value >= 0
+const MAX_SERIALIZATION_RETRIES = 2
+
+function isSerializationConflict(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+    return true
+  }
+  if (typeof err !== 'object' || err === null) return false
+  const cause = (err as { cause?: unknown }).cause
+  return typeof cause === 'object'
+    && cause !== null
+    && (cause as { originalCode?: unknown }).originalCode === '40001'
+}
 
 export function deriveFeatureSpanFromWeeklyAllocations(
   weeklyAllocations: Map<number, Map<string, number>> | undefined,
@@ -375,7 +405,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const projectResourceTypes = await prisma.resourceType.findMany({
     where: { projectId },
-    select: { id: true },
+    select: { id: true, name: true },
   })
   const projectResourceTypeIds = new Set(projectResourceTypes.map(rt => rt.id))
 
@@ -413,6 +443,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       if (!isNonNegativeFiniteNumber(entry.demandFTE)) {
         res.status(400).json({ error: 'period entry demandFTE must be a finite number >= 0' }); return
       }
+
+
       if (!isNonNegativeFiniteNumber(entry.utilisationPct)) {
         res.status(400).json({ error: 'period entry utilisationPct must be a finite number >= 0' }); return
       }
@@ -421,19 +453,55 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const shouldActivate = setActive ?? true
 
-  // ── 1. Create pre-apply snapshot for undo ───────────────────────────────
-  const snapshotData = await buildSnapshot(projectId)
-  const dateStr = new Date().toISOString().slice(0, 10)
-  await prisma.backlogSnapshot.create({
-    data: {
+  // ── Capture preflight planner authority before conflict check and snapshot ──
+  // This immutable evidence is used by the preflight conflict check only.
+  // A fresh, transaction-local authority is captured inside the transaction
+  // to avoid stale evidence from concurrent plan mutations.
+  const preflightAuthority: PriorPlannerAuthority | null = shouldActivate
+    ? await capturePlannerAuthority(prisma as unknown as PrismaTransactionClient, projectId)
+    : null
+
+  // ── 1a. Conflict preflight (before snapshot) ─────────────────────────────
+  if (shouldActivate) {
+    const conflictResult = await conflictPreflightCheck(
+      prisma as unknown as PrismaTransactionClient,
       projectId,
-      label: `Auto-saved before squad plan apply — ${dateStr}`,
-      trigger: 'optimiser_apply',
-      snapshot: snapshotData as unknown as object,
-      createdById: req.userId!,
-    },
-  })
-  await pruneSnapshots(prisma, projectId)
+      normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+      preflightAuthority ?? undefined,
+    )
+    if (conflictResult?.hasConflict) {
+      const messages: string[] = []
+      if (conflictResult.duplicateOwnerProfiles.length > 0) {
+        messages.push('Duplicate owner profiles exist for one or more affected resources. Repair required before applying.')
+      }
+      if (conflictResult.protectedNamedPersonProfiles.length > 0) {
+        for (const p of conflictResult.protectedNamedPersonProfiles) {
+          const label = p.namedResourceName ?? p.resourceTypeName
+          messages.push(`"${label}" has an explicit named-person profile and cannot be replaced by the planner.`)
+        }
+      }
+      res.status(409).json({ error: messages.join('; ') })
+      return
+    }
+  }
+
+  // ── 1. Create pre-apply snapshot for undo (track ID for on-conflict cleanup) ──
+  let newSnapshotId: string | null = null
+  if (shouldActivate) {
+    const snapshotData = await buildSnapshot(projectId)
+    const dateStr = new Date().toISOString().slice(0, 10)
+    const snapshot = await prisma.backlogSnapshot.create({
+      data: {
+        projectId,
+        label: `Auto-saved before squad plan apply — ${dateStr}`,
+        trigger: 'optimiser_apply',
+        snapshot: snapshotData as unknown as object,
+        createdById: req.userId!,
+      },
+    })
+    newSnapshotId = snapshot.id
+    // pruneSnapshots is deferred to after a successful transaction
+  }
 
 
   // ── 2. Compute planner-derived values from request data (no DB) ──────────
@@ -450,130 +518,19 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     slotWindowsByRt = deriveSlotWindowsByResourceType(normalisedPeriods)
   }
 
-  // ── 3. Transaction: plan + capacity-profile-affecting writes + sync ──────
-  const plan = await prisma.$transaction(async tx => {
-    // Deactivate existing active plans
-    if (shouldActivate) {
-      await tx.capacityPlan.updateMany({
-        where: { projectId, isActive: true },
-        data: { isActive: false },
-      })
-    }
+  // ── 2b. Precompute timeline/cache data (before transaction) ────────────────
+  let timelinePrecomputed: {
+    epicStartWeeks: Map<string, number>
+    featureRows: Array<{ projectId: string; featureId: string; startWeek: number; durationWeeks: number; isManual: false }>
+    storyRows: Array<{ projectId: string; storyId: string; startWeek: number; durationWeeks: number; isManual: false }>
+    weeklyDemandCache: Record<string, number>
+  } | undefined
 
-    // Create the new plan with nested periods & entries
-    const createdPlan = await tx.capacityPlan.create({
-      data: {
-        projectId,
-        name,
-        targetWeeks,
-        periodWeeks,
-        maxDelta,
-        isActive: shouldActivate,
-        totalCost,
-        deliveryWeeks,
-        periods: {
-          create: normalisedPeriods.map(p => ({
-            periodIndex: p.periodIndex,
-            startWeek: p.startWeek,
-            endWeek: p.endWeek,
-            entries: {
-              create: p.entries.map(e => ({
-                resourceTypeId: e.resourceTypeId,
-                headcount: e.headcount,
-                demandFTE: e.demandFTE,
-                utilisationPct: e.utilisationPct,
-              })),
-            },
-          })),
-        },
-      },
-      include: { periods: { include: { entries: true } } },
-    })
-
-    // Update RT counts + allocation mode + NR assignments (capacity-profile-affecting)
-    if (shouldActivate && maxHeadcountByRt && slotWindowsByRt) {
-      // Update RT counts and allocation mode for demand RTs
-      for (const [rtId, count] of maxHeadcountByRt) {
-        await tx.resourceType.update({
-          where: { id: rtId },
-          data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
-        })
-      }
-
-      // Also set ALL other project RTs to CAPACITY_PLAN
-      await tx.resourceType.updateMany({
-        where: { projectId, id: { notIn: [...maxHeadcountByRt.keys()] } },
-        data: { allocationMode: 'CAPACITY_PLAN' },
-      })
-
-      // Update ALL named resources allocation mode
-      await tx.namedResource.updateMany({
-        where: { resourceType: { projectId } },
-        data: { allocationMode: 'CAPACITY_PLAN' },
-      })
-
-      // Auto-create missing NRs then assign slot windows
-      for (const [rtId] of maxHeadcountByRt) {
-        const slotWindows = slotWindowsByRt.get(rtId) ?? []
-
-        // Fetch existing NRs with stable ordering
-        const existingNRs = await tx.namedResource.findMany({
-          where: { resourceTypeId: rtId },
-          orderBy: { id: 'asc' },
-          select: { id: true },
-        })
-
-        const missing = Math.max(0, slotWindows.length - existingNRs.length)
-        if (missing > 0) {
-          const rt = await tx.resourceType.findUnique({
-            where: { id: rtId },
-            select: { name: true },
-          })
-          const baseName = rt?.name ?? 'Resource'
-          const startIndex = existingNRs.length + 1
-          const newNRs = Array.from({ length: missing }, (_, i) => ({
-            resourceTypeId: rtId,
-            name: `${baseName} ${startIndex + i}`,
-            allocationMode: 'CAPACITY_PLAN' as const,
-            startWeek: 0,
-          }))
-          await tx.namedResource.createMany({ data: newNRs })
-        }
-
-        // Re-fetch all NRs (including any just created) with stable ordering
-        const allNRs = await tx.namedResource.findMany({
-          where: { resourceTypeId: rtId },
-          orderBy: { id: 'asc' },
-          select: { id: true },
-        })
-
-        // Assign each NR one slot window
-        await Promise.all(
-          allNRs.map((nr, idx) => {
-            const win = slotWindows[idx] ?? { startWeek: -1, endWeek: -1, allocationPercent: 100 }
-            return tx.namedResource.update({
-              where: { id: nr.id },
-              data: {
-                startWeek: win.startWeek,
-                endWeek: win.endWeek,
-                allocationPercent: win.allocationPercent,
-                allocationMode: 'CAPACITY_PLAN',
-              },
-            })
-          })
-        )
-      }
-
-      // Sync capacity profiles after all authoritative legacy writes
-      await syncCapacityProfilesForProject(tx, projectId)
-    }
-
-    return createdPlan
-  })
-
-  // ── 4. Materialise timeline using the projected schedule ─────────────────
   if (shouldActivate && maxHeadcountByRt && slotWindowsByRt) {
     let refreshedWeeklyDemandCache: Record<string, number>
+    let pfFeatureRows: Array<{ projectId: string; featureId: string; startWeek: number; durationWeeks: number; isManual: false }> = []
+    let pfStoryRows: Array<{ projectId: string; storyId: string; startWeek: number; durationWeeks: number; isManual: false }> = []
+    let epicStartWeeks: Map<string, number>
 
     if (clientLevellingResult?.featureStartWeeks && Object.keys(clientLevellingResult.featureStartWeeks).length > 0) {
       // ── Direct persistence path: derive spans from planner allocations ───
@@ -598,14 +555,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         plannerResult.weeklyDemandByResourceType,
       )
 
-      // Persist epic start weeks
-      const epicStartWeeks = new Map(
+      epicStartWeeks = new Map(
         Object.entries(clientLevellingResult.epicStartWeeks).map(([k, v]) => [k, Number(v)])
-      )
-      await Promise.all(
-        Array.from(epicStartWeeks.entries()).map(([epicId, startWeek]) =>
-          prisma.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
-        )
       )
 
       // Load features with stories/tasks to compute durations
@@ -623,14 +574,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
 
       const hpd = project.hoursPerDay
-
       const featureStartWeeks = clientLevellingResult.featureStartWeeks
-      const featureRows: Array<{
-        projectId: string; featureId: string; startWeek: number; durationWeeks: number; isManual: false
-      }> = []
-      const storyRows: Array<{
-        projectId: string; storyId: string; startWeek: number; durationWeeks: number; isManual: false
-      }> = []
 
       for (const epic of allEpics) {
         for (const feature of epic.features) {
@@ -656,7 +600,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             }
           }
 
-          featureRows.push({
+          pfFeatureRows.push({
             projectId,
             featureId: feature.id,
             startWeek: span.startWeek,
@@ -674,7 +618,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             }
             const proportion = totalFeatureDays > 0 ? storyDays / totalFeatureDays : 0
             const storyDuration = Math.max(1, Math.ceil(span.durationWeeks * proportion))
-            storyRows.push({
+            pfStoryRows.push({
               projectId,
               storyId: story.id,
               startWeek: span.startWeek,
@@ -684,36 +628,16 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
           }
         }
       }
-
-      // Persist timeline entries
-      await prisma.$transaction(async tx => {
-        await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
-        if (featureRows.length > 0) {
-          await tx.timelineEntry.createMany({ data: featureRows, skipDuplicates: true })
-        }
-        await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
-        if (storyRows.length > 0) {
-          await tx.storyTimelineEntry.createMany({ data: storyRows, skipDuplicates: true })
-        }
-      })
     } else {
       // ── Legacy fallback: re-run scheduler ──────────────────────────────
       const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay)
 
-      let epicStartWeeks: Map<string, number>
       if (clientLevellingResult?.epicStartWeeks) {
         epicStartWeeks = new Map(Object.entries(clientLevellingResult.epicStartWeeks).map(([k, v]) => [k, Number(v)]))
       } else {
         const levelResult = levelEpicStarts(schedulerInput)
         epicStartWeeks = levelResult.epicStartWeeks
       }
-
-      // Persist levelled epic start weeks
-      await Promise.all(
-        Array.from(epicStartWeeks.entries()).map(([epicId, startWeek]) =>
-          prisma.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
-        )
-      )
 
       const levelledEpics = schedulerInput.epics.map(e => ({
         ...e,
@@ -726,45 +650,254 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
       refreshedWeeklyDemandCache = Object.fromEntries(weeklyConsumptionMap)
 
-      // Materialise timeline entries
-      await prisma.$transaction(async tx => {
-        await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
-        const featureRows = featureSchedule
-          .filter(e => !e.isManual)
-          .map(e => ({
-            projectId,
-            featureId: e.featureId,
-            startWeek: e.startWeek,
-            durationWeeks: e.durationWeeks,
-            isManual: false,
-          }))
-        if (featureRows.length > 0) {
-          await tx.timelineEntry.createMany({ data: featureRows, skipDuplicates: true })
-        }
+      pfFeatureRows = featureSchedule
+        .filter(e => !e.isManual)
+        .map(e => ({
+          projectId,
+          featureId: e.featureId,
+          startWeek: e.startWeek,
+          durationWeeks: e.durationWeeks,
+          isManual: false as const,
+        }))
 
-        await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
-        const storyRows = storySchedule
-          .filter(e => !e.isManual)
-          .map(e => ({
-            projectId,
-            storyId: e.storyId,
-            startWeek: e.startWeek,
-            durationWeeks: e.durationWeeks,
-            isManual: false,
-          }))
-        if (storyRows.length > 0) {
-          await tx.storyTimelineEntry.createMany({ data: storyRows, skipDuplicates: true })
-        }
-      })
+      pfStoryRows = storySchedule
+        .filter(e => !e.isManual)
+        .map(e => ({
+          projectId,
+          storyId: e.storyId,
+          startWeek: e.startWeek,
+          durationWeeks: e.durationWeeks,
+          isManual: false as const,
+        }))
     }
 
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { weeklyDemandCache: refreshedWeeklyDemandCache },
-    })
+    timelinePrecomputed = {
+      epicStartWeeks,
+      featureRows: pfFeatureRows,
+      storyRows: pfStoryRows,
+      weeklyDemandCache: refreshedWeeklyDemandCache,
+    }
+
+
+}
+
+  // ── 3. Single transaction: revalidate → deactivate → plan → profile → timeline + cache ──
+  let plan: unknown
+  try {
+    let transactionAttempts = 0
+    while (true) {
+      try {
+    plan = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
+      // A deterministic test seam can commit a concurrent profile mutation
+      // before the authority snapshot and ownership validation reads.
+      if (shouldActivate) {
+        await runPreValidationConflictSeam()
+      }
+
+      // ── Capture transaction-local planner authority after pre-validation seam ──
+      // This fresh capture runs inside the Serializable transaction, after any
+      // concurrent mutations the pre-validation seam may have introduced, so that
+      // ownership evidence for revalidation, profile writes, and omitted cleanup
+      // is consistent and immune to preflight-to-transaction races.
+      const transactionAuthority: PriorPlannerAuthority | null = shouldActivate
+        ? await capturePlannerAuthority(tx, projectId)
+        : null
+
+      if (shouldActivate) {
+        await revalidatePlannerPlan(
+          tx,
+          projectId,
+          normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+          transactionAuthority ?? undefined,
+        )
+
+        // ── Pre-write conflict test seam ─────────────────────────────────
+        // Integration tests inject a profile mutation here to test preflight/apply race.
+        runPreWriteConflictSeam()
+      }
+
+      // Deactivate existing active plans
+      if (shouldActivate) {
+        await tx.capacityPlan.updateMany({
+          where: { projectId, isActive: true },
+          data: { isActive: false },
+        })
+      }
+
+      // Create the new plan with nested periods & entries
+      const createdPlan = await tx.capacityPlan.create({
+        data: {
+          projectId,
+          name,
+          targetWeeks,
+          periodWeeks,
+          maxDelta,
+          isActive: shouldActivate,
+          totalCost,
+          deliveryWeeks,
+          periods: {
+            create: normalisedPeriods.map(p => ({
+              periodIndex: p.periodIndex,
+              startWeek: p.startWeek,
+              endWeek: p.endWeek,
+              entries: {
+                create: p.entries.map(e => ({
+                  resourceTypeId: e.resourceTypeId,
+                  headcount: e.headcount,
+                  demandFTE: e.demandFTE,
+                  utilisationPct: e.utilisationPct,
+                })),
+              },
+            })),
+          },
+        },
+        include: { periods: { include: { entries: true } } },
+      })
+
+      // ── Profile-first: write authoritative profiles directly, project compatibility ──
+      if (shouldActivate && maxHeadcountByRt) {
+        // Update RT counts and allocation mode for demand RTs
+        for (const [rtId, count] of maxHeadcountByRt) {
+          await tx.resourceType.update({
+            where: { id: rtId },
+            data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
+          })
+        }
+
+        // Reuse the validated project resource types for materialisation
+        const rtNameById = new Map(projectResourceTypes.map(rt => [rt.id, rt.name]))
+
+        // Write authoritative profiles per resource type
+        for (const [rtId] of maxHeadcountByRt) {
+          const rtName = rtNameById.get(rtId) ?? 'Resource'
+
+          // Compute trajectories to know required count and provide data
+          const rtPeriods = normalisedPeriods.map(p => ({
+            periodIndex: p.periodIndex,
+            startWeek: p.startWeek,
+            endWeek: p.endWeek,
+            headcount: p.entries.find(e => e.resourceTypeId === rtId)?.headcount ?? 0,
+          }))
+          const trajectories = materializeResourceTrajectories(rtPeriods)
+
+          // Find/create named resources with stable ordering (createdAt, id)
+          const { allNamedResources } = await findOrCreatePlannedResources(
+            tx,
+            rtId,
+            rtName,
+            trajectories.length,
+            projectId,
+            transactionAuthority ?? undefined,
+          )
+          const materialized = materializeProfilesForResourceType(
+            rtId,
+            rtName,
+            normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+            allNamedResources,
+          )
+          // Authoritative profile + segment persistence
+          await writePlannerProfiles(
+            tx,
+            projectId,
+            [materialized.roleProfile],
+            materialized.plannedProfiles,
+            materialized.surplusResources,
+            undefined,
+            transactionAuthority ?? undefined,
+          )
+
+          // Project compatibility fields from just-written profiles
+          await projectCompatibilityFields(
+            tx,
+            projectId,
+            [materialized.roleProfile],
+            materialized.plannedProfiles,
+          )
+
+          // Clear surplus resource windows so legacy readers see no stale capacity
+          if (materialized.surplusResources.length > 0) {
+            await clearSurplusCompatibilityFields(tx, materialized.surplusResources)
+          }
+        }
+        await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()), transactionAuthority!)
+      }
+
+      // ── Timeline + cache persistence using precomputed data ────────────
+      if (shouldActivate && timelinePrecomputed) {
+        // Persist epic start weeks
+        for (const [epicId, startWeek] of timelinePrecomputed.epicStartWeeks) {
+          await tx.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
+        }
+
+        // Persist timeline entries
+        await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
+        if (timelinePrecomputed.featureRows.length > 0) {
+          await tx.timelineEntry.createMany({ data: timelinePrecomputed.featureRows, skipDuplicates: true })
+        }
+
+        // Persist story timeline entries
+        await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
+        if (timelinePrecomputed.storyRows.length > 0) {
+          await tx.storyTimelineEntry.createMany({ data: timelinePrecomputed.storyRows, skipDuplicates: true })
+        }
+
+        // Update weekly demand cache
+        await tx.project.update({
+          where: { id: projectId },
+          data: { weeklyDemandCache: timelinePrecomputed.weeklyDemandCache },
+        })
+
+        // ── Test failure seam (after timeline/cache) ─────────────────────────
+        // Production: no-op. Integration tests inject a throwing function to
+        // verify the transaction rolls back timeline and cache mutations too.
+        if (__applyFailureSeam) {
+          __applyFailureSeam()
+        }
+      }
+
+      return createdPlan
+    }, { isolationLevel: 'Serializable' })
+        break
+      } catch (err) {
+        if (!isSerializationConflict(err) || transactionAttempts >= MAX_SERIALIZATION_RETRIES) {
+          throw err
+        }
+        transactionAttempts += 1
+      }
+    }
+  } catch (err: unknown) {
+    if (err instanceof PlannerConflictError) {
+      // Transaction-time conflict: abort before active-plan deactivation.
+      // Delete only the new snapshot (created before the transaction) and return 409.
+      if (newSnapshotId) {
+        await prisma.backlogSnapshot.delete({ where: { id: newSnapshotId } }).catch(() => {
+          // Snapshot may already be deleted by another path; ignore deletion failure
+        })
+      }
+      res.status(409).json({ error: err.message })
+      return
+    }
+    if (isSerializationConflict(err)) {
+      // PostgreSQL Serializable transactions can abort on a concurrent write.
+      // The new snapshot is outside the transaction and must be cleaned up explicitly.
+      if (newSnapshotId) {
+        await prisma.backlogSnapshot.delete({ where: { id: newSnapshotId } }).catch(() => {
+          // Snapshot may already be deleted by another path; ignore deletion failure
+        })
+      }
+      res.status(409).json({ error: 'Concurrent planner apply detected; retry the operation.' })
+      return
+    }
+    throw err // Unexpected errors propagate as 500
+  }
+
+  // Prune snapshots only after a successful transaction
+  if (newSnapshotId) {
+    await pruneSnapshots(prisma, projectId)
   }
 
   res.status(201).json(plan)
+
 }))
 
 // ─────────────────────────────────────────────────────────────────────────────

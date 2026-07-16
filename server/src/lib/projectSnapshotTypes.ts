@@ -4,7 +4,7 @@
  * Schema version history:
  *   v1 — Epic-tree array (legacy; no schemaVersion wrapper)
  *   v2 — Full project state with schemaVersion: 2
- *   v3 — V2 + capacityProfiles (schemaVersion: 3)
+ *   v3 — V2 + capacityProfiles + optional exact capacityPlans/weeklyDemandCache
  *
  * All types mirror the shapes produced by buildSnapshot() selects and consumed
  * by the rollback restore code.
@@ -141,6 +141,8 @@ export type SnapshotProjectFields = {
   onboardingWeeks: number | null
   bufferWeeks: number | null
   hoursPerDay: number | null
+  /** Optional cache field added after v3 snapshots were introduced. */
+  weeklyDemandCache?: Record<string, number> | null
 }
 
 export type SnapshotResourceType = {
@@ -227,6 +229,35 @@ export type SnapshotCapacityProfile = {
   legacy: SnapshotJsonValue
   segments: SnapshotCapacitySegment[]
 }
+export type SnapshotCapacityPlanEntry = {
+  id: string
+  resourceTypeId: string
+  headcount: number
+  demandFTE: number
+  utilisationPct: number
+}
+
+export type SnapshotCapacityPlanPeriod = {
+  id: string
+  periodIndex: number
+  startWeek: number
+  endWeek: number
+  entries: SnapshotCapacityPlanEntry[]
+}
+
+export type SnapshotCapacityPlan = {
+  id: string
+  name: string
+  targetWeeks: number
+  periodWeeks: number
+  maxDelta: number
+  isActive: boolean
+  totalCost: number | null
+  deliveryWeeks: number | null
+  createdAt: string
+  periods: SnapshotCapacityPlanPeriod[]
+}
+
 
 // ─── Version-specific shapes ─────────────────────────────────────────────────
 
@@ -250,6 +281,8 @@ export type SnapshotV2 = {
 export type SnapshotV3 = Omit<SnapshotV2, 'schemaVersion'> & {
   schemaVersion: 3
   capacityProfiles: SnapshotCapacityProfile[]
+  /** Optional for backward compatibility with v3 snapshots created before plan capture. */
+  capacityPlans?: SnapshotCapacityPlan[]
 }
 
 export type SnapshotData = SnapshotV1 | SnapshotV2 | SnapshotV3

@@ -17,8 +17,19 @@ vi.mock('../lib/snapshotUtils.js', async importOriginal => {
     pruneSnapshots: vi.fn().mockResolvedValue(undefined),
   }
 })
+vi.mock('../lib/squadPlannerProfileWriter.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../lib/squadPlannerProfileWriter.js')>()
+  return {
+    ...actual,
+    revalidatePlannerPlan: vi.fn().mockResolvedValue(undefined),
+    capturePlannerAuthority: vi.fn().mockResolvedValue({ activePlanId: 'plan-previous', activePlanResourceTypeIds: new Set<string>(['rt-dev']), plannerRoleResourceTypeIds: new Set<string>(), allPlannerResourceTypeIds: new Set<string>() }),
+  }
+})
+
+import * as writerModule from '../lib/squadPlannerProfileWriter.js'
 
 import { app } from '../index.js'
+
 import { prisma } from '../lib/prisma.js'
 import {
   deriveFeatureSpanFromWeeklyAllocations,
@@ -26,6 +37,8 @@ import {
 } from '../routes/squadPlan.js'
 import { buildSnapshot } from '../routes/snapshots.js'
 import type { SchedulerResourceType } from '../lib/scheduler.js'
+import { pruneSnapshots } from '../lib/snapshotUtils.js'
+
 
 
 vi.mock('../lib/syncCapacityProfiles.js', () => ({
@@ -65,6 +78,8 @@ const futureCapacityPlanWindow = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(prisma.resourceType.findUnique).mockResolvedValue({ id: 'rt-dev', name: 'Developer', projectId: 'proj-1' } as never)
+  vi.mocked(prisma.backlogSnapshot.delete).mockResolvedValue({} as never)
 })
 
 describe('stripCapacityPlanMaterialization', () => {
@@ -229,6 +244,13 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
 })
 
 describe('POST /api/projects/:projectId/squad-plan/apply', () => {
+  beforeEach(() => {
+    vi.mocked(prisma.resourceType.findUnique).mockResolvedValue({
+      id: 'rt-dev',
+      name: 'Developer',
+      projectId: 'proj-1',
+    } as never)
+  })
   it('returns 400 when plan periods include resource types outside the project', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
@@ -258,20 +280,6 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
         ],
       })
 
-    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
-    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
-      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
-      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
-      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
-      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn(), deleteMany: vi.fn() },
-      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn() },
-      project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
-      timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
-      storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
-      epic: { update: vi.fn(), findMany: vi.fn() },
-      epicDependency: { findMany: vi.fn() },
-      storyDependency: { findMany: vi.fn() },
-    }))
 
     expect(res.status).toBe(400)
     expect(res.body.error).toContain('Unknown resourceTypeId')
@@ -356,28 +364,34 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     vi.mocked(prisma.resourceType.update).mockResolvedValue({} as never)
     vi.mocked(prisma.resourceType.updateMany).mockResolvedValue({ count: 0 } as never)
     vi.mocked(prisma.namedResource.updateMany).mockResolvedValue({ count: 1 } as never)
-    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([{ id: 'nr-dev' }] as never)
+    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([{ id: 'nr-dev', name: 'Developer 1', createdAt: new Date('2026-01-01'), allocationMode: 'CAPACITY_PLAN' }] as never)
     vi.mocked(prisma.namedResource.update).mockResolvedValue({} as never)
-    vi.mocked(prisma.epic.update).mockResolvedValue({} as never)
-    vi.mocked(prisma.project.update).mockResolvedValue({
-      ...mockProject,
-      weeklyDemandCache: { 'rt-dev|0': 2 },
-    } as never)
-
-    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
-    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
-      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
-      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
-      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
-      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn(), deleteMany: vi.fn() },
-      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn() },
+    let capturedTx!: Record<string, any>
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => {
+      capturedTx = {
+      capacityPlan: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'plan-1', periods: [{ entries: [{ resourceTypeId: 'rt-dev' }] }] }),
+        create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }),
+      },
+      resourceType: {
+        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn().mockResolvedValue({ id: 'rt-dev', name: 'Developer', projectId: 'proj-1' }),
+      },
+      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev', name: 'Developer 1', createdAt: new Date('2026-01-01'), allocationMode: 'CAPACITY_PLAN' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn().mockResolvedValue({}), deleteMany: vi.fn() },
+      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn(), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
       project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
       timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
       storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
       epic: { update: vi.fn(), findMany: vi.fn() },
       epicDependency: { findMany: vi.fn() },
       storyDependency: { findMany: vi.fn() },
-    }))
+      }
+      return fn(capturedTx)
+    })
 
     const res = await request(app)
       .post('/api/projects/proj-1/squad-plan/apply')
@@ -412,7 +426,7 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       })
 
     expect(res.status).toBe(201)
-    expect(prisma.project.update).toHaveBeenCalledWith({
+    expect(capturedTx.project.update).toHaveBeenCalledWith({
       where: { id: 'proj-1' },
       data: { weeklyDemandCache: { 'rt-dev|0': 2 } },
     })
@@ -497,29 +511,49 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     vi.mocked(prisma.resourceType.updateMany).mockResolvedValue({ count: 0 } as never)
     vi.mocked(prisma.namedResource.updateMany).mockResolvedValue({ count: 1 } as never)
     vi.mocked(prisma.namedResource.findMany)
-      .mockResolvedValueOnce([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }] as never)
-      .mockResolvedValueOnce([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }] as never)
+      .mockResolvedValueOnce([{ id: 'nr-dev-1', name: 'Developer 1', createdAt: new Date('2026-01-01'), allocationMode: 'CAPACITY_PLAN' }, { id: 'nr-dev-2', name: 'Developer 2', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' }] as never)
+      .mockResolvedValueOnce([{ id: 'nr-dev-1', name: 'Developer 1', createdAt: new Date('2026-01-01'), allocationMode: 'CAPACITY_PLAN' }, { id: 'nr-dev-2', name: 'Developer 2', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' }] as never)
     vi.mocked(prisma.namedResource.update).mockResolvedValue({} as never)
-    vi.mocked(prisma.epic.update).mockResolvedValue({} as never)
-    vi.mocked(prisma.project.update).mockResolvedValue({
-      ...mockProject,
-      weeklyDemandCache: {},
-    } as never)
-
-    // Mock $transaction once for the sync-wrapped plan+RT+NR writes
-    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: any) => fn({
-      capacityPlan: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }) },
-      resourceType: { update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUnique: vi.fn().mockResolvedValue({ name: 'Developer' }) },
-      namedResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn().mockResolvedValue([{ id: 'nr-dev-1' }, { id: 'nr-dev-2' }]), createMany: vi.fn().mockResolvedValue({ count: 0 }), update: vi.fn().mockResolvedValue({}), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
-      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn(), deleteMany: vi.fn() },
-      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn() },
+    let capturedTx!: Record<string, any>
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => {
+      capturedTx = {
+      capacityPlan: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'plan-1', periods: [{ entries: [{ resourceTypeId: 'rt-dev' }] }] }),
+        create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }),
+      },
+      resourceType: {
+        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn().mockResolvedValue({ id: 'rt-dev', name: 'Developer', projectId: 'proj-1' }),
+      },
+      namedResource: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findMany: vi.fn().mockImplementation(async (args: any) => {
+          const ids = args?.where?.id?.in as string[] | undefined
+          if (ids) return ids.map(id => ({ id, resourceTypeId: 'rt-dev', name: 'Developer ' + id.slice(-1), createdAt: new Date('2026-01-01'), allocationMode: 'CAPACITY_PLAN' }))
+          return [
+            { id: 'nr-dev-1', name: 'Developer 1', createdAt: new Date('2026-01-01'), allocationMode: 'CAPACITY_PLAN' },
+            { id: 'nr-dev-2', name: 'Developer 2', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' },
+          ]
+        }),
+        createMany: vi.fn().mockResolvedValue({ count: 0 }),
+        update: vi.fn().mockResolvedValue({}),
+        delete: vi.fn(),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      capacityProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'cp-1' }), update: vi.fn().mockResolvedValue({}), deleteMany: vi.fn() },
+      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn(), createMany: vi.fn().mockResolvedValue({ count: 0 }) },
       project: { findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }), update: vi.fn() },
       timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
       storyTimelineEntry: { deleteMany: vi.fn(), createMany: vi.fn() },
       epic: { update: vi.fn(), findMany: vi.fn() },
       epicDependency: { findMany: vi.fn() },
       storyDependency: { findMany: vi.fn() },
-    }))
+      }
+      return fn(capturedTx)
+    })
 
     const res = await request(app)
       .post('/api/projects/proj-1/squad-plan/apply')
@@ -567,7 +601,8 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       })
 
     expect(res.status).toBe(201)
-    const projectUpdateArg = vi.mocked(prisma.project.update).mock.calls.at(-1)?.[0]
+    expect(capturedTx.project.update).toHaveBeenCalled()
+    const projectUpdateArg = capturedTx.project.update.mock.calls.at(-1)?.[0]
     const weeklyDemandCache = projectUpdateArg?.data?.weeklyDemandCache as Record<string, number>
     expect(weeklyDemandCache['rt-dev|0']).toBeCloseTo(5, 6)
     expect(weeklyDemandCache['rt-dev|4']).toBeCloseTo(2.5, 6)
@@ -607,5 +642,79 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     expect(res.status).toBe(500)
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
     expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('does not create snapshot or prune when setActive is false', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send({
+        name: 'Inactive plan',
+        targetWeeks: 10,
+        periodWeeks: 4,
+        maxDelta: 1,
+        setActive: false,
+        periods: [
+          {
+            periodIndex: 0,
+            startWeek: 0,
+            endWeek: 4,
+            entries: [
+              {
+                resourceTypeId: 'rt-dev',
+                headcount: 1,
+                demandFTE: 0.8,
+                utilisationPct: 80,
+              },
+            ],
+          },
+        ],
+      })
+
+    expect(res.status).toBe(201)
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(pruneSnapshots).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when revalidatePlannerPlan detects a transaction-time conflict, deletes new snapshot', async () => {
+    const conflictError = new writerModule.PlannerConflictError('test conflict', [])
+    vi.mocked(writerModule.revalidatePlannerPlan).mockRejectedValueOnce(conflictError)
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+    vi.mocked(prisma.backlogSnapshot.create).mockResolvedValue({ id: 'test-snapshot-id' } as never)
+    vi.mocked(prisma.backlogSnapshot.delete).mockResolvedValue({ id: 'test-snapshot-id' } as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send({
+        name: 'Race plan',
+        targetWeeks: 10,
+        periodWeeks: 4,
+        maxDelta: 1,
+        setActive: true,
+        periods: [
+          {
+            periodIndex: 0,
+            startWeek: 0,
+            endWeek: 4,
+            entries: [
+              {
+                resourceTypeId: 'rt-dev',
+                headcount: 1,
+                demandFTE: 0.8,
+                utilisationPct: 80,
+              },
+            ],
+          },
+        ],
+      })
+
+    expect(res.status).toBe(409)
+    expect(prisma.backlogSnapshot.create).toHaveBeenCalled()
+    expect(prisma.backlogSnapshot.delete).toHaveBeenCalledWith({ where: { id: 'test-snapshot-id' } })
   })
 })

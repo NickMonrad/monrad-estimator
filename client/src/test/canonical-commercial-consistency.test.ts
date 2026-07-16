@@ -380,6 +380,178 @@ describe('canonical commercial consistency', () => {
     }
   })
 
+  it('legitimate capacity reduction changes ACTUAL_DAYS billing without changing PRO_RATA basis; preserves pricing, discounts, overhead; recalculates tax; no double counting', () => {
+    // Use the richer Scenario A profile (2 RTs, 3 NRs, overhead) with
+    // project-wide discount and tax. This proves the pricing model invariant
+    // survives capacity changes across a realistic commercial projection.
+    const base = buildScenarioAProfile()
+    const discounts = [
+      { id: 'd-loyalty', label: 'Loyalty', type: 'PERCENTAGE' as const, value: 10, resourceTypeId: null },
+      { id: 'd-dev', label: 'Dev discount', type: 'PERCENTAGE' as const, value: 5, resourceTypeId: 'rt-dev' },
+    ]
+    const projectSettings = { taxRate: 10, taxLabel: 'GST' }
+
+    const baseResult = computeCommercialData(base, discounts, projectSettings)
+    expect(baseResult).not.toBeNull()
+
+    // Baseline known totals:
+    // Alice ACTUAL_DAYS: 10 actual × $500 = $5,000
+    // Charlie ACTUAL_DAYS: 8 actual × $500 = $4,000
+    // Bob PRO_RATA: 12 allocated × $400 = $4,800
+    // Dev discount 5%: Alice: $250, Charlie: $200
+    // Subtotal (NR rows after Dev discount): (5000-250)+(4000-200)+4800 = $13,350
+    // Overhead: 2 × $600 = $1,200 (no discounts)
+    // Subtotal (all rows): 4750+3800+4800+1200 = $14,550
+    // Project discount 10%: $1,455
+    // After discounts: $13,095
+    // Tax 10%: $1,309.50
+    // Grand total: $14,404.50
+    expect(Number.isFinite(baseResult!.subtotal)).toBe(true)
+    // Capture baseline row IDs for duplicate check
+    const baseRowIds = baseResult!.rows.map(r => r.id)
+    expect(new Set(baseRowIds).size).toBe(baseRowIds.length)
+
+    // ── Apply capacity reduction ──────────────────────────────────────────
+    // Scheduler reduces Alice's actual scheduled days from 10 to 6.
+    // All other NRs, overhead, and configuration unchanged.
+    const changedCapacity: ResourceProfile = {
+      ...base,
+      resourceRows: base.resourceRows.map(row => {
+        if (row.resourceTypeId !== 'rt-dev') return row
+        return {
+          ...row,
+          namedResources: row.namedResources.map(nr =>
+            nr.id === 'nr-alice'
+              ? {
+                  ...nr,
+                  actualAllocatedDays: 6,
+                  actualAllocationStartWeek: 0,
+                  actualAllocationEndWeek: 3,
+                  actualAllocatedWeeks: [
+                    { week: 0, days: 1.5, capacityDays: 5 },
+                    { week: 1, days: 1.5, capacityDays: 5 },
+                    { week: 2, days: 1.5, capacityDays: 5 },
+                    { week: 3, days: 1.5, capacityDays: 5 },
+                  ],
+                  actualAllocationSegments: [{ startWeek: 0, endWeek: 4, days: 6 }],
+                  capacityProfile: {
+                    planningBasis: 'capacityProfile',
+                    source: 'squadPlanner',
+                    segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 60 }],
+                  },
+                }
+              : {
+                  ...nr,
+                  capacityProfile: {
+                    planningBasis: 'capacityProfile',
+                    source: 'squadPlanner',
+                    segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 80 }],
+                  },
+                }
+          ),
+        }
+      }),
+    }
+    const changedResult = computeCommercialData(changedCapacity, discounts, projectSettings)
+
+    expect(changedResult).not.toBeNull()
+
+    // ── 1. Changed billable days — ACTUAL_DAYS reduced, PRO_RATA unchanged ──
+    const alice = changedResult!.rows.find(r => r.id === 'nr-alice')
+    expect(alice).toBeDefined()
+    expect(alice!.allocatedDays).toBe(6)
+    expect(alice!.subtotal).toBe(6 * 500) // 3000
+    expect(alice!.pricingModel).toBe('ACTUAL_DAYS')
+
+    const charlie = changedResult!.rows.find(r => r.id === 'nr-charlie')
+    expect(charlie).toBeDefined()
+    expect(charlie!.allocatedDays).toBe(8)
+    expect(charlie!.subtotal).toBe(8 * 500) // 4000
+    expect(charlie!.pricingModel).toBe('ACTUAL_DAYS')
+
+    const bob = changedResult!.rows.find(r => r.id === 'nr-bob')
+    expect(bob).toBeDefined()
+    expect(bob!.allocatedDays).toBe(12)
+    expect(bob!.subtotal).toBe(12 * 400) // 4800
+    expect(bob!.pricingModel).toBe('PRO_RATA')
+
+    // ── 2. Pricing model and day rate preserved for every row ─────────────
+    for (const row of changedResult!.rows) {
+      const baseRow = baseResult!.rows.find(r => r.id === row.id)
+      expect(baseRow).toBeDefined()
+      expect(row.pricingModel).toBe(baseRow!.pricingModel)
+      expect(row.dayRate).toBe(baseRow!.dayRate)
+      expect(row.resourceTypeId).toBe(baseRow!.resourceTypeId)
+    }
+
+    // ── 3. Overhead preserved (same row count, cost) ──────────────────────
+    const ohRows = changedResult!.rows.filter(r => r.kind === 'overhead')
+    expect(ohRows.length).toBe(1)
+    expect(ohRows[0].id).toBe('oh-gov')
+    expect(ohRows[0].allocatedDays).toBe(2)
+    expect(ohRows[0].subtotal).toBe(2 * 600) // 1200
+    expect(ohRows[0].dayRate).toBe(600)
+
+    // ── 4. Discount configuration preserved (same entries, types, values) ──
+    expect(changedResult!.projectDiscounts).toHaveLength(1) // project-level only
+    expect(changedResult!.projectDiscounts[0].id).toBe('d-loyalty')
+    expect(changedResult!.projectDiscounts[0].type).toBe('PERCENTAGE')
+    expect(changedResult!.projectDiscounts[0].value).toBe(10)
+
+    // Per-row RT-level discounts preserved
+    for (const row of changedResult!.rows) {
+      if (row.kind !== 'named-resource') {
+        expect((row.appliedDiscounts ?? [])).toHaveLength(0)
+        continue
+      }
+      if (row.resourceTypeId === 'rt-dev') {
+        // Dev NRs get the 5% Dev discount
+        expect(row.appliedDiscounts).toHaveLength(1)
+        expect(row.appliedDiscounts[0].id).toBe('d-dev')
+        expect(row.appliedDiscounts[0].type).toBe('PERCENTAGE')
+        expect(row.appliedDiscounts[0].value).toBe(5)
+        // calculatedAmount = 5% of subtotal
+        expect(row.appliedDiscounts[0].calculatedAmount)
+          .toBeCloseTo(0.05 * row.subtotal, 8)
+      } else {
+        // Des NRs get no role-level discount
+        expect(row.appliedDiscounts).toHaveLength(0)
+      }
+    }
+
+    // ── 5. Tax recalculated correctly ─────────────────────────────────────
+    expect(changedResult!.taxRate).toBe(10)
+    expect(changedResult!.taxEnabled).toBe(true)
+
+    // Expected after-change totals:
+    // Alice:  6 × $500 = $3,000 - 5% ($150) = $2,850
+    // Charlie: 8 × $500 = $4,000 - 5% ($200) = $3,800
+    // Bob:    12 × $400 = $4,800 (no role discount)
+    // Overhead: 2 × $600 = $1,200 (no role discount)
+    // Subtotal: 2850 + 3800 + 4800 + 1200 = $12,650
+    // Project discount 10%: $1,265
+    // After discounts: $11,385
+    // Tax 10%: $1,138.50
+    // Grand total: $12,523.50
+    expect(changedResult!.subtotal).toBeCloseTo(12650, 8)
+    expect(changedResult!.totalProjectDiscount).toBeCloseTo(1265, 8)
+    expect(changedResult!.afterDiscounts).toBeCloseTo(11385, 8)
+    expect(changedResult!.taxAmount).toBeCloseTo(1138.5, 8)
+    expect(changedResult!.grandTotal).toBeCloseTo(12523.5, 8)
+
+    // ── 6. No double counting — same number of rows, same row IDs ──────────
+    expect(changedResult!.rows).toHaveLength(baseResult!.rows.length)
+    const changedRowIds = changedResult!.rows.map(r => r.id)
+    expect(new Set(changedRowIds).size).toBe(changedRowIds.length)
+    // Every base row ID exists in changed result
+    for (const id of baseRowIds) {
+      expect(changedRowIds).toContain(id)
+    }
+
+    // ── 7. Grand total differs from base (capacity changed) ────────────────
+    expect(changedResult!.grandTotal).not.toBe(baseResult!.grandTotal)
+  })
+
   it('rollback parity: restored Scenario A DTO produces identical commercial totals before and after mutation', () => {
     // ── State A: restored snapshot DTO ──────────────────────────────
     const profileA = buildScenarioAProfile()

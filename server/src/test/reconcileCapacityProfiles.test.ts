@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { prisma } from '../lib/prisma.js'
 
 import {
+  compareCapacityProfiles,
   reconcileCapacityProfiles,
   formatReconciliationReport,
 } from '../lib/reconcileCapacityProfiles.js'
@@ -161,6 +162,50 @@ function makePersistedSegment(
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 describe('reconcileCapacityProfiles', () => {
+  it('treats a persisted planned-resource owner as the legacy named-person alias', () => {
+    const report = compareCapacityProfiles(
+      'proj-1',
+      [{
+        id: 'expected-nr',
+        projectId: 'proj-1',
+        owner: { kind: 'namedPerson', id: 'nr-1', name: 'Planner 1' },
+        planningBasis: 'capacityProfile',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 7,
+        segments: [{
+          id: 'expected-seg',
+          startWeek: 0,
+          endWeek: 7,
+          capacityPercent: 100,
+          source: 'squadPlanner',
+        }],
+        source: 'squadPlanner',
+        legacy: {},
+      }],
+      [{
+        id: 'persisted-nr',
+        resourceTypeId: null,
+        namedResourceId: 'nr-1',
+        ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 7,
+        segments: [{
+          startWeek: 0,
+          endWeek: 7,
+          capacityPercent: 100,
+          source: 'SQUAD_PLANNER',
+        }],
+      }],
+    )
+
+    expect(report.matchedProfiles).toBe(1)
+    expect(report.mismatches).toHaveLength(0)
+  })
+
   it('passes when persisted profiles match mapper-derived profiles', async () => {
     vi.mocked(prisma.project.findMany).mockResolvedValue([
       makeProject(

@@ -225,6 +225,7 @@ export default function SquadPlannerDrawer({
   const [showAllResourceTypes, setShowAllResourceTypes] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [seedBanner, setSeedBanner] = useState<string | null>(null)
+  const [applyDone, setApplyDone] = useState(false)
 
   const qc = useQueryClient()
   const skipNextPersistRef = useRef(false)
@@ -351,6 +352,7 @@ export default function SquadPlannerDrawer({
         : null,
     )
     generate.reset()
+    setApplyDone(false)
   }, [generate, projectId, resourceTypes, seedSettings])
 
   // ── restore state when drawer opens ──────────────────────────────────────
@@ -398,15 +400,7 @@ export default function SquadPlannerDrawer({
           setActive: true,
         })
         .then(r => r.data),
-    onSuccess: async () => {
-      await Promise.all([
-        qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
-        qc.refetchQueries({ queryKey: ['timeline', projectId] }),
-        qc.refetchQueries({ queryKey: ['resource-types', projectId] }),
-      ])
-      onClose()
-      setTimeout(() => alert('✅ Plan applied — timeline and resource counts updated.'), 100)
-    },
+    onSuccess: () => setError(null),
     onError: (err: unknown) => {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
@@ -437,7 +431,7 @@ export default function SquadPlannerDrawer({
     }
   }
 
-  if (!open) return null
+  if (!open || applyDone) return null
 
   const result = generate.data
 
@@ -446,7 +440,6 @@ export default function SquadPlannerDrawer({
     ? Array.from(new Set(result.periods.flatMap(p => p.resources.map(r => r.resourceTypeName))))
     : []
 
-  // Build a quick lookup: rtName → periodIndex → resource
   const lookup = new Map<string, Map<number, PeriodResource>>()
   if (result) {
     for (const p of result.periods) {
@@ -876,9 +869,22 @@ export default function SquadPlannerDrawer({
               {/* Action buttons */}
               <div className="flex gap-2">
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!window.confirm('Apply this capacity profile? Resource profiles will be updated.')) return
-                    apply.mutate(result)
+                    try {
+                      await apply.mutateAsync(result)
+                      setApplyDone(true)
+                      onClose()
+                      Promise.all([
+                        qc.refetchQueries({ queryKey: ['resource-profile', projectId] }),
+                        qc.refetchQueries({ queryKey: ['timeline', projectId] }),
+                        qc.refetchQueries({ queryKey: ['resource-types', projectId] }),
+                      ]).catch(() => {
+                        /* refetch failures are non-critical after successful apply */
+                      })
+                    } catch {
+                      /* error state handled by mutation onError callback */
+                    }
                   }}
                   disabled={apply.isPending}
                   className="flex-1 bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
