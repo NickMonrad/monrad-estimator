@@ -315,3 +315,56 @@ describe('CommercialTab Planning Context', () => {
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
   })
 })
+
+
+describe('CommercialTab authoritative availability presentation', () => {
+  const baseRow = (overrides: Partial<CommercialData['rows'][number]> = {}) => ({
+    id: 'availability-row', name: 'Availability role', count: 1,
+    effortDays: 10, allocatedDays: 8, totalDays: 8, dayRate: 500, subtotal: 4000,
+    allocationMode: 'TIMELINE', allocationPercent: 25,
+    allocationStartWeek: 2, allocationEndWeek: 6, derivedStartWeek: 3, derivedEndWeek: 7,
+    kind: 'resource' as const, pricingModel: null, resourceTypeId: 'rt-availability',
+    appliedDiscounts: [], netSubtotal: 4000,
+    ...overrides,
+  })
+
+  const profile = (
+    planningBasis: 'demandFollowing' | 'availabilityWindow' | 'wholeProjectAllocation' | 'capacityProfile',
+    overrides: Record<string, unknown> = {},
+  ) => ({
+    resolutionSource: 'PROFILE' as const,
+    planningBasis,
+    defaultPercent: 75,
+    startWeek: 4,
+    endWeek: 9,
+    segments: [],
+    ...overrides,
+  })
+
+  it.each([
+    ['role segmented profile', baseRow({ capacityProfile: profile('availabilityWindow', { segments: [{ startWeek: 0, endWeek: 3, capacityPercent: 50 }] }) }), 'Varies by week', 'Varies by week', false],
+    ['role availability window', baseRow({ capacityProfile: profile('availabilityWindow') }), 'Fixed for selected weeks · 75%', 'Wk 4 – Wk 9', true],
+    ['role whole-project profile', baseRow({ capacityProfile: profile('wholeProjectAllocation', { defaultPercent: 60, startWeek: null, endWeek: null }) }), 'Fixed for whole project · 60%', 'Wk 0 – Wk 10', true],
+    ['role selected-week start only', baseRow({ capacityProfile: profile('availabilityWindow', { startWeek: 4, endWeek: null }) }), 'Fixed for selected weeks · 75%', 'From Wk 4', true],
+    ['role selected-week end only', baseRow({ capacityProfile: profile('availabilityWindow', { startWeek: null, endWeek: 9 }) }), 'Fixed for selected weeks · 75%', 'Until Wk 9', true],
+    ['role null profile window', baseRow({ capacityProfile: profile('availabilityWindow', { startWeek: null, endWeek: null }) }), 'Fixed for selected weeks · 75%', '—', true],
+    ['role legacy fallback', baseRow(), 'Fixed for selected weeks · 25%', 'Wk 2 – Wk 6', true],
+    ['planned-resource segmented profile', baseRow({ id: 'nr-segmented', name: 'Planned availability', kind: 'named-resource', pricingModel: 'ACTUAL_DAYS', capacityProfile: profile('capacityProfile', { segments: [{ startWeek: 0, endWeek: 3, capacityPercent: 50 }] }) }), 'Varies by week', 'Varies by week', false],
+    ['named-resource whole-project profile', baseRow({ id: 'nr-whole', name: 'Named whole project', kind: 'named-resource', pricingModel: 'ACTUAL_DAYS', capacityProfile: profile('wholeProjectAllocation', { startWeek: null, endWeek: null }) }), 'Fixed for whole project · 75%', 'Wk 0 – Wk 10', true],
+    ['named-resource scalar profile', baseRow({ id: 'nr-scalar', name: 'Named availability', kind: 'named-resource', pricingModel: 'ACTUAL_DAYS', capacityProfile: profile('availabilityWindow') }), 'Fixed for selected weeks · 75%', 'Wk 4 – Wk 9', true],
+    ['named-resource selected-week start only', baseRow({ id: 'nr-start', name: 'Named start availability', kind: 'named-resource', pricingModel: 'ACTUAL_DAYS', capacityProfile: profile('availabilityWindow', { startWeek: 4, endWeek: null }) }), 'Fixed for selected weeks · 75%', 'From Wk 4', true],
+    ['named-resource selected-week end only', baseRow({ id: 'nr-end', name: 'Named end availability', kind: 'named-resource', pricingModel: 'ACTUAL_DAYS', capacityProfile: profile('availabilityWindow', { startWeek: null, endWeek: 9 }) }), 'Fixed for selected weeks · 75%', 'Until Wk 9', true],
+    ['named-resource null profile window', baseRow({ id: 'nr-null', name: 'Named null availability', kind: 'named-resource', pricingModel: 'ACTUAL_DAYS', capacityProfile: profile('availabilityWindow', { startWeek: null, endWeek: null }) }), 'Fixed for selected weeks · 75%', '—', true],
+    ['ordinary named-resource fallback', baseRow({ id: 'nr-legacy', name: 'Named legacy availability', kind: 'named-resource', pricingModel: 'ACTUAL_DAYS' }), 'Fixed for selected weeks · 25%', 'Wk 2 – Wk 6', true],
+  ] as const)('uses profile-first badge and Period for %s', (_case, row, badge, period, showsPercentage) => {
+    renderTab(createMockCommercialData({ rows: [row], subtotal: row.subtotal }))
+
+    const renderedRow = screen.getByText(row.name).closest('tr')!
+    expect(renderedRow).toHaveTextContent(badge)
+    expect(renderedRow).toHaveTextContent(period)
+    expect(renderedRow.textContent?.includes('25%')).toBe(row.capacityProfile == null)
+    expect(renderedRow.textContent?.includes('%')).toBe(showsPercentage)
+    expect(renderedRow).toHaveTextContent('$500')
+    expect(renderedRow).toHaveTextContent('$4000')
+  })
+})

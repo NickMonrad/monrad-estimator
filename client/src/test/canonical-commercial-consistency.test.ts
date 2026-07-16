@@ -348,15 +348,23 @@ describe('canonical commercial consistency', () => {
       resourceRows: base.resourceRows.map(row => ({
         ...row,
         capacityProfile: {
+          resolutionSource: 'PROFILE',
           planningBasis: 'capacityProfile',
           source: 'squadPlanner',
+          defaultPercent: 75,
+          startWeek: null,
+          endWeek: null,
           segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
         },
         namedResources: row.namedResources.map(nr => ({
           ...nr,
           capacityProfile: {
+            resolutionSource: 'PROFILE',
             planningBasis: 'capacityProfile',
             source: 'squadPlanner',
+            defaultPercent: 75,
+            startWeek: null,
+            endWeek: null,
             segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
           },
         })),
@@ -377,6 +385,16 @@ describe('canonical commercial consistency', () => {
       expect(enrichedResult!.rows[i].billableDays).toBe(baseResult!.rows[i].billableDays)
       expect(enrichedResult!.rows[i].subtotal).toBe(baseResult!.rows[i].subtotal)
       expect(enrichedResult!.rows[i].pricingModel).toBe(baseResult!.rows[i].pricingModel)
+    }
+
+    // Presentation receives the resolved profile without changing calculations.
+    for (const row of enrichedResult!.rows) {
+      expect(row.capacityProfile).toMatchObject({
+        resolutionSource: 'PROFILE',
+        defaultPercent: 75,
+        startWeek: null,
+        endWeek: null,
+      })
     }
   })
 

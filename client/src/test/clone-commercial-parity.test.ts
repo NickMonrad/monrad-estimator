@@ -603,7 +603,7 @@ describe('clone commercial parity', () => {
     const RES_NAME = colIdx('Resource name')
     const RES_IDENTITY = colIdx('Resource identity')
     const CATEGORY = colIdx('Category')
-    const PLAN_BASIS = colIdx('Planning basis')
+    const PLAN_BASIS = colIdx('Availability pattern')
     const PROF_SOURCE = colIdx('Profile source')
     const DEF_CAP = colIdx('Default capacity %')
     const PROF_START = colIdx('Profile start')
@@ -635,8 +635,8 @@ describe('clone commercial parity', () => {
     // QA row (role-level, no NRs): ZERO-capacity profile
     const qaRow = sourceRows.find(r => r[ROLE] === 'QA')
     expect(qaRow).toBeDefined()
-    // Planning basis: 'capacityProfile' → 'Capacity profile'
-    expect(qaRow![PLAN_BASIS]).toBe('Capacity profile')
+    // Planning basis: 'capacityProfile' → 'Varies by week'
+    expect(qaRow![PLAN_BASIS]).toBe('Varies by week')
     // Profile source: 'fixed' → 'Fixed'
     expect(qaRow![PROF_SOURCE]).toBe('Fixed')
     // Default capacity %: 0 — truthy-fallback safe, must be "0" not ""
@@ -656,8 +656,8 @@ describe('clone commercial parity', () => {
     expect(qaLeadRow).toBeDefined()
     // Named person identity
     expect(qaLeadRow![RES_IDENTITY]).toBe('Named person')
-    // Planning basis: 'Capacity profile'
-    expect(qaLeadRow![PLAN_BASIS]).toBe('Capacity profile')
+    // Planning basis: 'Varies by week'
+    expect(qaLeadRow![PLAN_BASIS]).toBe('Varies by week')
     // Profile source: 'Fixed'
     expect(qaLeadRow![PROF_SOURCE]).toBe('Fixed')
     // Default capacity %: 0
@@ -681,7 +681,7 @@ describe('clone commercial parity', () => {
     expect(aliceRow![ROLE]).toBe('Developer')
     expect(aliceRow![RES_IDENTITY]).toBe('Named person')
     expect(aliceRow![CATEGORY]).toBe('ENGINEERING')
-    expect(aliceRow![PLAN_BASIS]).toBe('Capacity profile')
+    expect(aliceRow![PLAN_BASIS]).toBe('Varies by week')
     expect(aliceRow![PROF_SOURCE]).toBe('Squad Planner')
     expect(aliceRow![DEF_CAP]).toBe('100')
     expect(aliceRow![PROF_START]).toBe('W1')
@@ -723,7 +723,7 @@ describe('clone commercial parity', () => {
     expect(bobRow![ROLE]).toBe('Developer')
     expect(bobRow![RES_IDENTITY]).toBe('Named person')
     expect(bobRow![CATEGORY]).toBe('ENGINEERING')
-    expect(bobRow![PLAN_BASIS]).toBe('Capacity profile')
+    expect(bobRow![PLAN_BASIS]).toBe('Varies by week')
     expect(bobRow![PROF_SOURCE]).toBe('Manual')
     expect(bobRow![DEF_CAP]).toBe('80')
     expect(bobRow![PROF_START]).toBe('W1')
@@ -766,8 +766,8 @@ describe('clone commercial parity', () => {
       'Section', 'Role', 'Resource name', 'Resource identity', 'Category',
       'Resource count', 'Hours per day', 'Effort days', 'Assigned days', 'Billable days',
       'Day rate', 'Subtotal',
-      'Planning basis', 'Profile source', 'Default capacity %', 'Profile start', 'Profile end',
-      'Availability window start', 'Availability window end',
+      'Availability pattern', 'Profile source', 'Default capacity %', 'Profile start', 'Profile end',
+      'Available from', 'Available to',
       'Assigned start', 'Assigned end', 'Capacity profile segments', 'Assignment segments', 'Assigned weeks',
       'Billing basis', 'Handover notes',
     ]
