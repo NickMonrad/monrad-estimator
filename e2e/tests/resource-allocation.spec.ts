@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
-import { login, createProject, quickSchedule, API_BASE } from './helpers'
+import { login, createProject, createUserAndLogin, quickSchedule, API_BASE } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -13,8 +13,9 @@ const CSV_CONTENT = [
   'Task,Alpha Epic,Alpha Feature,Alpha Story,Beta Task,,Project Manager,8,1,,,,,',
 ].join('\n')
 
-async function setupCommercialTab(page: Page) {
-  await login(page)
+async function seedBacklogProject(page: Page, alreadyAuthenticated = false) {
+  if (!alreadyAuthenticated) await login(page)
+
   const projectName = `E2E Resource Allocation ${Date.now()}`
   await createProject(page, projectName)
   await page.getByRole('heading', { name: projectName, exact: true }).first().click()
@@ -22,7 +23,7 @@ async function setupCommercialTab(page: Page) {
   await page.getByRole('button', { name: /backlog/i }).click()
   await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
 
-  const tmpFile = path.join(os.tmpdir(), `alloc-seed-${Date.now()}.csv`)
+  const tmpFile = path.join(os.tmpdir(), `alloc-seed-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`)
   fs.writeFileSync(tmpFile, CSV_CONTENT)
   await page.getByRole('button', { name: /import csv/i }).click()
   await page.locator('input[type="file"]').setInputFiles(tmpFile)
@@ -32,8 +33,13 @@ async function setupCommercialTab(page: Page) {
   await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
   await expect(page.getByText('Alpha Epic')).toBeVisible({ timeout: 10_000 })
 
-  const url = page.url()
-  const projectId = url.match(/\/projects\/([^/]+)/)?.[1]!
+  const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
+  expect(projectId, 'Expected seeded project URL to include an ID').toBeTruthy()
+  return projectId!
+}
+
+async function setupCommercialTab(page: Page, alreadyAuthenticated = false) {
+  const projectId = await seedBacklogProject(page, alreadyAuthenticated)
 
   const [rtLoadResponse] = await Promise.all([
     page.waitForResponse(
@@ -100,52 +106,128 @@ async function gotoResourceProfile(page: Page, projectId: string) {
   await expect(page.getByRole('heading', { name: /capacity profile summary/i }).first()).toBeVisible({ timeout: 15_000 })
 }
 
+type CanonicalPlannerProfile = {
+  profileId: string
+  ownerKind: 'plannedResource'
+  resourceTypeId: string
+  namedResourceId: string
+  source: string
+  planningBasis: string
+  resolutionSource: string
+  segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+}
+
+const PLANNER_SEGMENTS = [
+  { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+  { startWeek: 4, endWeek: 8, capacityPercent: 100 },
+]
+
+function canonicalSegments(segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>) {
+  return segments.map(({ startWeek, endWeek, capacityPercent }) => ({ startWeek, endWeek, capacityPercent }))
+}
+
+async function getPlannerProfile(
+  page: Page,
+  projectId: string,
+  resourceTypeId: string,
+  headers: Record<string, string>,
+): Promise<CanonicalPlannerProfile> {
+  const [capacityProfilesResponse, resourceProfileResponse] = await Promise.all([
+    page.request.get(`${API_BASE}/api/projects/${projectId}/capacity-profiles`, { headers }),
+    page.request.get(`${API_BASE}/api/projects/${projectId}/resource-profile`, { headers }),
+  ])
+  expect(capacityProfilesResponse.ok(), 'capacity profile read failed').toBeTruthy()
+  expect(resourceProfileResponse.ok(), 'resource profile read failed').toBeTruthy()
+
+  const capacityProfiles = await capacityProfilesResponse.json() as {
+    capacityProfiles: Array<{
+      id: string
+      owner: { kind: string; id: string; roleId?: string }
+      source: string
+      planningBasis: string
+      segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    }>
+  }
+  const resourceProfile = await resourceProfileResponse.json() as {
+    resourceRows: Array<{
+      resourceTypeId: string
+      namedResources?: Array<{
+        id: string
+        capacityProfile?: { resolutionSource: string; segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }> }
+      }>
+    }>
+  }
+
+  const matches = capacityProfiles.capacityProfiles.filter(profile =>
+    profile.owner.kind === 'plannedResource' &&
+    profile.owner.roleId === resourceTypeId &&
+    JSON.stringify(canonicalSegments(profile.segments)) === JSON.stringify(PLANNER_SEGMENTS),
+  )
+  expect(matches, `Expected exactly one PLANNED_RESOURCE profile with the canonical segmented plan; received ${JSON.stringify(capacityProfiles.capacityProfiles.map(profile => ({ owner: profile.owner, segments: canonicalSegments(profile.segments) })))}`).toHaveLength(1)
+  const profile = matches[0]!
+  const row = resourceProfile.resourceRows.find(candidate => candidate.resourceTypeId === resourceTypeId)
+  const namedResource = row?.namedResources?.find(candidate => candidate.id === profile.owner.id)
+  expect(namedResource?.capacityProfile, 'Expected the same planned owner in Resource Profile').toBeTruthy()
+  expect(canonicalSegments(namedResource!.capacityProfile!.segments)).toEqual(PLANNER_SEGMENTS)
+
+  return {
+    profileId: profile.id,
+    ownerKind: 'plannedResource',
+    resourceTypeId,
+    namedResourceId: profile.owner.id,
+    source: profile.source,
+    planningBasis: profile.planningBasis,
+    resolutionSource: namedResource!.capacityProfile!.resolutionSource,
+    segments: canonicalSegments(profile.segments),
+  }
+}
+
 async function setupSquadPlannerCapacityPlan(page: Page) {
-  const projectId = await setupCommercialTab(page)
+  // This flow owns a unique user and project. The old fixture loaded Resource
+  // Profile before apply; direct setup completes the serializable planner write
+  // before that page can issue its profile reads.
+  const user = await createUserAndLogin(page)
+  const projectId = await seedBacklogProject(page, true)
+  const authHeaders = { Authorization: `Bearer ${user.token}` }
 
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const authHeaders: Record<string, string> = {}
-  if (token) authHeaders['Authorization'] = `Bearer ${token}`
-
-  await page.goto(`/projects/${projectId}/resource-profile`)
-  await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
-
-  const profileRes = await page.request.get(
-    `${API_BASE}/api/projects/${projectId}/resource-profile`,
+  const resourceTypesResponse = await page.request.get(
+    `${API_BASE}/api/projects/${projectId}/resource-types`,
     { headers: authHeaders },
   )
-  expect(profileRes.ok()).toBeTruthy()
-  const profile = await profileRes.json()
-  const planRt = profile.resourceRows.find((r: { name: string }) => r.name !== 'Project Manager')
-  expect(planRt, 'Expected at least one non-Project Manager resource type').toBeTruthy()
+  expect(resourceTypesResponse.ok(), 'resource type discovery failed').toBeTruthy()
+  const resourceTypes = await resourceTypesResponse.json() as Array<{ id: string; name: string }>
+  const techLeadMatches = resourceTypes.filter(resourceType => resourceType.name === 'Tech Lead')
+  expect(techLeadMatches, 'Expected exactly one seeded Tech Lead resource type').toHaveLength(1)
+  const resourceTypeId = techLeadMatches[0]!.id
 
-  const rtId = planRt.resourceTypeId
-  const planResourceName = planRt.name
-
-  // Create a named resource then PATCH to CAPACITY_PLAN.
-  // Avoids squad-plan/apply which causes PostgreSQL serialisation conflicts
-  // with server integration tests running in the same CI job.
-  const nrRes = await page.request.post(
-    `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources`,
-    { headers: authHeaders, data: { name: 'Test Person' } },
+  const applyPayload = {
+    name: 'E2E segmented profile-first plan',
+    targetWeeks: 9,
+    periodWeeks: 4,
+    maxDelta: 1,
+    setActive: true,
+    periods: [
+      { periodIndex: 0, startWeek: 0, endWeek: 4, entries: [{ resourceTypeId, headcount: 0.5, demandFTE: 0.5, utilisationPct: 100 }] },
+      { periodIndex: 1, startWeek: 4, endWeek: 9, entries: [{ resourceTypeId, headcount: 1, demandFTE: 1, utilisationPct: 100 }] },
+    ],
+  }
+  const applyResponse = await page.request.post(
+    `${API_BASE}/api/projects/${projectId}/squad-plan/apply`,
+    { headers: authHeaders, data: applyPayload },
   )
-  expect(nrRes.ok(), `POST named resource failed: ${nrRes.status()}`).toBeTruthy()
-  const nrBody = await nrRes.json()
-  const nrId = nrBody.id || nrBody.namedResource?.id
-  expect(nrId, 'expected named resource to have an id').toBeTruthy()
+  expect(applyResponse.ok(), `squad-plan/apply failed: ${applyResponse.status()}`).toBeTruthy()
 
-  const patchRes = await page.request.patch(
-    `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-    {
-      headers: authHeaders,
-      data: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 50 },
-    },
-  )
-  expect(patchRes.ok(), `PATCH named resource failed: ${patchRes.status()}`).toBeTruthy()
+  const before = await getPlannerProfile(page, projectId, resourceTypeId, authHeaders)
+  expect(before).toMatchObject({
+    ownerKind: 'plannedResource',
+    resourceTypeId,
+    source: 'squadPlanner',
+    planningBasis: 'capacityProfile',
+    resolutionSource: 'PROFILE',
+    segments: PLANNER_SEGMENTS,
+  })
 
-  const planResourceTypeId = rtId
-
-  return { projectId, planResourceTypeId, planResourceName }
+  return { projectId, authHeaders, applyPayload, before }
 }
 
 test.describe('Resource Allocation', () => {
@@ -280,30 +362,68 @@ test.describe('Resource Allocation', () => {
     await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
   })
 
-  test('CAPACITY_PLAN fixture creates profile without scalar update', async ({ page }) => {
-    test.setTimeout(90_000)
-  
-    const { projectId, planResourceName } = await setupSquadPlannerCapacityPlan(page)
-  
-    const scalarCalls: string[] = []
-    page.on('request', req => {
-      const url = req.url()
-      if (url.includes('/resource-types/') && !url.includes('/named-resources/') && req.method() === 'PUT') {
-        scalarCalls.push(url)
+  test('Squad Planner apply preserves one planned-resource segmented profile through the safe editor', async ({ page }) => {
+    test.setTimeout(120_000)
+    const { projectId, authHeaders, before } = await setupSquadPlannerCapacityPlan(page)
+
+    await gotoResourceProfile(page, projectId)
+
+    // Capture only destructive scalar updates while inspecting this exact owner.
+    const scalarWrites: string[] = []
+    const roleScalarEndpoint = `/api/projects/${projectId}/resource-types/${before.resourceTypeId}`
+    const ownerScalarEndpoint = `${roleScalarEndpoint}/named-resources/${before.namedResourceId}`
+    page.on('request', request => {
+      const url = new URL(request.url()).pathname
+      if ((request.method() === 'PUT' && url === roleScalarEndpoint) ||
+          (request.method() === 'PATCH' && url === ownerScalarEndpoint)) {
+        scalarWrites.push(`${request.method()} ${url}`)
       }
     })
-  
-    // The planned resource row exists on the page
-    const planRow = page.locator('table tbody tr').filter({ hasText: planResourceName }).first()
-    await expect(planRow).toBeVisible({ timeout: 10_000 })
-    await expect(planRow).toContainText(/(person|people)/i)
-  
-    // No generic scalar role-allocation PUT was emitted during page inspection
-    expect(scalarCalls).toHaveLength(0)
-  
-    // Round-trip: state persists after reload
-    await page.reload()
+
+    const roleRow = page.getByTestId(`resource-profile-row-${before.resourceTypeId}`)
+    await expect(roleRow).toBeVisible({ timeout: 10_000 })
+    await roleRow.getByRole('button', { name: /people/i }).click()
+
+    const ownerCard = page.getByTestId(`named-resource-profile-${before.namedResourceId}`)
+    const ownerProfile = page.getByTestId(`profile-managed-owner-${before.namedResourceId}`)
+    await expect(ownerCard).toBeVisible({ timeout: 10_000 })
+    await expect(ownerProfile).toHaveText('Varies by week')
+    await expect(ownerProfile).not.toHaveText(/%/)
+    await expect(ownerCard.getByText(/W1-W4: 50%/)).toBeVisible()
+    await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
+
+    const ownerPanel = page.getByTestId(`profile-managed-panel-${before.namedResourceId}`)
+    await ownerProfile.click()
+    await expect(ownerPanel).toBeVisible()
+    await expect(ownerPanel.getByText(/managed through the weekly capacity profile/i)).toBeVisible()
+    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
+    await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
+
+    await ownerPanel.getByRole('link', { name: /open weekly profile editor/i }).click()
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
+    await expect(page.getByRole('dialog', { name: 'Squad Planner' })).toBeVisible({ timeout: 15_000 })
+
+    const profilePath = `/api/projects/${projectId}/resource-profile`
+    const [returnedProfileResponse] = await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname === profilePath && response.request().method() === 'GET'),
+      page.goBack(),
+    ])
+    expect(returnedProfileResponse.ok()).toBeTruthy()
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/resource-profile`))
     await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
+    const [reloadedProfileResponse] = await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname === profilePath && response.request().method() === 'GET'),
+      page.reload(),
+    ])
+    expect(reloadedProfileResponse.ok()).toBeTruthy()
+    await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
+
+    expect(scalarWrites).toEqual([])
+    const after = await getPlannerProfile(page, projectId, before.resourceTypeId, authHeaders)
+    expect(after).toEqual(before)
   })
   
 })

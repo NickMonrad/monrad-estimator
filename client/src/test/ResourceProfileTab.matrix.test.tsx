@@ -1108,3 +1108,56 @@ describe('ResourceProfileTab help/control matrix', () => {
     expect(navButtons.length).toBeGreaterThanOrEqual(1)
   })
 })
+
+
+describe('ResourceProfileTab authoritative Period column', () => {
+  it('uses authoritative availability-window dates instead of stale scalar dates everywhere', () => {
+    const row = {
+      resourceTypeId: 'rt-dev', name: 'Developer', category: 'ENG', count: 1, hoursPerDay: 8, dayRate: 500,
+      totalHours: 80, totalDays: 10, effortDays: 10, allocatedDays: 10, allocationMode: 'TIMELINE',
+      allocationPercent: 100, allocationStartWeek: 2, allocationEndWeek: 6, derivedStartWeek: null, derivedEndWeek: null,
+      estimatedCost: 5000, epics: [], namedResources: [],
+      capacityProfile: {
+        resolutionSource: 'PROFILE' as const, planningBasis: 'availabilityWindow' as const, source: 'squadPlanner' as const,
+        defaultPercent: 75, startWeek: 3, endWeek: 8, segments: [],
+      },
+    }
+    const profile = {
+      projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 10, bufferWeeks: 0, onboardingWeeks: 0,
+      resourceRows: [row], overheadRows: [], summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: false },
+    }
+
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, { profile, filteredResourceRows: [row] })} />)
+    const profileRow = within(container).getByTestId('resource-profile-row-rt-dev')
+    const badge = within(profileRow).getByTitle('Click to edit allocation')
+
+    expect(badge.textContent).toBe('Fixed for selected weeks · 75%')
+    expect(within(profileRow).getByText(/Wk 3.*→.*Wk 8/)).toBeInTheDocument()
+    expect(within(profileRow).getByText('Wk 3 – Wk 8')).toBeInTheDocument()
+    expect(screen.queryByText(/Wk 2.*Wk 6/)).toBeNull()
+  })
+
+  it('renders Varies by week in Period for segmented capacity profiles instead of stale scalar dates', () => {
+    const row = {
+      resourceTypeId: 'rt-dev', name: 'Developer', category: 'ENG', count: 1, hoursPerDay: 8, dayRate: 500,
+      totalHours: 80, totalDays: 10, effortDays: 10, allocatedDays: 10, allocationMode: 'EFFORT',
+      allocationPercent: 100, allocationStartWeek: 2, allocationEndWeek: 6, derivedStartWeek: null, derivedEndWeek: null,
+      estimatedCost: 5000, epics: [], namedResources: [],
+      capacityProfile: {
+        resolutionSource: 'PROFILE' as const, planningBasis: 'capacityProfile' as const, source: 'squadPlanner' as const,
+        defaultPercent: 75, startWeek: 0, endWeek: 8,
+        segments: [{ startWeek: 0, endWeek: 3, capacityPercent: 50 }, { startWeek: 4, endWeek: 8, capacityPercent: 100 }],
+      },
+    }
+    const profile = {
+      projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 10, bufferWeeks: 0, onboardingWeeks: 0,
+      resourceRows: [row], overheadRows: [], summary: { totalHours: 80, totalDays: 10, totalCost: 5000, hasCost: false },
+    }
+
+    const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, { profile, filteredResourceRows: [row] })} />)
+    const profileRow = within(container).getByTestId('resource-profile-row-rt-dev')
+
+    expect(within(profileRow).getAllByText('Varies by week')).toHaveLength(2)
+    expect(within(profileRow).queryByText(/Wk 2.*Wk 6/)).toBeNull()
+  })
+})

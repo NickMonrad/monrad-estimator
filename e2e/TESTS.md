@@ -236,7 +236,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | cancel closes editor without changing mode badge | Opens editor, switches mode to Fixed for whole project, clicks Cancel → asserts editor is gone and badge text is unchanged |
 | summary tab shows Availability pattern column | Navigates back to Resource Profile tab → asserts the `<th>` with text "Availability pattern" is visible in the summary table |
 | allocation editor — EFFORT hides Available % control | Opens the inline editor, selects EFFORT mode — asserts Available % and Available Percent controls are absent |
-| CAPACITY_PLAN row shows info panel with safe editor | Applies a squad plan via API so "Project Manager" row gets CAPACITY_PLAN mode, asserts badge shows "Varies by week", clicking opens info panel — no mode select, no Available %, no Save button, "Open weekly profile editor" button visible and navigates to Timeline with squad-planner panel |
+| Squad Planner apply preserves a planned-resource segmented profile through the safe editor | Creates an isolated user and project, sends the real `POST /squad-plan/apply` payload with 0.5 then 1.0 headcount periods, resolves the exact planned-resource owner through both profile APIs, verifies profile-first segments and the safe `Varies by week` panel, captures no protected scalar role/named-resource writes, deep-links to the Squad Planner drawer, reloads the authoritative profile, and compares the canonical persisted profile before/after |
 
 #### `Responsive measurements — Timeline resource-counts` describe block (4 tests)
 
