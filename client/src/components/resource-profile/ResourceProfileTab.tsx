@@ -11,6 +11,8 @@ import {
   ALLOCATION_MODE_OPTIONS,
   getEffectiveAvailabilityDisplay,
   getEffectiveAvailabilityBadge,
+  getEffectiveAvailabilityPeriod,
+  formatEffectiveAvailabilityPeriod,
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 
@@ -177,7 +179,6 @@ export default function ResourceProfileTab({
                             </span>
                           )
                         }
-                        const { effectiveMode: mode, startWeek: effectiveStart, endWeek: effectiveEnd } = availability
                         const badge = getEffectiveAvailabilityBadge(availability, profile?.projectDurationWeeks)
                         return (
                           <div>
@@ -220,8 +221,8 @@ export default function ResourceProfileTab({
                                 Profile source: {formatCapacityProfileSource(row.capacityProfile.source)} · Resolution source: {formatResolutionSource(row.capacityProfile.resolutionSource)}
                               </span>
                             )}
-                            {mode === 'TIMELINE' && effectiveStart != null && effectiveEnd != null && (
-                              <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Wk {Math.floor(effectiveStart)} → Wk {Math.floor(effectiveEnd)}</div>
+                            {badge.sub && (
+                              <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{badge.sub}</div>
                             )}
                             {row.capacityProfile && row.capacityProfile.segments.length > 0 && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
@@ -238,13 +239,10 @@ export default function ResourceProfileTab({
                       })()}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                      {(() => {
-                        if (availability.periodLabel) return availability.periodLabel
-                        const start = weekToDate(availability.startWeek); const end = weekToDate(availability.endWeek)
-                        if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                        if (availability.startWeek != null && availability.endWeek != null) return `Wk ${Math.floor(availability.startWeek)} – Wk ${Math.floor(availability.endWeek)}`
-                        return '—'
-                      })()}
+                      {formatEffectiveAvailabilityPeriod(
+                        getEffectiveAvailabilityPeriod(availability, profile?.projectDurationWeeks),
+                        { weekToDate, formatDate: fmtDate },
+                      )}
                     </td>
                     <td className="text-right px-4 py-3 text-gray-900 dark:text-white">
                       <input type="number" min="0" step="1" defaultValue={row.dayRate ?? ''} key={`dr-${row.resourceTypeId}-${row.dayRate}`}
@@ -327,7 +325,7 @@ export default function ResourceProfileTab({
                                 <div>
                                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                     Available from
-                                    {row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
+                                    {!availability.hasAuthoritativeProfile && row.derivedStartWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedStartWeek)})</span>}
                                   </label>
                                   <input type="number" min={0} step={0.5} value={allocationDraft.allocationStartWeek ?? ''} placeholder="auto"
                                     onChange={e => setAllocationDraft(d => d ? { ...d, allocationStartWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}
@@ -336,7 +334,7 @@ export default function ResourceProfileTab({
                                 <div>
                                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                                     Available to
-                                    {row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
+                                    {!availability.hasAuthoritativeProfile && row.derivedEndWeek != null && <span className="text-gray-400 dark:text-gray-500 ml-1">(auto: Wk {Math.floor(row.derivedEndWeek)})</span>}
                                   </label>
                                   <input type="number" min={0} step={0.5} value={allocationDraft.allocationEndWeek ?? ''} placeholder="auto"
                                     onChange={e => setAllocationDraft(d => d ? { ...d, allocationEndWeek: e.target.value === '' ? null : Number(e.target.value) } : d)}

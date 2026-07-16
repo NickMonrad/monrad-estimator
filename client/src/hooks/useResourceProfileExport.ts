@@ -133,6 +133,7 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       return
     }
     const capProfile = row.capacityProfile
+    const availability = getEffectiveAvailabilityDisplay(row)
     const profileStart = capProfile?.startWeek != null ? formatWeekLabel(capProfile.startWeek) : ''
     const profileEnd = capProfile?.endWeek != null ? formatWeekLabel(capProfile.endWeek) : ''
     rows.push([
@@ -146,8 +147,8 @@ export const buildProfileCsv = (profileData: ResourceProfile) => {
       capProfile?.defaultPercent != null ? String(capProfile.defaultPercent) : '',
       profileStart,
       profileEnd,
-      '',   // Available from
-      '',   // Available to
+      availability.startWeek != null ? formatWeekLabel(availability.startWeek) : '',
+      availability.endWeek != null ? formatWeekLabel(availability.endWeek) : '',
       '',   // Assigned start
       '',   // Assigned end
       formatCapacityProfileSegments(capProfile), // Capacity profile segments

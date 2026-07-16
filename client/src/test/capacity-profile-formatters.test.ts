@@ -11,6 +11,8 @@ import {
   deriveEffectiveAvailabilityState,
   getEffectiveAvailabilityDisplay,
   getEffectiveAvailabilityBadge,
+  getEffectiveAvailabilityPeriod,
+  formatEffectiveAvailabilityPeriod,
 } from '../lib/capacityProfileFormatting'
 
 describe('formatPlanningBasis', () => {
@@ -102,7 +104,7 @@ describe('formatCapacityProfileSource', () => {
   })
 
   it('formats availabilityWindow', () => {
-    expect(formatCapacityProfileSource('availabilityWindow')).toBe('Availability pattern')
+    expect(formatCapacityProfileSource('availabilityWindow')).toBe('Availability window')
   })
 
   it('formats imported', () => {
@@ -367,6 +369,82 @@ describe('getEffectiveAvailabilityDisplay', () => {
     expect(result.endWeek).toBe(6)
     expect(result.percentage).toBe(25)
     expect(result.periodLabel).toBeNull()
+  })
+})
+
+describe('effective availability period formatter', () => {
+  const format = (row: Parameters<typeof getEffectiveAvailabilityDisplay>[0], projectDurationWeeks = 12) =>
+    formatEffectiveAvailabilityPeriod(
+      getEffectiveAvailabilityPeriod(getEffectiveAvailabilityDisplay(row), projectDurationWeeks),
+    )
+
+  it('uses project boundaries for authoritative whole-project profiles with null bounds', () => {
+    expect(format({
+      allocationMode: 'TIMELINE',
+      allocationStartWeek: 3,
+      allocationEndWeek: 7,
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'wholeProjectAllocation',
+        defaultPercent: 75,
+        startWeek: null,
+        endWeek: null,
+      },
+    })).toBe('Wk 0 – Wk 12')
+  })
+
+  it('uses project boundaries for legacy whole-project rows', () => {
+    expect(format({
+      allocationMode: 'FULL_PROJECT',
+      allocationStartWeek: 3,
+      allocationEndWeek: 7,
+    })).toBe('Wk 0 – Wk 12')
+  })
+
+  it.each([
+    ['selected-week range', { allocationMode: 'TIMELINE', allocationStartWeek: 3, allocationEndWeek: 7 }, 'Wk 3 – Wk 7'],
+    ['selected-week start only', { allocationMode: 'TIMELINE', allocationStartWeek: 3 }, 'From Wk 3'],
+    ['selected-week end only', { allocationMode: 'TIMELINE', allocationEndWeek: 7 }, 'Until Wk 7'],
+    ['selected-week null bounds', { allocationMode: 'TIMELINE' }, '—'],
+    ['demand following with stale dates', { allocationMode: 'EFFORT', allocationStartWeek: 3, allocationEndWeek: 7 }, '—'],
+  ] as const)('formats %s', (_case, row, expected) => {
+    expect(format(row)).toBe(expected)
+  })
+
+  it('keeps authoritative null selected-week bounds empty despite stale legacy and derived dates', () => {
+    expect(format({
+      allocationMode: 'TIMELINE',
+      allocationStartWeek: 3,
+      allocationEndWeek: 7,
+      derivedStartWeek: 4,
+      derivedEndWeek: 8,
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'availabilityWindow',
+        startWeek: null,
+        endWeek: null,
+      },
+    })).toBe('—')
+  })
+
+  it.each([
+    ['segmented profile', {
+      allocationMode: 'TIMELINE',
+      capacityProfile: {
+        resolutionSource: 'PROFILE',
+        planningBasis: 'availabilityWindow',
+        segments: [{ startWeek: 0, endWeek: 2, capacityPercent: 50 }],
+      },
+    }],
+    ['active capacity plan', {
+      allocationMode: 'TIMELINE',
+      capacityProfile: {
+        resolutionSource: 'ACTIVE_CAPACITY_PLAN',
+        planningBasis: 'wholeProjectAllocation',
+      },
+    }],
+  ] as const)('formats %s as varying by week', (_case, row) => {
+    expect(format(row)).toBe('Varies by week')
   })
 })
 

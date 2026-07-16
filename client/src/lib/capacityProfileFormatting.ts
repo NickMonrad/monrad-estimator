@@ -78,7 +78,7 @@ const CAPACITY_SOURCE_LABELS: Record<CapacityProfileSource, string> = {
   squadPlanner: 'Squad Planner',
   fixed: 'Fixed',
   manual: 'Manual',
-  availabilityWindow: 'Availability pattern',
+  availabilityWindow: 'Availability window',
   imported: 'Imported',
   derived: 'Derived',
   legacy: 'Legacy fallback',
@@ -311,6 +311,75 @@ export function getEffectiveAvailabilityDisplay(row: EffectiveAvailabilityInput)
   }
 }
 
+export type EffectiveAvailabilityPeriodKind = 'varies' | 'range' | 'from' | 'until' | 'whole-project' | 'none'
+
+/**
+ * Presentation-ready availability boundaries. Authority and effective mode are
+ * resolved first; this type only describes how those values are shown.
+ */
+export interface EffectiveAvailabilityPeriod {
+  kind: EffectiveAvailabilityPeriodKind
+  startWeek: number | null
+  endWeek: number | null
+}
+
+/**
+ * Resolve the visible period without consulting compatibility fields.
+ *
+ * Whole-project availability is bounded by the project, not scalar profile
+ * dates. Selected-week availability deliberately preserves partial/null bounds.
+ */
+export function getEffectiveAvailabilityPeriod(
+  availability: EffectiveAvailabilityDisplay,
+  projectDurationWeeks?: number | null,
+): EffectiveAvailabilityPeriod {
+  if (availability.isProfileManaged || availability.effectiveMode === 'CAPACITY_PLAN') {
+    return { kind: 'varies', startWeek: null, endWeek: null }
+  }
+  if (availability.effectiveMode === 'EFFORT') {
+    return { kind: 'none', startWeek: null, endWeek: null }
+  }
+  if (availability.effectiveMode === 'FULL_PROJECT') {
+    return { kind: 'whole-project', startWeek: 0, endWeek: projectDurationWeeks ?? null }
+  }
+  if (availability.startWeek != null && availability.endWeek != null) {
+    return { kind: 'range', startWeek: availability.startWeek, endWeek: availability.endWeek }
+  }
+  if (availability.startWeek != null) {
+    return { kind: 'from', startWeek: availability.startWeek, endWeek: null }
+  }
+  if (availability.endWeek != null) {
+    return { kind: 'until', startWeek: null, endWeek: availability.endWeek }
+  }
+  return { kind: 'none', startWeek: null, endWeek: null }
+}
+
+export interface EffectiveAvailabilityPeriodFormatter {
+  weekToDate?: (week: number) => Date | null
+  formatDate?: (date: Date) => string
+}
+
+/** Format a resolved period as dates when conversion is available, otherwise as weeks. */
+export function formatEffectiveAvailabilityPeriod(
+  period: EffectiveAvailabilityPeriod,
+  formatter: EffectiveAvailabilityPeriodFormatter = {},
+): string {
+  if (period.kind === 'varies') return 'Varies by week'
+  if (period.kind === 'none') return '—'
+
+  const formatWeek = (week: number) => {
+    const date = formatter.weekToDate?.(week)
+    return date && formatter.formatDate ? formatter.formatDate(date) : `Wk ${Math.floor(week)}`
+  }
+
+  if (period.kind === 'from' && period.startWeek != null) return `From ${formatWeek(period.startWeek)}`
+  if (period.kind === 'until' && period.endWeek != null) return `Until ${formatWeek(period.endWeek)}`
+  if (period.startWeek != null && period.endWeek != null) {
+    return `${formatWeek(period.startWeek)} – ${formatWeek(period.endWeek)}`
+  }
+  return '—'
+}
+
 
 export interface EffectiveAvailabilityBadge {
   label: string
@@ -323,31 +392,22 @@ export function getEffectiveAvailabilityBadge(
   availability: EffectiveAvailabilityDisplay,
   projectDurationWeeks?: number | null,
 ): EffectiveAvailabilityBadge {
-  if (availability.isProfileManaged) {
+  if (availability.isProfileManaged || availability.effectiveMode === 'CAPACITY_PLAN') {
     return { label: 'Varies by week', color: 'bg-green-100 text-green-700', sub: null }
   }
 
   const mode = availability.effectiveMode
-  if (mode === 'CAPACITY_PLAN') {
-    return { label: 'Varies by week', color: 'bg-green-100 text-green-700', sub: null }
-  }
   const label = formatAllocationMode(mode)
   if (mode === 'EFFORT') {
     return { label, color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400', sub: null }
   }
 
-  const percentLabel = availability.percentage != null ? `${label} · ${availability.percentage}%` : label
-  if (mode === 'TIMELINE') {
-    const sub = availability.startWeek != null && availability.endWeek != null
-      ? `Wk ${Math.floor(availability.startWeek)} → Wk ${Math.floor(availability.endWeek)}`
-      : null
-    return { label: percentLabel, color: 'bg-blue-100 text-blue-700', sub }
+  const periodText = formatEffectiveAvailabilityPeriod(
+    getEffectiveAvailabilityPeriod(availability, projectDurationWeeks),
+  )
+  return {
+    label: availability.percentage != null ? `${label} · ${availability.percentage}%` : label,
+    color: mode === 'TIMELINE' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700',
+    sub: periodText === '—' ? null : periodText,
   }
-
-  const sub = availability.hasAuthoritativeProfile
-    ? availability.startWeek != null && availability.endWeek != null
-      ? `Wk ${Math.floor(availability.startWeek)} → Wk ${Math.floor(availability.endWeek)}`
-      : null
-    : projectDurationWeeks != null ? `Wk 0 → Wk ${Math.floor(projectDurationWeeks)}` : null
-  return { label: percentLabel, color: 'bg-purple-100 text-purple-700', sub }
 }

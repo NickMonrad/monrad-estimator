@@ -810,7 +810,7 @@ describe('Capacity Profile labels — availability terminology', () => {
         epics: [], namedResources: [],
       }],
     })} />)
-    const badge = screen.getByText('Varies by week')
+    const badge = screen.getByTitle('Click to edit allocation')
     expect(badge).toBeInTheDocument()
     // CAPACITY_PLAN must NOT show a percentage suffix
     expect(badge.textContent).not.toMatch(/%/)

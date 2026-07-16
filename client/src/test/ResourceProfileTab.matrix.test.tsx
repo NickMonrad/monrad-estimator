@@ -440,24 +440,24 @@ function nullWindowProfileRowOverrides(
 }
 
 const NULL_WINDOW_SCALAR_CASES = [
-  ['demandFollowing', 'EFFORT', false],
-  ['wholeProjectAllocation', 'FULL_PROJECT', false],
-  ['availabilityWindow', 'TIMELINE', false],
+  ['demandFollowing', 'EFFORT', '—'],
+  ['wholeProjectAllocation', 'FULL_PROJECT', 'Wk 0 – Wk 10'],
+  ['availabilityWindow', 'TIMELINE', '—'],
 ] as const
 
 describe('ResourceProfileTab authoritative null profile windows', () => {
   it.each(NULL_WINDOW_SCALAR_CASES)(
-    'keeps PROFILE + %s null window out of the badge period and scalar draft',
-    (planningBasis, expectedMode) => {
+    'keeps PROFILE + %s null bounds authoritative in the period and scalar draft',
+    (planningBasis, expectedMode, expectedPeriod) => {
       const setAllocationDraft = vi.fn()
       const overrides = nullWindowProfileRowOverrides('PROFILE', planningBasis)
       const { container } = renderWithRouter(<ResourceProfileTab {...createProps(1, {
         ...overrides,
         setAllocationDraft,
       })} />)
-
       const row = screen.getByTestId('resource-profile-row-rt-dev')
-      expect(row.querySelectorAll('td')[6]?.textContent).toBe('—')
+
+      expect(row.querySelectorAll('td')[6]?.textContent).toBe(expectedPeriod)
       const badge = container.querySelector('button[title="Click to edit allocation"]')!
       expect(badge.textContent).not.toContain('25%')
       fireEvent.click(badge)
@@ -467,6 +467,7 @@ describe('ResourceProfileTab authoritative null profile windows', () => {
         allocationStartWeek: null,
         allocationEndWeek: null,
       })
+      expect(screen.queryByText(/\(auto: Wk/)).toBeNull()
     },
   )
 
@@ -496,6 +497,44 @@ describe('ResourceProfileTab authoritative null profile windows', () => {
         allocationStartWeek: null, allocationEndWeek: null,
       },
     })
+  })
+
+  it.each([
+    ['start only', 3, null, 'From Wk 3'],
+    ['end only', null, 7, 'Until Wk 7'],
+  ] as const)('renders authoritative selected-week %s without legacy fallback', (_case, startWeek, endWeek, period) => {
+    const overrides = nullWindowProfileRowOverrides('PROFILE', 'availabilityWindow')
+    for (const row of [overrides.profile.resourceRows[0], overrides.filteredResourceRows[0]]) {
+      row.capacityProfile.startWeek = startWeek
+      row.capacityProfile.endWeek = endWeek
+    }
+
+    renderWithRouter(<ResourceProfileTab {...createProps(1, overrides)} />)
+    const row = screen.getByTestId('resource-profile-row-rt-dev')
+    expect(row.querySelectorAll('td')[6]?.textContent).toBe(period)
+    expect(screen.queryByText(/Wk 2|Wk 6|auto: Wk/)).toBeNull()
+  })
+
+  it('retains derived hints for a pure legacy selected-week row', () => {
+    const props = createProps(1)
+    props.filteredResourceRows[0] = {
+      ...props.filteredResourceRows[0],
+      allocationMode: 'TIMELINE',
+      derivedStartWeek: 3,
+      derivedEndWeek: 7,
+    }
+    props.profile!.resourceRows[0] = props.filteredResourceRows[0]
+    props.editingAllocation = 'rt-dev'
+    props.allocationDraft = {
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationStartWeek: 3,
+      allocationEndWeek: 7,
+    }
+
+    renderWithRouter(<ResourceProfileTab {...props} />)
+    expect(screen.getByText(/\(auto: Wk 3\)/)).toBeInTheDocument()
+    expect(screen.getByText(/\(auto: Wk 7\)/)).toBeInTheDocument()
   })
 
   it('keeps PROFILE capacityProfile and ACTIVE_CAPACITY_PLAN null windows profile-managed', () => {
@@ -776,7 +815,7 @@ describe('ResourceProfileTab authoritative scalar mismatch', () => {
     // Badge uses profile defaultPercent (75%) not stale row value (100%)
     expect(badge!.textContent).toContain('75%')
     // Week range shows profile values (W3-W8)
-    expect(screen.getByText(/Wk 3.*→.*Wk 8/)).toBeInTheDocument()
+    expect(screen.getAllByText('Wk 3 – Wk 8')).toHaveLength(2)
 
     fireEvent.click(badge!)
     expect(setEditingAllocation).toHaveBeenCalledWith('rt-dev')
@@ -859,8 +898,8 @@ describe('ResourceProfileTab authoritative scalar mismatch', () => {
     expect(badge!.textContent).toContain('75%')
     expect(badge!.textContent).not.toContain('100%')
     // Week range shows profile values (W3-W8), not legacy (W2-W6)
-    expect(screen.getByText(/Wk 3.*→.*Wk 8/)).toBeInTheDocument()
-    expect(screen.queryByText(/Wk 2.*→.*Wk 6/)).toBeNull()
+    expect(screen.getAllByText('Wk 3 – Wk 8')).toHaveLength(2)
+    expect(screen.queryByText(/Wk 2.*Wk 6/)).toBeNull()
   })
 
   it('PROFILE + wholeProjectAllocation + no segments + stale EFFORT maps to FULL_PROJECT scalar editor', () => {
@@ -1223,7 +1262,7 @@ describe('ResourceProfileTab authoritative Period column', () => {
       allocationPercent: 100, allocationStartWeek: 2, allocationEndWeek: 6, derivedStartWeek: null, derivedEndWeek: null,
       estimatedCost: 5000, epics: [], namedResources: [],
       capacityProfile: {
-        resolutionSource: 'PROFILE' as const, planningBasis: 'availabilityWindow' as const, source: 'squadPlanner' as const,
+        resolutionSource: 'PROFILE' as const, planningBasis: 'availabilityWindow' as const, source: 'availabilityWindow' as const,
         defaultPercent: 75, startWeek: 3, endWeek: 8, segments: [],
       },
     }
@@ -1237,8 +1276,9 @@ describe('ResourceProfileTab authoritative Period column', () => {
     const badge = within(profileRow).getByTitle('Click to edit allocation')
 
     expect(badge.textContent).toBe('Fixed for selected weeks · 75%')
-    expect(within(profileRow).getByText(/Wk 3.*→.*Wk 8/)).toBeInTheDocument()
-    expect(within(profileRow).getByText('Wk 3 – Wk 8')).toBeInTheDocument()
+    expect(within(profileRow).getByText('Availability window')).toBeInTheDocument()
+    expect(screen.getByText(/Profile source: Availability window/)).toBeInTheDocument()
+    expect(within(profileRow).getAllByText('Wk 3 – Wk 8')).toHaveLength(2)
     expect(screen.queryByText(/Wk 2.*Wk 6/)).toBeNull()
   })
 

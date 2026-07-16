@@ -1,6 +1,11 @@
 import { Fragment } from 'react'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
-import { getEffectiveAvailabilityBadge, getEffectiveAvailabilityDisplay } from '../../lib/capacityProfileFormatting'
+import {
+  formatEffectiveAvailabilityPeriod,
+  getEffectiveAvailabilityBadge,
+  getEffectiveAvailabilityDisplay,
+  getEffectiveAvailabilityPeriod,
+} from '../../lib/capacityProfileFormatting'
 
 interface Props extends UseResourceProfileReturn {
   projectId: string
@@ -160,16 +165,10 @@ export default function CommercialTab({
                     <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                       {(row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' ? (() => {
                         const availability = getEffectiveAvailabilityDisplay(row)
-                        if (availability.periodLabel) return availability.periodLabel
-                        const start = weekToDate(availability.startWeek); const end = weekToDate(availability.endWeek)
-                        if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                        if (availability.startWeek != null && availability.endWeek != null) return `Wk ${Math.floor(availability.startWeek)} – Wk ${Math.floor(availability.endWeek)}`
-                        if (!availability.hasAuthoritativeProfile && availability.effectiveMode === 'FULL_PROJECT') {
-                          const projectStart = weekToDate(0); const projectEnd = weekToDate(profile?.projectDurationWeeks ?? null)
-                          if (projectStart && projectEnd) return `${fmtDate(projectStart)} – ${fmtDate(projectEnd)}`
-                          if (profile?.projectDurationWeeks != null) return `Wk 0 – Wk ${Math.floor(profile.projectDurationWeeks)}`
-                        }
-                        return '—'
+                        return formatEffectiveAvailabilityPeriod(
+                          getEffectiveAvailabilityPeriod(availability, profile?.projectDurationWeeks),
+                          { weekToDate, formatDate: fmtDate },
+                        )
                       })() : '—'}
                     </td>
                     <td className="text-right px-4 py-3 text-gray-900 dark:text-white font-medium">{formatNumber(row.allocatedDays)}</td>

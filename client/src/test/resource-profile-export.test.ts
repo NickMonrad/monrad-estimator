@@ -196,9 +196,9 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     expect(row[14]).toBe('')                      // Default capacity % empty
     expect(row[15]).toBe('')                      // Profile start empty
     expect(row[16]).toBe('')                      // Profile end empty
-    // Availability window columns empty for role-level (no startWeek/endWeek on row directly)
-    expect(row[17]).toBe('')                      // Available from empty
-    expect(row[18]).toBe('')                      // Available to empty
+    // Legacy availability fields are exported only when no profile resolves.
+    expect(row[17]).toBe('W1')
+    expect(row[18]).toBe('W11')
   })
 
   it('authoritative no-window profile produces empty profile and availability-window CSV fields despite stale legacy windows', () => {
@@ -243,8 +243,8 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
               actualAllocationSegments: [],
               synthetic: false,
               capacityProfile: {
-                planningBasis: 'demandFollowing',
-                source: 'squadPlanner',
+                planningBasis: 'availabilityWindow',
+                source: 'availabilityWindow',
                 defaultPercent: null,
                 startWeek: null,
                 endWeek: null,
@@ -263,9 +263,9 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     expect(rows.length).toBe(1)
     const row = rows[0]
     // Planning basis from profile
-    expect(row[12]).toBe('As needed')
-    // Profile source from profile (formatted)
-    expect(row[13]).toBe('Squad Planner')
+    expect(row[12]).toBe('Fixed for selected weeks')
+    // Provenance stays source-oriented; it must not reuse the planning-basis label.
+    expect(row[13]).toBe('Availability window')
     // Default capacity % is null in profile
     expect(row[14]).toBe('')
     // Profile start/end are null → empty
@@ -274,6 +274,30 @@ describe('ResourceProfile CSV Export — authoritative profile columns', () => {
     // Availability window columns empty — profile has no window, legacy fields ignored
     expect(row[17]).toBe('')
     expect(row[18]).toBe('')
+  })
+
+  it.each([
+    ['start-only', 2, null, 'W3', ''],
+    ['end-only', null, 9, '', 'W10'],
+  ] as const)('exports authoritative %s boundaries without legacy fallback', (_case, startWeek, endWeek, expectedStart, expectedEnd) => {
+    const profile = makeProfile({
+      resourceRows: [{
+        resourceTypeId: 'rt-dev', name: 'Developer', category: 'ENGINEERING', count: 1,
+        hoursPerDay: 8, dayRate: 800, totalHours: 80, totalDays: 10, effortDays: 10, allocatedDays: 10,
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 3, allocationEndWeek: 7, derivedStartWeek: 4, derivedEndWeek: 8,
+        estimatedCost: null, epics: [], namedResources: [],
+        capacityProfile: {
+          planningBasis: 'availabilityWindow', source: 'availabilityWindow', defaultPercent: 75,
+          startWeek, endWeek, segments: [], resolutionSource: 'PROFILE',
+        },
+      }],
+    })
+
+    const { rows } = parseCsv(buildProfileCsv(profile))
+    expect(rows[0][17]).toBe(expectedStart)
+    expect(rows[0][18]).toBe(expectedEnd)
+    expect(rows[0][13]).toBe('Availability window')
   })
 
   it('does not duplicate a named resource per segment — one row per person', () => {
