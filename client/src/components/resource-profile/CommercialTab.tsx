@@ -1,5 +1,6 @@
 import { Fragment } from 'react'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
+import { getEffectiveAvailabilityBadge, getEffectiveAvailabilityDisplay } from '../../lib/capacityProfileFormatting'
 
 interface Props extends UseResourceProfileReturn {
   projectId: string
@@ -14,7 +15,7 @@ export default function CommercialTab({
   editingTaxRate, setEditingTaxRate, taxRateDraft, setTaxRateDraft,
   bufferWeeks, onboardingWeeks,
   createDiscount, deleteDiscount, updateTax, applyRateCard,
-  handleDiscountSubmit, handleApplyRateCard, getAllocationBadge,
+  handleDiscountSubmit, handleApplyRateCard,
   weekToDate, fmtDate, formatNumber,
   filteredResourceRows,
 }: Props) {
@@ -138,8 +139,13 @@ export default function CommercialTab({
                     <td className="text-right px-4 py-3 text-gray-500 dark:text-gray-400">{formatNumber(row.effortDays)}</td>
                     <td className="px-4 py-3">
                     {(row.kind === 'resource' || row.kind === 'named-resource') ? (() => {
-                      const badge = getAllocationBadge(row)
                       const isAggregate = row.allocationMode === 'AGGREGATE'
+                      const badge = isAggregate
+                        ? { label: 'Named resources: mixed modes', color: 'bg-gray-100 text-gray-400', sub: null }
+                        : getEffectiveAvailabilityBadge(
+                          getEffectiveAvailabilityDisplay(row),
+                          profile?.projectDurationWeeks,
+                        )
                       if (isAggregate) return <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color}`}>{badge.label}</span>
                       return (
                         <div>
@@ -153,13 +159,16 @@ export default function CommercialTab({
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                       {(row.kind === 'resource' || row.kind === 'named-resource') && row.allocationMode !== 'AGGREGATE' ? (() => {
-                        let startWk: number | null
-                        let endWk: number | null
-                        if (row.allocationMode === 'FULL_PROJECT') { startWk = 0; endWk = profile?.projectDurationWeeks ?? null }
-                        else { startWk = row.allocationStartWeek ?? row.derivedStartWeek; endWk = row.allocationEndWeek ?? row.derivedEndWeek }
-                        const start = weekToDate(startWk); const end = weekToDate(endWk)
+                        const availability = getEffectiveAvailabilityDisplay(row)
+                        if (availability.periodLabel) return availability.periodLabel
+                        const start = weekToDate(availability.startWeek); const end = weekToDate(availability.endWeek)
                         if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                        if (startWk != null && endWk != null) return `Wk ${Math.floor(startWk)} – Wk ${Math.floor(endWk)}`
+                        if (availability.startWeek != null && availability.endWeek != null) return `Wk ${Math.floor(availability.startWeek)} – Wk ${Math.floor(availability.endWeek)}`
+                        if (!availability.hasAuthoritativeProfile && availability.effectiveMode === 'FULL_PROJECT') {
+                          const projectStart = weekToDate(0); const projectEnd = weekToDate(profile?.projectDurationWeeks ?? null)
+                          if (projectStart && projectEnd) return `${fmtDate(projectStart)} – ${fmtDate(projectEnd)}`
+                          if (profile?.projectDurationWeeks != null) return `Wk 0 – Wk ${Math.floor(profile.projectDurationWeeks)}`
+                        }
                         return '—'
                       })() : '—'}
                     </td>

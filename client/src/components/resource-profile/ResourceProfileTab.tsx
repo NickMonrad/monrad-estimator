@@ -4,15 +4,13 @@ import {
   ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
 } from 'recharts'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
-import type { ResourceProfileRow } from '../../types/backlog'
 import {
-  formatAllocationMode,
   formatAllocationModeDescription,
   formatCapacityProfileSource,
-  formatPlanningBasis,
   formatResolutionSource,
   ALLOCATION_MODE_OPTIONS,
-  deriveEffectiveAvailabilityState,
+  getEffectiveAvailabilityDisplay,
+  getEffectiveAvailabilityBadge,
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 
@@ -24,39 +22,6 @@ const TYPE_OPTIONS = [
 
 /** Options for the generic editor dropdown — excludes CAPACITY_PLAN (profile-managed). */
 const MANUAL_ALLOCATION_OPTIONS = ALLOCATION_MODE_OPTIONS.filter(o => o.value !== 'CAPACITY_PLAN')
-
-type AvailabilityDisplay = {
-  effective: ReturnType<typeof deriveEffectiveAvailabilityState>
-  mode: ReturnType<typeof deriveEffectiveAvailabilityState>['effectiveMode']
-  percent: number
-  startWeek: number | null
-  endWeek: number | null
-  periodLabel: string | null
-}
-
-function getAvailabilityDisplay(row: ResourceProfileRow): AvailabilityDisplay {
-  const effective = deriveEffectiveAvailabilityState(row)
-  const profile = row.capacityProfile
-  const startWeek = effective.hasAuthoritativeProfile
-    ? (profile?.startWeek ?? row.allocationStartWeek ?? row.derivedStartWeek ?? null)
-    : (row.allocationStartWeek ?? row.derivedStartWeek ?? null)
-  const endWeek = effective.hasAuthoritativeProfile
-    ? (profile?.endWeek ?? row.allocationEndWeek ?? row.derivedEndWeek ?? null)
-    : (row.allocationEndWeek ?? row.derivedEndWeek ?? null)
-
-  return {
-    effective,
-    mode: effective.effectiveMode,
-    percent: effective.hasAuthoritativeProfile
-      ? (profile?.defaultPercent ?? row.allocationPercent ?? 100)
-      : (row.allocationPercent ?? 100),
-    startWeek,
-    endWeek,
-    periodLabel: effective.effectiveMode === 'CAPACITY_PLAN' && (profile?.segments.length ?? 0) > 0
-      ? 'Varies by week'
-      : null,
-  }
-}
 
 interface Props extends UseResourceProfileReturn {
   projectId: string
@@ -114,7 +79,7 @@ export default function ResourceProfileTab({
             </thead>
             <tbody>
               {filteredResourceRows.map(row => {
-                const availability = getAvailabilityDisplay(row)
+                const availability = getEffectiveAvailabilityDisplay(row)
                 return (
                 <Fragment key={row.resourceTypeId}>
                   <tr data-testid={`resource-profile-row-${row.resourceTypeId}`} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
@@ -212,18 +177,8 @@ export default function ResourceProfileTab({
                             </span>
                           )
                         }
-                        const { effective, mode, percent: effectivePercent, startWeek: effectiveStart, endWeek: effectiveEnd } = availability
-                        const planningBasisLabel = effective.hasAuthoritativeProfile && row.capacityProfile
-                          ? formatPlanningBasis(row.capacityProfile.planningBasis)
-                          : null
-                        const modeLabel = planningBasisLabel ?? formatAllocationMode(mode)
-                        const badge = (() => {
-                          if (mode === 'EFFORT') return { label: modeLabel, color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
-                          if (mode === 'TIMELINE') return { label: `${modeLabel} · ${effectivePercent}%`, color: 'bg-blue-100 text-blue-700' }
-                          if (mode === 'FULL_PROJECT') return { label: `${modeLabel} · ${effectivePercent}%`, color: 'bg-purple-100 text-purple-700' }
-                          if (mode === 'CAPACITY_PLAN') return { label: modeLabel, color: 'bg-green-100 text-green-700' }
-                          return { label: modeLabel, color: 'bg-purple-100 text-purple-700' }
-                        })()
+                        const { effectiveMode: mode, startWeek: effectiveStart, endWeek: effectiveEnd } = availability
+                        const badge = getEffectiveAvailabilityBadge(availability, profile?.projectDurationWeeks)
                         return (
                           <div>
                             <button
@@ -233,15 +188,14 @@ export default function ResourceProfileTab({
                                   setAllocationDraft(null)
                                 } else {
                                   setEditingAllocation(row.resourceTypeId)
-                                  // The editor keeps its legacy manual-window default, while display values stay authoritative.
-                                  const canEdit = !availability.effective.isProfileManaged
-                                  const draftMode = availability.mode
-                                  const draftPct = availability.percent
+                                  const canEdit = !availability.isProfileManaged
+                                  const draftMode = availability.effectiveMode
+                                  const draftPct = availability.percentage ?? 100
                                   const draftStart = canEdit && draftMode === 'TIMELINE'
-                                    ? (availability.effective.hasAuthoritativeProfile ? row.capacityProfile?.startWeek : null) ?? row.allocationStartWeek ?? null
+                                    ? availability.startWeek
                                     : null
                                   const draftEnd = canEdit && draftMode === 'TIMELINE'
-                                    ? (availability.effective.hasAuthoritativeProfile ? row.capacityProfile?.endWeek : null) ?? row.allocationEndWeek ?? null
+                                    ? availability.endWeek
                                     : null
                                   setAllocationDraft({
                                     allocationMode: draftMode,

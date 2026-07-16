@@ -337,8 +337,8 @@ describe('ResourceProfileTab', () => {
     expect(setAllocationDraft).toHaveBeenCalledWith({
       allocationMode: 'TIMELINE',
       allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
+      allocationStartWeek: 0,
+      allocationEndWeek: 10,
     })
   })
 

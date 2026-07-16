@@ -1,4 +1,5 @@
 import type { ResourceProfile, ProjectDiscount } from '../types/backlog'
+import type { EffectiveAvailabilityInput } from '../lib/capacityProfileFormatting'
 
 type NamedResourcePricingModel = 'ACTUAL_DAYS' | 'PRO_RATA'
 
@@ -17,6 +18,8 @@ export type CommercialRow = {
   allocationEndWeek: number | null
   derivedStartWeek: number | null
   derivedEndWeek: number | null
+  /** Authoritative availability metadata used by Commercial presentation only. */
+  capacityProfile?: EffectiveAvailabilityInput['capacityProfile']
   kind: 'resource' | 'named-resource' | 'overhead'
   pricingModel: NamedResourcePricingModel | null
   /** For mutations — NR rows need their RT id for the PATCH URL */
@@ -102,6 +105,7 @@ export function computeCommercialData(
             allocationEndWeek: nr.allocationEndWeek ?? null,
             derivedStartWeek: nr.derivedStartWeek ?? r.derivedStartWeek ?? null,
             derivedEndWeek: nr.derivedEndWeek ?? r.derivedEndWeek ?? null,
+            capacityProfile: nr.capacityProfile,
             kind: 'named-resource' as const,
             pricingModel,
             resourceTypeId: r.resourceTypeId,
@@ -128,6 +132,7 @@ export function computeCommercialData(
         allocationEndWeek: r.allocationEndWeek ?? null,
         derivedStartWeek: r.derivedStartWeek ?? null,
         derivedEndWeek: r.derivedEndWeek ?? null,
+        capacityProfile: r.capacityProfile,
         kind: 'resource' as const,
         pricingModel: null,
         resourceTypeId: r.resourceTypeId,
