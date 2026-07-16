@@ -87,7 +87,7 @@ export async function terminateProcess(child, graceMs = 4_000, { useProcessGroup
   // ── Bounded wait ────────────────────────────────────────────────────
 
   const cleanExit = await Promise.race([
-    Promise.race([exited, pipesClosed]),
+    Promise.race(useProcessGroup ? [pipesClosed] : [exited, pipesClosed]),
     new Promise(resolve => setTimeout(() => resolve(false), graceMs)),
   ])
 
@@ -95,8 +95,7 @@ export async function terminateProcess(child, graceMs = 4_000, { useProcessGroup
     sendSignal(child, 'SIGKILL', useProcessGroup)
     // After escalation, bounded drain before stream teardown.
     await Promise.race([
-      exited,
-      pipesClosed,
+      ...(useProcessGroup ? [pipesClosed] : [exited, pipesClosed]),
       new Promise(resolve => setTimeout(resolve, 500)),
     ])
   }

@@ -620,3 +620,64 @@ test('runCommand without signal resolves on zero exit', async () => {
   const result = await runCommand('node', ['-e', 'process.exit(0)'])
   assert.equal(result, '')
 })
+
+
+// ── runCommand: abort termination paths ──────────────────────────────────────
+
+test('runCommand on POSIX kills child via process group termination on abort', async () => {
+  if (process.platform === 'win32') return
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-posix-pg-'))
+  const pidFile = path.join(tmpDir, 'child.pid')
+  const escaped = JSON.stringify(pidFile)
+  const controller = new AbortController()
+
+  const promise = runCommand('node', ['-e', `
+    require('fs').writeFileSync(${escaped}, String(process.pid));
+    setTimeout(() => {}, 60000);
+  `], { signal: controller.signal, graceMs: 500 })
+
+  await new Promise(r => setTimeout(r, 300))
+
+  const childPid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10)
+  assert.ok(childPid > 0, 'child PID must be valid')
+
+  controller.abort()
+  await assert.rejects(promise, /was cancelled/, 'must reject on abort')
+
+  // Wait for OS to reap the child process
+  for (let i = 0; i < 20; i++) {
+    try { process.kill(childPid, 0); await new Promise(r => setTimeout(r, 100)) }
+    catch (e) { if (e.code === 'ESRCH') break }
+  }
+
+  assert.throws(() => process.kill(childPid, 0), { code: 'ESRCH' }, 'child must be killed')
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+test('runCommand on Windows uses child.kill on abort', async () => {
+  const controller = new AbortController()
+  const promise = runCommand('node', ['-e', 'setTimeout(() => process.exit(0), 30000)'], { signal: controller.signal, platform: 'win32' })
+  await new Promise(r => setTimeout(r, 100))
+
+  const start = Date.now()
+  controller.abort()
+  await assert.rejects(promise, /was cancelled/, 'must reject on abort')
+  assert.ok(Date.now() - start < 5000, 'rejection must be prompt')
+})
+
+test('runCommand resolves normally when child exits successfully before abort signal arrives', async () => {
+  const controller = new AbortController()
+  const result = await runCommand('node', ['-e', 'process.exit(0)'], { signal: controller.signal })
+  assert.equal(result, '')
+  controller.abort()
+})
+
+test('runCommand preserves non-zero exit error when child exits before abort signal arrives', async () => {
+  const controller = new AbortController()
+  await assert.rejects(
+    runCommand('node', ['-e', 'process.exit(42)'], { signal: controller.signal }),
+    /failed with exit code 42/,
+  )
+  controller.abort()
+})

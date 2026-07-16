@@ -177,9 +177,11 @@ The lifecycle module operates in two modes controlled by whether
 **Auto-created mode (MONRAD_TEST_DATABASE_URL unset, default):**
 A temporary database with a `monrad_test_` prefix (e.g.
 `monrad_test_a1b2c3d4e5`) is created on the same PostgreSQL server as
-`DATABASE_URL`. Schema migrations are applied, the suite runs, connections
-are terminated, and the temporary database is dropped. The module never
-touches the configured `DATABASE_URL` database.
+`DATABASE_URL`. Schema migrations are applied, the suite runs, the runner
+terminates all spawned child processes (process tree on POSIX via
+SIGTERM→SIGKILL; `taskkill /T /F` on Windows), connections are terminated,
+and the temporary database is dropped. The module never touches the
+configured `DATABASE_URL` database.
 
 **Externally managed mode (MONRAD_TEST_DATABASE_URL set):**
 `MONRAD_TEST_DATABASE_URL` IS the exact database the lifecycle module uses.
@@ -305,7 +307,7 @@ For local agent validation, prefer:
 npm run test:e2e:local
 ```
 
-The local runner owns database migration/seed, test-data cleanup, dynamic ports, API/Vite startup, Playwright execution, and child-process shutdown. Do not require manually running or killing dev servers around it.
+The local runner owns database migration/seed, test-data cleanup, dynamic ports, API/Vite startup, Playwright execution, and child-process shutdown. It terminates the entire process tree before dropping the disposable database: on POSIX via SIGTERM with escalation to SIGKILL after a grace period; on Windows via `taskkill /T /F`. Do not require manually running or killing dev servers around it.
 
 Documentation-only, internal refactors with unchanged behaviour, or narrowly scoped server changes may mark E2E as not applicable, but the PR must state why and identify the focused tests used instead.
 

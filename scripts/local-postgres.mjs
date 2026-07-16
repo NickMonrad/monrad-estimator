@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { terminateProcess } from './terminate-process.mjs'
 
 const POSTGRES_PROTOCOLS = new Set(['postgres:', 'postgresql:'])
 const IDENTIFIER_LIMIT = 63
@@ -100,13 +101,13 @@ export function resolveCommand(command, args, platform = process.platform, npmEx
   return { command, args }
 }
 
-export function runCommand(command, args, { cwd, env, inherit = true, platform, npmExecPath, signal } = {}) {
+export function runCommand(command, args, { cwd, env, inherit = true, platform, npmExecPath, signal, graceMs = 4_000 } = {}) {
   if (signal?.aborted) {
     return Promise.reject(new Error(`${command} was cancelled`))
   }
   return new Promise((resolve, reject) => {
     const spec = resolveCommand(command, args, platform, npmExecPath)
-    const child = spawn(spec.command, spec.args, { cwd, env, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(spec.command, spec.args, { cwd, env, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
     let output = ''
     if (!inherit) {
       child.stdout.on('data', chunk => { output += chunk; process.stdout.write(chunk) })
@@ -114,7 +115,11 @@ export function runCommand(command, args, { cwd, env, inherit = true, platform, 
     }
 
     function onAbort() {
-      child.kill('SIGTERM')
+      if ((platform ?? process.platform) !== 'win32') {
+        terminateProcess(child, graceMs, { useProcessGroup: true }).catch(() => {})
+      } else {
+        child.kill('SIGTERM')
+      }
       reject(new Error(`${command} was cancelled`))
     }
 

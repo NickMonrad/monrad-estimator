@@ -82,9 +82,13 @@ The local runner provisions one disposable database per worktree/run, then runs
 migrations, cleanup, seed, API, Vite, and Playwright only against that database.
 It prefers the configured host PostgreSQL authority and is designed to fall back
 to a unique `postgres:15` Docker container when Docker is usable (this fallback
-has not been live-tested). It terminates database connections, drops the
-disposable database, and removes its temporary container after success or
-failure; it never resets, drops, or cleans the persistent `DATABASE_URL`
+has not been live-tested). Before dropping the disposable database it
+terminates all spawned child processes: on POSIX the entire process tree
+receives SIGTERM with escalation to SIGKILL after a grace period; on Windows
+`taskkill /T /F` kills the process tree. It then terminates database
+connections, drops the disposable database, and removes its temporary
+container after success or failure; it never resets, drops, or cleans the
+persistent `DATABASE_URL`
 database.
 
 Use `npm run test:integration:local` for the PostgreSQL-backed snapshot rollback, clone, Squad Plan profile-first, and apply-parity suites. `npm run db:setup` safely creates the configured persistent development database if missing, then runs `prisma migrate deploy` and `prisma generate`. Shell variables override `server/.env` (or `MONRAD_ENV_FILE`). For an externally managed test database, set both `MONRAD_TEST_DATABASE_URL` (the exact database that receives migrations, seed, and cleanup — never auto-created or auto-dropped) and `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` (required opt-in). Both variables together are required; the lifecycle module refuses to operate when only one is set.

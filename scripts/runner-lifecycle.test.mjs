@@ -200,22 +200,21 @@ describe('terminateProcess — pipe stream cleanup', () => {
 // ── Process group signaling ───────────────────────────────────────
 
 describe('terminateProcess — process group signaling', () => {
-  it('sends signal to process group via process.kill(-pid) instead of child.kill', async () => {
-    // When useProcessGroup is true, `terminateProcess` calls
-    // process.kill(-child.pid, 'SIGTERM') which in a test context
-    // throws ESRCH (no such process) — that is swallowed.
-    // Crucially, child.kill must NOT be called.
+  it('clean process-group shutdown — SIGTERM then pipe close', async () => {
+    // When useProcessGroup is true, signals are sent to the process group
+    // via process.kill(-child.pid). In this test ESRCH is swallowed.
+    // Resolution waits for pipe closure (descendants release FDs).
     const child = mockChild()
 
-    const promise = terminateProcess(child, 50, { useProcessGroup: true })
+    const promise = terminateProcess(child, 200, { useProcessGroup: true })
 
     assert.equal(child.killed, false, 'must not call child.kill')
     assert.equal(child._capturedSignal(), null, 'must not send signal via child.kill')
 
-    child._exitNow(0)
+    // Descendants release inherited FDs.
+    child._closePipes()
     await promise
 
-    assert.equal(child.exitCode, 0)
     assert.ok(child.stdout._destroyed, 'stdout stream must be destroyed')
     assert.ok(child.stderr._destroyed, 'stderr stream must be destroyed')
     assert.ok(child.stdin._ended, 'stdin must be ended')
@@ -283,7 +282,8 @@ describe('terminateProcess — process group signaling', () => {
 
   it('escalates to SIGKILL for stuck process group', async () => {
     // When the process group doesn't respond to SIGTERM within the
-    // grace window, the group gets SIGKILL.
+    // grace window, the group gets SIGKILL. Resolution waits for pipe
+    // closure even after escalation.
     const child = mockChild()
     const graceMs = 50
 
@@ -291,12 +291,76 @@ describe('terminateProcess — process group signaling', () => {
 
     assert.equal(child.killed, false, 'child.kill not used for group signaling')
 
-    setTimeout(() => child._exitNow(9, 'SIGKILL'), graceMs + 20)
+    // After SIGKILL, descendants finally release FDs.
+    setTimeout(() => child._closePipes(), graceMs + 30)
     await promise
 
     assert.equal(child.killed, false, 'child.kill must still not be called')
-    assert.equal(child.exitCode, 9)
-    assert.equal(child.signalCode, 'SIGKILL')
     assert.ok(child.stdout._destroyed, 'streams cleaned after escalation')
+    assert.ok(child.stderr._destroyed, 'stderr cleaned after escalation')
+  })
+
+  // ── Additional group-mode edge cases ─────────────────────────────
+
+  it('wrapper exit alone does not resolve — waits for pipe close in group mode', async () => {
+    // Regression: in process-group mode the wrapper child's 'exit' event
+    // must NOT trigger resolution.  Only pipe closure (descendants
+    // releasing inherited FDs) or escalation may resolve the wait.
+    const child = mockChild()
+
+    const promise = terminateProcess(child, 200, { useProcessGroup: true })
+
+    // Wrapper exits — but pipes remain open (descendants hold FDs).
+    child._exitNow(0)
+
+    // Give event loop a tick so the exit event would propagate if
+    // it were a resolution trigger.
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(child.stdout._destroyed, false,
+      'must not resolve on wrapper exit alone — pipes still open')
+    assert.equal(child.stderr._destroyed, false,
+      'must not resolve on wrapper exit alone — pipes still open')
+
+    // Descendants release inherited FDs.
+    child._closePipes()
+    await promise
+
+    assert.ok(child.stdout._destroyed, 'resolved after pipe close')
+    assert.ok(child.stderr._destroyed, 'resolved after pipe close')
+    assert.ok(child.stdin._ended, 'stdin ended after group termination')
+  })
+
+  it('returns early when useProcessGroup is true but child has no pid', async () => {
+    // No-PID handling: without a PID we cannot reference a process
+    // group, so termination is a no-op.
+    const child = mockChild()
+    child.pid = null
+
+    await terminateProcess(child, 50, { useProcessGroup: true })
+
+    assert.equal(child.killed, false, 'must not attempt any signal')
+    assert.equal(child.stdout._destroyed, false, 'must not touch streams')
+    assert.equal(child.stderr._destroyed, false, 'must not touch streams')
+    assert.equal(child.stdin._ended, false, 'must not touch stdin')
+  })
+
+  it('non-group mode resolves on exit event before pipe close', async () => {
+    // Contrast regression: in default (non-group) mode the exit event
+    // IS the completion signal.  This test must keep passing.
+    const child = mockChild()
+
+    const promise = terminateProcess(child, 200)
+
+    assert.equal(child._capturedSignal(), 'SIGTERM', 'must use child.kill')
+
+    // Child exits — pipes are still open, but non-group mode resolves
+    // on exit event alone.
+    child._exitNow(0)
+    await promise
+
+    assert.equal(child.exitCode, 0)
+    assert.ok(child.stdout._destroyed, 'streams cleaned after exit')
+    assert.ok(child.stderr._destroyed, 'streams cleaned after exit')
+    assert.ok(child.stdin._ended, 'stdin ended after exit')
   })
 })
