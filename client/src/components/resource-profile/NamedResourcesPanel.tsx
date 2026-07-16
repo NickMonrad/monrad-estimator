@@ -1,4 +1,5 @@
 import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type { ResourceProfileRow } from '../../types/backlog'
@@ -58,6 +59,7 @@ export default function NamedResourcesPanel({
   allocations = [],
 }: NamedResourcesPanelProps) {
   const qc = useQueryClient()
+  const [profileInfoOwnerId, setProfileInfoOwnerId] = useState<string | null>(null)
 
   const { data: resources = [], isLoading } = useQuery<NamedResource[]>({
     queryKey: ['named-resources', projectId, rtId],
@@ -295,7 +297,7 @@ export default function NamedResourcesPanel({
                   </button>
                   </div>
                   {resource.allocation?.capacityProfile && (
-                    <div className="px-2 py-1 ml-2 mt-0.5 text-xs space-y-0.5 border-l-2 border-blue-200 dark:border-blue-700 bg-blue-50/50 dark:bg-blue-950/20 rounded-r">
+                    <div data-testid={`named-resource-profile-${resource.id}`} className="px-2 py-1 ml-2 mt-0.5 text-xs space-y-0.5 border-l-2 border-blue-200 dark:border-blue-700 bg-blue-50/50 dark:bg-blue-950/20 rounded-r">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
                           {formatPlanningBasis(resource.allocation.capacityProfile.planningBasis)}
@@ -327,6 +329,32 @@ export default function NamedResourcesPanel({
                             </span>
                           ))}
                         </div>
+                      )}
+                      {resource.synthetic && resource.allocation.capacityProfile.planningBasis === 'capacityProfile' && resource.allocation.capacityProfile.segments.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            data-testid={`profile-managed-owner-${resource.id}`}
+                            onClick={() => setProfileInfoOwnerId(current => current === resource.id ? null : resource.id)}
+                            className="mt-1 text-[10px] font-medium text-lab3-blue hover:text-lab3-navy"
+                            aria-expanded={profileInfoOwnerId === resource.id}
+                          >
+                            Varies by week
+                          </button>
+                          {profileInfoOwnerId === resource.id && (
+                            <div data-testid={`profile-managed-panel-${resource.id}`} className="mt-1 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-2 text-xs">
+                              <p className="text-gray-600 dark:text-gray-300">
+                                Availability varies by week. This planned-resource profile is managed through the weekly capacity profile.
+                              </p>
+                              <a
+                                href={`/projects/${projectId}/timeline?panel=squad-planner`}
+                                className="mt-2 inline-flex items-center rounded-lg bg-lab3-navy px-3 py-1 text-xs font-medium text-white hover:bg-lab3-blue"
+                              >
+                                Open weekly profile editor ↗
+                              </a>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   )}

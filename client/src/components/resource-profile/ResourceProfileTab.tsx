@@ -4,6 +4,7 @@ import {
   ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
 } from 'recharts'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
+import type { ResourceProfileRow } from '../../types/backlog'
 import {
   formatAllocationMode,
   formatAllocationModeDescription,
@@ -23,6 +24,39 @@ const TYPE_OPTIONS = [
 
 /** Options for the generic editor dropdown — excludes CAPACITY_PLAN (profile-managed). */
 const MANUAL_ALLOCATION_OPTIONS = ALLOCATION_MODE_OPTIONS.filter(o => o.value !== 'CAPACITY_PLAN')
+
+type AvailabilityDisplay = {
+  effective: ReturnType<typeof deriveEffectiveAvailabilityState>
+  mode: ReturnType<typeof deriveEffectiveAvailabilityState>['effectiveMode']
+  percent: number
+  startWeek: number | null
+  endWeek: number | null
+  periodLabel: string | null
+}
+
+function getAvailabilityDisplay(row: ResourceProfileRow): AvailabilityDisplay {
+  const effective = deriveEffectiveAvailabilityState(row)
+  const profile = row.capacityProfile
+  const startWeek = effective.hasAuthoritativeProfile
+    ? (profile?.startWeek ?? row.allocationStartWeek ?? row.derivedStartWeek ?? null)
+    : (row.allocationStartWeek ?? row.derivedStartWeek ?? null)
+  const endWeek = effective.hasAuthoritativeProfile
+    ? (profile?.endWeek ?? row.allocationEndWeek ?? row.derivedEndWeek ?? null)
+    : (row.allocationEndWeek ?? row.derivedEndWeek ?? null)
+
+  return {
+    effective,
+    mode: effective.effectiveMode,
+    percent: effective.hasAuthoritativeProfile
+      ? (profile?.defaultPercent ?? row.allocationPercent ?? 100)
+      : (row.allocationPercent ?? 100),
+    startWeek,
+    endWeek,
+    periodLabel: effective.effectiveMode === 'CAPACITY_PLAN' && (profile?.segments.length ?? 0) > 0
+      ? 'Varies by week'
+      : null,
+  }
+}
 
 interface Props extends UseResourceProfileReturn {
   projectId: string
@@ -79,9 +113,11 @@ export default function ResourceProfileTab({
               </tr>
             </thead>
             <tbody>
-              {filteredResourceRows.map(row => (
+              {filteredResourceRows.map(row => {
+                const availability = getAvailabilityDisplay(row)
+                return (
                 <Fragment key={row.resourceTypeId}>
-                  <tr className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                  <tr data-testid={`resource-profile-row-${row.resourceTypeId}`} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                     <td className="px-6 py-3">
                       <div className="font-medium text-gray-900 dark:text-white">
                         <button className="text-left hover:text-lab3-navy transition-colors font-medium" onClick={() => toggleRow(row.resourceTypeId)}>
@@ -176,20 +212,10 @@ export default function ResourceProfileTab({
                             </span>
                           )
                         }
-                        const effective = deriveEffectiveAvailabilityState(row)
-                        const mode = effective.effectiveMode
+                        const { effective, mode, percent: effectivePercent, startWeek: effectiveStart, endWeek: effectiveEnd } = availability
                         const planningBasisLabel = effective.hasAuthoritativeProfile && row.capacityProfile
                           ? formatPlanningBasis(row.capacityProfile.planningBasis)
                           : null
-                        const effectivePercent = effective.hasAuthoritativeProfile
-                          ? (row.capacityProfile?.defaultPercent ?? row.allocationPercent ?? 100)
-                          : (row.allocationPercent ?? 100)
-                        const effectiveStart = effective.hasAuthoritativeProfile
-                          ? (row.capacityProfile?.startWeek ?? row.allocationStartWeek ?? row.derivedStartWeek ?? null)
-                          : (row.allocationStartWeek ?? row.derivedStartWeek ?? null)
-                        const effectiveEnd = effective.hasAuthoritativeProfile
-                          ? (row.capacityProfile?.endWeek ?? row.allocationEndWeek ?? row.derivedEndWeek ?? null)
-                          : (row.allocationEndWeek ?? row.derivedEndWeek ?? null)
                         const modeLabel = planningBasisLabel ?? formatAllocationMode(mode)
                         const badge = (() => {
                           if (mode === 'EFFORT') return { label: modeLabel, color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' }
@@ -207,18 +233,15 @@ export default function ResourceProfileTab({
                                   setAllocationDraft(null)
                                 } else {
                                   setEditingAllocation(row.resourceTypeId)
-                                  // Initialise draft from effective state, not stale legacy row.allocationMode.
-                                  // For authoritative segmentless profiles, derive defaults from the profile.
-                                  const canEdit = !effective.isProfileManaged
-                                  const draftMode = effective.effectiveMode
-                                  const draftPct = effective.hasAuthoritativeProfile
-                                    ? (row.capacityProfile?.defaultPercent ?? row.allocationPercent ?? 100)
-                                    : (row.allocationPercent ?? 100)
+                                  // The editor keeps its legacy manual-window default, while display values stay authoritative.
+                                  const canEdit = !availability.effective.isProfileManaged
+                                  const draftMode = availability.mode
+                                  const draftPct = availability.percent
                                   const draftStart = canEdit && draftMode === 'TIMELINE'
-                                    ? (effective.hasAuthoritativeProfile ? row.capacityProfile?.startWeek : null) ?? row.allocationStartWeek ?? null
+                                    ? (availability.effective.hasAuthoritativeProfile ? row.capacityProfile?.startWeek : null) ?? row.allocationStartWeek ?? null
                                     : null
                                   const draftEnd = canEdit && draftMode === 'TIMELINE'
-                                    ? (effective.hasAuthoritativeProfile ? row.capacityProfile?.endWeek : null) ?? row.allocationEndWeek ?? null
+                                    ? (availability.effective.hasAuthoritativeProfile ? row.capacityProfile?.endWeek : null) ?? row.allocationEndWeek ?? null
                                     : null
                                   setAllocationDraft({
                                     allocationMode: draftMode,
@@ -262,11 +285,10 @@ export default function ResourceProfileTab({
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                       {(() => {
-                        const startWk = row.allocationStartWeek ?? row.derivedStartWeek
-                        const endWk = row.allocationEndWeek ?? row.derivedEndWeek
-                        const start = weekToDate(startWk); const end = weekToDate(endWk)
+                        if (availability.periodLabel) return availability.periodLabel
+                        const start = weekToDate(availability.startWeek); const end = weekToDate(availability.endWeek)
                         if (start && end) return `${fmtDate(start)} – ${fmtDate(end)}`
-                        if (startWk != null && endWk != null) return `Wk ${Math.floor(startWk)} – Wk ${Math.floor(endWk)}`
+                        if (availability.startWeek != null && availability.endWeek != null) return `Wk ${Math.floor(availability.startWeek)} – Wk ${Math.floor(availability.endWeek)}`
                         return '—'
                       })()}
                     </td>
@@ -438,7 +460,8 @@ export default function ResourceProfileTab({
                     </tr>
                   )}
                 </Fragment>
-              ))}
+                )
+              })}
 
               {profile.overheadRows.map(row => {
                 const fteExceedsCount = row.currentCount != null && row.requiredFTE > row.currentCount
