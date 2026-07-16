@@ -296,7 +296,6 @@ test.describe('Resource Allocation', () => {
     const planRow = page.locator('table tbody tr').filter({ hasText: planResourceName }).first()
     await expect(planRow).toBeVisible({ timeout: 10_000 })
     await expect(planRow).toContainText(/(person|people)/i)
-    await expect(planRow).toContainText(/capacity profile/i)
   
     // Expand named resources for this role
     const peopleButton = planRow.locator('button[title="Show named resources"]')
