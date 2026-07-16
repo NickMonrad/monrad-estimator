@@ -2052,6 +2052,14 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
       expect(nr.allocationPct).toBeGreaterThan(0)
     }
 
+    // ── Independently capture the expected NR identity before omission ──
+    const omittedRtNRsBefore = await prisma.namedResource.findMany({
+      where: { resourceTypeId: rtOmitted },
+      orderBy: { id: 'asc' },
+    })
+    expect(omittedRtNRsBefore.length).toBe(1) // headcount=1 → 1 trajectory → 1 NR
+    const expectedOmittedNRId = omittedRtNRsBefore[0].id
+
     // ── Second apply: plan covering only rtActive (rtOmitted is omitted) ──
     const second = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
@@ -2067,6 +2075,7 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     expect(firstPlanAfter?.isActive).toBe(false)
 
     // ── Assert omitted RT legacy compatibility fields zeroed ────────────
+    // ── Assert omitted RT legacy compatibility fields zeroed ────────────
     const rtAfter = await prisma.resourceType.findUnique({ where: { id: rtOmitted } })
     expect(rtAfter).toMatchObject({
       allocationMode: 'CAPACITY_PLAN',
@@ -2076,38 +2085,30 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
       allocationEndWeek: null,
     })
 
-    const nrListAfter = await prisma.namedResource.findMany({
+    // ── Assert exact NamedResource identity unchanged ─────────────────
+    // Uses the independently captured count and ID from before the second apply
+    const omittedRtNRsAfter = await prisma.namedResource.findMany({
       where: { resourceTypeId: rtOmitted },
-      select: {
-        id: true,
-        allocationMode: true,
-        allocationPercent: true,
-        allocationPct: true,
-        allocationStartWeek: true,
-        allocationEndWeek: true,
-        startWeek: true,
-        endWeek: true,
-      },
+      orderBy: { id: 'asc' },
     })
-    expect(nrListAfter.length).toBeGreaterThan(0)
-    for (const nr of nrListAfter) {
-      expect(nr).toMatchObject({
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: 0,
-        allocationPct: 0,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        startWeek: null,
-        endWeek: null,
-      })
-    }
- 
-    // ── Assert new plan is active ──────────────────────────────────────
+    expect(omittedRtNRsAfter.length).toBe(1) // unchanged from pre-capture
+    expect(omittedRtNRsAfter[0].id).toBe(expectedOmittedNRId)
+    // Compatibility fields zeroed
+    expect(omittedRtNRsAfter[0]).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 0,
+      allocationPct: 0,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+    // ── New active plan ──────────────────────────────────────────────
     const secondPlanId = await fetchActivePlanId(projectId)
     expect(secondPlanId).not.toBeNull()
     expect(secondPlanId).not.toBe(firstPlanId)
- 
-    // ── Direct DB: assert aggregate ROLE profile for omitted RT ────────
+
+    // ── Direct DB: assert aggregate ROLE profile for omitted RT ──────
     const rolesAfterOmission = await prisma.capacityProfile.findMany({
       where: { projectId, ownerKind: 'ROLE', resourceTypeId: rtOmitted },
       orderBy: { id: 'asc' },
@@ -2119,33 +2120,16 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     expect(omittedRoleProfile.planningBasis).toBe('CAPACITY_PROFILE')
     expect(omittedRoleProfile.defaultPercent).toBe(0)
     expect(omittedRoleProfile.startWeek).toBeNull()
-    expect(omittedRoleProfile.endWeek).toBeNull()
- 
-    // Exactly zero segments
-    const omittedRoleSegments = await prisma.capacitySegment.findMany({
-      where: { capacityProfileId: omittedRoleProfile.id },
-    })
-    expect(omittedRoleSegments.length).toBe(0)
- 
     // ── Direct DB: assert PLANNED_RESOURCE profiles for omitted NRs ────
-    const omittedRtNRs = await prisma.namedResource.findMany({
-      where: { resourceTypeId: rtOmitted },
-      orderBy: { id: 'asc' },
-    })
-    expect(omittedRtNRs.length).toBeGreaterThan(0)
- 
+    // Uses independently captured expectedOmittedNRId, not a post-state query
     const plannedForOmitted = await prisma.capacityProfile.findMany({
-      where: { projectId, ownerKind: 'PLANNED_RESOURCE', namedResourceId: { in: omittedRtNRs.map(nr => nr.id) } },
+      where: { projectId, ownerKind: 'PLANNED_RESOURCE', namedResourceId: expectedOmittedNRId },
       orderBy: { namedResourceId: 'asc' },
     })
-    expect(plannedForOmitted.length).toBe(omittedRtNRs.length)
-    const plannedNrIds = new Set(plannedForOmitted.map(p => p.namedResourceId))
-    for (const nr of omittedRtNRs) {
-      expect(plannedNrIds.has(nr.id)).toBe(true)
-    }
+    expect(plannedForOmitted.length).toBe(1)
     for (const p of plannedForOmitted) {
       expect(p.resourceTypeId).toBeNull()
-      expect(p.namedResourceId).not.toBeNull()
+      expect(p.namedResourceId).toBe(expectedOmittedNRId)
       expect(p.source).toBe('SQUAD_PLANNER')
       expect(p.planningBasis).toBe('CAPACITY_PROFILE')
       expect(p.defaultPercent).toBe(0)
@@ -2159,6 +2143,11 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
       })
       expect(otherOwner).toBeNull()
     }
+    // Total authority count: 1 ROLE + 1 PLANNED_RESOURCE
+    const totalOmittedProfiles = await prisma.capacityProfile.count({
+      where: { projectId, ownerKind: { in: ['ROLE', 'PLANNED_RESOURCE'] }, OR: [{ resourceTypeId: rtOmitted }, { namedResourceId: expectedOmittedNRId }] },
+    })
+    expect(totalOmittedProfiles).toBe(2)
  
     // ── Canonical endpoint: /capacity-profiles ─────────────────────────
     // Must return the exact persisted authority set with no fallback
@@ -2181,17 +2170,16 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     expect(cpRoleSegments.length).toBe(0)
  
     // Every expected PLANNED_RESOURCE owner returned exactly once
-    for (const nr of omittedRtNRs) {
-      const nrCPs = cpBody.capacityProfiles.filter(
-        (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'plannedResource' && (p.owner as Record<string, unknown>).id === nr.id,
-      )
-      expect(nrCPs.length).toBe(1)
-      expect(nrCPs[0].source).toBe('squadPlanner')
-      expect(nrCPs[0].planningBasis).toBe('capacityProfile')
-      expect(nrCPs[0].defaultPercent).toBe(0)
-      const nrCPSegments = (nrCPs[0].segments as Array<unknown>) ?? []
-      expect(nrCPSegments.length).toBe(0)
-    }
+    // Uses independently captured expectedOmittedNRId
+    const nrCPs = cpBody.capacityProfiles.filter(
+      (p: Record<string, unknown>) => (p.owner as Record<string, unknown>)?.kind === 'plannedResource' && (p.owner as Record<string, unknown>).id === expectedOmittedNRId,
+    )
+    expect(nrCPs.length).toBe(1)
+    expect(nrCPs[0].source).toBe('squadPlanner')
+    expect(nrCPs[0].planningBasis).toBe('capacityProfile')
+    expect(nrCPs[0].defaultPercent).toBe(0)
+    const nrCPSegments = (nrCPs[0].segments as Array<unknown>) ?? []
+    expect(nrCPSegments.length).toBe(0)
  
     // Only one role entry for omitted RT (no duplicate, no stale legacy fallback)
     const omittedRtRoles = cpBody.capacityProfiles.filter(
@@ -2215,13 +2203,31 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
  
     // Assert PROFILE resolution source for each named resource
     const namedResourcesOutput = (omittedRow as Record<string, unknown>).namedResources as Array<Record<string, unknown>> ?? []
-    expect(namedResourcesOutput.length).toBe(omittedRtNRs.length)
+    expect(namedResourcesOutput.length).toBe(1)
     for (const nrData of namedResourcesOutput) {
       const cp = nrData.capacityProfile as Record<string, unknown> | undefined
       expect(cp).toBeDefined()
       expect(cp!.resolutionSource).toBe('PROFILE')
       expect(cp!.defaultPercent).toBe(0)
     }
+
+    // ── Timeline: assert zero capacity for omitted NR ─────────────────
+    const tlRes = await request(app)
+      .get(`/api/projects/${projectId}/timeline`)
+      .set('Authorization', authHeader)
+    expect(tlRes.status).toBe(200)
+    const tlBody = tlRes.body as { namedResources: Array<Record<string, unknown>> }
+    const tlNR = tlBody.namedResources.find(
+      (nr: Record<string, unknown>) => nr.id === expectedOmittedNRId,
+    )
+    expect(tlNR).toBeDefined()
+    expect(tlNR!.actualAllocatedDays).toBe(0)
+    expect(tlNR!.allocationPercent).toBe(0)
+    expect(tlNR!.allocationPct).toBe(0)
+    expect(tlNR!.allocationStartWeek).toBeNull()
+    expect(tlNR!.allocationEndWeek).toBeNull()
+    expect(tlNR!.startWeek).toBeNull()
+    expect(tlNR!.endWeek).toBeNull()
   })
 })
 
@@ -2291,7 +2297,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     expect(mapperRole!.defaultPercent).toBe(100)
     expect(mapperRole!.startWeek).toBe(0)
     // endWeek matches the allocationEndWeek set on the ResourceType
-    expect(mapperRole!.endWeek).not.toBeNull()
+    expect(mapperRole!.endWeek).toBe(10)
 
     // No segments for CAPACITY_PLAN without active slots
     const mapperSegments = await prisma.capacitySegment.findMany({
@@ -2314,9 +2320,13 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     expect(typeof applyRes.body.id).toBe('string')
     expect(applyRes.body.isActive).toBe(true)
     expect(applyRes.body.name).toBe('CAPACITY_PLAN First Apply')
-    expect(Array.isArray(applyRes.body.periods)).toBe(true)
-    expect(applyRes.body.periods.length).toBeGreaterThanOrEqual(1)
-    expect(applyRes.body.periods[0].entries).toBeDefined()
+    expect(applyRes.body.periods).toHaveLength(1)
+    expect(applyRes.body.periods[0].periodIndex).toBe(0)
+    expect(applyRes.body.periods[0].startWeek).toBe(0)
+    expect(applyRes.body.periods[0].endWeek).toBe(8)
+    expect(applyRes.body.periods[0].entries).toHaveLength(1)
+    expect(applyRes.body.periods[0].entries[0].resourceTypeId).toBe(rtId)
+    expect(applyRes.body.periods[0].entries[0].headcount).toBe(1)
  
     // ── Assert mapper-produced ROLE profile reused and converted ──────
     const roleAfter = await prisma.capacityProfile.findUnique({
@@ -2337,6 +2347,8 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     })
     expect(rolesAfter.length).toBe(1)
     expect(rolesAfter[0].id).toBe(mapperRoleId)
+    expect(rolesAfter[0].startWeek).toBe(0)
+    expect(rolesAfter[0].endWeek).toBe(7)
  
     // ── Assert aggregate ROLE segments created ─────────────────────────
     const roleSegments = await prisma.capacitySegment.findMany({
@@ -2348,7 +2360,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     expect(roleSegments[0].startWeek).toBe(0)
     expect(roleSegments[0].capacityPercent).toBe(100)
     // endWeek derived from period endWeek=8 (exclusive in planner)
-    expect(roleSegments[0].endWeek).toBeGreaterThan(0)
+    expect(roleSegments[0].endWeek).toBe(7)
     expect(roleSegments[0].source).toBe('SQUAD_PLANNER')
  
     // ── Assert materialised NamedResources ──────────────────────────────
@@ -2377,7 +2389,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     expect(plannedProfile.defaultPercent).toBe(100)
     // startWeek/endWeek from segment boundaries
     expect(plannedProfile.startWeek).toBe(0)
-    expect(plannedProfile.endWeek).not.toBeNull()
+    expect(plannedProfile.endWeek).toBe(7)
  
     // Assert PLANNED_RESOURCE segments
     const plannedSegments = await prisma.capacitySegment.findMany({
@@ -2387,6 +2399,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     expect(plannedSegments.length).toBe(1)
     expect(plannedSegments[0].startWeek).toBe(0)
     expect(plannedSegments[0].capacityPercent).toBe(100)
+    expect(plannedSegments[0].endWeek).toBe(7)
     expect(plannedSegments[0].source).toBe('SQUAD_PLANNER')
  
     // No duplicate PLANNED_RESOURCE profile
@@ -2414,9 +2427,12 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     expect(roleCPs[0].source).toBe('squadPlanner')
     expect(roleCPs[0].planningBasis).toBe('capacityProfile')
     expect(roleCPs[0].defaultPercent).toBe(100)
+    expect(roleCPs[0].startWeek).toBe(0)
+    expect(roleCPs[0].endWeek).toBe(7)
     const cpRoleSegments = (roleCPs[0].segments as Array<Record<string, unknown>>) ?? []
     expect(cpRoleSegments.length).toBe(1)
     expect(cpRoleSegments[0].startWeek).toBe(0)
+    expect(cpRoleSegments[0].endWeek).toBe(7)
     expect(cpRoleSegments[0].capacityPercent).toBe(100)
  
     // PLANNED_RESOURCE: exactly one, correct owner
@@ -2425,12 +2441,15 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     )
     expect(plannedCPs.length).toBe(1)
     expect(plannedCPs[0].source).toBe('squadPlanner')
+    expect(plannedCPs[0].startWeek).toBe(0)
+    expect(plannedCPs[0].endWeek).toBe(7)
     expect(plannedCPs[0].planningBasis).toBe('capacityProfile')
     expect(plannedCPs[0].defaultPercent).toBe(100)
     const cpPlannedSegments = (plannedCPs[0].segments as Array<Record<string, unknown>>) ?? []
     expect(cpPlannedSegments.length).toBe(1)
     expect(cpPlannedSegments[0].startWeek).toBe(0)
     expect(cpPlannedSegments[0].capacityPercent).toBe(100)
+    expect(cpPlannedSegments[0].endWeek).toBe(7)
  
     // Total endpoint profiles count matches persisted authority set
     const persistedProfileCount = await prisma.capacityProfile.count({ where: { projectId } })
@@ -2457,6 +2476,14 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     const nrCp = nrOutputs[0].capacityProfile as Record<string, unknown> | undefined
     expect(nrCp).toBeDefined()
     expect(nrCp!.resolutionSource).toBe('PROFILE')
+    expect(nrCp!.defaultPercent).toBe(100)
+    expect(nrCp!.startWeek).toBe(0)
+    expect(nrCp!.endWeek).toBe(7)
+    const rpSegments = (nrCp!.segments as Array<Record<string, unknown>>) ?? []
+    expect(rpSegments.length).toBe(1)
+    expect(rpSegments[0].startWeek).toBe(0)
+    expect(rpSegments[0].endWeek).toBe(7)
+    expect(rpSegments[0].capacityPercent).toBe(100)
  
     // ── Assert snapshot history ───────────────────────────────────────
     const snapshots = await prisma.backlogSnapshot.findMany({
