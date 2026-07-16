@@ -2075,7 +2075,6 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     expect(firstPlanAfter?.isActive).toBe(false)
 
     // ── Assert omitted RT legacy compatibility fields zeroed ────────────
-    // ── Assert omitted RT legacy compatibility fields zeroed ────────────
     const rtAfter = await prisma.resourceType.findUnique({ where: { id: rtOmitted } })
     expect(rtAfter).toMatchObject({
       allocationMode: 'CAPACITY_PLAN',
@@ -2119,7 +2118,17 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     expect(omittedRoleProfile.source).toBe('SQUAD_PLANNER')
     expect(omittedRoleProfile.planningBasis).toBe('CAPACITY_PROFILE')
     expect(omittedRoleProfile.defaultPercent).toBe(0)
+    expect(omittedRoleProfile.ownerKind).toBe('ROLE')
+    expect(omittedRoleProfile.endWeek).toBeNull()
+
+    // Exactly zero segments on the ROLE profile
+    const omittedRoleSegments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: omittedRoleProfile.id },
+      orderBy: { startWeek: 'asc' },
+    })
+    expect(omittedRoleSegments).toHaveLength(0)
     expect(omittedRoleProfile.startWeek).toBeNull()
+
     // ── Direct DB: assert PLANNED_RESOURCE profiles for omitted NRs ────
     // Uses independently captured expectedOmittedNRId, not a post-state query
     const plannedForOmitted = await prisma.capacityProfile.findMany({
@@ -2201,15 +2210,30 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     expect(omittedRow).toBeDefined()
     expect((omittedRow as Record<string, unknown>).allocatedDays ?? 0).toBe(0)
  
-    // Assert PROFILE resolution source for each named resource
+    // Assert PROFILE resolution source tied to the independently captured expectedOmittedNRId
     const namedResourcesOutput = (omittedRow as Record<string, unknown>).namedResources as Array<Record<string, unknown>> ?? []
-    expect(namedResourcesOutput.length).toBe(1)
-    for (const nrData of namedResourcesOutput) {
-      const cp = nrData.capacityProfile as Record<string, unknown> | undefined
-      expect(cp).toBeDefined()
-      expect(cp!.resolutionSource).toBe('PROFILE')
-      expect(cp!.defaultPercent).toBe(0)
-    }
+    expect(namedResourcesOutput).toHaveLength(1)
+
+    const omittedNrOutput = namedResourcesOutput[0]
+    expect(omittedNrOutput.id).toBe(expectedOmittedNRId)
+    expect(omittedNrOutput.resourceIdentity).toBe('PLANNED_RESOURCE')
+
+    // NamedResource-level compatibility fields are zero/inactive
+    expect(omittedNrOutput.allocationPercent).toBe(0)
+    expect(omittedNrOutput.allocationPct).toBe(0)
+    expect(omittedNrOutput.allocationStartWeek).toBeNull()
+    expect(omittedNrOutput.allocationEndWeek).toBeNull()
+    expect(omittedNrOutput.startWeek).toBeNull()
+    expect(omittedNrOutput.endWeek).toBeNull()
+
+    const capacityProfile = omittedNrOutput.capacityProfile as Record<string, unknown> | undefined
+    expect(capacityProfile).toBeDefined()
+    expect(capacityProfile!.resolutionSource).toBe('PROFILE')
+    expect(capacityProfile!.defaultPercent).toBe(0)
+    expect(capacityProfile!.startWeek).toBeNull()
+    expect(capacityProfile!.endWeek).toBeNull()
+    const rpSegments = (capacityProfile!.segments as Array<unknown>) ?? []
+    expect(rpSegments).toHaveLength(0)
 
     // ── Timeline: assert zero capacity for omitted NR ─────────────────
     const tlRes = await request(app)
