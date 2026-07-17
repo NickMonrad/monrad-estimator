@@ -17,6 +17,7 @@ import {
   resolveCommand,
   startDockerPostgres,
   stopDockerPostgres,
+  waitForPostgres,
   withDatabaseName,
   withIsolatedTestDatabase,
   redactError,
@@ -1026,4 +1027,108 @@ test('withIsolatedTestDatabase external mode: cancellation before prepare reject
     /was cancelled/,
   )
   assert.equal(prepared, false, 'must not prepare after pre-abort')
+})
+
+// ── Readiness failure preservation and cancellation ────────────────────
+
+test('readiness query failure plus shutdown failure preserves both', async () => {
+  let endCalled = false
+  let queryResolve = null
+  const queryPromise = new Promise(resolve => { queryResolve = resolve })
+
+  const fakeClient = {
+    connect: async () => {},
+    query: async () => {
+      await queryPromise
+      throw new Error('query timeout')
+    },
+    end: async () => { endCalled = true; throw new Error('shutdown failed') },
+    _ending: false,
+  }
+
+  const stubClientFactory = () => fakeClient
+  const readied = waitForPostgres('postgresql://u:p@localhost/db', stubClientFactory, 3_000)
+
+  // Let query start then resolve it (failing).
+  await new Promise(resolve => setTimeout(resolve, 5))
+  queryResolve()
+
+  await assert.rejects(readied, /query timeout/)
+  const err = await readied.catch(e => e)
+  assert.ok(err.message.includes('query timeout'), `primary missing: "${err.message}"`)
+  assert.ok(err.message.includes('shutdown failed'), `secondary missing: "${err.message}"`)
+  assert.ok(err.message.includes('secondary'), `secondary marker missing: "${err.message}"`)
+  assert.ok(!err.message.includes('u:p'), 'credentials must be redacted')
+  assert.ok(endCalled, 'client.end() was called')
+})
+
+test('readiness connect failure plus shutdown failure preserves both', async () => {
+  let endCalled = false
+  const fakeClient = {
+    connect: async () => { throw new Error('connection refused') },
+    query: async () => { throw new Error('should not reach') },
+    end: async () => { endCalled = true; throw new Error('shutdown failed') },
+    _ending: false,
+  }
+
+  const stubClientFactory = () => fakeClient
+  const readied = waitForPostgres('postgresql://u:p@localhost/db', stubClientFactory, 3_000)
+
+  await assert.rejects(readied, /connection refused/)
+  const err = await readied.catch(e => e)
+  assert.ok(err.message.includes('connection refused'), `primary missing: "${err.message}"`)
+  assert.ok(err.message.includes('shutdown failed'), `secondary missing: "${err.message}"`)
+  assert.ok(endCalled, 'client.end() was called')
+})
+
+test('successful readiness query plus shutdown failure fails', async () => {
+  let endCalled = false
+  const fakeClient = {
+    connect: async () => {},
+    query: async () => {},
+    end: async () => { endCalled = true; throw new Error('shutdown failed') },
+    _ending: false,
+  }
+
+  const stubClientFactory = () => fakeClient
+  await assert.rejects(
+    waitForPostgres('postgresql://u:p@localhost/db', stubClientFactory, 3_000),
+    /shutdown failed/,
+  )
+  assert.ok(endCalled, 'client.end() was called')
+})
+
+test('cancellation during pending readiness query calls end and rejects', async () => {
+  const ctrl = new AbortController()
+  let endCalled = false
+  let queryReject = null
+  const queryPromise = new Promise((_, reject) => { queryReject = reject })
+
+  const fakeClient = {
+    connect: async () => {},
+    query: async () => {
+      await queryPromise
+      // If we reach here, shutdown already happened.
+      throw new Error('read_query: Connection terminated')
+    },
+    end: async () => { endCalled = true },
+    _ending: false,
+  }
+
+  const stubClientFactory = () => fakeClient
+  const readied = waitForPostgres('postgresql://u:p@localhost/db', stubClientFactory, 60_000, ctrl.signal)
+
+  // Let query start.
+  await new Promise(resolve => setTimeout(resolve, 5))
+
+  // Abort while query is pending.
+  ctrl.abort()
+
+  // Assert client.end() was initiated by abort handler BEFORE settling the query.
+  assert.ok(endCalled, 'client.end() must be called by abort handler before query settles')
+
+  // Reject the query as the shut-down client would.
+  queryReject(new Error('Connection terminated'))
+
+  await assert.rejects(readied, /cancelled|terminated/)
 })

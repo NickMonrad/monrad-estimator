@@ -498,11 +498,13 @@ describe('real ensureDatabase with fake client', () => {
     // Abort while query is in-flight.
     ctrl.abort()
 
-    // Settle the fake query (rowCount 0 so aborted check fires).
+    // Assert abort handler initiated client shutdown BEFORE settling query.
+    assert.ok(endCalled, 'client.end() must be called by abort handler before query settles')
+
+    // Settle the fake query (rowCount 0 so aborted check fires after it returns).
     queryPromiseResolve({ rowCount: 0 })
 
     await assert.rejects(dbPromise, /cancelled|aborted/)
-    assert.ok(endCalled, 'client.end() must be called after abort')
   })
 
   it('client shutdown bounded and timed out', async () => {

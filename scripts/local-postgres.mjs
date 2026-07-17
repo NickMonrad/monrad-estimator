@@ -457,13 +457,14 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
     throw preserved
   }
 }
-async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, signal) {
+export async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, signal) {
   const deadline = Date.now() + timeoutMs
   let lastError
   let abortHandler = null
   while (Date.now() < deadline) {
     if (signal?.aborted) throw redactError(lastError ?? new Error('Cancelled waiting for PostgreSQL readiness'))
     let client
+    let done = false
     try {
       // Calculate remaining time once; never pass zero as a timeout.
       const remaining = remainingTime(deadline)
@@ -479,7 +480,7 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
 
       await client.connect()
       await client.query('SELECT 1')
-      return
+      done = true
     } catch (error) {
       lastError = error
       // Abortable retry delay.
@@ -498,11 +499,27 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
       if (abortHandler && signal) signal.removeEventListener('abort', abortHandler)
       abortHandler = null
       if (client) {
-        const end = await boundedClientEnd(client, 5_000)
-        if (!end.ok) {
-          lastError = end.error ?? new Error('client.end() failed during readiness')
+        let endResult
+        try {
+          endResult = await boundedClientEnd(client, 5_000)
+        } catch (endError) {
+          endResult = { ok: false, error: endError instanceof Error ? endError : new Error(String(endError)) }
+        }
+        if (!endResult.ok) {
+          const shutdownMsg = `Client shutdown failed: ${endResult.error?.message || endResult.error}`
+          if (lastError) {
+            const primaryMsg = lastError instanceof Error ? lastError.message : String(lastError)
+            lastError = new Error(`${primaryMsg} [secondary: ${shutdownMsg}]`)
+          } else {
+            lastError = new Error(shutdownMsg)
+          }
         }
       }
+    }
+    // Check result AFTER finally so shutdown failures after success are visible.
+    if (done) {
+      if (lastError) throw lastError
+      return
     }
   }
   throw redactError(lastError, 'Timed out waiting for Docker PostgreSQL')
