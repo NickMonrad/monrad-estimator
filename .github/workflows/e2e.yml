@@ -6,32 +6,13 @@ on:
 
 jobs:
   e2e:
-    name: Playwright E2E
+    name: Docker-first E2E lifecycle
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: monrad_estimator
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/monrad_estimator
       JWT_SECRET: ci-test-secret-for-github-actions-32chars
       NODE_ENV: test
-      PORT: 3001
-      CLIENT_URL: http://localhost:5173
-      TEST_EMAIL: test@example.com
-      TEST_PASSWORD: password123
+
 
     steps:
       - uses: actions/checkout@v7
@@ -109,83 +90,24 @@ jobs:
         working-directory: client
         run: npm test
 
-      # ── Server ──────────────────────────────────────────────────
-      - name: Run database migrations
-        working-directory: server
-        run: npx prisma migrate deploy
-
-      - name: Generate Prisma client
-        working-directory: server
-        run: npx prisma generate
-
-      # ── Snapshot rollback integration tests (real PostgreSQL) ──
-      - name: Snapshot rollback integration tests
-        working-directory: server
-        run: npm run test:snapshot-integration
-
-
-      # ── Clone integration tests (real PostgreSQL) ─────────────
-      - name: Clone integration tests
-        working-directory: server
-        run: npm run test:clone-integration
-      # ── Squad Plan profile-first integration tests (real PostgreSQL) ──
-      - name: Squad Plan profile-first integration tests
-        working-directory: server
-        run: npm run test:squadplan-integration
-        env:
-          INTEGRATION_TEST: 'true'
-      - name: Seed database (creates E2E test user)
-        working-directory: server
-        run: npx tsx prisma/seed.ts
-
-      - name: Verify seed user exists
-        run: |
-          PGPASSWORD=postgres psql -U postgres -h localhost -d monrad_estimator \
-            -c 'SELECT email, length(password) as pwd_len FROM "User" WHERE email = $$test@example.com$$;'
-
+      # ── Build (independent validation) ──────────────────────────
       - name: Build server
         working-directory: server
         run: npm run build
 
-      - name: Start API server
-        working-directory: server
-        run: node dist/index.js &
-
-      # ── Client ──────────────────────────────────────────────────
       - name: Build client
         working-directory: client
         run: npm run build
         env:
           VITE_API_URL: http://localhost:3001
 
-      - name: Serve client build
-        working-directory: client
-        run: npx vite preview --port 5173 --host &
-
-      # ── Wait for servers ─────────────────────────────────────────
-      - name: Wait for API and client to be ready
-        run: npx --yes wait-on http://localhost:3001/health http://localhost:5173 --timeout 30000
-
-      - name: Smoke test API login
-        run: |
-          echo "Health check:"
-          curl -s http://localhost:3001/health
-          echo ""
-          echo "Login response:"
-          curl -s -w "\nHTTP %{http_code}" -X POST http://localhost:3001/api/auth/login \
-            -H "Content-Type: application/json" \
-            -d '{"email":"test@example.com","password":"password123"}'
-
-      # ── Playwright ───────────────────────────────────────────────
-      - name: Install Chromium
+      # ── Docker-first E2E lifecycle ────────────────────────────────
+      - name: Install Playwright Chromium
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright tests
-        working-directory: e2e
-        run: npx playwright test --grep-invert @screenshots
-        env:
-          BASE_URL: http://localhost:5173
+      - name: Run Docker-first E2E lifecycle
+        run: npm run test:e2e:local
 
       # ── Artifacts ────────────────────────────────────────────────
       - name: Upload Playwright report
@@ -195,6 +117,19 @@ jobs:
           name: playwright-report-${{ github.sha }}
           path: e2e/playwright-report/
           retention-days: 14
+
+      # ── Cleanup diagnostics ─────────────────────────────────────────
+      - name: Check for leftover Docker containers
+        if: always()
+        run: |
+          containers=$(docker ps -a --filter name=monrad_pg_ --format '{{.ID}} {{.Names}} {{.CreatedAt}}' 2>/dev/null || true)
+          if [ -n "$containers" ]; then
+            echo "::warning::Found monrad_pg_ containers that may be leftover from this run:"
+            echo "$containers"
+            exit 1
+          else
+            echo "No monrad_pg_ containers remain — cleanup successful"
+          fi
   lifecycle:
     name: Lifecycle ${{ matrix.os }}
     strategy:

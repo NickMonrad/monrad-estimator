@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   createTestDatabaseName,
   ensureDatabase,
+  isDockerDaemonUnavailable,
   loadLocalEnvironment,
   maintenanceDatabaseUrl,
   normalizeDatabaseIdentity,
@@ -222,6 +223,98 @@ test('constructs Docker commands with a dynamic port and removes the container',
   assert.equal(calls[0].args[12], 'postgres:15')
   await stopDockerPostgres(container, { run })
   assert.deepEqual(calls.at(-1).args, ['rm', '--force', container.name])
+})
+
+// ── Docker error classification ──────────────────────────────────────────
+
+test('isDockerDaemonUnavailable detects daemon connectivity failure on Unix', () => {
+  const err = new Error('Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?')
+  assert.ok(isDockerDaemonUnavailable(err))
+})
+
+test('isDockerDaemonUnavailable detects daemon connectivity failure on Windows named pipe', () => {
+  const err = new Error('error during connect: this error may indicate that the docker daemon is not running.: docker named pipe not found')
+  assert.ok(isDockerDaemonUnavailable(err))
+})
+
+test('isDockerDaemonUnavailable detects docker executable not found', () => {
+  const err = new Error('docker: command not found')
+  assert.ok(isDockerDaemonUnavailable(err))
+})
+
+test('isDockerDaemonUnavailable does NOT classify generic exit code 1 as daemon unavailable', () => {
+  assert.equal(isDockerDaemonUnavailable(new Error('docker failed with exit code 1')), false)
+  assert.equal(isDockerDaemonUnavailable(new Error('Command failed with exit code 1')), false)
+  assert.equal(isDockerDaemonUnavailable(new Error('exit code 1')), false)
+})
+
+test('isDockerDaemonUnavailable does NOT classify image pull failures as daemon unavailable', () => {
+  const err = new Error('docker failed with exit code 1: Unable to find image "postgres:15" locally, pull access denied')
+  assert.equal(isDockerDaemonUnavailable(err), false)
+})
+
+test('isDockerDaemonUnavailable does NOT classify permission failures as daemon unavailable', () => {
+  const err = new Error('docker failed with exit code 1: permission denied while trying to connect')
+  assert.equal(isDockerDaemonUnavailable(err), false)
+})
+
+test('isDockerDaemonUnavailable does NOT classify container name conflicts as daemon unavailable', () => {
+  const err = new Error('docker failed with exit code 1: Conflict. The container name "/monrad_pg_test" is already in use')
+  assert.equal(isDockerDaemonUnavailable(err), false)
+})
+
+test('isDockerDaemonUnavailable returns false for null/undefined', () => {
+  assert.equal(isDockerDaemonUnavailable(null), false)
+  assert.equal(isDockerDaemonUnavailable(undefined), false)
+})
+
+test('startDockerPostgres preserves original diagnostic for non-daemon failures', async () => {
+  const run = async () => { throw new Error('Unable to find image "postgres:15" locally: pull access denied') }
+  await assert.rejects(
+    startDockerPostgres({ run, random: 'test-pull-fail' }),
+    /pull access denied/,
+  )
+})
+
+test('startDockerPostgres surfs Docker port conflict error without misclassifying', async () => {
+  const run = async (cmd, args, opts) => {
+    if (args[0] === 'run') throw new Error('Conflict. The container name "/monrad_pg_conflict" is already in use by container')
+    return ''
+  }
+  await assert.rejects(
+    startDockerPostgres({ run, random: 'test-conflict' }),
+    /container name.*already in use|Conflict/,
+  )
+})
+
+test('startDockerPostgres tries cleanup when port discovery fails', async () => {
+  let cleanedUp = false
+  const run = async (cmd, args, opts) => {
+    if (args[0] === 'run') { return 'abc\n' }
+    if (args[0] === 'port') { throw new Error('port not assigned') }
+    if (args[0] === 'rm') { cleanedUp = true; return '' }
+    return ''
+  }
+  await assert.rejects(
+    startDockerPostgres({ run, random: 'test-cleanup-port', waitForPort: async () => {} }),
+    /port not assigned/,
+  )
+  assert.equal(cleanedUp, true, 'cleanup must be attempted when port discovery fails')
+})
+
+test('startDockerPostgres retains primary Docker failure alongside cleanup failure', async () => {
+  let cleanupCalled = false
+  const run = async (cmd, args, opts) => {
+    if (args[0] === 'run') { return 'abc\n' }
+    if (args[0] === 'port') { throw new Error('port mapping failed') }
+    if (args[0] === 'rm') { cleanupCalled = true; throw new Error('docker rm failed') }
+    return ''
+  }
+  await assert.rejects(
+    startDockerPostgres({ run, random: 'test-dual-fail', waitForPort: async () => {} }),
+    /port mapping failed.*docker rm failed/,
+  )
+  assert.equal(cleanupCalled, true, 'cleanup must be attempted even when primary error will occur')
 })
 
 test('uses Docker-first mode by default and cleans up container after success', async () => {

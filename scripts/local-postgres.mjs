@@ -6,6 +6,46 @@ import { terminateProcess, windowsTerminateProcess } from './terminate-process.m
 
 const POSTGRES_PROTOCOLS = new Set(['postgres:', 'postgresql:'])
 const IDENTIFIER_LIMIT = 63
+const dockerCommand = runCommand
+const DIAGNOSTIC_CAP = 500
+
+/**
+ * Redact credential-like values from a diagnostic text string.
+ * Does not create an Error — use on captured command output before surfacing.
+ */
+function redactDiagnosticOutput(text) {
+  return text
+    .replace(/(postgres(?:ql)?:\/\/[^\s@/:]+:)[^@\s]+@/gi, '$1***@')
+    .replace(/([?&])password=([^&\s]*)/gi, '$1password=***')
+    .replace(/(randomBytes|base64url)[\s\S]{0,100}/gi, (m) => m.length > 48 ? m.slice(0, 24) + '***' : m)
+    .slice(0, DIAGNOSTIC_CAP)
+}
+
+/**
+ * Determine whether a Docker error specifically indicates daemon or socket
+ * connectivity failure, as opposed to other Docker exit-code-1 failures.
+ */
+export function isDockerDaemonUnavailable(error) {
+  if (!error) return false
+  const msg = (typeof error === 'string' ? error : (error.message ?? String(error))).toLowerCase()
+  // Specific daemon/socket connectivity patterns
+  const patterns = [
+    /cannot connect.*docker daemon/i,
+    /is the docker daemon running/i,
+    /docker daemon (is not running|not running|not available)/i,
+    /cannot connect to docker/i,
+    /named pipe.*not found/i,
+    /docker socket/i,
+    /unix.*docker.*socket/i,
+    /connection refused.*docker/i,
+    /docker executable not found/i,
+    /docker.*not found/i,
+    /\.docker\.sock/i,
+    /daemon is not running/i,
+    /daemon not running/i,
+  ]
+  return patterns.some(p => p.test(msg))
+}
 
 export function readEnvFile(filename) {
   if (!fs.existsSync(filename)) return {}
@@ -171,7 +211,12 @@ export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, 
     child.once('exit', code => {
       signal?.removeEventListener('abort', onAbort)
       if (abortRequested) return
-      code === 0 ? resolveOnce(output) : rejectOnce(new Error(`${command} failed with exit code ${code}`))
+      if (code === 0) { resolveOnce(output); return }
+      // Include bounded diagnostic output when available (non-inherit mode).
+      // This lets callers distinguish failure types without seeing secrets.
+      const diag = output ? redactDiagnosticOutput(output) : ''
+      const hint = diag ? `: ${diag}` : ''
+      rejectOnce(new Error(`${command} failed with exit code ${code}${hint}`))
     })
   })
 }
@@ -219,13 +264,18 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
   const password = crypto.randomBytes(24).toString('base64url')
   const dockerEnv = { ...environment, POSTGRES_PASSWORD: password, POSTGRES_USER: 'postgres', POSTGRES_DB: 'postgres' }
   try {
-    await run('docker', ['run', '--detach', '--name', name, '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER', '--env', 'POSTGRES_DB', '--publish', '127.0.0.1::5432', 'postgres:15'], { env: dockerEnv, signal })
+    await run('docker', ['run', '--detach', '--name', name, '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER', '--env', 'POSTGRES_DB', '--publish', '127.0.0.1::5432', 'postgres:15'], { env: dockerEnv, signal, inherit: false })
   } catch (err) {
-    const msg = err?.message ?? String(err)
-    if (msg.includes('Cannot connect') || msg.includes('no such file') || msg.includes('socket') || msg.includes('daemon') || msg.includes('exit code 1')) {
+    // Classify only daemon/socket connectivity failures as "daemon unavailable".
+    // Other Docker failures (pull, permissions, arguments, port conflict, etc.)
+    // preserve their original diagnostic.
+    const dockerErr = err instanceof Error ? err : new Error(String(err))
+    if (isDockerDaemonUnavailable(dockerErr)) {
       throw new Error('Docker daemon is unavailable. Docker is the default prerequisite for disposable test databases. Use MONRAD_TEST_DATABASE_URL with MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 for an externally managed database, or start the Docker daemon.')
     }
-    throw err
+    // Preserve the original diagnostic for non-daemon failures, redacting
+    // any credential-like patterns.
+    throw redactError(dockerErr, 'Docker startup failed')
   }
   if (signal?.aborted) {
     let cleanupFailure = null
@@ -265,7 +315,7 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
 }
 
 export async function stopDockerPostgres(container, { run = dockerCommand, environment = process.env, signal } = {}) {
-  if (container?.name) await run('docker', ['rm', '--force', container.name], { env: { ...environment, ...container.dockerEnv }, signal })
+  if (container?.name) await run('docker', ['rm', '--force', container.name], { env: { ...environment, ...container.dockerEnv }, signal, inherit: false })
 }
 
 async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, signal) {
