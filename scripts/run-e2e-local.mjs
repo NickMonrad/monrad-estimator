@@ -201,15 +201,12 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
       child.on('error', err => {
         if (expectedShutdown) return
         const msg = `${label} could not start: ${err.message}`
-        console.error(`[e2e-local] ${msg}`)
         failures.addPrimary(new Error(msg))
         reject(failures.primary)
       })
       child.on('exit', code => {
         if (expectedShutdown) return
-        const msg = `${label} exited unexpectedly with code ${code}`
-        console.error(`[e2e-local] ${msg}`)
-        failures.addPrimary(new Error(msg))
+        failures.addPrimary(new Error(`${label} exited unexpectedly with code ${code}`))
         reject(failures.primary)
       })
     })

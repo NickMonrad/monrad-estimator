@@ -69,8 +69,9 @@ function flattenAggregated(aggregated) {
 
 export function createFailureCollector() {
   let primary = null          // Error | null
+  let primaryKey = null       // dedupKey without type — for primary equivalence check
   const secondary = []        // { type: string, error: Error }
-  const seen = new Set()      // dedup key set
+  const seen = new Set()      // dedup key set for secondaries
 
   function addUnique(key, item) {
     if (seen.has(key)) return
@@ -85,16 +86,21 @@ export function createFailureCollector() {
     /**
      * Add an error as the primary failure. If primary is already set,
      * the new error becomes a secondary of type 'primary' (unless it
-     * structurally duplicates the existing primary).
+     * structurally duplicates the existing primary, in which case it
+     * is silently skipped).
      */
     addPrimary(err) {
       if (!err) return
       const error = err instanceof Error ? err : new Error(String(err))
+      const key = dedupKey(error) // without type
       if (!primary) {
         primary = error
+        primaryKey = key
         return
       }
-      // Later primary becomes a typed secondary.
+      // Same as existing primary — skip silently.
+      if (key === primaryKey) return
+      // Later distinct primary becomes a typed secondary.
       addUnique(dedupKey(error, 'primary'), { type: 'primary', error })
     },
 
@@ -129,12 +135,15 @@ export function createFailureCollector() {
         }
       } else {
         const errObj = error instanceof Error ? error : new Error(String(error))
+        const key = dedupKey(errObj) // without type
         if (!primary) {
           primary = errObj
-        } else {
+          primaryKey = key
+        } else if (key !== primaryKey) {
           const type = primaryType ?? 'primary'
           addUnique(dedupKey(errObj, type), { type, error: errObj })
         }
+        // key === primaryKey → silently skip (same as existing primary)
       }
     },
 

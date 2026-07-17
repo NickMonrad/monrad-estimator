@@ -255,6 +255,55 @@ export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, 
   })
 }
 
+/**
+ * Compute the remaining time from a deadline, capped by an optional maximum.
+ * Returns 0 when the deadline has passed. Never returns a negative value.
+ * When no deadline is provided, returns the maximum (or a large default).
+ */
+function remainingTime(deadline, maximum = Infinity) {
+  if (deadline == null) return Number.isFinite(maximum) ? maximum : 300_000
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) return 0
+  return Number.isFinite(maximum) ? Math.min(remaining, maximum) : remaining
+}
+
+/**
+ * Shut down a PostgreSQL client with a bounded timeout.
+ * The timer is cleared when end() completes; caller must not leave timers
+ * keeping the event loop alive.
+ * Returns { ok: true } or { ok: false, error }.
+ */
+async function boundedClientEnd(client, timeoutMs = 5_000) {
+  let timer = null
+  try {
+    const result = await Promise.race([
+      client.end().then(() => ({ ok: true })),
+      new Promise(resolve => {
+        timer = setTimeout(() => resolve({ ok: false, error: new Error('client.end() timed out') }), timeoutMs)
+      }),
+    ])
+    return result
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Destroy a PostgreSQL client connection to interrupt in-flight operations.
+ * This is more aggressive than end() — it forces the socket closed so that
+ * pending connect() or query() calls settle promptly.
+ */
+function destroyClient(client) {
+  // pg Client has a .end() method and an internal socket/connection.
+  if (client._ending) return
+  try {
+    client._destroyed = true
+    if (typeof client.end === 'function') {
+      client.end({ timeout: 1_000 }).catch(() => {})
+    }
+  } catch { /* best-effort */ }
+}
+
 async function runQuery(client, sql, values) {
   await client.query(sql, values)
 }
@@ -263,17 +312,38 @@ async function defaultClientFactory(connectionString, extraOptions = {}) {
   return new Client({ connectionString, ...extraOptions })
 }
 
-export async function ensureDatabase({ databaseUrl, clientFactory = defaultClientFactory, signal, queryTimeout = 30_000 } = {}) {
+/**
+ * Ensure the configured development database exists.
+ *
+ * @param {object} options
+ * @param {string} options.databaseUrl  — persistent DATABASE_URL
+ * @param {Function} [options.clientFactory]
+ * @param {AbortSignal} [options.signal]
+ * @param {number} [options.deadline]   — absolute deadline (Date.now() + ms) from parent
+ * @param {number} [options.maxConnectionTimeoutMs=10_000]
+ * @returns {Promise<{created:boolean, database:string}>}
+ */
+export async function ensureDatabase({ databaseUrl, clientFactory = defaultClientFactory, signal, deadline, maxConnectionTimeoutMs = 10_000 } = {}) {
   const { database } = parseDatabaseUrl(databaseUrl)
   const maintenanceUrl = maintenanceDatabaseUrl(databaseUrl)
   if (signal?.aborted) throw new Error('Database setup was cancelled before connecting')
-  const client = await clientFactory(maintenanceUrl, { connectionTimeoutMillis: 10_000, query_timeout: queryTimeout })
+
+  // Derive timeouts from the parent deadline so the overall command is authoritative.
+  const connectTimeout = remainingTime(deadline, maxConnectionTimeoutMs)
+  const queryTimeout = remainingTime(deadline, 30_000)
+  if (connectTimeout <= 0) throw new Error('Database setup timed out before connecting')
+
+  const client = await clientFactory(maintenanceUrl, { connectionTimeoutMillis: connectTimeout, query_timeout: queryTimeout })
   let aborted = false
-  const onAbort = () => { aborted = true }
+  const onAbort = () => {
+    aborted = true
+    // Actively destroy the client connection so in-flight connect()/query() settle.
+    destroyClient(client)
+  }
   signal?.addEventListener('abort', onAbort, { once: true })
   try {
     await client.connect()
-    if (signal?.aborted) throw new Error('Database setup was cancelled after connecting')
+    if (aborted) throw new Error('Database setup was cancelled after connecting')
     const result = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [database])
     if (result.rowCount === 0) {
       if (aborted) throw new Error('Database setup was cancelled before CREATE DATABASE')
@@ -281,20 +351,10 @@ export async function ensureDatabase({ databaseUrl, clientFactory = defaultClien
     }
     return { created: result.rowCount === 0, database }
   } catch (error) {
-    if (aborted) {
-      // Actively close when abort fired — don't let a stale query hang.
-      try {
-        client.end({ timeout: 5_000 })
-      } catch { /* best-effort */ }
-    }
     throw redactError(error, 'Could not connect to PostgreSQL maintenance database or create the configured development database')
   } finally {
     signal?.removeEventListener('abort', onAbort)
-    // Bound client shutdown — don't let a stalled end() hang the process.
-    await Promise.race([
-      client.end().catch(() => {}),
-      new Promise(r => setTimeout(r, 5_000)),
-    ])
+    await boundedClientEnd(client, 5_000)
   }
 }
 

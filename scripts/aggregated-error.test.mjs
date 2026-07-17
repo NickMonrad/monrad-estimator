@@ -163,3 +163,103 @@ describe('createFailureCollector / addError', () => {
     assert.equal(c.toError(), null)
   })
 })
+
+describe('primary deduplication (F5)', () => {
+  it('primary merged back from identical aggregate is not duplicated', () => {
+    const c = createFailureCollector()
+    c.addPrimary(new Error('API crash'))
+
+    // Simulate: withIsolatedTestDatabase wraps aggregate and we merge back.
+    const inner = createFailureCollector()
+    inner.addError(new Error('API crash'))
+    const agg = inner.toError()
+
+    c.addError(agg)
+
+    assert.equal(c.primary?.message, 'API crash')
+    const primaries = c.secondary.filter(s => s.type === 'primary')
+    assert.equal(primaries.length, 0, 'no duplicate primary as secondary')
+  })
+
+  it('same primary object is not duplicated', () => {
+    const err = new Error('unique failure')
+    const c = createFailureCollector()
+    c.addPrimary(err)
+    c.addPrimary(err)  // same reference
+    const a = c.toError()
+    assert.equal(a.primary, err)
+    assert.equal(a.secondaryErrors.length, 0)
+  })
+
+  it('equivalent primary wrapped in another aggregate is not duplicated', () => {
+    const c = createFailureCollector()
+    c.addPrimary(new Error('exit code 1'))
+
+    // Simulate nested aggregate from withIsolatedTestDatabase.
+    const inner = createFailureCollector()
+    inner.addPrimary(new Error('exit code 1'))
+    inner.addSecondary('docker cleanup', new Error('rm failed'))
+    const agg = inner.toError()
+
+    c.addError(agg)
+
+    // Primary unchanged, docker cleanup survives, no duplicate primary.
+    assert.equal(c.primary?.message, 'exit code 1')
+    const docker = c.secondary.filter(s => s.type === 'docker cleanup')
+    assert.equal(docker.length, 1)
+    const dupPrimary = c.secondary.filter(s => s.type === 'primary')
+    assert.equal(dupPrimary.length, 0)
+  })
+
+  it('genuinely different later primary is retained as typed secondary', () => {
+    const c = createFailureCollector()
+    c.addPrimary(new Error('first failure'))
+    c.addPrimary(new Error('different failure'))
+    const a = c.toError()
+    assert.equal(a.primary?.message, 'first failure')
+    const later = a.secondaryErrors.filter(s => s.type === 'primary')
+    assert.equal(later.length, 1)
+    assert.ok(later[0].error?.message?.includes('different'))
+  })
+
+  it('nested aggregates three levels deep remain deterministic', () => {
+    const l3 = createFailureCollector()
+    l3.addPrimary(new Error('l3'))
+    l3.addSecondary('l3s', new Error('l3-sec'))
+    const l3a = l3.toError()
+
+    const l2 = createFailureCollector()
+    l2.addPrimary(new Error('l2'))
+    l2.addError(l3a)
+    const l2a = l2.toError()
+
+    const l1 = createFailureCollector()
+    l1.addError(l2a)
+    l1.addSecondary('cleanup', new Error('final'))
+
+    const a = l1.toError()
+    assert.equal(a.primary?.message, 'l2')
+    // l3's primary becomes 'primary' secondary, l3s and cleanup are secondaries.
+    const primarySecs = a.secondaryErrors.filter(s => s.type === 'primary')
+    assert.equal(primarySecs.length, 1)
+    assert.ok(primarySecs[0].error?.message?.includes('l3'))
+    const l3secs = a.secondaryErrors.filter(s => s.type === 'l3s')
+    assert.equal(l3secs.length, 1)
+    const cleanupSecs = a.secondaryErrors.filter(s => s.type === 'cleanup')
+    assert.equal(cleanupSecs.length, 1)
+  })
+
+  it('final message contains each unique diagnostic once', () => {
+    const c = createFailureCollector()
+    c.addPrimary(new Error('api exit 1'))
+    c.addSecondary('docker cleanup', new Error('rm failed'))
+    c.addSecondary('process termination', new Error('kill failed'))
+    const a = c.toError()
+    assert.ok(a.message.includes('api exit 1'))
+    assert.ok(a.message.includes('[docker cleanup]'))
+    assert.ok(a.message.includes('[process termination]'))
+    // The same entries should appear only once.
+    const matches = (a.message.match(/\[docker cleanup\]/g) || []).length
+    assert.equal(matches, 1)
+  })
+})
