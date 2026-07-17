@@ -66,7 +66,7 @@ export function isDockerDaemonUnavailable(error) {
     /docker socket/i,
     /unix.*docker.*socket/i,
     /connection refused.*docker/i,
-    /docker executable not found/i,
+
     /docker could not start.*enoent/i,
     /\.docker\.sock/i,
     /daemon is not running/i,

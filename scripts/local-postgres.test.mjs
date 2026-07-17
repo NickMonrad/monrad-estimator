@@ -275,6 +275,21 @@ test('isDockerDaemonUnavailable returns false for null/undefined', () => {
   assert.equal(isDockerDaemonUnavailable(undefined), false)
 })
 
+test('isDockerDaemonUnavailable does NOT classify manifest not found as daemon unavailable', () => {
+  const err = new Error('docker failed with exit code 1: manifest for example/image:tag not found: manifest unknown')
+  assert.equal(isDockerDaemonUnavailable(err), false)
+})
+
+test('isDockerDaemonUnavailable does NOT classify "No such container" as daemon unavailable', () => {
+  const err = new Error('Error: No such container: monrad_pg_test')
+  assert.equal(isDockerDaemonUnavailable(err), false)
+})
+
+test('isDockerDaemonUnavailable does NOT classify network not found as daemon unavailable', () => {
+  const err = new Error('docker failed with exit code 1: network mynetwork not found')
+  assert.equal(isDockerDaemonUnavailable(err), false)
+})
+
 test('startDockerPostgres preserves original diagnostic for non-daemon failures', async () => {
   const run = async () => { throw new Error('Unable to find image "postgres:15" locally: pull access denied') }
   await assert.rejects(

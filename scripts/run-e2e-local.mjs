@@ -33,7 +33,6 @@ const clientDir = fileURLToPath(new URL('../client/', import.meta.url))
 const e2eDir = fileURLToPath(new URL('../e2e/', import.meta.url))
 export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOverride, withIsolatedTestDatabase: withIsolatedTestDatabaseOverride, loadLocalEnvironment: loadEnvOverride, waitForMonradApi: waitForMonradApiOverride, waitForClient: waitForClientOverride, waitForProxy: waitForProxyOverride, guardFactory = shutdownGuard, terminateChild } = {}) {
   const children = []
-  const guard = guardFactory()
   const internalAbort = new AbortController()
   const failures = createFailureCollector()
 
@@ -50,36 +49,36 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
     return ctrl.signal
   }
 
-  const combinedSignal = AbortSignal.any
-    ? AbortSignal.any([guard.abortSignal, internalAbort.signal])
-    : makeCombinedSignal(guard.abortSignal, internalAbort.signal)
   const resolvedEnv = loadEnvOverride ? loadEnvOverride(root) : loadLocalEnvironment(root)
   const host = resolvedEnv.E2E_HOST ?? '127.0.0.1'
 
-  // Wrap the entire body after guard creation so guard.dispose() runs on every path.
+  // ── Preflight checks ─────────────────────────────────────────────────────
+  const jwtSecret = resolvedEnv.JWT_SECRET ?? ''
+  if (!jwtSecret || jwtSecret === 'change-me-in-production' || jwtSecret.length < 32) {
+    console.error('[e2e-local] ERROR: JWT_SECRET is missing, too short, or still set to "change-me-in-production".')
+    console.error('[e2e-local] The example env uses "local-dev-jwt-secret-at-least-32-chars!!" — copy it:')
+    console.error('[e2e-local]   cp server/.env.example server/.env')
+    console.error('[e2e-local] Or set a custom value of 32+ characters.')
+    return { exitCode: 1, primaryChildFailure: null, aggregatedError: null, cleanupErrors: [] }
+  }
+
+  // ── Port discovery ───────────────────────────────────────────────────────
+  const preferredApiPort = Number(resolvedEnv.E2E_API_PORT ?? resolvedEnv.PORT ?? 3001)
+  const preferredClientPort = Number(resolvedEnv.E2E_CLIENT_PORT ?? 5173)
+  const apiPort = await findAvailablePort(preferredApiPort)
+  const clientPort = await findAvailablePort(preferredClientPort, new Set([apiPort]))
+  const apiUrl = `http://${host}:${apiPort}`
+  const baseUrl = `http://${host}:${clientPort}`
+
+  console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (preferred :${preferredApiPort} was unavailable)`}`)
+  console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
+
+  // ── Guard after preflight ────────────────────────────────────────────────
+  const guard = guardFactory()
+  const combinedSignal = AbortSignal.any
+    ? AbortSignal.any([guard.abortSignal, internalAbort.signal])
+    : makeCombinedSignal(guard.abortSignal, internalAbort.signal)
   try {
-    // ── Preflight checks ─────────────────────────────────────────────────────
-    const jwtSecret = resolvedEnv.JWT_SECRET ?? ''
-    if (!jwtSecret || jwtSecret === 'change-me-in-production' || jwtSecret.length < 32) {
-      console.error('[e2e-local] ERROR: JWT_SECRET is missing, too short, or still set to "change-me-in-production".')
-      console.error('[e2e-local] The example env uses "local-dev-jwt-secret-at-least-32-chars!!" — copy it:')
-      console.error('[e2e-local]   cp server/.env.example server/.env')
-      console.error('[e2e-local] Or set a custom value of 32+ characters.')
-      return { exitCode: 1, primaryChildFailure: null, aggregatedError: null, cleanupErrors: [] }
-    }
-
-    // ── Port discovery ───────────────────────────────────────────────────────
-    const preferredApiPort = Number(resolvedEnv.E2E_API_PORT ?? resolvedEnv.PORT ?? 3001)
-    const preferredClientPort = Number(resolvedEnv.E2E_CLIENT_PORT ?? 5173)
-    const apiPort = await findAvailablePort(preferredApiPort)
-    const clientPort = await findAvailablePort(preferredClientPort, new Set([apiPort]))
-    const apiUrl = `http://${host}:${apiPort}`
-    const baseUrl = `http://${host}:${clientPort}`
-
-    console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (preferred :${preferredApiPort} was unavailable)`}`)
-    console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
-
-    try {
       await (withIsolatedTestDatabaseOverride ?? withIsolatedTestDatabase)({ root, signal: combinedSignal }, async testEnv => {
         try {
           // ── Cleanup before seed ──────────────────────────────────────────────
@@ -128,12 +127,11 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
           if (failures.primary) throw failures.toError()
 
           // ── Proxy check ──────────────────────────────────────────────────────
+          if (guard.triggered) return
           const proxyRace = await Promise.race([
             (waitForProxyOverride ?? waitForProxy)(baseUrl).then(() => 'proxy-ok'),
-            Promise.race([api.failure, client.failure]).then(
-              () => 'child-failure',
-              () => 'child-failure',
-            ),
+            api.failure,
+            client.failure,
           ])
           if (proxyRace === 'child-failure') {
             if (failures.primary) throw failures.toError()
@@ -148,11 +146,12 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
             signal: combinedSignal,
           })
           const pwWinner = await Promise.race([
-            Promise.race([api.failure, client.failure]).then(
-              () => 'child-failure',
-              () => 'child-failure',
+            playwrightPromise.then(
+              () => 'playwright',
+              err => { throw err },
             ),
-            playwrightPromise.then(() => 'playwright'),
+            api.failure,
+            client.failure,
           ])
           if (pwWinner === 'child-failure') {
             // Await forced Playwright termination before cleanup removes DB.
@@ -172,10 +171,9 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
           }
         }
       })
-    } catch (error) {
-      if (error) {
-        failures.addError(error, { secondaryType: 'runner' })
-      }
+  } catch (error) {
+    if (error) {
+      failures.addError(error, { secondaryType: 'runner' })
     }
   } finally {
     guard.dispose()
@@ -197,27 +195,25 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
 
   function monitorChild(child, label) {
     let expectedShutdown = false
-    const failure = new Promise((_, reject) => {
+    const failure = new Promise(resolve => {
       child.on('error', err => {
         if (expectedShutdown) return
         const msg = `${label} could not start: ${err.message}`
         failures.addPrimary(new Error(msg))
-        reject(failures.primary)
+        resolve('child-failure')
       })
       child.on('exit', code => {
         if (expectedShutdown) return
         failures.addPrimary(new Error(`${label} exited unexpectedly with code ${code}`))
-        reject(failures.primary)
+        resolve('child-failure')
       })
     })
-    failure.catch(() => {})
     return {
       child,
       failure,
       markExpectedShutdown: () => { expectedShutdown = true },
     }
   }
-
   function start(command, args, { cwd, env, extraEnv = {}, label }) {
     const spec = resolveCommand(command, args)
     const child = (spawnOption ?? spawn)(spec.command, spec.args, {

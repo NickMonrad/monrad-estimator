@@ -446,6 +446,26 @@ test('Shutdown guard listeners are disposed after child failure', async () => {
   assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
   assert.equal(result.exitCode, 1, 'must exit non-zero')
 })
+
+test('Shutdown guard is not created when JWT validation fails (early return)', async () => {
+  let guardCreated = false
+  const guardFactory = () => {
+    guardCreated = true
+    return { dispose: () => {}, abortSignal: new AbortController().signal, triggered: false, signalExitCode: 0 }
+  }
+
+  const envLoader = () => ({ JWT_SECRET: 'too-short' })
+
+  const result = await runE2eLocal({
+    loadLocalEnvironment: envLoader,
+    spawn: () => { throw new Error('should not spawn') },
+    withIsolatedTestDatabase: mockDbLifecycle,
+    guardFactory,
+  })
+  assert.equal(guardCreated, false, 'guard must not be created on JWT failure')
+  assert.equal(result.exitCode, 1, 'must exit non-zero')
+  assert.equal(result.primaryChildFailure, null, 'no child failure')
+})
 test('Child failure plus termination failure plus cleanup failure all remain visible in aggregated error', async () => {
   let apiChild, viteChild
   const spawn = () => {
@@ -541,4 +561,113 @@ test('No unhandled promise rejection on child failure during Playwright', async 
   assert.equal(unhandled.length, 0, 'no unhandled promise rejections expected')
   assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
   assert.equal(result.exitCode, 1, 'must exit non-zero')
+})
+
+test('Active operation succeeds normally when neither child fails', async () => {
+  let callCount = 0
+  const events = []
+  const spawn = () => {
+    callCount++
+    const child = controllableChild()
+    return child
+  }
+
+  const orderedRunCommand = (_cmd, args, opts = {}) => {
+    if (args?.some(a => a.includes('playwright'))) {
+      events.push('playwright-start')
+      return new Promise(resolve => {
+        opts.signal?.addEventListener('abort', () => { events.push('playwright-aborted'); resolve('') }, { once: true })
+        setTimeout(() => { events.push('playwright-done'); resolve('') }, 0)
+      })
+    }
+    if (args?.some(a => a.includes('e2e-cleanup'))) return Promise.resolve('')
+    if (args?.some(a => a.includes('seed'))) return Promise.resolve('')
+    return Promise.resolve('')
+  }
+
+  const result = await runE2eLocal({
+    loadLocalEnvironment: mockEnvLoader,
+    spawn,
+    runCommand: orderedRunCommand,
+    withIsolatedTestDatabase: mockDbLifecycle,
+    waitForMonradApi: async () => {},
+    waitForClient: async () => {},
+    waitForProxy: async () => {},
+  })
+
+  assert.equal(result.exitCode, 0, 'must exit zero on success')
+  assert.equal(result.primaryChildFailure, null, 'no primary child failure')
+  assert.equal(callCount, 2, 'both API and Vite must be spawned')
+  assert.ok(events.includes('playwright-start'), 'playwright must start')
+  assert.ok(events.includes('playwright-done'), 'playwright must complete')
+  assert.ok(!events.includes('playwright-aborted'), 'playwright must not be aborted')
+})
+
+test('Child failure stops Playwright before Docker cleanup', async () => {
+  const events = []
+  let apiChild, viteChild
+
+  const spawn = () => {
+    if (!apiChild) {
+      apiChild = controllableChild()
+      return apiChild
+    }
+    viteChild = controllableChild()
+    return viteChild
+  }
+
+  const orderedRunCommand = (_cmd, args, opts = {}) => {
+    if (args?.some(a => a.includes('playwright'))) {
+      events.push('playwright-start')
+      // Trigger child failure DURING Playwright execution.
+      setTimeout(() => apiChild.emit('exit', 1), 0)
+      return new Promise(resolve => {
+        opts.signal?.addEventListener('abort', () => {
+          events.push('playwright-aborted')
+          resolve('')
+        }, { once: true })
+        // Also resolve if playwright completes without abort
+        setTimeout(() => {
+          if (!opts.signal?.aborted) {
+            events.push('playwright-done')
+            resolve('')
+          }
+        }, 100)
+      })
+    }
+    if (args?.some(a => a.includes('e2e-cleanup'))) return Promise.resolve('')
+    if (args?.some(a => a.includes('seed'))) return Promise.resolve('')
+    return Promise.resolve('')
+  }
+
+  const result = await runE2eLocal({
+    loadLocalEnvironment: mockEnvLoader,
+    spawn,
+    runCommand: orderedRunCommand,
+    withIsolatedTestDatabase: async (opts, action) => {
+      try {
+        await action({ DATABASE_URL: 'postgresql://test@localhost/test', INTEGRATION_TEST: 'true' })
+      } finally {
+        events.push('docker-cleanup')
+      }
+    },
+    waitForMonradApi: async () => {},
+    waitForClient: async () => {},
+    waitForProxy: async () => {},
+  })
+
+  assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
+  assert.equal(result.exitCode, 1, 'must exit non-zero')
+
+  // Verify ordering: Playwright started → child failure → Playwright aborted → Docker cleanup
+  const pwStart = events.indexOf('playwright-start')
+  const pwAbort = events.indexOf('playwright-aborted')
+  const dcCleanup = events.indexOf('docker-cleanup')
+
+  assert.ok(pwStart >= 0, 'playwright must start')
+  assert.ok(pwAbort >= 0, 'playwright must be aborted')
+  assert.ok(pwAbort > pwStart, `playwright abort (${pwAbort}) must occur after start (${pwStart})`)
+  if (dcCleanup >= 0) {
+    assert.ok(dcCleanup > pwAbort, `Docker cleanup (${dcCleanup}) must occur after Playwright abort (${pwAbort})`)
+  }
 })
