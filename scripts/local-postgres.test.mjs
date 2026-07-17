@@ -237,8 +237,14 @@ test('isDockerDaemonUnavailable detects daemon connectivity failure on Windows n
   assert.ok(isDockerDaemonUnavailable(err))
 })
 
-test('isDockerDaemonUnavailable detects docker executable not found', () => {
-  const err = new Error('docker: command not found')
+test('isDockerDaemonUnavailable does NOT classify Docker CLI "command not found" as daemon failure', () => {
+  // Docker is running but the subcommand doesn't exist — NOT daemon unavailable.
+  assert.equal(isDockerDaemonUnavailable(new Error('docker: \'foo\' is not a docker command.\nSee \'docker --help\'')), false)
+  assert.equal(isDockerDaemonUnavailable(new Error('docker: command not found')), false)
+})
+
+test('isDockerDaemonUnavailable detects spawn ENOENT (docker binary not installed)', () => {
+  const err = new Error('docker could not start: spawn docker ENOENT')
   assert.ok(isDockerDaemonUnavailable(err))
 })
 

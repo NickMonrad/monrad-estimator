@@ -39,7 +39,7 @@ export function isDockerDaemonUnavailable(error) {
     /unix.*docker.*socket/i,
     /connection refused.*docker/i,
     /docker executable not found/i,
-    /docker.*not found/i,
+    /enoent/i,
     /\.docker\.sock/i,
     /daemon is not running/i,
     /daemon not running/i,
@@ -172,8 +172,8 @@ export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, 
     const child = spawn(spec.command, spec.args, { cwd, env: mergedEnv, shell: false, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
     let output = ''
     if (!inherit) {
-      child.stdout.on('data', chunk => { output += chunk; process.stdout.write(chunk) })
-      child.stderr.on('data', chunk => { output += chunk; process.stderr.write(chunk) })
+      child.stdout.on('data', chunk => { output += chunk })
+      child.stderr.on('data', chunk => { output += chunk })
     }
 
     function onAbort() {
@@ -266,15 +266,14 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
   try {
     await run('docker', ['run', '--detach', '--name', name, '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER', '--env', 'POSTGRES_DB', '--publish', '127.0.0.1::5432', 'postgres:15'], { env: dockerEnv, signal, inherit: false })
   } catch (err) {
-    // Classify only daemon/socket connectivity failures as "daemon unavailable".
-    // Other Docker failures (pull, permissions, arguments, port conflict, etc.)
-    // preserve their original diagnostic.
+    // Attempt to remove any container that may have been created despite the
+    // error (e.g. abort signal fired after creation but before run() returned).
+    await run('docker', ['rm', '--force', name], { env: dockerEnv }).catch(() => {})
+
     const dockerErr = err instanceof Error ? err : new Error(String(err))
     if (isDockerDaemonUnavailable(dockerErr)) {
       throw new Error('Docker daemon is unavailable. Docker is the default prerequisite for disposable test databases. Use MONRAD_TEST_DATABASE_URL with MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 for an externally managed database, or start the Docker daemon.')
     }
-    // Preserve the original diagnostic for non-daemon failures, redacting
-    // any credential-like patterns.
     throw redactError(dockerErr, 'Docker startup failed')
   }
   if (signal?.aborted) {

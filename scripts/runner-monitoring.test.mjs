@@ -105,8 +105,10 @@ test('Error event triggers primaryChildFailure', async () => {
   assert.match(result.primaryChildFailure.message, /EADDRINUSE/, 'error contains original message')
 })
 
-test('First child failure remains primary', async () => {
+test('First child failure remains primary when both children fail', async () => {
   let callCount = 0
+  let apiChild = null
+
   const spawn = () => {
     callCount++
     const child = new EventEmitter()
@@ -114,9 +116,13 @@ test('First child failure remains primary', async () => {
     child.stdout = new EventEmitter()
     child.stderr = new EventEmitter()
     child.kill = () => {}
-    // API (call 1) exits; Vite (call 2) errors
-    if (callCount === 1) process.nextTick(() => child.emit('exit', 1))
-    else process.nextTick(() => child.emit('error', new Error('vite failed')))
+    if (callCount === 1) {
+      apiChild = child
+    } else {
+      // De-synchronize so monitorChild handlers attach before exit fires.
+      setTimeout(() => apiChild.emit('exit', 1), 0)
+      setTimeout(() => child.emit('error', new Error('vite failed')), 0)
+    }
     return child
   }
 
@@ -129,6 +135,7 @@ test('First child failure remains primary', async () => {
     waitForClient: yieldToEventLoop,
     waitForProxy: yieldToEventLoop,
   })
+  assert.equal(callCount, 2, 'both API and Vite must be spawned')
   assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
   assert.match(result.primaryChildFailure.message, /code 1/, 'API exit failure is primary')
   assert.doesNotMatch(result.primaryChildFailure.message, /vite/, 'vite error is not primary')

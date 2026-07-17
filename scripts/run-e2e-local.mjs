@@ -121,15 +121,21 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
         if (guard.triggered || primaryChildFailure) return
 
         // ── Playwright ───────────────────────────────────────────────────────
-        await Promise.race([
-          (runCommandOverride ?? runCommand)('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
-            cwd: e2eDir, env: testEnv,
-            extraEnv: { BASE_URL: baseUrl, API_URL: apiUrl, NODE_ENV: 'test' },
-            inherit: true,
-            signal: combinedSignal,
-          }),
-          Promise.race([api.failure, client.failure]).catch(() => {}),
+        const playwrightPromise = (runCommandOverride ?? runCommand)('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
+          cwd: e2eDir, env: testEnv,
+          extraEnv: { BASE_URL: baseUrl, API_URL: apiUrl, NODE_ENV: 'test' },
+          inherit: true,
+          signal: combinedSignal,
+        })
+        const childFailure = Promise.race([api.failure, client.failure]).catch(() => {})
+        const winner = await Promise.race([
+          playwrightPromise.then(() => 'playwright'),
+          childFailure.then(() => 'child-failure'),
         ])
+        if (winner === 'child-failure') {
+          // Await forced Playwright termination before cleanup removes DB.
+          try { await playwrightPromise } catch { /* expected — killed via combinedSignal */ }
+        }
       } finally {
         // Always stop API/Vite children before database cleanup.
         try {
