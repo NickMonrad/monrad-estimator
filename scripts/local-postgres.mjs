@@ -22,13 +22,38 @@ function redactDiagnosticOutput(text) {
 }
 
 /**
+ * Remove a Docker container by name with bounded timeout and credential-safe
+ * diagnostics. Uses an independent AbortSignal.timeout so cleanup is not
+ * blocked by an already-aborted primary signal.
+ *
+ * Returns { removed, reason?, error? } — never throws.
+ * "no such container" is treated as already cleaned (removed: false, reason: 'no-such-container').
+ */
+export async function removeDockerContainer(name, { run = dockerCommand, env = process.env } = {}) {
+  const cleanupSignal = AbortSignal.timeout(30_000)
+  try {
+    await run('docker', ['rm', '--force', name], { env, signal: cleanupSignal, inherit: false })
+    return { removed: true }
+  } catch (err) {
+    const msg = err?.message ?? String(err)
+    const redacted = redactDiagnosticOutput(msg)
+    if (/no such container/i.test(redacted)) {
+      return { removed: false, reason: 'no-such-container' }
+    }
+    return { removed: false, reason: 'removal-failed', error: redacted }
+  }
+}
+
+/**
  * Determine whether a Docker error specifically indicates daemon or socket
  * connectivity failure, as opposed to other Docker exit-code-1 failures.
  */
 export function isDockerDaemonUnavailable(error) {
   if (!error) return false
   const msg = (typeof error === 'string' ? error : (error.message ?? String(error))).toLowerCase()
-  // Specific daemon/socket connectivity patterns
+  // Specific daemon/socket connectivity patterns only.
+  // ENOENT is classified only as a spawn/executable-not-found error from
+  // runCommand's "could not start" pattern, not from arbitrary Docker output.
   const patterns = [
     /cannot connect.*docker daemon/i,
     /is the docker daemon running/i,
@@ -39,7 +64,7 @@ export function isDockerDaemonUnavailable(error) {
     /unix.*docker.*socket/i,
     /connection refused.*docker/i,
     /docker executable not found/i,
-    /enoent/i,
+    /docker could not start.*enoent/i,
     /\.docker\.sock/i,
     /daemon is not running/i,
     /daemon not running/i,
@@ -228,11 +253,10 @@ async function defaultClientFactory(connectionString, extraOptions = {}) {
 async function runQuery(client, sql, values) {
   await client.query(sql, values)
 }
-
 export async function ensureDatabase({ databaseUrl, clientFactory = defaultClientFactory }) {
   const { database } = parseDatabaseUrl(databaseUrl)
   const maintenanceUrl = maintenanceDatabaseUrl(databaseUrl)
-  const client = await clientFactory(maintenanceUrl)
+  const client = await clientFactory(maintenanceUrl, { connectionTimeoutMillis: 10_000 })
   try {
     await client.connect()
     const result = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [database])
@@ -266,26 +290,24 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
   try {
     await run('docker', ['run', '--detach', '--name', name, '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER', '--env', 'POSTGRES_DB', '--publish', '127.0.0.1::5432', 'postgres:15'], { env: dockerEnv, signal, inherit: false })
   } catch (err) {
-    // Attempt to remove any container that may have been created despite the
-    // error (e.g. abort signal fired after creation but before run() returned).
-    await run('docker', ['rm', '--force', name], { env: dockerEnv }).catch(() => {})
+    // Attempt bounded cleanup; container may have been created despite the error.
+    const cleanup = await removeDockerContainer(name, { run, env: dockerEnv })
 
     const dockerErr = err instanceof Error ? err : new Error(String(err))
     if (isDockerDaemonUnavailable(dockerErr)) {
       throw new Error('Docker daemon is unavailable. Docker is the default prerequisite for disposable test databases. Use MONRAD_TEST_DATABASE_URL with MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 for an externally managed database, or start the Docker daemon.')
     }
+    // If cleanup also failed, append the diagnostic.
+    if (cleanup.removed === false && cleanup.reason === 'removal-failed') {
+      throw redactError(dockerErr, `Docker startup failed (cleanup: ${cleanup.error})`)
+    }
     throw redactError(dockerErr, 'Docker startup failed')
   }
   if (signal?.aborted) {
-    let cleanupFailure = null
-    try {
-      await run('docker', ['rm', '--force', name], { env: dockerEnv })
-    } catch (cleanupErr) {
-      cleanupFailure = cleanupErr
-    }
-    if (cleanupFailure) {
+    const cleanup = await removeDockerContainer(name, { run, env: dockerEnv })
+    if (cleanup.removed === false && cleanup.reason === 'removal-failed') {
       const err = new Error('Docker startup was cancelled')
-      err.cause = cleanupFailure instanceof Error ? cleanupFailure : new Error(String(cleanupFailure))
+      err.cause = cleanup.error
       throw err
     }
     throw new Error('Docker startup was cancelled')
@@ -293,28 +315,41 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
   try {
     const output = await run('docker', ['port', name, '5432/tcp'], { env: dockerEnv, inherit: false, signal })
     const match = String(output).trim().match(/:(\d+)$/)
-    if (!match) throw new Error('Docker did not return a mapped PostgreSQL port')
+    if (!match) {
+      const cleanup = await removeDockerContainer(name, { run, env: dockerEnv })
+      const err = new Error('Docker did not return a mapped PostgreSQL port')
+      if (cleanup.removed === false && cleanup.reason === 'removal-failed') {
+        err.message += ` (cleanup: ${cleanup.error})`
+      }
+      throw err
+    }
     const port = Number(match[1])
     const databaseUrl = `postgresql://postgres:${encodeURIComponent(password)}@127.0.0.1:${port}/postgres`
     if (waitForPort) await waitForPort(port, databaseUrl)
     return { name, port, databaseUrl, dockerEnv }
   } catch (error) {
-    let cleanupFailure = null
-    try {
-      await run('docker', ['rm', '--force', name], { env: dockerEnv })
-    } catch (cleanupErr) {
-      cleanupFailure = cleanupErr
+    // Bounded cleanup for port discovery or readiness failure.
+    if (error.message.startsWith('Docker did not return') && error.message.includes('(cleanup:')) {
+      throw error
     }
+    if (error.message.startsWith('Docker startup was cancelled') && error.cause) {
+      throw error
+    }
+    const cleanup = await removeDockerContainer(name, { run, env: dockerEnv })
     const preserved = error instanceof Error ? error : new Error(String(error))
-    if (cleanupFailure) {
-      preserved.message = `${preserved.message} (Docker cleanup also failed: ${cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure)})`
+    if (cleanup.removed === false && cleanup.reason === 'removal-failed') {
+      preserved.message = `${preserved.message} (cleanup: ${cleanup.error})`
     }
     throw preserved
   }
 }
 
 export async function stopDockerPostgres(container, { run = dockerCommand, environment = process.env, signal } = {}) {
-  if (container?.name) await run('docker', ['rm', '--force', container.name], { env: { ...environment, ...container.dockerEnv }, signal, inherit: false })
+  if (!container?.name) return
+  // Bounded cleanup: use removeDockerContainer's independent timeout signal.
+  // The passed signal may be aborted (normal shutdown); removeDockerContainer
+  // ignores it and uses its own AbortSignal.timeout.
+  await removeDockerContainer(container.name, { run, env: { ...environment, ...container.dockerEnv } })
 }
 
 async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, signal) {

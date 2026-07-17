@@ -807,17 +807,20 @@ test('preparePrisma does not run when signal is already aborted', async () => {
 })
 
 
-test('stopDockerPostgres forwards cleanup signal to docker rm', async () => {
-  let receivedSignal = null
-  const testSignal = AbortSignal.timeout(10_000)
+test('stopDockerPostgres uses independent bounded cleanup (not passed signal)', async () => {
+  const passedSignal = new AbortController().signal
+  let usedSignal = null
   await stopDockerPostgres(
     { name: 'test-container', dockerEnv: {} },
     {
-      signal: testSignal,
-      run: async (_cmd, _args, opts) => { receivedSignal = opts.signal },
+      signal: passedSignal,
+      run: async (_cmd, _args, opts) => { usedSignal = opts.signal },
     },
   )
-  assert.equal(receivedSignal, testSignal, 'stopDockerPostgres must forward signal to docker rm')
+  assert.notEqual(usedSignal, passedSignal, 'stopDockerPostgres must NOT reuse the passed signal')
+  assert.ok(usedSignal, 'stopDockerPostgres must pass an independent signal')
+  // The independent signal uses AbortSignal.timeout(30_000)
+  assert.equal(usedSignal?.reason?.message ?? usedSignal?.reason, undefined, 'cleanup signal should not be aborted initially')
 })
 
 

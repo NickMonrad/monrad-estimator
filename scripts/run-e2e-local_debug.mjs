@@ -38,10 +38,12 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
   const internalAbort = new AbortController()
 
   // Structured failure aggregation.
-  const AggregatedError = class extends Error {
+  class AggregatedError extends Error {
     constructor(primary, secondaryErrors = []) {
       const parts = [primary?.message ?? String(primary)]
-      for (const s of secondaryErrors) parts.push(`[${s.type}] ${s.error}`)
+      for (const s of secondaryErrors) {
+        parts.push(`[${s.type}] ${s.error}`)
+      }
       super(parts.join('; '))
       this.name = 'AggregatedError'
       this.primary = primary
@@ -189,7 +191,7 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
     } catch (error) {
       // Use the caught error directly — it's already aggregated or is the raw error.
       // Do not replace with primaryChildFailure.message, which would lose cleanup details.
-      if (error instanceof AggregatedError) {
+      console.error("CATCH:", typeof error, error?.constructor?.name, "instanceof AggregatedError:", error instanceof AggregatedError); if (error instanceof AggregatedError) {
         if (error.primary) failures.primary = error.primary
         for (const s of error.secondaryErrors) {
           failures.addSecondary(s.type, s.error)
@@ -214,6 +216,11 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
 
   // ── Helpers (closured) ─────────────────────────────────────────────────────
 
+  /**
+   * Attach failure monitoring to a child process.
+   * Records the first unexpected exit/error as the primary failure
+   * and aborts `internalAbort` to cancel remaining work.
+   */
   function monitorChild(child, label) {
     let expectedShutdown = false
     const failure = new Promise((_, reject) => {
