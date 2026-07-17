@@ -41,7 +41,9 @@ export async function removeDockerContainer(name, { run = dockerCommand, env = p
     if (/no such container/i.test(redacted)) {
       return { removed: false, reason: 'no-such-container' }
     }
-    return { removed: false, reason: 'removal-failed', error: redacted }
+    // Detect timeout from the signal that expired.
+    const timedOut = cleanupSignal.aborted && cleanupSignal.reason?.name === 'TimeoutError'
+    return { removed: false, reason: timedOut ? 'cleanup-timed-out' : 'removal-failed', error: redacted }
   }
 }
 
@@ -185,7 +187,9 @@ export function resolveCommand(command, args, platform = process.platform, npmEx
 
 export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, platform, npmExecPath, signal, graceMs = 4_000, terminateWindows, terminatePosix } = {}) {
   if (signal?.aborted) {
-    return Promise.reject(new Error(`${command} was cancelled`))
+    const isTimeout = signal.reason?.name === 'TimeoutError'
+    const msg = isTimeout ? `${command} timed out` : `${command} was cancelled`
+    return Promise.reject(new Error(msg))
   }
   return new Promise((resolve, reject) => {
     let settled = false
@@ -207,6 +211,9 @@ export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, 
       if (settled) return
       abortRequested = true
 
+      const isTimeout = signal?.reason?.name === 'TimeoutError'
+      const cancelMsg = isTimeout ? `${command} timed out` : `${command} was cancelled`
+
       const isWin = (platform ?? process.platform) === 'win32'
       const termFn = isWin
         ? (terminateWindows ?? windowsTerminateProcess)
@@ -215,10 +222,11 @@ export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, 
         ? termFn(child)
         : termFn(child, graceMs, { useProcessGroup: true })
       termPromise.then(
-        () => rejectOnce(new Error(`${command} was cancelled`)),
+        () => rejectOnce(new Error(cancelMsg)),
         (termError) => {
           const safeMsg = termError?.message ?? String(termError)
-          const err = new Error(`${command} was cancelled; process-tree termination failed: ${safeMsg}`)
+          const prefix = isTimeout ? `${command} timed out` : `${command} was cancelled`
+          const err = new Error(`${prefix}; process-tree termination failed: ${safeMsg}`)
           err.cause = termError
           rejectOnce(err)
         },
@@ -246,64 +254,47 @@ export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, 
     })
   })
 }
-async function defaultClientFactory(connectionString, extraOptions = {}) {
-  const { Client } = await import('pg')
-  return new Client({ connectionString, ...extraOptions })
-}
-/**
- * Resolves after `ms` milliseconds, or immediately when `signal` fires.
- * The abort listener is removed in all cases. The timer is cleared in all cases.
- * @param {number} ms
- * @param {AbortSignal} [signal]
- * @returns {Promise<'timeout'|'aborted'>}
- */
-async function abortableDelay(ms, signal) {
-  return new Promise(resolve => {
-    const timer = setTimeout(() => resolve('timeout'), ms)
-    if (signal) {
-      if (signal.aborted) {
-        clearTimeout(timer)
-        resolve('aborted')
-        return
-      }
-      const onAbort = () => {
-        clearTimeout(timer)
-        resolve('aborted')
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      // Ensure the listener is removed if the timer fires first
-      timer.unref?.()
-      // Store on timer so we can detect completion vs abort
-      timer._onAbort = onAbort
-    }
-  }).then(result => {
-    // If signal fired after timeout, ensure listener is removed
-    // (the timer's _onAbort reference might not get cleaned up)
-    return result
-  })
-}
 
 async function runQuery(client, sql, values) {
   await client.query(sql, values)
 }
-export async function ensureDatabase({ databaseUrl, clientFactory = defaultClientFactory, signal }) {
+async function defaultClientFactory(connectionString, extraOptions = {}) {
+  const { Client } = await import('pg')
+  return new Client({ connectionString, ...extraOptions })
+}
+
+export async function ensureDatabase({ databaseUrl, clientFactory = defaultClientFactory, signal, queryTimeout = 30_000 } = {}) {
   const { database } = parseDatabaseUrl(databaseUrl)
   const maintenanceUrl = maintenanceDatabaseUrl(databaseUrl)
   if (signal?.aborted) throw new Error('Database setup was cancelled before connecting')
-  const client = await clientFactory(maintenanceUrl, { connectionTimeoutMillis: 10_000 })
+  const client = await clientFactory(maintenanceUrl, { connectionTimeoutMillis: 10_000, query_timeout: queryTimeout })
+  let aborted = false
+  const onAbort = () => { aborted = true }
+  signal?.addEventListener('abort', onAbort, { once: true })
   try {
     await client.connect()
     if (signal?.aborted) throw new Error('Database setup was cancelled after connecting')
     const result = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [database])
     if (result.rowCount === 0) {
-      if (signal?.aborted) throw new Error('Database setup was cancelled before CREATE DATABASE')
+      if (aborted) throw new Error('Database setup was cancelled before CREATE DATABASE')
       await runQuery(client, `CREATE DATABASE ${quoteIdentifier(database)}`)
     }
     return { created: result.rowCount === 0, database }
   } catch (error) {
+    if (aborted) {
+      // Actively close when abort fired — don't let a stale query hang.
+      try {
+        client.end({ timeout: 5_000 })
+      } catch { /* best-effort */ }
+    }
     throw redactError(error, 'Could not connect to PostgreSQL maintenance database or create the configured development database')
   } finally {
-    await client.end().catch(() => {})
+    signal?.removeEventListener('abort', onAbort)
+    // Bound client shutdown — don't let a stalled end() hang the process.
+    await Promise.race([
+      client.end().catch(() => {}),
+      new Promise(r => setTimeout(r, 5_000)),
+    ])
   }
 }
 
@@ -422,11 +413,10 @@ export async function stopDockerPostgres(container, { run = dockerCommand, envir
   const result = await removeDockerContainer(container.name, { run, env: { ...environment, ...container.dockerEnv } })
   if (result.removed) return
   if (result.reason === 'no-such-container') return
-  // removal-failed: throw credential-safe error with container name and diagnostic
-  const msg = result.error?.includes('timed out')
-    ? `Docker container "${container.name}" cleanup timed out after 30s`
-    : `Failed to remove Docker container "${container.name}": ${result.error}`
-  throw redactError(new Error(msg), 'Docker cleanup failed')
+  if (result.reason === 'cleanup-timed-out') {
+    throw new Error(`Docker container "${container.name}" cleanup timed out after 30s`)
+  }
+  throw new Error(`Failed to remove Docker container "${container.name}": ${result.error}`)
 }
 
 export async function withIsolatedTestDatabase({ root, environment = process.env, clientFactory = defaultClientFactory, run = runCommand, startDocker = startDockerPostgres, stopDocker = stopDockerPostgres, prepare = preparePrisma, signal }, action, { timeoutMs = 0 } = {}) {
@@ -516,7 +506,7 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
         const redacted = redactError(dockerErr instanceof Error ? dockerErr : new Error(String(dockerErr)), 'Docker cleanup failed')
         if (collector.primary) {
           // Action already failed — add cleanup as secondary.
-          collector.addSecondary('docker cleanup', redacted.message)
+          collector.addSecondary('docker cleanup', redacted)
         } else {
           // Action succeeded — cleanup failure IS the primary failure.
           collector.addPrimary(redacted)

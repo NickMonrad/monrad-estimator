@@ -84,11 +84,13 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
         try {
           // ── Cleanup before seed ──────────────────────────────────────────────
           await (runCommandOverride ?? runCommand)('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv, signal: combinedSignal })
-          if (guard.triggered || failures.primary) return
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
           // ── Seed ─────────────────────────────────────────────────────────────
           await (runCommandOverride ?? runCommand)('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv, signal: combinedSignal })
-          if (guard.triggered || failures.primary) return
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
           // ── Start API ────────────────────────────────────────────────────────
           const api = start('npx', ['tsx', 'src/index.ts'], {
@@ -97,14 +99,16 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
             label: 'api',
           })
           children.push(api)
-          if (guard.triggered || failures.primary) return
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
           // Race API readiness against child failure.
           await Promise.race([
             (waitForMonradApiOverride ?? waitForMonradApi)(apiUrl).then(() => null),
             api.failure,
           ])
-          if (guard.triggered || failures.primary) return
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
           const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
             cwd: clientDir, env: testEnv,
@@ -112,21 +116,29 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
             label: 'vite',
           })
           children.push(client)
-          if (guard.triggered || failures.primary) return
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
           // Race client readiness against child failure.
           await Promise.race([
             (waitForClientOverride ?? waitForClient)(baseUrl).then(() => null),
             client.failure,
           ])
-          if (guard.triggered || failures.primary) return
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
           // ── Proxy check ──────────────────────────────────────────────────────
-          await Promise.race([
-            (waitForProxyOverride ?? waitForProxy)(baseUrl),
-            Promise.race([api.failure, client.failure]).catch(() => {}),
+          const proxyRace = await Promise.race([
+            (waitForProxyOverride ?? waitForProxy)(baseUrl).then(() => 'proxy-ok'),
+            Promise.race([api.failure, client.failure]).then(
+              () => 'child-failure',
+              () => 'child-failure',
+            ),
           ])
-          if (guard.triggered || failures.primary) return
+          if (proxyRace === 'child-failure') {
+            if (failures.primary) throw failures.toError()
+          }
+          if (guard.triggered) return
 
           // ── Playwright ───────────────────────────────────────────────────────
           const playwrightPromise = (runCommandOverride ?? runCommand)('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
@@ -135,24 +147,20 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
             inherit: true,
             signal: combinedSignal,
           })
-          const childFailure = Promise.race([api.failure, client.failure]).catch(() => {})
-          const winner = await Promise.race([
-            childFailure.then(() => 'child-failure'),
+          const pwWinner = await Promise.race([
+            Promise.race([api.failure, client.failure]).then(
+              () => 'child-failure',
+              () => 'child-failure',
+            ),
             playwrightPromise.then(() => 'playwright'),
           ])
-          if (winner === 'child-failure') {
+          if (pwWinner === 'child-failure') {
             // Await forced Playwright termination before cleanup removes DB.
-            try {
-              await playwrightPromise
-            } catch (playwrightErr) {
-              const pwMsg = playwrightErr?.message ?? String(playwrightErr)
-              // Distinguish ordinary cancellation (expected) from termination failure.
-              if (pwMsg.includes('process-tree termination failed')) {
-                failures.addSecondary('playwright termination', pwMsg)
+            try { await playwrightPromise } catch (pwErr) {
+              if (pwErr?.message?.includes('process-tree termination failed')) {
+                failures.addSecondary('playwright termination', pwErr)
               }
             }
-            // Throw aggregated error from the action so withIsolatedTestDatabase
-            // can append Docker cleanup failures naturally.
             throw failures.toError() ?? new Error('Child failure')
           }
         } finally {
@@ -160,34 +168,29 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
           try {
             await stopChildren()
           } catch (childErr) {
-            failures.addSecondary('child-process termination', childErr?.message ?? String(childErr))
+            failures.addSecondary('child-process termination', childErr)
           }
         }
-        })
+      })
     } catch (error) {
-      // Use the caught error directly — it's already aggregated or is the raw error.
-      if (error instanceof AggregatedError) {
-        // Flatten aggregated error into the shared collector without duplicating.
-        if (error.primary) failures.addPrimary(error.primary)
-        for (const s of error.secondaryErrors) {
-          failures.addSecondary(s.type, s.error)
-        }
-      } else if (error) {
-        failures.addSecondary('runner', error?.message ?? String(error))
+      if (error) {
+        failures.addError(error, { secondaryType: 'runner' })
       }
     }
   } finally {
     guard.dispose()
   }
 
+  const aggregated = failures.toError()
   return {
     exitCode: computeExitCode(),
     primaryChildFailure: failures.primary,
-    aggregatedError: failures.toError(),
-    cleanupErrors: failures.secondary.filter(e => {
-      if (guard.triggered && e.type === 'runner' && e.error.endsWith('was cancelled')) return false
-      return true
-    }),
+    aggregatedError: aggregated,
+    cleanupErrors: aggregated
+      ? aggregated.secondaryErrors.filter(s =>
+          !(guard.triggered && s.type === 'runner' && s.error?.message?.endsWith('was cancelled'))
+        )
+      : [],
   }
 
   // ── Helpers (closured) ─────────────────────────────────────────────────────
@@ -247,8 +250,8 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
     )
     const rejected = results.filter(r => r.status === 'rejected')
     if (rejected.length > 0) {
-      const messages = rejected.map((r, i) => `child ${i}: ${r.reason?.message ?? r.reason}`).join('; ')
-      failures.addSecondary('process termination', messages)
+      const msg = rejected.map((r, i) => `child ${i}: ${r.reason?.message ?? r.reason}`).join('; ')
+      failures.addSecondary('process termination', new Error(msg))
     }
   }
 
@@ -395,8 +398,12 @@ if (isMain) {
 
   // Run the full lifecycle.
   const result = await runE2eLocal()
-  for (const ce of result.cleanupErrors) {
-    console.error(`[e2e-local] ${ce.type}: ${ce.error}`)
+  if (result.aggregatedError) {
+    const primaryMsg = result.aggregatedError.primary?.message ?? String(result.aggregatedError.primary ?? 'Unknown failure')
+    console.error(`[e2e-local] ERROR: ${primaryMsg}`)
+    for (const s of result.cleanupErrors) {
+      console.error(`[e2e-local] SECONDARY [${s.type}]: ${s.error?.message ?? String(s.error)}`)
+    }
   }
   process.exit(result.exitCode)
 }

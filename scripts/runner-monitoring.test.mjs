@@ -399,7 +399,7 @@ test('Docker cleanup failure is retained alongside primary child failure', async
 
   assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
   const hasCleanupError = result.cleanupErrors.some(
-    e => (e.error ?? '').includes('Docker cleanup') || (e.error ?? '').includes('docker cleanup')
+    e => (e.error?.message ?? '').includes('Docker cleanup') || (e.error?.message ?? '').includes('docker cleanup')
   )
   assert.ok(hasCleanupError, 'Docker cleanup failure must be retained')
   assert.equal(result.exitCode, 1, 'must exit non-zero')
@@ -492,7 +492,7 @@ test('Child failure plus termination failure plus cleanup failure all remain vis
   )
   assert.ok(hasTermination, 'termination failure in cleanupErrors')
   const hasDockerError = result.cleanupErrors.some(
-    e => (e.error ?? '').includes('Docker')
+    e => (e.error?.message ?? '').includes('Docker')
   )
   assert.ok(hasDockerError, 'Docker cleanup failure in cleanupErrors')
 
