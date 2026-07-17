@@ -394,8 +394,18 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
       return
     } catch (error) {
       lastError = error
-      // Abortable retry delay — listener is cleaned up in all cases
-      await abortableDelay(500, signal)
+      // Abortable retry delay — removes both timer and listener on completion.
+      await new Promise(resolve => {
+        let onAbort
+        const timer = setTimeout(() => {
+          if (signal && onAbort) signal.removeEventListener('abort', onAbort)
+          resolve()
+        }, 500)
+        if (signal) {
+          onAbort = () => { clearTimeout(timer); resolve() }
+          signal.addEventListener('abort', onAbort, { once: true })
+        }
+      })
     } finally {
       if (client) {
         try { await client.end() } catch {
@@ -419,7 +429,7 @@ export async function stopDockerPostgres(container, { run = dockerCommand, envir
   throw redactError(new Error(msg), 'Docker cleanup failed')
 }
 
-export async function withIsolatedTestDatabase({ root, environment = process.env, clientFactory = defaultClientFactory, run = runCommand, startDocker = startDockerPostgres, stopDocker = stopDockerPostgres, prepare = preparePrisma, signal }, action) {
+export async function withIsolatedTestDatabase({ root, environment = process.env, clientFactory = defaultClientFactory, run = runCommand, startDocker = startDockerPostgres, stopDocker = stopDockerPostgres, prepare = preparePrisma, signal }, action, { timeoutMs = 0 } = {}) {
   const resolvedEnvironment = loadLocalEnvironment(root, environment)
   const externalUrl = resolvedEnvironment.MONRAD_TEST_DATABASE_URL
 
