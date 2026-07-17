@@ -463,24 +463,24 @@ export async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60
   let abortHandler = null
   while (Date.now() < deadline) {
     if (signal?.aborted) throw redactError(lastError ?? new Error('Cancelled waiting for PostgreSQL readiness'))
+    lastError = null  // Fresh iteration; previous attempt's error is irrelevant.
     let client
     let done = false
     try {
-      // Calculate remaining time once; never pass zero as a timeout.
+      // Recheck deadline before creating client: remainingTime must be positive.
       const remaining = remainingTime(deadline)
+      if (remaining <= 0) break
       const connectTimeout = Math.min(remaining, 5_000)
       client = await clientFactory(databaseUrl, { connectionTimeoutMillis: connectTimeout })
 
       // Attach abort listener to interrupt active connect/query.
       abortHandler = () => destroyClient(client)
       signal?.addEventListener('abort', abortHandler, { once: true })
-
       await client.connect()
       await client.query('SELECT 1')
       done = true
     } catch (error) {
       lastError = error
-      // Abortable retry delay.
       await new Promise(resolve => {
         let onAbort
         const timer = setTimeout(() => {
