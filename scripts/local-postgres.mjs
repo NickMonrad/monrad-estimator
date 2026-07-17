@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { terminateProcess, windowsTerminateProcess } from './terminate-process.mjs'
+import { createFailureCollector } from './aggregated-error.mjs'
 
 const POSTGRES_PROTOCOLS = new Set(['postgres:', 'postgresql:'])
 const IDENTIFIER_LIMIT = 63
@@ -464,7 +465,6 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
   if (signal?.aborted) throw new Error('Test database setup was cancelled')
 
   let container
-  const { createFailureCollector } = await import('./aggregated-error.mjs')
   const collector = createFailureCollector()
 
   try {
