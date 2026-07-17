@@ -305,7 +305,7 @@ test('Vite fails while Playwright is pending', async () => {
   assert.match(result.primaryChildFailure.message, /vite.*exit.*code 42/i, 'Vite failure is primary')
   assert.equal(result.exitCode, 1, 'must exit non-zero')
 })
-test('Playwright termination failure is retained as secondary (via stopChildren)', async () => {
+test('Playwright termination failure is retained as secondary', async () => {
   let callCount = 0
   const spawn = () => {
     callCount++
@@ -326,13 +326,20 @@ test('Playwright termination failure is retained as secondary (via stopChildren)
     waitForMonradApi: yieldToEventLoop,
     waitForClient: yieldToEventLoop,
     waitForProxy: yieldToEventLoop,
+    // Inject a termination function that always fails.
+    terminateChild: async () => { throw new Error('process-tree termination failed: mock failure') },
   })
 
   assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
   assert.ok(result.aggregatedError, 'aggregatedError must be set')
   assert.equal(result.exitCode, 1, 'must exit non-zero')
-  // Verify aggregatedError includes both primary and secondary
-  assert.match(result.aggregatedError.message, /api.*exit/i, 'aggregated message contains primary failure')
+  // Verify aggregatedError includes the termination failure
+  assert.match(result.aggregatedError.message, /process-tree termination/i, 'aggregated message contains termination failure')
+  // Verify cleanupErrors contains the termination failure
+  const hasTermination = result.cleanupErrors.some(
+    e => e.type === 'process termination' || e.type === 'child-process termination'
+  )
+  assert.ok(hasTermination, 'termination failure must be in cleanupErrors')
 })
 
 test('Expected shutdown does not create false child failures', async () => {
@@ -399,24 +406,46 @@ test('Docker cleanup failure is retained alongside primary child failure', async
 })
 
 test('Shutdown guard listeners are disposed after child failure', async () => {
+  // Use a mock process to verify guard dispose removes listeners.
   let listenerCount = 0
+  let disposed = false
   const mockProcess = {
     on: () => { listenerCount++ },
-    off: () => { listenerCount-- },
+    removeListener: () => { listenerCount--; disposed = true },
+    off: () => { listenerCount--; disposed = true },
     exit: () => {},
     pid: 12345,
   }
-  // We can't inject mockProcess directly into runE2eLocal, so we verify disposal
-  // by running the full flow and checking that guard triggers are handled.
-  // Instead, we test that after a failed run, a second import of the guard factory
-  // does not accumulate listeners.
-  const { shutdownGuard } = await import('./local-postgres.mjs')
-  const guard = shutdownGuard({ process: mockProcess, forceExit: () => {} })
-  assert.equal(listenerCount, 2, 'SIGINT + SIGTERM listeners attached')
-  guard.dispose()
-  assert.equal(listenerCount, 0, 'both listeners removed after dispose')
-})
 
+  // Create a guard factory that uses the mock process
+  const mockGuard = await import('./local-postgres.mjs').then(m => m.shutdownGuard({ process: mockProcess, forceExit: () => {} }))
+  assert.equal(listenerCount, 2, 'SIGINT + SIGTERM listeners attached')
+
+  // Run with a guard factory that returns our mock guard
+  const result = await runE2eLocal({
+    loadLocalEnvironment: mockEnvLoader,
+    spawn: () => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 54321, kill: () => {},
+        stdout: Object.assign(new EventEmitter(), { destroy: () => {} }),
+        stderr: Object.assign(new EventEmitter(), { destroy: () => {} }),
+      })
+      process.nextTick(() => child.emit('exit', 1))
+      return child
+    },
+    runCommand: noop,
+    withIsolatedTestDatabase: mockDbLifecycle,
+    waitForMonradApi: yieldToEventLoop,
+    waitForClient: yieldToEventLoop,
+    waitForProxy: yieldToEventLoop,
+    guardFactory: () => mockGuard,
+  })
+
+  // After runE2eLocal finishes, guard.dispose() should have been called
+  assert.ok(disposed, 'guard.dispose() was called after child failure')
+  assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
+  assert.equal(result.exitCode, 1, 'must exit non-zero')
+})
 test('Child failure plus termination failure plus cleanup failure all remain visible in aggregated error', async () => {
   let apiChild, viteChild
   const spawn = () => {
@@ -436,6 +465,8 @@ test('Child failure plus termination failure plus cleanup failure all remain vis
     waitForMonradApi: yieldToEventLoop,
     waitForClient: yieldToEventLoop,
     waitForProxy: yieldToEventLoop,
+    // Inject termination failure
+    terminateChild: async () => { throw new Error('process-tree termination failed: mock') },
     withIsolatedTestDatabase: async (_opts, action) => {
       try {
         await action({ DATABASE_URL: 'postgresql://test@localhost/test', INTEGRATION_TEST: 'true' })
@@ -452,9 +483,14 @@ test('Child failure plus termination failure plus cleanup failure all remain vis
   // aggregatedError.message should contain all three: primary + termination + cleanup
   const msg = result.aggregatedError.message
   assert.match(msg, /api.*exit/i, 'aggregated message must contain primary failure')
+  assert.match(msg, /process-tree termination/i, 'aggregated message must contain termination failure')
   assert.match(msg, /cleanup/i, 'aggregated message must contain cleanup failure')
 
-  // Verify cleanupErrors contains the Docker failure
+  // Verify cleanupErrors contains both termination and docker failure
+  const hasTermination = result.cleanupErrors.some(
+    e => e.type === 'process termination' || e.type === 'child-process termination'
+  )
+  assert.ok(hasTermination, 'termination failure in cleanupErrors')
   const hasDockerError = result.cleanupErrors.some(
     e => (e.error ?? '').includes('Docker')
   )

@@ -24,47 +24,24 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { loadLocalEnvironment, resolveCommand, runCommand, shutdownGuard, withIsolatedTestDatabase } from './local-postgres.mjs'
 import { terminateProcess, windowsTerminateProcess } from './terminate-process.mjs'
+import { AggregatedError, createFailureCollector } from './aggregated-error.mjs'
 
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const serverDir = fileURLToPath(new URL('../server/', import.meta.url))
 const clientDir = fileURLToPath(new URL('../client/', import.meta.url))
 const e2eDir = fileURLToPath(new URL('../e2e/', import.meta.url))
-
-export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOverride, withIsolatedTestDatabase: withIsolatedTestDatabaseOverride, loadLocalEnvironment: loadEnvOverride, waitForMonradApi: waitForMonradApiOverride, waitForClient: waitForClientOverride, waitForProxy: waitForProxyOverride } = {}) {
-  const resolvedEnv = loadEnvOverride ? loadEnvOverride(root) : loadLocalEnvironment(root)
+export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOverride, withIsolatedTestDatabase: withIsolatedTestDatabaseOverride, loadLocalEnvironment: loadEnvOverride, waitForMonradApi: waitForMonradApiOverride, waitForClient: waitForClientOverride, waitForProxy: waitForProxyOverride, guardFactory = shutdownGuard, terminateChild } = {}) {
   const children = []
-  const guard = shutdownGuard()
+  const guard = guardFactory()
   const internalAbort = new AbortController()
+  const failures = createFailureCollector()
 
-  // Structured failure aggregation.
-  const AggregatedError = class extends Error {
-    constructor(primary, secondaryErrors = []) {
-      const parts = [primary?.message ?? String(primary)]
-      for (const s of secondaryErrors) parts.push(`[${s.type}] ${s.error}`)
-      super(parts.join('; '))
-      this.name = 'AggregatedError'
-      this.primary = primary
-      this.secondaryErrors = secondaryErrors
-    }
-  }
-
-  const failures = {
-    primary: null,
-    secondary: [],
-    addPrimary(err) {
-      if (!this.primary) {
-        this.primary = err instanceof Error ? err : new Error(String(err))
-        internalAbort.abort()
-      }
-    },
-    addSecondary(type, error) {
-      this.secondary.push({ type, error: String(error) })
-    },
-    toError() {
-      if (!this.primary && this.secondary.length === 0) return null
-      return new AggregatedError(this.primary ?? new Error('Unknown failure'), this.secondary)
-    },
+  // Override addPrimary to also abort the internal signal (for E2E runner).
+  const originalAddPrimary = failures.addPrimary.bind(failures)
+  failures.addPrimary = (err) => {
+    originalAddPrimary(err)
+    internalAbort.abort()
   }
 
   function makeCombinedSignal(...signals) {
@@ -76,6 +53,7 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
   const combinedSignal = AbortSignal.any
     ? AbortSignal.any([guard.abortSignal, internalAbort.signal])
     : makeCombinedSignal(guard.abortSignal, internalAbort.signal)
+  const resolvedEnv = loadEnvOverride ? loadEnvOverride(root) : loadLocalEnvironment(root)
   const host = resolvedEnv.E2E_HOST ?? '127.0.0.1'
 
   // Wrap the entire body after guard creation so guard.dispose() runs on every path.
@@ -185,12 +163,12 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
             failures.addSecondary('child-process termination', childErr?.message ?? String(childErr))
           }
         }
-      })
+        })
     } catch (error) {
       // Use the caught error directly — it's already aggregated or is the raw error.
-      // Do not replace with primaryChildFailure.message, which would lose cleanup details.
       if (error instanceof AggregatedError) {
-        if (error.primary) failures.primary = error.primary
+        // Flatten aggregated error into the shared collector without duplicating.
+        if (error.primary) failures.addPrimary(error.primary)
         for (const s of error.secondaryErrors) {
           failures.addSecondary(s.type, s.error)
         }
@@ -256,14 +234,15 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
   }
 
   async function stopChildren() {
+    const termFn = terminateChild ?? (
+      process.platform === 'win32'
+        ? (child) => windowsTerminateProcess(child)
+        : (child) => terminateProcess(child, undefined, { useProcessGroup: true })
+    )
     const results = await Promise.allSettled(
       children.reverse().map(async entry => {
         entry.markExpectedShutdown?.()
-        if (process.platform === 'win32') {
-          await windowsTerminateProcess(entry.child)
-        } else {
-          await terminateProcess(entry.child, undefined, { useProcessGroup: true })
-        }
+        await termFn(entry.child)
       })
     )
     const rejected = results.filter(r => r.status === 'rejected')
@@ -389,10 +368,10 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
     }
     throw new Error(`Timed out waiting for ${label}: ${lastError?.message ?? 'unknown error'}`)
   }
-
   function computeExitCode() {
     if (guard.triggered) return guard.signalExitCode
-    if (failures.primary || failures.secondary.some(e => e.type !== 'process termination')) return 1
+    // Any failure — primary, process termination, cleanup — causes non-zero.
+    if (failures.primary || failures.secondary.length > 0) return 1
     return 0
   }
 }

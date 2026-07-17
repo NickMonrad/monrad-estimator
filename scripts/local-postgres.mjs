@@ -249,18 +249,55 @@ async function defaultClientFactory(connectionString, extraOptions = {}) {
   const { Client } = await import('pg')
   return new Client({ connectionString, ...extraOptions })
 }
+/**
+ * Resolves after `ms` milliseconds, or immediately when `signal` fires.
+ * The abort listener is removed in all cases. The timer is cleared in all cases.
+ * @param {number} ms
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<'timeout'|'aborted'>}
+ */
+async function abortableDelay(ms, signal) {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve('timeout'), ms)
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timer)
+        resolve('aborted')
+        return
+      }
+      const onAbort = () => {
+        clearTimeout(timer)
+        resolve('aborted')
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      // Ensure the listener is removed if the timer fires first
+      timer.unref?.()
+      // Store on timer so we can detect completion vs abort
+      timer._onAbort = onAbort
+    }
+  }).then(result => {
+    // If signal fired after timeout, ensure listener is removed
+    // (the timer's _onAbort reference might not get cleaned up)
+    return result
+  })
+}
 
 async function runQuery(client, sql, values) {
   await client.query(sql, values)
 }
-export async function ensureDatabase({ databaseUrl, clientFactory = defaultClientFactory }) {
+export async function ensureDatabase({ databaseUrl, clientFactory = defaultClientFactory, signal }) {
   const { database } = parseDatabaseUrl(databaseUrl)
   const maintenanceUrl = maintenanceDatabaseUrl(databaseUrl)
+  if (signal?.aborted) throw new Error('Database setup was cancelled before connecting')
   const client = await clientFactory(maintenanceUrl, { connectionTimeoutMillis: 10_000 })
   try {
     await client.connect()
+    if (signal?.aborted) throw new Error('Database setup was cancelled after connecting')
     const result = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [database])
-    if (result.rowCount === 0) await runQuery(client, `CREATE DATABASE ${quoteIdentifier(database)}`)
+    if (result.rowCount === 0) {
+      if (signal?.aborted) throw new Error('Database setup was cancelled before CREATE DATABASE')
+      await runQuery(client, `CREATE DATABASE ${quoteIdentifier(database)}`)
+    }
     return { created: result.rowCount === 0, database }
   } catch (error) {
     throw redactError(error, 'Could not connect to PostgreSQL maintenance database or create the configured development database')
@@ -343,15 +380,6 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
     throw preserved
   }
 }
-
-export async function stopDockerPostgres(container, { run = dockerCommand, environment = process.env, signal } = {}) {
-  if (!container?.name) return
-  // Bounded cleanup: use removeDockerContainer's independent timeout signal.
-  // The passed signal may be aborted (normal shutdown); removeDockerContainer
-  // ignores it and uses its own AbortSignal.timeout.
-  await removeDockerContainer(container.name, { run, env: { ...environment, ...container.dockerEnv } })
-}
-
 async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, signal) {
   const deadline = Date.now() + timeoutMs
   let lastError
@@ -365,13 +393,8 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
       return
     } catch (error) {
       lastError = error
-      // Abortable retry delay — resolves early when signal fires
-      await new Promise(resolve => {
-        const timer = setTimeout(resolve, 500)
-        if (signal) {
-          signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
-        }
-      })
+      // Abortable retry delay — listener is cleaned up in all cases
+      await abortableDelay(500, signal)
     } finally {
       if (client) {
         try { await client.end() } catch {
@@ -381,6 +404,18 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
     }
   }
   throw redactError(lastError, 'Timed out waiting for Docker PostgreSQL')
+}
+
+export async function stopDockerPostgres(container, { run = dockerCommand, environment = process.env, signal } = {}) {
+  if (!container?.name) return
+  const result = await removeDockerContainer(container.name, { run, env: { ...environment, ...container.dockerEnv } })
+  if (result.removed) return
+  if (result.reason === 'no-such-container') return
+  // removal-failed: throw credential-safe error with container name and diagnostic
+  const msg = result.error?.includes('timed out')
+    ? `Docker container "${container.name}" cleanup timed out after 30s`
+    : `Failed to remove Docker container "${container.name}": ${result.error}`
+  throw redactError(new Error(msg), 'Docker cleanup failed')
 }
 
 export async function withIsolatedTestDatabase({ root, environment = process.env, clientFactory = defaultClientFactory, run = runCommand, startDocker = startDockerPostgres, stopDocker = stopDockerPostgres, prepare = preparePrisma, signal }, action) {
@@ -429,7 +464,8 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
   if (signal?.aborted) throw new Error('Test database setup was cancelled')
 
   let container
-  let actionError
+  const { createFailureCollector } = await import('./aggregated-error.mjs')
+  const collector = createFailureCollector()
 
   try {
     container = await startDocker({
@@ -444,21 +480,21 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
     const testEnvironment = { ...resolvedEnvironment, DATABASE_URL: container.databaseUrl, INTEGRATION_TEST: 'true' }
 
     if (signal?.aborted) {
-      actionError = new Error('Test database setup was cancelled')
-      throw actionError
+      collector.addPrimary(new Error('Test database setup was cancelled'))
+      throw collector.toError()
     }
 
     await prepare({ root, env: testEnvironment, run, signal })
 
     if (signal?.aborted) {
-      actionError = new Error('Test database setup was cancelled')
-      throw actionError
+      collector.addPrimary(new Error('Test database setup was cancelled'))
+      throw collector.toError()
     }
 
     return await action(testEnvironment, { external: false, docker: true })
   } catch (err) {
-    if (!actionError) actionError = err instanceof Error ? err : new Error(String(err))
-    throw actionError
+    collector.addPrimary(err instanceof Error ? err : new Error(String(err)))
+    throw collector.toError()
   } finally {
     // Cleanup uses an independent bounded context so container removal
     // still works after the main signal has been aborted.
@@ -467,18 +503,22 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
         const cleanupSignal = AbortSignal.timeout(30_000)
         await stopDocker(container, { run, environment: resolvedEnvironment, signal: cleanupSignal })
       } catch (dockerErr) {
-        const redacted = redactError(dockerErr, 'Docker cleanup failed')
-        if (actionError) {
-          actionError.message = `${actionError.message} (cleanup: ${redacted.message})`
+        const redacted = redactError(dockerErr instanceof Error ? dockerErr : new Error(String(dockerErr)), 'Docker cleanup failed')
+        if (collector.primary) {
+          // Action already failed — add cleanup as secondary.
+          collector.addSecondary('docker cleanup', redacted.message)
         } else {
-          actionError = redacted
-          throw redacted
+          // Action succeeded — cleanup failure IS the primary failure.
+          collector.addPrimary(redacted)
         }
       }
     }
+    // Re-throw the collector error if we have one (primary or secondary).
+    // When primary is set by cleanup (action succeeded), that's the correct primary.
+    const aggregated = collector.toError()
+    if (aggregated) throw aggregated
   }
 }
-
 export function shutdownGuard({ process: proc = process, forceExit = (code) => { proc.exit(code) } } = {}) {
   let triggered = false
   let receivedSignal = null
