@@ -468,11 +468,8 @@ export async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60
     try {
       // Calculate remaining time once; never pass zero as a timeout.
       const remaining = remainingTime(deadline)
-      if (remaining <= 0) break
-
       const connectTimeout = Math.min(remaining, 5_000)
-      const stmtTimeout = Math.min(remaining, 10_000)
-      client = await clientFactory(databaseUrl, { connectionTimeoutMillis: connectTimeout, statement_timeout: stmtTimeout })
+      client = await clientFactory(databaseUrl, { connectionTimeoutMillis: connectTimeout })
 
       // Attach abort listener to interrupt active connect/query.
       abortHandler = () => destroyClient(client)
