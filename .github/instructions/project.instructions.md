@@ -171,35 +171,33 @@ it.
 
 ### Disposable test databases
 
-The lifecycle module operates in two modes controlled by whether
-`MONRAD_TEST_DATABASE_URL` is set:
+The lifecycle module operates in two modes:
 
-**Auto-created mode (MONRAD_TEST_DATABASE_URL unset, default):**
-A temporary database with a `monrad_test_` prefix (e.g.
-`monrad_test_a1b2c3d4e5`) is created on the same PostgreSQL server as
-`DATABASE_URL`. Schema migrations are applied, the suite runs, the runner
-terminates all spawned child processes (process tree on POSIX via
-SIGTERM→SIGKILL; `taskkill /T /F` on Windows), connections are terminated,
-and the temporary database is dropped. The module never touches the
-configured `DATABASE_URL` database.
+**Docker-first mode (default):**
+Creates a unique disposable `postgres:15` Docker container with a dynamically
+assigned loopback port. Schema migrations are applied to the container's built-in
+`postgres` database, the suite runs, then the container is force-removed. The
+container itself is the isolation and cleanup boundary — no temporary database
+is created on a host PostgreSQL server.
 
 **Externally managed mode (MONRAD_TEST_DATABASE_URL set):**
 `MONRAD_TEST_DATABASE_URL` IS the exact database the lifecycle module uses.
-Migrations, seed, and cleanup run directly against that database; the
+Migrations, cleanup, seed and tests run directly against that database; the
 module never auto-creates or auto-drops a database. Requires
-`MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` as an explicit opt-in safety guard.
+`MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` as an explicit destructive-test opt-in
+and is rejected when the URL identifies the same host, port and database as the
+persistent `DATABASE_URL`.
 
-The lifecycle module prefers a host PostgreSQL installation and is designed to
-fall back to a Docker container (named with a `monrad_pg_` prefix) when no host
-server is reachable. **This Docker fallback has not been live-tested;** prefer
-installing PostgreSQL directly on the host for reliable performance.
+When Docker is unavailable, the runner fails with a clear diagnostic explaining
+that Docker is the default prerequisite and that the external test database
+override may be used instead. There is no automatic fallback to host PostgreSQL.
 
 ### Environment variables
 
 | Variable | Purpose |
 |---|---|
-| `MONRAD_TEST_DATABASE_URL` | Exact connection string of an externally managed database for disposable integration/E2E tests. When set, migrations, seed, and cleanup run directly against this database; it is never auto-created or auto-dropped. Leave unset to let the module auto-create a temporary database on the same host as `DATABASE_URL`. |
-| `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` | Required when `MONRAD_TEST_DATABASE_URL` is set. Confirms explicit opt-in to using an externally managed database. Without this flag the module refuses to operate when `MONRAD_TEST_DATABASE_URL` is set. |
+| `MONRAD_TEST_DATABASE_URL` | Exact connection string of an externally managed database for disposable integration/E2E tests. When set, migrations, cleanup, seed and tests run directly against this database; it is never auto-created or auto-dropped. Leave unset for the default Docker-first lifecycle. |
+| `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` | Required when `MONRAD_TEST_DATABASE_URL` is set. Confirms explicit opt-in. Without this flag the module refuses to operate. The URL is also validated against the persistent `DATABASE_URL` to prevent destructive operations on the development database. |
 
 Both variables are documented with commented-out defaults in `server/.env.example`.
 
@@ -207,62 +205,35 @@ Both variables are documented with commented-out defaults in `server/.env.exampl
 
 | Prefix | Used for | Example |
 |---|---|---|
-| `monrad_test_` | Temporary test database names | `monrad_test_a1b2c3d4e5` |
-| `monrad_pg_` | Docker container names (fallback) | `monrad_pg_385_integration` |
+| `monrad_pg_` | Disposable Docker container names | `monrad_pg_a1b2c3d4` |
+| `monrad_test_` | Test database names (legacy, no longer created by default) | `monrad_test_a1b2c3d4` |
 
-Generated names use only lowercase letters, digits, and underscores. They are
-safe for use in SQL identifiers and Docker container names without quoting.
+Generated container names use only lowercase letters, digits, and underscores.
+They are safe for use in Docker container names without quoting.
 
 ### Interrupted runs
 
-If a test run is interrupted (Ctrl+C, crash, reboot), a temporary database
-or container may not be cleaned up automatically. **Before any removal,
-inspect and verify:**
-
-```sql
--- List candidates (connect to the server and query pg_database)
-SELECT datname FROM pg_database WHERE datname LIKE 'monrad_test_%';
-```
+If a test run is interrupted (Ctrl+C, crash), the disposable Docker container
+may not be cleaned up automatically. **Before any removal, inspect and verify:**
 
 ```bash
 # List Docker containers the lifecycle module may have created
 docker ps -a --filter name=monrad_pg_
 ```
 
-For each candidate database:
+For each candidate container:
 
-1. Compare the candidate name against the `DATABASE_URL` database — **they
-   must not match**. The configured persistent database is never a cleanup
-   target.
-2. Confirm the candidate was created by the lifecycle module (the name
-   contains the worktree-specific suffix), not a pre-existing externally
-   managed database. The `monrad_test_` prefix alone does not prove a
-   candidate is safe to drop.
-3. Only then proceed to terminate connections and drop.
-
-To drop a verified leftover database, **terminate connections first**:
-
-```sql
--- Terminate connections to the candidate, excluding your own session
-SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-WHERE datname = 'monrad_test_a1b2c3d4e5' AND pid <> pg_backend_pid();
--- Drop the verified candidate
-DROP DATABASE IF EXISTS monrad_test_a1b2c3d4e5;
-```
-
-To remove a verified leftover container, force-stop and remove:
+1. Verify the name contains the worktree-specific suffix generated by the
+   lifecycle module, not a pre-existing externally managed container.
+2. Confirm it is not a container you manually created for persistent development.
+3. Only then force-remove it:
 
 ```bash
-docker rm -f monrad_pg_385_integration
+docker rm -f monrad_pg_a1b2c3d4
 ```
 
-> **Never delete by prefix without inspection.** List, verify the exact
-> name, compare against the configured `DATABASE_URL`, and confirm the
-> candidate is not the configured persistent database (in the default
-> setup, `monrad_estimator`) before removal. The `monrad_test_` prefix
-> alone does not prove a candidate is safe to drop — verify that it was
-> created by the lifecycle module, not a pre-existing externally managed
-> database.
+> **Never delete by prefix without inspection.** List, verify the exact name,
+> and confirm the container was created by the lifecycle module before removal.
 
 ## UI and accessibility conventions
 

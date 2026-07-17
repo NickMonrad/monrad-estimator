@@ -8,6 +8,8 @@ import {
   ensureDatabase,
   loadLocalEnvironment,
   maintenanceDatabaseUrl,
+  normalizeDatabaseIdentity,
+  isSameDatabase,
   parseDatabaseUrl,
   redactDatabaseUrl,
   resolveCommand,
@@ -50,6 +52,73 @@ test('derives maintenance and target URLs without mutating development URL', () 
   assert.equal(developmentUrl, 'postgresql://developer:secret@localhost:5432/development_db?sslmode=disable')
 })
 
+test('normalizeDatabaseIdentity handles scheme aliases and default port', () => {
+  const a = normalizeDatabaseIdentity('postgresql://u:p@localhost/mydb')
+  const b = normalizeDatabaseIdentity('postgres://u@localhost:5432/mydb')
+  assert.deepEqual(a, { host: 'localhost', port: 5432, database: 'mydb' })
+  assert.deepEqual(b, { host: 'localhost', port: 5432, database: 'mydb' })
+})
+
+test('normalizeDatabaseIdentity handles loopback aliases', () => {
+  const localhost = normalizeDatabaseIdentity('postgresql://u:p@localhost/db')
+  const ipv4 = normalizeDatabaseIdentity('postgresql://u:p@127.0.0.1/db')
+  const ipv6 = normalizeDatabaseIdentity('postgresql://u:p@[::1]/db')
+  assert.equal(localhost.host, 'localhost')
+  assert.equal(ipv4.host, 'localhost')
+  assert.equal(ipv6.host, 'localhost')
+})
+
+test('isSameDatabase rejects identical databases regardless of credentials', () => {
+  assert.ok(isSameDatabase('postgresql://a:1@localhost/x', 'postgresql://b:2@localhost/x'))
+})
+
+test('isSameDatabase recognizes genuinely different databases', () => {
+  assert.equal(isSameDatabase('postgresql://u:p@localhost/a', 'postgresql://u:p@localhost/b'), false)
+})
+
+test('isSameDatabase different hosts are different', () => {
+  assert.equal(isSameDatabase('postgresql://u:p@host1/x', 'postgresql://u:p@host2/x'), false)
+})
+
+test('isSameDatabase ignores irrelevant query parameters', () => {
+  assert.ok(isSameDatabase('postgresql://u:p@localhost/db', 'postgresql://u:p@localhost/db?sslmode=disable'))
+})
+
+test('isSameDatabase handles URL-encoded database names', () => {
+  assert.ok(isSameDatabase('postgresql://u:p@localhost/test%20db', 'postgresql://u:p@localhost/test db'))
+})
+
+test('isSameDatabase ignores hostname case', () => {
+  assert.ok(isSameDatabase('postgresql://u:p@LOCALHOST/db', 'postgresql://u:p@localhost/db'))
+})
+
+test('isSameDatabase missing persistent DATABASE_URL fails closed', async () => {
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: {
+        MONRAD_TEST_DATABASE_URL: 'postgresql://tester:secret@localhost/test_db',
+        MONRAD_ALLOW_EXTERNAL_TEST_DATABASE: '1',
+      },
+    }, async () => {}),
+    /DATABASE_URL is required to validate MONRAD_TEST_DATABASE_URL isolation/,
+  )
+})
+
+test('isSameDatabase external URL rejected when it matches persistent URL', async () => {
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: {
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/monrad_estimator',
+        MONRAD_TEST_DATABASE_URL: 'postgresql://other:creds@127.0.0.1:5432/monrad_estimator?sslmode=require',
+        MONRAD_ALLOW_EXTERNAL_TEST_DATABASE: '1',
+      },
+    }, async () => {}),
+    /must not target the same database/,
+  )
+})
+
 test('generates unique PostgreSQL-safe test names within limits', () => {
   const first = createTestDatabaseName({ worktree: '/tmp/very-long-worktree-name-with-unsafe-characters!!!', pid: 1, random: 'one' })
   const second = createTestDatabaseName({ worktree: '/tmp/another-worktree', pid: 2, random: 'two' })
@@ -86,44 +155,75 @@ test('constructs Docker commands with a dynamic port and removes the container',
   const container = await startDockerPostgres({ run, random: 'docker-test', waitForPort: async port => assert.equal(port, 49152) })
   assert.equal(container.port, 49152)
   assert.match(container.name, /^monrad_pg_/)
-  assert.deepEqual(calls[0].args.slice(0, 7), ['run', '--detach', '--name', container.name, '--env', 'POSTGRES_PASSWORD', '--env'])
-  assert.ok(calls[0].args.includes('127.0.0.1::5432'))
+  assert.deepEqual(calls[0].args.slice(0, 12), ['run', '--detach', '--name', container.name, '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER', '--env', 'POSTGRES_DB', '--publish', '127.0.0.1::5432'])
+  assert.equal(calls[0].args[12], 'postgres:15')
   await stopDockerPostgres(container, { run })
   assert.deepEqual(calls.at(-1).args, ['rm', '--force', container.name])
 })
 
-test('cleans a disposable database after success and terminates connections before drop', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-life-'))
+test('uses Docker-first mode by default and cleans up container after success', async () => {
+  let dockerStarted = false
+  let dockerStopped = false
+  let actionUrl = null
+  let createDbQueries = 0
+  let dropDbQueries = 0
   const queries = []
-  let prepared = false
+  const mockClient = {
+    async connect() {},
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.startsWith('CREATE DATABASE')) createDbQueries++
+      if (sql.startsWith('DROP DATABASE')) dropDbQueries++
+      return { rowCount: 1 }
+    },
+    async end() {},
+  }
+  const clientFactory = async () => mockClient
   await withIsolatedTestDatabase({
-    root,
+    root: process.cwd(),
     environment: { DATABASE_URL: developmentUrl },
-    clientFactory: fakeClientFactory(queries),
-    prepare: async () => { prepared = true },
-  }, async env => {
-    assert.notEqual(env.DATABASE_URL, developmentUrl)
-  })
-  assert.equal(prepared, true)
-  assert.ok(queries.some(query => query.sql.startsWith('CREATE DATABASE')))
-  const terminate = queries.findIndex(query => query.sql.startsWith('SELECT pg_terminate_backend'))
-  const drop = queries.findIndex(query => query.sql.startsWith('DROP DATABASE'))
-  assert.ok(terminate >= 0 && drop > terminate)
-  assert.ok(!queries.some(query => query.sql.includes('development_db') && query.sql.startsWith('DROP DATABASE')))
-  fs.rmSync(root, { recursive: true, force: true })
+    clientFactory,
+    startDocker: async () => {
+      dockerStarted = true
+      return { name: 'monrad_pg_test', databaseUrl: 'postgresql://postgres:secret@127.0.0.1:49152/postgres' }
+    },
+    stopDocker: async () => { dockerStopped = true },
+    prepare: async ({ env }) => { actionUrl = env.DATABASE_URL },
+  }, async () => 'ok')
+  assert.equal(dockerStarted, true, 'Docker must be started')
+  assert.equal(dockerStopped, true, 'Docker must be stopped')
+  assert.equal(actionUrl, 'postgresql://postgres:secret@127.0.0.1:49152/postgres', 'Docker databaseUrl must be used')
+  assert.equal(createDbQueries, 0, 'no CREATE DATABASE queries in Docker-first mode')
+  assert.equal(dropDbQueries, 0, 'no DROP DATABASE queries in Docker-first mode')
 })
 
-test('cleans a disposable database after child failure', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-life-'))
+test('cleans up container when child action fails', async () => {
+  let dockerStarted = false
+  let dockerStopped = false
   const queries = []
-  await assert.rejects(withIsolatedTestDatabase({
-    root,
-    environment: { DATABASE_URL: developmentUrl },
-    clientFactory: fakeClientFactory(queries),
-    prepare: async () => {},
-  }, async () => { throw new Error('child failed') }), /child failed/)
-  assert.ok(queries.some(query => query.sql.startsWith('DROP DATABASE')))
-  fs.rmSync(root, { recursive: true, force: true })
+  const mockClient = {
+    async connect() {},
+    async query(sql, values) { queries.push({ sql, values }); return { rowCount: 1 } },
+    async end() {},
+  }
+  const clientFactory = async () => mockClient
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: { DATABASE_URL: developmentUrl },
+      clientFactory,
+      startDocker: async () => {
+        dockerStarted = true
+        return { name: 'monrad_pg_test', databaseUrl: 'postgresql://postgres:secret@127.0.0.1:49152/postgres' }
+      },
+      stopDocker: async () => { dockerStopped = true },
+      prepare: async () => {},
+    }, async () => { throw new Error('child failed') }),
+    /child failed/,
+  )
+  assert.equal(dockerStarted, true, 'Docker must be started')
+  assert.equal(dockerStopped, true, 'Docker must be stopped even on failure')
+  assert.equal(queries.length, 0, 'no database-level queries in Docker-first mode')
 })
 
 test('requires explicit opt-in for externally managed test databases', async () => {
@@ -147,42 +247,6 @@ test('uses an explicitly allowed external test database without dropping it', as
   assert.equal(preparedUrl, 'postgresql://tester:secret@localhost/test_db')
 })
 
-test('falls back to a unique Docker database when host PostgreSQL is unavailable', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-fallback-'))
-  const queries = []
-  let attempts = 0
-  let dockerStarted = false
-  let dockerStopped = false
-  const clientFactory = async () => {
-    attempts += 1
-    return {
-      async connect() {
-        if (attempts === 1) throw new Error('host unavailable')
-      },
-      async query(sql, values) {
-        queries.push({ sql, values })
-        return { rowCount: 1 }
-      },
-      async end() {},
-    }
-  }
-  await withIsolatedTestDatabase({
-    root,
-    environment: { DATABASE_URL: developmentUrl },
-    clientFactory,
-    startDocker: async () => {
-      dockerStarted = true
-      return { name: 'monrad_pg_test', databaseUrl: 'postgresql://postgres:secret@127.0.0.1:49152/postgres' }
-    },
-    stopDocker: async () => { dockerStopped = true },
-    prepare: async () => {},
-  }, async (_env, metadata) => assert.equal(metadata.docker, true))
-  assert.equal(dockerStarted, true)
-  assert.equal(dockerStopped, true)
-  assert.ok(queries.some(query => query.sql.startsWith('CREATE DATABASE')))
-  assert.ok(queries.some(query => query.sql.startsWith('DROP DATABASE')))
-  fs.rmSync(root, { recursive: true, force: true })
-})
 
 test('uses Windows npm command adaptation without shell strings', () => {
   const command = resolveCommand('npm', ['install'], 'win32', 'C:/npm-cli.js')
@@ -267,26 +331,18 @@ test('redacts password query parameters in error messages', () => {
   assert.doesNotMatch(redacted.message, /password=topsecret/)
 })
 
-test('throws cleanup error when database cleanup fails after successful action', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-clnp-'))
-  let dropAttempted = false
-  const clientFactory = async () => ({
-    async connect() {},
-    async query(sql, values) {
-      if (sql.startsWith('DROP DATABASE')) {
-        dropAttempted = true
-        throw new Error('drop failed: postgresql://user:realpass@localhost/db')
-      }
-      return { rowCount: 1 }
-    },
-    async end() {},
-  })
+test('throws cleanup error when Docker cleanup fails after successful action', async () => {
+  let stopDockerCalled = false
   let err
   try {
     await withIsolatedTestDatabase({
-      root,
-      environment: { DATABASE_URL: 'postgresql://user:realpass@localhost:5432/my_db' },
-      clientFactory,
+      root: process.cwd(),
+      environment: { DATABASE_URL: developmentUrl },
+      startDocker: async () => ({ name: 'monrad_pg_clnp', databaseUrl: 'postgresql://postgres:secret@127.0.0.1:49152/postgres' }),
+      stopDocker: async () => {
+        stopDockerCalled = true
+        throw new Error('stop failed: postgresql://user:realpass@localhost/db')
+      },
       prepare: async () => {},
     }, async () => 'ok')
     assert.fail('expected rejection')
@@ -294,32 +350,23 @@ test('throws cleanup error when database cleanup fails after successful action',
     err = e
   }
   assert.ok(err instanceof Error, 'rejection is an Error')
-  assert.ok(err.message.includes('Cleanup failed'), 'cleanup error is primary when action succeeds')
+  assert.ok(err.message.includes('cleanup failed'), 'cleanup error is primary when action succeeds')
   assert.match(err.message, /\*\*\*@/, 'password is redacted in cleanup error')
-  assert.equal(dropAttempted, true)
-  fs.rmSync(root, { recursive: true, force: true })
+  assert.equal(stopDockerCalled, true)
 })
 
-test('surfaces cleanup failure alongside primary action failure', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-clna-'))
-  let dropAttempted = false
-  const clientFactory = async () => ({
-    async connect() {},
-    async query(sql, values) {
-      if (sql.startsWith('DROP DATABASE')) {
-        dropAttempted = true
-        throw new Error('cleanup failed')
-      }
-      return { rowCount: 1 }
-    },
-    async end() {},
-  })
+test('surfaces Docker cleanup failure alongside primary action failure', async () => {
+  let stopDockerCalled = false
   let err
   try {
     await withIsolatedTestDatabase({
-      root,
+      root: process.cwd(),
       environment: { DATABASE_URL: developmentUrl },
-      clientFactory,
+      startDocker: async () => ({ name: 'monrad_pg_clna', databaseUrl: 'postgresql://postgres:secret@127.0.0.1:49152/postgres' }),
+      stopDocker: async () => {
+        stopDockerCalled = true
+        throw new Error('Docker cleanup failed')
+      },
       prepare: async () => {},
     }, async () => { throw new Error('action failed') })
     assert.fail('expected rejection')
@@ -328,31 +375,22 @@ test('surfaces cleanup failure alongside primary action failure', async () => {
   }
   assert.ok(err instanceof Error, 'rejection is an Error')
   assert.ok(err.message.includes('action failed'), 'primary action failure is present')
-  assert.ok(err.message.includes('cleanup'), 'cleanup failure is surfaced alongside action failure')
-  assert.equal(dropAttempted, true)
-  fs.rmSync(root, { recursive: true, force: true })
+  assert.ok(err.message.includes('Docker cleanup'), 'Docker cleanup failure is surfaced alongside action failure')
+  assert.equal(stopDockerCalled, true)
 })
 
-test('surfaces cleanup failure after non-Error action rejection', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-clnp-'))
-  let dropAttempted = false
-  const clientFactory = async () => ({
-    async connect() {},
-    async query(sql, values) {
-      if (sql.startsWith('DROP DATABASE')) {
-        dropAttempted = true
-        throw new Error('cleanup choked')
-      }
-      return { rowCount: 1 }
-    },
-    async end() {},
-  })
+test('Docker cleanup failure after non-Error action rejection', async () => {
+  let stopDockerCalled = false
   let err
   try {
     await withIsolatedTestDatabase({
-      root,
+      root: process.cwd(),
       environment: { DATABASE_URL: developmentUrl },
-      clientFactory,
+      startDocker: async () => ({ name: 'monrad_pg_clnp', databaseUrl: 'postgresql://postgres:secret@127.0.0.1:49152/postgres' }),
+      stopDocker: async () => {
+        stopDockerCalled = true
+        throw new Error('Docker cleanup choked')
+      },
       prepare: async () => {},
     }, async () => { throw 'urgent failure' })
     assert.fail('expected rejection')
@@ -361,47 +399,11 @@ test('surfaces cleanup failure after non-Error action rejection', async () => {
   }
   assert.ok(err instanceof Error, 'non-Error rejection is normalized to Error')
   assert.ok(err.message.includes('urgent failure'), 'original failure meaning is retained')
-  assert.ok(err.message.includes('cleanup'), 'cleanup failure is surfaced')
-  assert.equal(dropAttempted, true, 'cleanup was attempted')
-  fs.rmSync(root, { recursive: true, force: true })
+  assert.ok(err.message.includes('Docker cleanup'), 'Docker cleanup failure is surfaced')
+  assert.equal(stopDockerCalled, true, 'Docker cleanup was attempted')
 })
 
 
-test('attempts both database and Docker cleanup when both are present', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-both-'))
-  const queries = []
-  let dockerCleanupCalled = false
-  let attempts = 0
-  const clientFactory = async () => {
-    attempts += 1
-    return {
-      async connect() {
-        if (attempts === 1) throw new Error('host unavailable')
-      },
-      async query(sql, values) {
-        queries.push({ sql, values })
-        return { rowCount: 1 }
-      },
-      async end() {},
-    }
-  }
-  await withIsolatedTestDatabase({
-    root,
-    environment: { DATABASE_URL: developmentUrl },
-    clientFactory,
-    startDocker: async () => {
-      return { name: 'monrad_pg_both', databaseUrl: 'postgresql://postgres:pw@127.0.0.1:49152/postgres' }
-    },
-    stopDocker: async () => { dockerCleanupCalled = true },
-    prepare: async () => {},
-  }, async (_env, metadata) => {
-    assert.ok(metadata.docker)
-  })
-  assert.ok(queries.some(q => q.sql.startsWith('CREATE DATABASE')), 'test database was created')
-  assert.ok(queries.some(q => q.sql.startsWith('DROP DATABASE')), 'test database was dropped')
-  assert.ok(dockerCleanupCalled, 'Docker container was cleaned up')
-  fs.rmSync(root, { recursive: true, force: true })
-})
 
 
 // ── Shutdown guard ───────────────────────────────────────────────────────────
@@ -452,25 +454,31 @@ test('shutdownGuard SIGTERM sets triggered, signal, and 143 exit code', () => {
   guard.dispose()
 })
 
-test('shutdownGuard idempotent on repeated signal', () => {
+test('shutdownGuard second signal triggers force-exit', () => {
   const events = {}
   const mockProc = {
     exitCode: undefined,
     on(event, handler) { events[event] = handler },
     off(event) { delete events[event] },
   }
-  const guard = shutdownGuard({ process: mockProc })
+  let forceExitCalledWith = null
+  const guard = shutdownGuard({
+    process: mockProc,
+    forceExit: (code) => { forceExitCalledWith = code },
+  })
+  // First signal: SIGINT
   events.SIGINT('SIGINT')
   assert.equal(guard.triggered, true)
   assert.equal(guard.signal, 'SIGINT')
-  assert.equal(mockProc.exitCode, 130)
+  assert.equal(guard.signalExitCode, 130)
+  assert.equal(guard.abortSignal.aborted, true)
+  assert.equal(forceExitCalledWith, null, 'forceExit must not be called on first signal')
 
-  // Second signal must not change state
+  // Second signal: SIGTERM must trigger force-exit
   events.SIGTERM('SIGTERM')
-  assert.equal(guard.triggered, true, 'triggered must remain true')
-  assert.equal(guard.signal, 'SIGINT', 'signal must not be overwritten')
-  assert.equal(guard.signalExitCode, 130, 'exit code must not be overwritten')
-  assert.equal(mockProc.exitCode, 130, 'mock exitCode must not change')
+  assert.equal(forceExitCalledWith, 130, 'forceExit must be called with the first signal exit code')
+  assert.equal(guard.signal, 'SIGINT', 'signal must still reflect the first signal')
+  assert.equal(guard.signalExitCode, 130, 'exit code must still reflect the first signal')
   guard.dispose()
 })
 
@@ -759,4 +767,60 @@ test('abort after non-zero exit retains exit error', async () => {
     /failed with exit code 1/,
   )
   controller.abort()
+})
+
+// ── Cancellation tests ──────────────────────────────────────────────────────────
+
+test('withIsolatedTestDatabase Docker-first mode: cancellation before startup creates no container', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  let dockerStarted = false
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
+      signal: controller.signal,
+      startDocker: async () => { dockerStarted = true; return { name: 'test-pg', databaseUrl: 'postgresql://u:p@localhost:5432/postgres' } },
+    }, async () => {}),
+    /was cancelled/,
+  )
+  assert.equal(dockerStarted, false, 'no container should be created after pre-abort')
+})
+
+test('withIsolatedTestDatabase Docker-first mode: cancellation during prepare still cleans up container', async () => {
+  const controller = new AbortController()
+  const signal = controller.signal
+  let dockerStopped = false
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
+      startDocker: async () => ({ name: 'test-pg', databaseUrl: 'postgresql://u:p@localhost:5432/postgres' }),
+      stopDocker: async () => { dockerStopped = true },
+      prepare: async () => { controller.abort() },
+      signal,
+    }, async () => {}),
+    /was cancelled/,
+  )
+  assert.equal(dockerStopped, true, 'Docker container must be cleaned up even after prepare cancellation')
+})
+
+test('withIsolatedTestDatabase external mode: cancellation before prepare rejects without preparing', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  let prepared = false
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: {
+        DATABASE_URL: 'postgresql://u:p@localhost/persistent',
+        MONRAD_TEST_DATABASE_URL: 'postgresql://u:p@localhost/external_test',
+        MONRAD_ALLOW_EXTERNAL_TEST_DATABASE: '1',
+      },
+      prepare: async () => { prepared = true },
+      signal: controller.signal,
+    }, async () => {}),
+    /was cancelled/,
+  )
+  assert.equal(prepared, false, 'must not prepare after pre-abort')
 })

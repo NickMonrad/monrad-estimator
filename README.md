@@ -41,7 +41,8 @@ A full-stack project estimation tool that replaces a manual spreadsheet process.
 ### Prerequisites
 
 - Node.js 24+
-- PostgreSQL reachable from `DATABASE_URL`, or Docker for the optional development/test container workflow
+- Docker for disposable test database containers (test:integration:local, test:e2e:local)
+- PostgreSQL reachable from `DATABASE_URL` for the persistent development database (or a manually managed Docker container)
 
 ### 1. Configure PostgreSQL
 
@@ -53,7 +54,11 @@ docker run -d --name monrad-pg -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=po
 
 Set `DATABASE_URL` in `server/.env` after installing dependencies.
 
-`db:setup` reads shell variables first, then `server/.env` (or `MONRAD_ENV_FILE`), creates only the configured development database when it is absent, and runs `prisma migrate deploy` plus `prisma generate`. It never resets, drops, or overwrites that database. It supports a host PostgreSQL installation; Docker is optional for development setup.
+`db:setup` reads shell variables first, then `server/.env` (or `MONRAD_ENV_FILE`),
+creates only the configured development database when it is absent, and runs
+`prisma migrate deploy` plus `prisma generate`. It never resets, drops, or
+overwrites that database. Disposable PostgreSQL test containers are managed by
+`test:integration:local` and `test:e2e:local`, not by `db:setup`.
 
 ### 2. Install dependencies
 
@@ -164,39 +169,27 @@ npm run validate
 #   termination (SIGTERM → SIGKILL on POSIX; taskkill /T /F on Windows)
 npm run test:local-db
 
-# PostgreSQL-backed integration suites use one disposable database per run.
-# They prefer host PostgreSQL and are designed to fall back to a unique
-# postgres:15 container when no host server is reachable (not yet live-tested).
+# PostgreSQL-backed integration suites use a unique disposable postgres:15
+# Docker container per run. Docker is required.
 npm run test:integration:local
 
-# E2E provisions the same disposable database before cleanup, seed, API, Vite, and Playwright.
-# It never targets the configured persistent development database.
-
+# E2E provisions the same disposable Docker container before cleanup, seed,
+# API, Vite, and Playwright. It never targets the configured persistent
+# development database.
 npm run test:e2e:local
-# Externally managed test database (migrations, seed, and cleanup are destructive):
-# MONRAD_TEST_DATABASE_URL="postgresql://user@host:5432/db_name" MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 npm run test:integration:local
-# When set, MONRAD_TEST_DATABASE_URL IS the exact externally managed database —
-# migrations, seed, and cleanup run directly against it; it is never auto-created
-# or auto-dropped. Both variables are required for opt-in.
-```
 
-Temporary test databases are named uniquely per worktree/run. Before dropping
-the disposable database the local runner terminates all spawned child processes:
-on POSIX the entire process tree receives SIGTERM with escalation to SIGKILL
-after a grace period; on Windows `taskkill /T /F` kills the process tree. The
-runner waits for actual process exit before proceeding to database disposal.
-After process cleanup, connections are terminated and cleanup runs after success
-or failure. If an interrupted process leaves a temporary database or container
-behind, inspect the leftover resources first — list databases with
-`SELECT datname FROM pg_database WHERE datname LIKE 'monrad_test_%'` and
-containers with `docker ps -a --filter name=monrad_pg_` — then verify the exact
-name against the configured `DATABASE_URL` (the persistent database is never a
-cleanup target), terminate connections, and drop or force-remove each one.
-**Never delete by prefix without inspection** — the `monrad_test_` prefix alone
-does not prove a candidate is safe to drop. Only comparing the exact name
-against the configured `DATABASE_URL` and confirming the lifecycle module owns
-the candidate makes cleanup safe. The sample default (`monrad_estimator`) is a
-common persistent-development-database name, but any name may be configured.
+# Externally managed test database (Docker unavailable or CI with managed service):
+# MONRAD_TEST_DATABASE_URL="postgresql://user@host:5432/db_name" MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 npm run test:integration:local
+
+Temporary test databases are managed within disposable PostgreSQL 15 Docker
+containers per worktree/run. Before removing the container the local runner
+terminates all spawned child processes: on POSIX the entire process tree
+receives SIGTERM with escalation to SIGKILL after a grace period; on Windows
+`taskkill /T /F` kills the process tree. The runner waits for actual process
+exit before proceeding to container removal. After process cleanup, the
+container is force-removed after success or failure. If an interrupted run
+leaves a container behind, inspect leftover resources first — list containers
+with `docker ps -a --filter name=monrad_pg_` — then force-remove each one.
 
 ---
 

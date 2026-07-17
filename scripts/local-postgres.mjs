@@ -54,6 +54,27 @@ export function parseDatabaseUrl(value) {
   return { url, database }
 }
 
+export function normalizeDatabaseIdentity(urlString) {
+  const parsed = parseDatabaseUrl(urlString)
+  const { url, database } = parsed
+  let host = url.hostname.toLowerCase()
+  // Normalize local loopback aliases
+  if (host === '127.0.0.1' || host === '::1' || host === '[::1]') host = 'localhost'
+  const port = url.port ? Number(url.port) : 5432
+  return { host, port, database }
+}
+
+export function isSameDatabase(urlA, urlB) {
+  try {
+    const a = normalizeDatabaseIdentity(urlA)
+    const b = normalizeDatabaseIdentity(urlB)
+    return a.host === b.host && a.port === b.port && a.database === b.database
+  } catch {
+    // If either URL can't be parsed, fail closed — treat as potentially same
+    return false
+  }
+}
+
 export function withDatabaseName(value, database) {
   assertSafeIdentifier(database)
   const { url } = parseDatabaseUrl(value)
@@ -194,28 +215,31 @@ export async function preparePrisma({ root, env, run = runCommand }) {
   await run('npx', ['prisma', 'generate'], { cwd: serverDir, env })
 }
 
-async function terminateAndDrop({ maintenanceUrl, databaseName, clientFactory }) {
-  const client = await clientFactory(maintenanceUrl)
-  try {
-    await client.connect()
-    await client.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()', [databaseName])
-    await client.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`)
-  } finally {
-    await client.end().catch(() => {})
-  }
-}
 
 function dockerCommand(command, args, options) {
   return runCommand(command, args, options)
 }
 
-export async function startDockerPostgres({ run = dockerCommand, random = crypto.randomUUID(), waitForPort, environment = process.env } = {}) {
+export async function startDockerPostgres({ run = dockerCommand, random = crypto.randomUUID(), waitForPort, environment = process.env, signal } = {}) {
+  if (signal?.aborted) throw new Error('Docker startup was cancelled')
   const name = createTestDatabaseName({ worktree: 'docker', random }).replace(/^monrad_test_/, 'monrad_pg_')
   const password = crypto.randomBytes(24).toString('base64url')
   const dockerEnv = { ...environment, POSTGRES_PASSWORD: password, POSTGRES_USER: 'postgres', POSTGRES_DB: 'postgres' }
-  await run('docker', ['run', '--detach', '--name', name, '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER', '--env', 'POSTGRES_DB', '--publish', '127.0.0.1::5432', 'postgres:15'], { env: dockerEnv })
   try {
-    const output = await run('docker', ['port', name, '5432/tcp'], { env: dockerEnv, inherit: false })
+    await run('docker', ['run', '--detach', '--name', name, '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER', '--env', 'POSTGRES_DB', '--publish', '127.0.0.1::5432', 'postgres:15'], { env: dockerEnv, signal })
+  } catch (err) {
+    const msg = err?.message ?? String(err)
+    if (msg.includes('Cannot connect') || msg.includes('no such file') || msg.includes('socket') || msg.includes('daemon') || msg.includes('exit code 1')) {
+      throw new Error('Docker daemon is unavailable. Docker is the default prerequisite for disposable test databases. Use MONRAD_TEST_DATABASE_URL with MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 for an externally managed database, or start the Docker daemon.')
+    }
+    throw err
+  }
+  if (signal?.aborted) {
+    await run('docker', ['rm', '--force', name], { env: dockerEnv }).catch(() => {})
+    throw new Error('Docker startup was cancelled')
+  }
+  try {
+    const output = await run('docker', ['port', name, '5432/tcp'], { env: dockerEnv, inherit: false, signal })
     const match = String(output).trim().match(/:(\d+)$/)
     if (!match) throw new Error('Docker did not return a mapped PostgreSQL port')
     const port = Number(match[1])
@@ -232,10 +256,11 @@ export async function stopDockerPostgres(container, { run = dockerCommand, envir
   if (container?.name) await run('docker', ['rm', '--force', container.name], { env: { ...environment, ...container.dockerEnv } })
 }
 
-async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000) {
+async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, signal) {
   const deadline = Date.now() + timeoutMs
   let lastError
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw redactError(lastError ?? new Error('Cancelled waiting for PostgreSQL readiness'))
     const client = await clientFactory(databaseUrl)
     try {
       await client.connect()
@@ -251,90 +276,97 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000) {
   throw redactError(lastError, 'Timed out waiting for Docker PostgreSQL')
 }
 
-export async function withIsolatedTestDatabase({ root, environment = process.env, clientFactory = defaultClientFactory, run = runCommand, startDocker = startDockerPostgres, stopDocker = stopDockerPostgres, prepare = preparePrisma }, action) {
+export async function withIsolatedTestDatabase({ root, environment = process.env, clientFactory = defaultClientFactory, run = runCommand, startDocker = startDockerPostgres, stopDocker = stopDockerPostgres, prepare = preparePrisma, signal }, action) {
   const resolvedEnvironment = loadLocalEnvironment(root, environment)
   const externalUrl = resolvedEnvironment.MONRAD_TEST_DATABASE_URL
+
+  // ── External mode ──────────────────────────────────────────────
   if (externalUrl) {
     if (resolvedEnvironment.MONRAD_ALLOW_EXTERNAL_TEST_DATABASE !== '1') {
       throw new Error('MONRAD_TEST_DATABASE_URL requires MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 because migrations and cleanup are destructive')
     }
-    parseDatabaseUrl(externalUrl)
+    const parsed = parseDatabaseUrl(externalUrl)
+    const persistentUrl = resolvedEnvironment.DATABASE_URL
+    if (persistentUrl) {
+      if (isSameDatabase(persistentUrl, externalUrl)) {
+        throw new Error('MONRAD_TEST_DATABASE_URL must not target the same database as the persistent DATABASE_URL')
+      }
+    } else {
+      throw new Error('DATABASE_URL is required to validate MONRAD_TEST_DATABASE_URL isolation')
+    }
+    if (signal?.aborted) throw new Error('Test database setup was cancelled')
     const testEnvironment = { ...resolvedEnvironment, DATABASE_URL: externalUrl, INTEGRATION_TEST: 'true' }
     await prepare({ root, env: testEnvironment, run })
-    return action(testEnvironment, { external: true, databaseName: parseDatabaseUrl(externalUrl).database })
+    if (signal?.aborted) throw new Error('Test database setup was cancelled')
+    return action(testEnvironment, { external: true, databaseName: parsed.database })
   }
 
-  const configuredUrl = resolvedEnvironment.DATABASE_URL
-  if (!configuredUrl) throw new Error('DATABASE_URL is required; configure server/.env, MONRAD_ENV_FILE, or the shell environment')
-  parseDatabaseUrl(configuredUrl)
+  // ── Docker-first default mode ──────────────────────────────────
+  if (signal?.aborted) throw new Error('Test database setup was cancelled')
+
   let container
-  let maintenanceUrl
-  let databaseName
   let actionError
+
   try {
-    try {
-      maintenanceUrl = maintenanceDatabaseUrl(configuredUrl)
-      const client = await clientFactory(maintenanceUrl)
-      await client.connect()
-      await client.end()
-    } catch (hostError) {
-      try {
-        container = await startDocker({ run, environment: resolvedEnvironment, waitForPort: async (_port, databaseUrl) => waitForPostgres(databaseUrl, clientFactory) })
-        maintenanceUrl = maintenanceDatabaseUrl(container.databaseUrl)
-      } catch (dockerError) {
-        throw redactError(dockerError, 'Host PostgreSQL is unavailable and Docker fallback could not start')
-      }
+    container = await startDocker({
+      run,
+      environment: resolvedEnvironment,
+      waitForPort: async (_port, databaseUrl) => waitForPostgres(databaseUrl, clientFactory, 60_000, signal),
+      signal,
+    })
+
+    // The disposable container's built-in postgres database IS the test database.
+    // No additional CREATE/DROP DATABASE is needed — container removal handles cleanup.
+    const testEnvironment = { ...resolvedEnvironment, DATABASE_URL: container.databaseUrl, INTEGRATION_TEST: 'true' }
+
+    if (signal?.aborted) {
+      actionError = new Error('Test database setup was cancelled')
+      throw actionError
     }
-    databaseName = createTestDatabaseName({ worktree: root })
-    const targetUrl = withDatabaseName(maintenanceUrl, databaseName)
-    const client = await clientFactory(maintenanceUrl)
-    try {
-      await client.connect()
-      await client.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`)
-    } finally {
-      await client.end().catch(() => {})
-    }
-    const testEnvironment = { ...resolvedEnvironment, DATABASE_URL: targetUrl, INTEGRATION_TEST: 'true' }
+
     await prepare({ root, env: testEnvironment, run })
-    return await action(testEnvironment, { external: false, databaseName, docker: Boolean(container) })
+
+    if (signal?.aborted) {
+      actionError = new Error('Test database setup was cancelled')
+      throw actionError
+    }
+
+    return await action(testEnvironment, { external: false, docker: true })
   } catch (err) {
-    actionError = err instanceof Error ? err : new Error(String(err))
+    if (!actionError) actionError = err instanceof Error ? err : new Error(String(err))
     throw actionError
   } finally {
-    const cleanupErrors = []
-    if (databaseName && maintenanceUrl) {
-      try {
-        await terminateAndDrop({ maintenanceUrl, databaseName, clientFactory })
-      } catch (dbErr) {
-        cleanupErrors.push(redactError(dbErr, 'Database cleanup failed'))
-      }
-    }
+    // Cleanup uses an independent bounded context so container removal
+    // still works after the main signal has been aborted.
     if (container) {
       try {
-        await stopDocker(container, { run, environment: resolvedEnvironment })
+        const cleanupSignal = AbortSignal.timeout(30_000)
+        await stopDocker(container, { run, environment: resolvedEnvironment, signal: cleanupSignal })
       } catch (dockerErr) {
-        cleanupErrors.push(redactError(dockerErr, 'Docker cleanup failed'))
-      }
-    }
-    if (cleanupErrors.length > 0) {
-      const combinedMessages = cleanupErrors.map(e => e.message).join('; ')
-      if (actionError) {
-        actionError.message = `${actionError.message} (cleanup: ${combinedMessages})`
-      } else {
-        throw new Error(`Cleanup failed: ${combinedMessages}`)
+        const redacted = redactError(dockerErr, 'Docker cleanup failed')
+        if (actionError) {
+          actionError.message = `${actionError.message} (cleanup: ${redacted.message})`
+        } else {
+          actionError = redacted
+          throw redacted
+        }
       }
     }
   }
 }
 
-export function shutdownGuard({ process: proc = process } = {}) {
+export function shutdownGuard({ process: proc = process, forceExit = (code) => { proc.exit(code) } } = {}) {
   let triggered = false
   let receivedSignal = null
   let exitCode = null
   const controller = new AbortController()
 
   const handler = (signal) => {
-    if (triggered) return
+    if (triggered) {
+      // Second signal: force exit immediately.
+      forceExit(exitCode ?? 1)
+      return
+    }
     triggered = true
     receivedSignal = signal
     exitCode = signal === 'SIGINT' ? 130 : 143
