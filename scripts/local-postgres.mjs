@@ -365,11 +365,16 @@ export async function ensureDatabase({ databaseUrl, clientFactory = defaultClien
       endResult = { ok: false, error: endError instanceof Error ? endError : new Error(String(endError)) }
     }
     if (!endResult.ok) {
-      const shutdownError = new Error(`Client shutdown failed: ${endResult.error?.message || endResult.error}`)
+      const shutdownMsg = `Client shutdown failed: ${endResult.error?.message || endResult.error}`
+      const shutdownSafe = redactDiagnosticOutput(shutdownMsg)
+      const shutdownError = new Error(shutdownSafe)
       if (dbError) {
+        // Append shutdown failure to primary error so it's visible in final output.
+        const combinedMsg = `${dbError.message} [secondary: ${shutdownSafe}]`
+        dbError.message = combinedMsg
         dbError.cause = shutdownError
       } else {
-        dbError = shutdownError
+        dbError = new Error(`Setup succeeded but ${shutdownSafe}`)
       }
     }
   }
@@ -455,18 +460,29 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
 async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, signal) {
   const deadline = Date.now() + timeoutMs
   let lastError
+  let abortHandler = null
   while (Date.now() < deadline) {
     if (signal?.aborted) throw redactError(lastError ?? new Error('Cancelled waiting for PostgreSQL readiness'))
     let client
     try {
-      const connectTimeout = Math.min(remainingTime(deadline, 10_000), 5_000)
-      client = await clientFactory(databaseUrl, { connectionTimeoutMillis: connectTimeout, statement_timeout: Math.min(remainingTime(deadline), 10_000) })
+      // Calculate remaining time once; never pass zero as a timeout.
+      const remaining = remainingTime(deadline)
+      if (remaining <= 0) break
+
+      const connectTimeout = Math.min(remaining, 5_000)
+      const stmtTimeout = Math.min(remaining, 10_000)
+      client = await clientFactory(databaseUrl, { connectionTimeoutMillis: connectTimeout, statement_timeout: stmtTimeout })
+
+      // Attach abort listener to interrupt active connect/query.
+      abortHandler = () => destroyClient(client)
+      signal?.addEventListener('abort', abortHandler, { once: true })
+
       await client.connect()
       await client.query('SELECT 1')
       return
     } catch (error) {
       lastError = error
-      // Abortable retry delay — removes both timer and listener on completion.
+      // Abortable retry delay.
       await new Promise(resolve => {
         let onAbort
         const timer = setTimeout(() => {
@@ -479,6 +495,8 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
         }
       })
     } finally {
+      if (abortHandler && signal) signal.removeEventListener('abort', abortHandler)
+      abortHandler = null
       if (client) {
         const end = await boundedClientEnd(client, 5_000)
         if (!end.ok) {
