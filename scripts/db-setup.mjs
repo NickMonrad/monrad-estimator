@@ -78,23 +78,31 @@ export async function runDbSetup({
   // Step 1: create guard FIRST so try/finally can always dispose it (F4)
   const guard = guardFactory()
   const collector = createFailureCollector()
+  // Cancellation-source state shared by try/catch/finally (blocker 1 fix).
+  let cancellationSource = null  // 'signal' | 'timeout' | null
+  let guardAbort = null
+  let timeoutAbort = null
+  let timeoutSignal = null
+
+  /**
+   * Determine cancellation source: guard (signal) vs timeout vs nil.
+   * Hoisted to function scope so catch and finally can call it.
+   */
+  function resolveSource() {
+    return cancellationSource || (timeoutSignal?.aborted ? 'timeout' : guard.triggered ? 'signal' : null)
+  }
 
   try {
     // Step 2: validate config inside the protected block
     const timeoutMs = parseTimeout(environment.MONRAD_DB_SETUP_TIMEOUT_MS)
-    const timeoutSignal = timeoutFactory(timeoutMs)
+    timeoutSignal = timeoutFactory(timeoutMs)
 
-    // Resolve cancellation source, accounting for signals that were already
-    // aborted before event listeners could be attached.
-    let cancellationSource = null  // 'signal' | 'timeout' | null
-    const guardAbort = () => { if (!cancellationSource) cancellationSource = 'signal' }
-    const timeoutAbort = () => { if (!cancellationSource) cancellationSource = 'timeout' }
+    // Attach listeners to detect the first cancellation source.
+    cancellationSource = null
+    guardAbort = () => { if (!cancellationSource) cancellationSource = 'signal' }
+    timeoutAbort = () => { if (!cancellationSource) cancellationSource = 'timeout' }
     guard.abortSignal.addEventListener('abort', guardAbort, { once: true })
     timeoutSignal.addEventListener('abort', timeoutAbort, { once: true })
-
-    function resolveSource() {
-      return cancellationSource || (timeoutSignal.aborted ? 'timeout' : guard.triggered ? 'signal' : null)
-    }
 
     // Step 3: combined signal
     const combinedSignal = AbortSignal.any
@@ -126,8 +134,6 @@ export async function runDbSetup({
 
     // Step 4e: check before success output
     if (guard.triggered) {
-      // Guard fired — this is user cancellation, not timeout.
-      // Do not print success.
       collector.addSecondary('runner', new Error('db:setup was cancelled'))
     } else if (timeoutSignal.aborted) {
       collector.addSecondary('runner', new Error('db:setup timed out'))
@@ -137,22 +143,21 @@ export async function runDbSetup({
     }
   } catch (error) {
     // Classification: cancellation source determines the label.
-    const source = (typeof resolveSource === 'function') ? resolveSource() : null
+    const source = resolveSource()
     if (source === 'signal') {
-      // User cancellation — preserve guard exit code.
       collector.addSecondary('runner', error instanceof Error ? error : new Error(String(error)))
     } else if (source === 'timeout') {
-      // Timeout is the primary failure.
       collector.addPrimary(new Error('db:setup timed out'))
       if (error) {
         collector.addSecondary('runner', error instanceof Error ? error : new Error(String(error)))
       }
     } else {
-      // Ordinary operational failure.
       collector.addPrimary(error instanceof Error ? error : new Error(String(error)))
     }
   } finally {
-    // Step 5: dispose guard in finally
+    // Clean up abort listeners — safe even if never fired or already removed.
+    if (guardAbort) guard.abortSignal.removeEventListener('abort', guardAbort)
+    if (timeoutAbort && timeoutSignal) timeoutSignal.removeEventListener('abort', timeoutAbort)
     guard.dispose()
   }
 

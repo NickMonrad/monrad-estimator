@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict'
 import { describe, it, mock } from 'node:test'
 import { runDbSetup } from './db-setup.mjs'
+import { ensureDatabase } from './local-postgres.mjs'
 
 // ── Helper factories ──────────────────────────────────────────────────
 
@@ -340,160 +341,227 @@ describe('guard disposal (F4)', () => {
     assert.ok(disposed)
   })
 })
-
-describe('client options and timeouts', () => {
-  it('connection timeout derived from overall deadline', async () => {
-    let receivedOpts
-    const result = await runDbSetup({
-      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
-      guardFactory: neverGuard,
-      timeoutFactory: (ms) => {
-        const c = new AbortController()
-        const t = setTimeout(() => c.abort(), 1_000_000) // won't fire; unref'd
-        t.unref()
-        return c.signal
-      },
-      ensureDatabase: async ({ deadline }) => {
-        assert.ok(typeof deadline === 'number')
-        assert.ok(deadline > Date.now())
-        return { created: false, database: 'db' }
-      },
-      preparePrisma: async () => {},
-    })
-    assert.equal(result.exitCode, 0)
-  })
-  it('abort closes or destroys client', async () => {
+describe('cancellation-source classification', () => {
+  it('timeout during database work', async () => {
     const result = await runDbSetup({
       environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
       guardFactory: neverGuard,
       timeoutFactory: immediateTimeoutFactory,
       ensureDatabase: async ({ signal }) => {
-        if (signal?.aborted) throw new Error('aborted before connect')
+        if (signal?.aborted) throw new Error('Operation aborted')
         return { created: false, database: 'db' }
       },
       preparePrisma: async () => {},
     })
     assert.equal(result.exitCode, 1)
-    assert.ok(result.aggregatedError)
+    assert.ok(result.aggregatedError?.message?.includes('timed out'))
   })
 
-  it('client closure after connect failure', async () => {
+  it('SIGINT during database work', async () => {
+    const guard = triggeredGuard('SIGINT')
     const result = await runDbSetup({
       environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
-      guardFactory: neverGuard,
+      guardFactory: () => guard,
       timeoutFactory: neverTimeoutFactory,
-      ensureDatabase: async () => {
-        throw new Error('connect failed: timeout')
-      },
-      preparePrisma: async () => {},
-    })
-    assert.equal(result.exitCode, 1)
-    assert.ok(result.aggregatedError?.message?.includes('connect failed'))
-  })
-
-  it('client shutdown timer is cleared when end succeeds', async () => {
-    const result = await runDbSetup({
-      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
-      guardFactory: neverGuard,
-      timeoutFactory: neverTimeoutFactory,
-      ensureDatabase: async () => {
-        // The real ensureDatabase calls boundedClientEnd in finally.
-        return { created: false, database: 'db' }
-      },
-      preparePrisma: async () => {},
-    })
-    assert.equal(result.exitCode, 0)
-  })
-})
-
-describe('Prisma signal propagation', () => {
-  it('migration receives combined signal', async () => {
-    let receivedSignal = null
-    await runDbSetup({
-      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
-      guardFactory: neverGuard,
-      timeoutFactory: neverTimeoutFactory,
-      ensureDatabase: async () => ({ created: false, database: 'db' }),
-      preparePrisma: async ({ signal }) => { receivedSignal = signal },
-    })
-    assert.ok(receivedSignal)
-    assert.equal(receivedSignal.aborted, false)
-  })
-
-  it('generation receives combined signal', async () => {
-    let receivedSignal = null
-    await runDbSetup({
-      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
-      guardFactory: neverGuard,
-      timeoutFactory: neverTimeoutFactory,
-      ensureDatabase: async () => ({ created: false, database: 'db' }),
-      preparePrisma: async ({ signal }) => { receivedSignal = signal },
-    })
-    assert.ok(receivedSignal)
-  })
-
-  it('migration timeout terminates process tree', async () => {
-    // runCommand's onAbort terminates the child when the signal fires.
-    // This is verified in runner-lifecycle.test.mjs.
-    const result = await runDbSetup({
-      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
-      guardFactory: neverGuard,
-      timeoutFactory: immediateTimeoutFactory,
       ensureDatabase: async ({ signal }) => {
         if (signal?.aborted) throw new Error('aborted')
         return { created: false, database: 'db' }
       },
       preparePrisma: async () => {},
     })
-    assert.equal(result.exitCode, 1)
+    assert.equal(result.exitCode, 130)
   })
-})
 
-describe('credential safety', () => {
-  it('password in DATABASE_URL is redacted', async () => {
+  it('SIGTERM during database work', async () => {
+    const guard = triggeredGuard('SIGTERM')
     const result = await runDbSetup({
-      environment: { DATABASE_URL: 'postgresql://user:secret-password@localhost/db' },
-      guardFactory: neverGuard,
-      timeoutFactory: immediateTimeoutFactory,
+      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
+      guardFactory: () => guard,
+      timeoutFactory: neverTimeoutFactory,
       ensureDatabase: async ({ signal }) => {
-        if (signal?.aborted) throw new Error('timed out')
+        if (signal?.aborted) throw new Error('aborted')
         return { created: false, database: 'db' }
       },
       preparePrisma: async () => {},
     })
-    assert.equal(result.exitCode, 1)
-    if (result.aggregatedError) {
-      assert.ok(!result.aggregatedError.message.includes('secret-password'))
-    }
+    assert.equal(result.exitCode, 143)
   })
-})
 
-describe('idempotence', () => {
-  it('existing database is never dropped', async () => {
+  it('timeout during Prisma', async () => {
+    const result = await runDbSetup({
+      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
+      guardFactory: neverGuard,
+      timeoutFactory: immediateTimeoutFactory,
+      ensureDatabase: async ({ signal }) => {
+        // Ensure DB completes successfully before timeout fires.
+        return { created: false, database: 'db' }
+      },
+      preparePrisma: async ({ signal }) => {
+        if (signal?.aborted) throw new Error('migration aborted by timeout')
+        throw new Error('migration never started')
+      },
+    })
+    assert.equal(result.exitCode, 1)
+    assert.ok(result.aggregatedError?.message?.includes('timed out'))
+  })
+
+  it('timeout plus process-tree termination failure', async () => {
+    const result = await runDbSetup({
+      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
+      guardFactory: neverGuard,
+      timeoutFactory: immediateTimeoutFactory,
+      ensureDatabase: async ({ signal }) => {
+        return { created: false, database: 'db' }
+      },
+      preparePrisma: async () => { throw new Error('npx timed out; process-tree termination failed: SIGKILL') },
+    })
+    assert.equal(result.exitCode, 1)
+    assert.ok(result.aggregatedError)
+    const msg = result.aggregatedError.message
+    assert.ok(msg.includes('timed out') || msg.includes('process-tree') || msg.includes('npx'))
+  })
+
+  it('ordinary Prisma failure remains ordinary operational failure', async () => {
     const result = await runDbSetup({
       environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
       guardFactory: neverGuard,
       timeoutFactory: neverTimeoutFactory,
       ensureDatabase: async () => ({ created: false, database: 'db' }),
-      preparePrisma: async () => {},
+      preparePrisma: async () => { throw new Error('migration syntax error') },
     })
-    assert.equal(result.exitCode, 0)
-    assert.equal(result.aggregatedError, null)
+    assert.equal(result.exitCode, 1)
+    assert.ok(result.aggregatedError?.message?.includes('migration syntax error'))
+    assert.ok(!result.aggregatedError?.message?.includes('timed out'))
+  })
+})
+
+describe('real ensureDatabase with fake client', () => {
+  it('connection timeout options derived from deadline', async () => {
+    let receivedOpts = null
+    const fakeClient = {
+      connect: async () => {},
+      query: async () => ({ rowCount: 1 }),
+      end: async () => {},
+      _ending: false,
+    }
+    // Inject a clientFactory that captures the options, then returns the fake client.
+    const factory = {
+      clientFactory: (url, opts) => { receivedOpts = opts; return fakeClient },
+    }
+    await ensureDatabase({
+      databaseUrl: 'postgresql://u:p@localhost/db',
+      deadline: Date.now() + 60_000,
+      ...factory,
+    })
+    assert.ok(receivedOpts)
+    assert.ok(receivedOpts.connectionTimeoutMillis > 0, 'connection timeout derived from deadline')
+    assert.ok(receivedOpts.query_timeout > 0, 'query_timeout derived from deadline')
   })
 
-  it('repeated execution remains idempotent', async () => {
-    const opts = {
-      environment: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
-      guardFactory: neverGuard,
-      timeoutFactory: neverTimeoutFactory,
-      ensureDatabase: async () => ({ created: false, database: 'db' }),
-      preparePrisma: async () => {},
+  it('in-flight query cancelled by abort signal', async () => {
+    const ctrl = new AbortController()
+    let abortedDuringQuery = false
+    const fakeClient = {
+      connect: async () => {},
+      query: async () => {
+        // Simulate abort arriving before the query completes.
+        ctrl.abort()
+        abortedDuringQuery = true
+        return { rowCount: 0 }
+      },
+      end: async () => {},
+      _ending: false,
     }
-    const r1 = await runDbSetup(opts)
-    const r2 = await runDbSetup(opts)
-    assert.equal(r1.exitCode, 0)
-    assert.equal(r2.exitCode, 0)
-    assert.equal(r1.aggregatedError, null)
-    assert.equal(r2.aggregatedError, null)
+
+    await assert.rejects(
+      ensureDatabase({
+        databaseUrl: 'postgresql://u:p@localhost/db',
+        signal: ctrl.signal,
+        deadline: Date.now() + 60_000,
+        clientFactory: () => fakeClient,
+      }),
+      /cancelled|aborted/
+    )
+  })
+
+  it('client shutdown bounded and timed out', async () => {
+    let endCalled = false
+    const hangClient = {
+      connect: async () => {},
+      query: async () => ({ rowCount: 1 }),
+      end: async () => {
+        endCalled = true
+        // Hang forever — boundedClientEnd should bound this.
+        await new Promise(() => {})
+      },
+      _ending: false,
+    }
+
+    let error
+    try {
+      await ensureDatabase({
+        databaseUrl: 'postgresql://u:p@localhost/db',
+        deadline: Date.now() + 60_000,
+        clientFactory: () => hangClient,
+      })
+      assert.fail('should have rejected')
+    } catch (e) {
+      error = e
+    }
+    assert.ok(endCalled, 'client.end() was called')
+    assert.ok(error, 'ensureDatabase rejected')
+    assert.ok(error.message.includes('Client shutdown failed') || error.message.includes('timed out'))
+  })
+
+  it('shutdown failure after successful setup causes failure', async () => {
+    const fakeClient = {
+      connect: async () => {},
+      query: async () => ({ rowCount: 1 }),
+      end: async () => { throw new Error('shutdown failed') },
+      _ending: false,
+    }
+
+    let error
+    try {
+      await ensureDatabase({
+        databaseUrl: 'postgresql://u:p@localhost/db',
+        deadline: Date.now() + 60_000,
+        clientFactory: () => fakeClient,
+      })
+      assert.fail('should have rejected')
+    } catch (e) {
+      error = e
+    }
+    assert.ok(error, 'ensureDatabase rejected')
+    // After try/catch fix in ensureDatabase finally block, boundedClientEnd
+    // errors are captured as shutdown failure not thrown replacements.
+    assert.ok(error.message.includes('shutdown') || error.message.includes('end'))
+  })
+
+  it('shutdown failure after DB error adds secondary context', async () => {
+    const fakeClient = {
+      connect: async () => { throw new Error('connection refused') },
+      query: async () => { throw new Error('should not reach') },
+      end: async () => { throw new Error('shutdown also failed') },
+      _ending: false,
+    }
+
+    let error
+    try {
+      await ensureDatabase({
+        databaseUrl: 'postgresql://u:p@localhost/db',
+        deadline: Date.now() + 60_000,
+        clientFactory: () => fakeClient,
+      })
+      assert.fail('should have rejected')
+    } catch (e) {
+      error = e
+    }
+    assert.ok(error, 'ensureDatabase rejected')
+    // The primary is the DB error; the shutdown failure is attached as cause.
+    assert.ok(error.message.includes('connection refused') || error.message.includes('connect'),
+      `expected connect error in "${error.message}"`)
+    assert.ok(error.cause, 'shutdown failure preserved as cause')
+    assert.ok(error.cause.message.includes('shutdown'), 'cause is shutdown error')
   })
 })

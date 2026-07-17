@@ -294,13 +294,11 @@ async function boundedClientEnd(client, timeoutMs = 5_000) {
  * pending connect() or query() calls settle promptly.
  */
 function destroyClient(client) {
-  // pg Client has a .end() method and an internal socket/connection.
+  // pg Client has no supported .end({ timeout }) option, so this is
+  // best-effort: ask end() to settle and catch any error.
   if (client._ending) return
   try {
-    client._destroyed = true
-    if (typeof client.end === 'function') {
-      client.end({ timeout: 1_000 }).catch(() => {})
-    }
+    client.end().catch(() => {})
   } catch { /* best-effort */ }
 }
 
@@ -328,34 +326,56 @@ export async function ensureDatabase({ databaseUrl, clientFactory = defaultClien
   const maintenanceUrl = maintenanceDatabaseUrl(databaseUrl)
   if (signal?.aborted) throw new Error('Database setup was cancelled before connecting')
 
-  // Derive timeouts from the parent deadline so the overall command is authoritative.
+  // Derive connect timeout from remaining deadline.
   const connectTimeout = remainingTime(deadline, maxConnectionTimeoutMs)
-  const queryTimeout = remainingTime(deadline, 30_000)
   if (connectTimeout <= 0) throw new Error('Database setup timed out before connecting')
 
-  const client = await clientFactory(maintenanceUrl, { connectionTimeoutMillis: connectTimeout, query_timeout: queryTimeout })
+  const client = await clientFactory(maintenanceUrl, { connectionTimeoutMillis: connectTimeout, query_timeout: remainingTime(deadline, 30_000) })
   let aborted = false
   const onAbort = () => {
     aborted = true
-    // Actively destroy the client connection so in-flight connect()/query() settle.
     destroyClient(client)
   }
   signal?.addEventListener('abort', onAbort, { once: true })
+
+  let dbError = null
+  let created = false
   try {
     await client.connect()
     if (aborted) throw new Error('Database setup was cancelled after connecting')
+
+    // Recalculate query timeout — deadline may be closer than when we connected.
+    if (remainingTime(deadline) <= 0) throw new Error('Database setup timed out before query')
+
     const result = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [database])
     if (result.rowCount === 0) {
       if (aborted) throw new Error('Database setup was cancelled before CREATE DATABASE')
+      if (remainingTime(deadline) <= 0) throw new Error('Database setup timed out before CREATE DATABASE')
       await runQuery(client, `CREATE DATABASE ${quoteIdentifier(database)}`)
     }
-    return { created: result.rowCount === 0, database }
+    created = result.rowCount === 0
   } catch (error) {
-    throw redactError(error, 'Could not connect to PostgreSQL maintenance database or create the configured development database')
+    dbError = redactError(error, 'Could not connect to PostgreSQL maintenance database or create the configured development database')
   } finally {
     signal?.removeEventListener('abort', onAbort)
-    await boundedClientEnd(client, 5_000)
+    let endResult
+    try {
+      endResult = await boundedClientEnd(client, 5_000)
+    } catch (endError) {
+      endResult = { ok: false, error: endError instanceof Error ? endError : new Error(String(endError)) }
+    }
+    if (!endResult.ok) {
+      const shutdownError = new Error(`Client shutdown failed: ${endResult.error?.message || endResult.error}`)
+      if (dbError) {
+        dbError.cause = shutdownError
+      } else {
+        dbError = shutdownError
+      }
+    }
   }
+
+  if (dbError) throw dbError
+  return { created, database }
 }
 
 export function redactError(error, prefix = 'Database operation failed') {
@@ -439,7 +459,8 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
     if (signal?.aborted) throw redactError(lastError ?? new Error('Cancelled waiting for PostgreSQL readiness'))
     let client
     try {
-      client = await clientFactory(databaseUrl, { connectionTimeoutMillis: 5_000 })
+      const connectTimeout = Math.min(remainingTime(deadline, 10_000), 5_000)
+      client = await clientFactory(databaseUrl, { connectionTimeoutMillis: connectTimeout, statement_timeout: Math.min(remainingTime(deadline), 10_000) })
       await client.connect()
       await client.query('SELECT 1')
       return
@@ -459,8 +480,9 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
       })
     } finally {
       if (client) {
-        try { await client.end() } catch {
-          // client.end() failure must not replace primary readiness failure
+        const end = await boundedClientEnd(client, 5_000)
+        if (!end.ok) {
+          lastError = end.error ?? new Error('client.end() failed during readiness')
         }
       }
     }
