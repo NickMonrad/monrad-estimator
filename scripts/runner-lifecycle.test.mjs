@@ -370,6 +370,7 @@ describe('terminateProcess — process group signaling', () => {
 
 describe('checkProcessGroupExists', () => {
   it('returns { exists: true } for a PID that is a group leader', () => {
+    if (process.platform === 'win32') return  // process group -1 is not meaningful on Windows
     // The init process (PID 1) is always a group leader on POSIX.
     // If we can't reach it (e.g. container without permission), skip.
     const result = checkProcessGroupExists(1)
