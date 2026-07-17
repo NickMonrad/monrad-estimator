@@ -1035,6 +1035,9 @@ test('readiness query failure plus shutdown failure preserves both', async () =>
   let endCalled = false
   let queryResolve = null
   const queryPromise = new Promise(resolve => { queryResolve = resolve })
+  const secret = 'super-secret'
+  const urlSecret = 'another-secret'
+  const shutdownError = `shutdown failed for postgresql://tester:${secret}@localhost/db?password=${urlSecret}`
 
   const fakeClient = {
     connect: async () => {},
@@ -1042,7 +1045,7 @@ test('readiness query failure plus shutdown failure preserves both', async () =>
       await queryPromise
       throw new Error('query timeout')
     },
-    end: async () => { endCalled = true; throw new Error('shutdown failed') },
+    end: async () => { endCalled = true; throw new Error(shutdownError) },
     _ending: false,
   }
 
@@ -1058,16 +1061,22 @@ test('readiness query failure plus shutdown failure preserves both', async () =>
   assert.ok(err.message.includes('query timeout'), `primary missing: "${err.message}"`)
   assert.ok(err.message.includes('shutdown failed'), `secondary missing: "${err.message}"`)
   assert.ok(err.message.includes('secondary'), `secondary marker missing: "${err.message}"`)
+  assert.ok(!err.message.includes(secret), `password in URL must be redacted: "${err.message}"`)
+  assert.ok(!err.message.includes(urlSecret), `query password must be redacted: "${err.message}"`)
+  assert.ok(err.message.includes('***'), 'redacted markers must be present')
   assert.ok(!err.message.includes('u:p'), 'credentials must be redacted')
   assert.ok(endCalled, 'client.end() was called')
 })
 
 test('readiness connect failure plus shutdown failure preserves both', async () => {
   let endCalled = false
+  const secret = 'super-secret'
+  const urlSecret = 'another-secret'
+  const shutdownError = `shutdown failed for postgresql://tester:${secret}@localhost/db?password=${urlSecret}`
   const fakeClient = {
     connect: async () => { throw new Error('connection refused') },
     query: async () => { throw new Error('should not reach') },
-    end: async () => { endCalled = true; throw new Error('shutdown failed') },
+    end: async () => { endCalled = true; throw new Error(shutdownError) },
     _ending: false,
   }
 
@@ -1078,23 +1087,30 @@ test('readiness connect failure plus shutdown failure preserves both', async () 
   const err = await readied.catch(e => e)
   assert.ok(err.message.includes('connection refused'), `primary missing: "${err.message}"`)
   assert.ok(err.message.includes('shutdown failed'), `secondary missing: "${err.message}"`)
+  assert.ok(!err.message.includes(secret), `password in URL must be redacted: "${err.message}"`)
+  assert.ok(!err.message.includes(urlSecret), `query password must be redacted: "${err.message}"`)
+  assert.ok(err.message.includes('***'), 'redacted markers must be present')
   assert.ok(endCalled, 'client.end() was called')
 })
-
 test('successful readiness query plus shutdown failure fails', async () => {
   let endCalled = false
+  const secret = 'super-secret'
+  const urlSecret = 'another-secret'
+  const shutdownError = `shutdown failed for postgresql://tester:${secret}@localhost/db?password=${urlSecret}`
   const fakeClient = {
     connect: async () => {},
     query: async () => {},
-    end: async () => { endCalled = true; throw new Error('shutdown failed') },
+    end: async () => { endCalled = true; throw new Error(shutdownError) },
     _ending: false,
   }
 
   const stubClientFactory = () => fakeClient
-  await assert.rejects(
-    waitForPostgres('postgresql://u:p@localhost/db', stubClientFactory, 3_000),
-    /shutdown failed/,
-  )
+  const readied = waitForPostgres('postgresql://u:p@localhost/db', stubClientFactory, 3_000)
+  await assert.rejects(readied, /shutdown failed/)
+  const err = await readied.catch(e => e)
+  assert.ok(!err.message.includes(secret), `password in URL must be redacted: "${err.message}"`)
+  assert.ok(!err.message.includes(urlSecret), `query password must be redacted: "${err.message}"`)
+  assert.ok(err.message.includes('***'), 'redacted markers must be present')
   assert.ok(endCalled, 'client.end() was called')
 })
 

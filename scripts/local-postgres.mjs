@@ -504,11 +504,12 @@ export async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60
         }
         if (!endResult.ok) {
           const shutdownMsg = `Client shutdown failed: ${endResult.error?.message || endResult.error}`
+          const shutdownSafe = redactDiagnosticOutput(shutdownMsg)
           if (lastError) {
             const primaryMsg = lastError instanceof Error ? lastError.message : String(lastError)
-            lastError = new Error(`${primaryMsg} [secondary: ${shutdownMsg}]`)
+            lastError = new Error(`${primaryMsg} [secondary: ${shutdownSafe}]`)
           } else {
-            lastError = new Error(shutdownMsg)
+            lastError = new Error(shutdownSafe)
           }
         }
       }
