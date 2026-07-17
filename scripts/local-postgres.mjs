@@ -65,14 +65,9 @@ export function normalizeDatabaseIdentity(urlString) {
 }
 
 export function isSameDatabase(urlA, urlB) {
-  try {
-    const a = normalizeDatabaseIdentity(urlA)
-    const b = normalizeDatabaseIdentity(urlB)
-    return a.host === b.host && a.port === b.port && a.database === b.database
-  } catch {
-    // If either URL can't be parsed, fail closed — treat as potentially same
-    return false
-  }
+  const a = normalizeDatabaseIdentity(urlA)
+  const b = normalizeDatabaseIdentity(urlB)
+  return a.host === b.host && a.port === b.port && a.database === b.database
 }
 
 export function withDatabaseName(value, database) {
@@ -122,7 +117,7 @@ export function resolveCommand(command, args, platform = process.platform, npmEx
   return { command, args }
 }
 
-export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, platform, npmExecPath, signal, graceMs = 4_000 } = {}) {
+export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, platform, npmExecPath, signal, graceMs = 4_000, terminateWindows, terminatePosix } = {}) {
   if (signal?.aborted) {
     return Promise.reject(new Error(`${command} was cancelled`))
   }
@@ -147,9 +142,12 @@ export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, 
       abortRequested = true
 
       const isWin = (platform ?? process.platform) === 'win32'
+      const termFn = isWin
+        ? (terminateWindows ?? windowsTerminateProcess)
+        : (terminatePosix ?? terminateProcess)
       const termPromise = isWin
-        ? windowsTerminateProcess(child)
-        : terminateProcess(child, graceMs, { useProcessGroup: true })
+        ? termFn(child)
+        : termFn(child, graceMs, { useProcessGroup: true })
       termPromise.then(
         () => rejectOnce(new Error(`${command} was cancelled`)),
         (termError) => {
@@ -177,9 +175,9 @@ export function runCommand(command, args, { cwd, env, extraEnv, inherit = true, 
     })
   })
 }
-async function defaultClientFactory(connectionString) {
+async function defaultClientFactory(connectionString, extraOptions = {}) {
   const { Client } = await import('pg')
-  return new Client({ connectionString })
+  return new Client({ connectionString, ...extraOptions })
 }
 
 async function runQuery(client, sql, values) {
@@ -209,15 +207,10 @@ export function redactError(error, prefix = 'Database operation failed') {
   return new Error(`${prefix}: ${redacted}`)
 }
 
-export async function preparePrisma({ root, env, run = runCommand }) {
+export async function preparePrisma({ root, env, run = runCommand, signal }) {
   const serverDir = path.join(root, 'server')
-  await run('npx', ['prisma', 'migrate', 'deploy'], { cwd: serverDir, env })
-  await run('npx', ['prisma', 'generate'], { cwd: serverDir, env })
-}
-
-
-function dockerCommand(command, args, options) {
-  return runCommand(command, args, options)
+  await run('npx', ['prisma', 'migrate', 'deploy'], { cwd: serverDir, env, signal })
+  await run('npx', ['prisma', 'generate'], { cwd: serverDir, env, signal })
 }
 
 export async function startDockerPostgres({ run = dockerCommand, random = crypto.randomUUID(), waitForPort, environment = process.env, signal } = {}) {
@@ -235,7 +228,17 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
     throw err
   }
   if (signal?.aborted) {
-    await run('docker', ['rm', '--force', name], { env: dockerEnv }).catch(() => {})
+    let cleanupFailure = null
+    try {
+      await run('docker', ['rm', '--force', name], { env: dockerEnv })
+    } catch (cleanupErr) {
+      cleanupFailure = cleanupErr
+    }
+    if (cleanupFailure) {
+      const err = new Error('Docker startup was cancelled')
+      err.cause = cleanupFailure instanceof Error ? cleanupFailure : new Error(String(cleanupFailure))
+      throw err
+    }
     throw new Error('Docker startup was cancelled')
   }
   try {
@@ -247,13 +250,22 @@ export async function startDockerPostgres({ run = dockerCommand, random = crypto
     if (waitForPort) await waitForPort(port, databaseUrl)
     return { name, port, databaseUrl, dockerEnv }
   } catch (error) {
-    await run('docker', ['rm', '--force', name], { env: dockerEnv }).catch(() => {})
-    throw error
+    let cleanupFailure = null
+    try {
+      await run('docker', ['rm', '--force', name], { env: dockerEnv })
+    } catch (cleanupErr) {
+      cleanupFailure = cleanupErr
+    }
+    const preserved = error instanceof Error ? error : new Error(String(error))
+    if (cleanupFailure) {
+      preserved.message = `${preserved.message} (Docker cleanup also failed: ${cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure)})`
+    }
+    throw preserved
   }
 }
 
-export async function stopDockerPostgres(container, { run = dockerCommand, environment = process.env } = {}) {
-  if (container?.name) await run('docker', ['rm', '--force', container.name], { env: { ...environment, ...container.dockerEnv } })
+export async function stopDockerPostgres(container, { run = dockerCommand, environment = process.env, signal } = {}) {
+  if (container?.name) await run('docker', ['rm', '--force', container.name], { env: { ...environment, ...container.dockerEnv }, signal })
 }
 
 async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, signal) {
@@ -261,16 +273,27 @@ async function waitForPostgres(databaseUrl, clientFactory, timeoutMs = 60_000, s
   let lastError
   while (Date.now() < deadline) {
     if (signal?.aborted) throw redactError(lastError ?? new Error('Cancelled waiting for PostgreSQL readiness'))
-    const client = await clientFactory(databaseUrl)
+    let client
     try {
+      client = await clientFactory(databaseUrl, { connectionTimeoutMillis: 5_000 })
       await client.connect()
       await client.query('SELECT 1')
       return
     } catch (error) {
       lastError = error
-      await new Promise(resolve => setTimeout(resolve, 500))
+      // Abortable retry delay — resolves early when signal fires
+      await new Promise(resolve => {
+        const timer = setTimeout(resolve, 500)
+        if (signal) {
+          signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
+        }
+      })
     } finally {
-      await client.end().catch(() => {})
+      if (client) {
+        try { await client.end() } catch {
+          // client.end() failure must not replace primary readiness failure
+        }
+      }
     }
   }
   throw redactError(lastError, 'Timed out waiting for Docker PostgreSQL')
@@ -280,25 +303,42 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
   const resolvedEnvironment = loadLocalEnvironment(root, environment)
   const externalUrl = resolvedEnvironment.MONRAD_TEST_DATABASE_URL
 
+  // Reject MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 when no external URL is set.
+  // This catches stale or accidental environment settings — the flag alone
+  // must not silently select Docker mode.
+  if (resolvedEnvironment.MONRAD_ALLOW_EXTERNAL_TEST_DATABASE === '1' && !externalUrl) {
+    throw new Error('MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 requires MONRAD_TEST_DATABASE_URL to be set. Without an external test URL the default Docker-first mode applies; remove MONRAD_ALLOW_EXTERNAL_TEST_DATABASE unless you intend external mode.')
+  }
   // ── External mode ──────────────────────────────────────────────
   if (externalUrl) {
     if (resolvedEnvironment.MONRAD_ALLOW_EXTERNAL_TEST_DATABASE !== '1') {
       throw new Error('MONRAD_TEST_DATABASE_URL requires MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 because migrations and cleanup are destructive')
     }
-    const parsed = parseDatabaseUrl(externalUrl)
     const persistentUrl = resolvedEnvironment.DATABASE_URL
-    if (persistentUrl) {
-      if (isSameDatabase(persistentUrl, externalUrl)) {
+    if (!persistentUrl) {
+      throw new Error('DATABASE_URL is required to validate MONRAD_TEST_DATABASE_URL isolation')
+    }
+    const normalizedExternal = normalizeDatabaseIdentity(externalUrl)
+    try {
+      const normalizedPersistent = normalizeDatabaseIdentity(persistentUrl)
+      if (
+        normalizedPersistent.host === normalizedExternal.host &&
+        normalizedPersistent.port === normalizedExternal.port &&
+        normalizedPersistent.database === normalizedExternal.database
+      ) {
         throw new Error('MONRAD_TEST_DATABASE_URL must not target the same database as the persistent DATABASE_URL')
       }
-    } else {
-      throw new Error('DATABASE_URL is required to validate MONRAD_TEST_DATABASE_URL isolation')
+    } catch (err) {
+      // Re-throw if it's our own identity-match error
+      if (err instanceof Error && err.message === 'MONRAD_TEST_DATABASE_URL must not target the same database as the persistent DATABASE_URL') throw err
+      // Otherwise a parse or normalization failure in the persistent URL — reject
+      throw new Error(`Cannot validate MONRAD_TEST_DATABASE_URL isolation: ${err instanceof Error ? err.message : String(err)}`)
     }
     if (signal?.aborted) throw new Error('Test database setup was cancelled')
     const testEnvironment = { ...resolvedEnvironment, DATABASE_URL: externalUrl, INTEGRATION_TEST: 'true' }
-    await prepare({ root, env: testEnvironment, run })
+    await prepare({ root, env: testEnvironment, run, signal })
     if (signal?.aborted) throw new Error('Test database setup was cancelled')
-    return action(testEnvironment, { external: true, databaseName: parsed.database })
+    return action(testEnvironment, { external: true, databaseName: normalizedExternal.database })
   }
 
   // ── Docker-first default mode ──────────────────────────────────
@@ -324,7 +364,7 @@ export async function withIsolatedTestDatabase({ root, environment = process.env
       throw actionError
     }
 
-    await prepare({ root, env: testEnvironment, run })
+    await prepare({ root, env: testEnvironment, run, signal })
 
     if (signal?.aborted) {
       actionError = new Error('Test database setup was cancelled')

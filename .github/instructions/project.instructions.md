@@ -196,10 +196,10 @@ override may be used instead. There is no automatic fallback to host PostgreSQL.
 
 | Variable | Purpose |
 |---|---|
-| `MONRAD_TEST_DATABASE_URL` | Exact connection string of an externally managed database for disposable integration/E2E tests. When set, migrations, cleanup, seed and tests run directly against this database; it is never auto-created or auto-dropped. Leave unset for the default Docker-first lifecycle. |
-| `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` | Required when `MONRAD_TEST_DATABASE_URL` is set. Confirms explicit opt-in. Without this flag the module refuses to operate. The URL is also validated against the persistent `DATABASE_URL` to prevent destructive operations on the development database. |
+| `MONRAD_TEST_DATABASE_URL` | Exact connection string of an externally managed database for disposable integration/E2E tests. When set, migrations, cleanup, seed and tests run directly against this database; it is never auto-created or auto-dropped. Leave unset for the default Docker-first lifecycle. Requires `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1`. |
+| `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` | Required when `MONRAD_TEST_DATABASE_URL` is set. Confirms explicit destructive-test opt-in. The URL is validated against the persistent `DATABASE_URL` to prevent destructive operations on the development database. **Rejected when set without `MONRAD_TEST_DATABASE_URL`** — the flag alone has no effect; remove it unless external mode is intended. |
 
-Both variables are documented with commented-out defaults in `server/.env.example`.
+Both variables are documented with commented-out placeholders in `server/.env.example`.
 
 ### Naming conventions
 
@@ -278,7 +278,7 @@ For local agent validation, prefer:
 npm run test:e2e:local
 ```
 
-The local runner owns database migration/seed, test-data cleanup, dynamic ports, API/Vite startup, Playwright execution, and child-process shutdown. It terminates the entire process tree before dropping the disposable database: on POSIX via SIGTERM with escalation to SIGKILL after a grace period; on Windows via `taskkill /T /F`. Do not require manually running or killing dev servers around it.
+The local runner owns database migration/seed, test-data cleanup, dynamic ports, API/Vite startup, Playwright execution, and child-process shutdown. It terminates the entire process tree before removing the disposable Docker container: on POSIX via SIGTERM with escalation to SIGKILL after a grace period; on Windows via `taskkill /T /F`. Do not require manually running or killing dev servers around it.
 
 Documentation-only, internal refactors with unchanged behaviour, or narrowly scoped server changes may mark E2E as not applicable, but the PR must state why and identify the focused tests used instead.
 

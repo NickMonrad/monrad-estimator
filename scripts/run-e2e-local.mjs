@@ -87,7 +87,7 @@ console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (
 console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
 
 try {
-  await withIsolatedTestDatabase({ root }, async testEnv => {
+  await withIsolatedTestDatabase({ root, signal: combinedSignal }, async testEnv => {
     try {
       // ── Cleanup before seed ───────────────────────────────────────────────
       await runCommand('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv, signal: combinedSignal })
@@ -111,6 +111,13 @@ try {
       children.push(api)
       if (guard.triggered) return
 
+      // Race API readiness against child failure — whichever fires first wins.
+      await Promise.race([
+        waitForMonradApi(apiUrl).then(() => null),
+        api.failure,
+      ])
+      if (guard.triggered) return
+
       // ── Start Vite ────────────────────────────────────────────────────────
       const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
         cwd: clientDir,
@@ -123,10 +130,13 @@ try {
       children.push(client)
       if (guard.triggered) return
 
-      await waitForMonradApi(apiUrl)
+      // Race client readiness against child failure.
+      await Promise.race([
+        waitForClient(baseUrl).then(() => null),
+        client.failure,
+      ])
       if (guard.triggered) return
-      await waitForClient(baseUrl)
-      if (guard.triggered) return
+
       await waitForProxy(baseUrl)
       if (guard.triggered) return
 
@@ -187,23 +197,27 @@ function start(command, args, { cwd, env, extraEnv = {}, label }) {
   child.stderr.on('data', data => process.stderr.write(`[${label}] ${data}`))
 
   let expectedShutdown = false
+
   const failure = new Promise((_, reject) => {
     child.on('error', err => {
       if (!expectedShutdown) {
         console.error(`[${label}] failed to start: ${err.message}`)
-        reject(err)
+        reject(new Error(`${label} could not start: ${err.message}`))
       }
     })
+    // ANY unexpected exit (including code 0) is a failure — the child should
+    // run until explicitly shut down (markExpectedShutdown).
     child.on('exit', code => {
-      if (!expectedShutdown && code !== 0) {
-        console.error(`[${label}] exited with code ${code}`)
-        reject(new Error(`${label} exited with code ${code}`))
+      if (!expectedShutdown) {
+        console.error(`[${label}] exited unexpectedly with code ${code}`)
+        reject(new Error(`${label} exited unexpectedly with code ${code}`))
       }
     })
   })
 
-  // Wire failure to abort the run — startup failures propagate via internalAbort.
-  failure.catch(() => { internalAbort.abort() })
+  // Suppress unhandled rejection: callers race failure against readiness checks
+  // so the failure is surfaced through the race, not through a global rejection.
+  failure.catch(() => {})
 
   return { child, failure, markExpectedShutdown: () => { expectedShutdown = true } }
 }
@@ -261,30 +275,57 @@ async function portRespondsToHttp(port) {
 
 async function waitForMonradApi(url) {
   await waitFor(`Monrad API at ${url}`, async () => {
-    const response = await fetch(`${url}/health`)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const body = await response.json()
-    if (body.status !== 'ok' || body.service !== 'monrad-estimator') {
-      throw new Error(`Unexpected health payload: ${JSON.stringify(body)}`)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const response = await fetch(`${url}/health`, { signal: controller.signal })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const body = await response.json()
+      if (body.status !== 'ok' || body.service !== 'monrad-estimator') {
+        throw new Error(`Unexpected health payload: ${JSON.stringify(body)}`)
+      }
+    } catch (err) {
+      if (err?.name === 'AbortError') throw new Error('Request timed out')
+      throw err
+    } finally {
+      clearTimeout(timeout)
     }
   })
 }
 
 async function waitForClient(url) {
   await waitFor(`Vite client at ${url}`, async () => {
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const html = await response.text()
-    if (!html.includes('Monrad Estimator')) throw new Error('Client HTML did not contain Monrad title')
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const response = await fetch(url, { signal: controller.signal })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const html = await response.text()
+      if (!html.includes('Monrad Estimator')) throw new Error('Client HTML did not contain Monrad title')
+    } catch (err) {
+      if (err?.name === 'AbortError') throw new Error('Request timed out')
+      throw err
+    } finally {
+      clearTimeout(timeout)
+    }
   })
 }
 
 async function waitForProxy(url) {
   await waitFor(`Vite API proxy at ${url}/api/projects`, async () => {
-    const response = await fetch(`${url}/api/projects`)
-    const body = await response.json()
-    if (response.status !== 401 || !['AUTH_REQUIRED', 'Unauthorized'].includes(body.code ?? body.error)) {
-      throw new Error(`Unexpected proxy response ${response.status}: ${JSON.stringify(body)}`)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const response = await fetch(`${url}/api/projects`, { signal: controller.signal })
+      const body = await response.json()
+      if (response.status !== 401 || !['AUTH_REQUIRED', 'Unauthorized'].includes(body.code ?? body.error)) {
+        throw new Error(`Unexpected proxy response ${response.status}: ${JSON.stringify(body)}`)
+      }
+    } catch (err) {
+      if (err?.name === 'AbortError') throw new Error('Request timed out')
+      throw err
+    } finally {
+      clearTimeout(timeout)
     }
   })
 }

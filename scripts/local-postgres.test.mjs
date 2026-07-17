@@ -11,6 +11,7 @@ import {
   normalizeDatabaseIdentity,
   isSameDatabase,
   parseDatabaseUrl,
+  preparePrisma,
   redactDatabaseUrl,
   resolveCommand,
   startDockerPostgres,
@@ -68,29 +69,6 @@ test('normalizeDatabaseIdentity handles loopback aliases', () => {
   assert.equal(ipv6.host, 'localhost')
 })
 
-test('isSameDatabase rejects identical databases regardless of credentials', () => {
-  assert.ok(isSameDatabase('postgresql://a:1@localhost/x', 'postgresql://b:2@localhost/x'))
-})
-
-test('isSameDatabase recognizes genuinely different databases', () => {
-  assert.equal(isSameDatabase('postgresql://u:p@localhost/a', 'postgresql://u:p@localhost/b'), false)
-})
-
-test('isSameDatabase different hosts are different', () => {
-  assert.equal(isSameDatabase('postgresql://u:p@host1/x', 'postgresql://u:p@host2/x'), false)
-})
-
-test('isSameDatabase ignores irrelevant query parameters', () => {
-  assert.ok(isSameDatabase('postgresql://u:p@localhost/db', 'postgresql://u:p@localhost/db?sslmode=disable'))
-})
-
-test('isSameDatabase handles URL-encoded database names', () => {
-  assert.ok(isSameDatabase('postgresql://u:p@localhost/test%20db', 'postgresql://u:p@localhost/test db'))
-})
-
-test('isSameDatabase ignores hostname case', () => {
-  assert.ok(isSameDatabase('postgresql://u:p@LOCALHOST/db', 'postgresql://u:p@localhost/db'))
-})
 
 test('isSameDatabase missing persistent DATABASE_URL fails closed', async () => {
   await assert.rejects(
@@ -106,6 +84,91 @@ test('isSameDatabase missing persistent DATABASE_URL fails closed', async () => 
 })
 
 test('isSameDatabase external URL rejected when it matches persistent URL', async () => {
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: {
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/monrad_estimator',
+        MONRAD_TEST_DATABASE_URL: 'postgresql://other:creds@127.0.0.1:5432/monrad_estimator?sslmode=require',
+        MONRAD_ALLOW_EXTERNAL_TEST_DATABASE: '1',
+      },
+    }, async () => {}),
+    /must not target the same database/,
+  )
+})
+
+test('normalizeDatabaseIdentity throws on invalid URL', () => {
+  assert.throws(() => normalizeDatabaseIdentity('not-a-url'), /valid PostgreSQL connection URL/)
+})
+
+test('normalizeDatabaseIdentity throws on unsupported protocol', () => {
+  assert.throws(() => normalizeDatabaseIdentity('mysql://u:p@localhost/db'), /must use postgres/)
+})
+
+test('normalizeDatabaseIdentity throws on missing database name', () => {
+  assert.throws(() => normalizeDatabaseIdentity('postgresql://u:p@localhost/'), /must include a database name/)
+})
+
+test('isSameDatabase throws on invalid persistent URL', () => {
+  assert.throws(() => isSameDatabase('not-a-url', 'postgresql://u:p@localhost/db'), /valid PostgreSQL connection URL/)
+})
+
+test('isSameDatabase throws on invalid external URL', () => {
+  assert.throws(() => isSameDatabase('postgresql://u:p@localhost/db', 'not-a-url'), /valid PostgreSQL connection URL/)
+})
+
+test('isSameDatabase identical with different credentials', () => {
+  assert.ok(isSameDatabase('postgresql://a:1@localhost/x', 'postgresql://b:2@localhost/x'))
+})
+
+test('isSameDatabase ignores irrelevant query parameters', () => {
+  assert.ok(isSameDatabase('postgresql://u:p@localhost/db', 'postgresql://u:p@localhost/db?sslmode=disable'))
+})
+
+test('isSameDatabase handles URL-encoded database names', () => {
+  assert.ok(isSameDatabase('postgresql://u:p@localhost/test%20db', 'postgresql://u:p@localhost/test db'))
+})
+
+test('isSameDatabase ignores hostname case', () => {
+  assert.ok(isSameDatabase('postgresql://u:p@LOCALHOST/db', 'postgresql://u:p@localhost/db'))
+})
+
+test('isSameDatabase different databases are different', () => {
+  assert.equal(isSameDatabase('postgresql://u:p@localhost/a', 'postgresql://u:p@localhost/b'), false)
+})
+
+test('isSameDatabase different hosts are different', () => {
+  assert.equal(isSameDatabase('postgresql://u:p@host1/x', 'postgresql://u:p@host2/x'), false)
+})
+
+test('withIsolatedTestDatabase rejects ALLOW_EXTERNAL without TEST_URL', async () => {
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: {
+        DATABASE_URL: 'postgresql://u:p@localhost/persistent',
+        MONRAD_ALLOW_EXTERNAL_TEST_DATABASE: '1',
+      },
+    }, async () => {}),
+    /MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 requires MONRAD_TEST_DATABASE_URL/,
+  )
+})
+
+test('withIsolatedTestDatabase rejects invalid persistent URL in external mode', async () => {
+  await assert.rejects(
+    withIsolatedTestDatabase({
+      root: process.cwd(),
+      environment: {
+        DATABASE_URL: 'not-a-valid-url',
+        MONRAD_TEST_DATABASE_URL: 'postgresql://tester:secret@localhost/test_db',
+        MONRAD_ALLOW_EXTERNAL_TEST_DATABASE: '1',
+      },
+    }, async () => {}),
+    /Cannot validate MONRAD_TEST_DATABASE_URL isolation/,
+  )
+})
+
+test('withIsolatedTestDatabase rejects external URL that matches persistent URL', async () => {
   await assert.rejects(
     withIsolatedTestDatabase({
       root: process.cwd(),
@@ -629,6 +692,35 @@ test('runCommand without signal resolves on zero exit', async () => {
   assert.equal(result, '')
 })
 
+// ── Cancellation and bounded-operation tests ────────────────────────────
+
+test('preparePrisma does not run when signal is already aborted', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(
+    preparePrisma({
+      root: process.cwd(),
+      env: { DATABASE_URL: 'postgresql://u:p@localhost/db' },
+      signal: controller.signal,
+    }),
+    /was cancelled/,
+  )
+})
+
+
+test('stopDockerPostgres forwards cleanup signal to docker rm', async () => {
+  let receivedSignal = null
+  const testSignal = AbortSignal.timeout(10_000)
+  await stopDockerPostgres(
+    { name: 'test-container', dockerEnv: {} },
+    {
+      signal: testSignal,
+      run: async (_cmd, _args, opts) => { receivedSignal = opts.signal },
+    },
+  )
+  assert.equal(receivedSignal, testSignal, 'stopDockerPostgres must forward signal to docker rm')
+})
+
 
 // ── runCommand: abort termination paths ──────────────────────────────────────
 
@@ -680,15 +772,28 @@ test('runCommand preserves non-zero exit error when child exits before abort sig
   controller.abort()
 })
 
-test('runCommand on Windows cancels via taskkill invocation', async () => {
+test('runCommand on Windows uses injected terminateWindows', async () => {
   const controller = new AbortController()
-  const promise = runCommand('node', ['-e', 'setTimeout(() => process.exit(0), 30000)'], { signal: controller.signal, platform: 'win32' })
+  let terminateCalled = false
+  let terminateChild = null
+  const promise = runCommand('node', ['-e', 'setTimeout(() => {}, 30000)'], {
+    signal: controller.signal,
+    platform: 'win32',
+    terminateWindows: (child) => {
+      terminateCalled = true
+      terminateChild = child
+      child.kill()
+      return Promise.resolve()
+    },
+  })
   await new Promise(r => setTimeout(r, 100))
 
   const start = Date.now()
   controller.abort()
   await assert.rejects(promise, /was cancelled/, 'must reject on abort')
   assert.ok(Date.now() - start < 5000, 'rejection must be prompt')
+  assert.ok(terminateCalled, 'Windows termination callback must be invoked')
+  assert.ok(terminateChild, 'termination must receive the child process')
 })
 
 test('runCommand waits for termination before rejecting on abort', async () => {
@@ -733,22 +838,18 @@ test('runCommand waits for termination before rejecting on abort', async () => {
   fs.rmSync(tmpDir, { recursive: true, force: true })
 })
 
-test('runCommand termination failure surfaces to caller', async () => {
+test('runCommand termination failure surfaces to caller via injected terminateWindows', async () => {
   const controller = new AbortController()
-  // Use a non-existent PID by passing platform: 'win32' on POSIX
-  // The node child will be spawned and killed but the termination happens
-  // via windowsTerminateProcess which will have no effect (child is already spawned
-  // on the current platform as a node process). This test verifies the
-  // cancellation mechanism doesn't swallow errors.
-  // Actually, on POSIX with platform: 'win32', the child spawns as a normal
-  // node process but termination uses taskkill which fails.
-  // Let's test with platform: 'win32' on any platform and verify the rejection
-  // still happens.
-  const promise = runCommand('node', ['-e', 'setTimeout(() => process.exit(0), 30000)'], { signal: controller.signal, platform: 'win32', graceMs: 500 })
+  const promise = runCommand('node', ['-e', 'setTimeout(() => {}, 30000)'], {
+    signal: controller.signal,
+    platform: 'win32',
+    terminateWindows: () => Promise.reject(new Error('mock termination failure')),
+    graceMs: 500,
+  })
   await new Promise(r => setTimeout(r, 100))
   controller.abort()
 
-  // Must still reject — termination failure should not swallow the cancellation
+  // Must reject with cancellation error even though termination failed
   await assert.rejects(promise, /was cancelled/, 'must reject even if termination fails')
 })
 

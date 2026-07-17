@@ -195,6 +195,37 @@ jobs:
           name: playwright-report-${{ github.sha }}
           path: e2e/playwright-report/
           retention-days: 14
+  lifecycle:
+    name: Lifecycle ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run deterministic lifecycle tests
+        run: npm run test:local-db
+
+  docker-integration:
+    name: Docker-first integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Docker-first integration tests
+        run: npm run test:integration:local
   backup-windows:
     name: Backup regression (Windows)
     runs-on: windows-latest
