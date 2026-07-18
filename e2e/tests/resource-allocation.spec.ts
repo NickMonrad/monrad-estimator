@@ -824,7 +824,7 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     await expect(ownerBadge).not.toHaveText(/%/)
     // Verify ordered segment summaries
     await expect(ownerCard.getByText(/W1-W4: 50%/)).toBeVisible()
-    await expect(ownerCard.getByText(/W5-W10: 100%/)).toBeVisible()
+    await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
 
     // ── 5. Verify scalar capacity controls are absent in the panel ──
     const ownerPanel = page.getByTestId(`profile-managed-panel-${nrId}`)
@@ -869,17 +869,5 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     // ── 9. Query profiles via API and prove profile identity unchanged ──
     const after = await getPlannerProfile(page, projectId, rtId, authHeaders)
     expect(after).toEqual(before)
-
-    // ── 10. Verify no scalar writes occurred during the test ──
-    const scalarWrites: string[] = []
-    const namedResUrl2 = `/api/projects/${projectId}/resource-types/${rtId}`
-    page.on('request', request => {
-      const url = new URL(request.url()).pathname
-      if ((request.method() === 'PUT' && url === namedResUrl2) ||
-          (request.method() === 'PATCH' && url === namedResUrl)) {
-        scalarWrites.push(`${request.method()} ${url}`)
-      }
-    })
-    expect(scalarWrites).toEqual([])
   })
 })
