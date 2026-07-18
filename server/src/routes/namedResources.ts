@@ -319,14 +319,24 @@ function buildMissingProfilePayload(existing: any): NamedResourceCapacityPayload
     endWeek,
   }
 }
-
+let guardRejected = false
   const resource = await prisma.$transaction(async tx => {
     // Write non-capacity fields first
     await tx.namedResource.update({ where: { id }, data: nrData })
     let updated
     if (hasCapacityInput) {
-      // Guard: reject capacity-bearing mutation against protected profiles
-      await assertCapacityNotProtected(tx, id, projectId)
+      try {
+        await assertCapacityNotProtected(tx, id, projectId)
+      } catch (guardErr) {
+        guardRejected = true
+        const status = (guardErr as unknown as Record<string, unknown>).status ?? 409
+        const code = (guardErr as unknown as Record<string, unknown>).code ?? 'PROFILE_MANAGED_CAPACITY'
+        res.status(status as number).json({
+          error: (guardErr as Error).message,
+          code,
+        })
+        return
+      }
       // Capacity fields provided — profile-first write + project back to legacy
       const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
       updated = await tx.namedResource.update({
@@ -341,31 +351,23 @@ function buildMissingProfilePayload(existing: any): NamedResourceCapacityPayload
           endWeek: projection.allocationEndWeek,
         },
       })
-
     } else {
       // No capacity changes — preserve existing profile row identity if present.
-      // Only create a profile if one does not already exist.
       const existingProfiles = await tx.capacityProfile.findMany({
         where: { namedResourceId: id, projectId },
         select: { id: true },
       })
       if (existingProfiles.length === 0) {
-        // Create a profile from existing legacy fields
-        // For TIMELINE mode, preserve existing window fields.
-        // For non-window modes, suppress stale windows.
         await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, buildMissingProfilePayload(existing))
       }
-      // Don't touch legacy fields — existing values remain intact
       updated = await tx.namedResource.findFirst({ where: { id } })
       if (!updated) throw new Error('NamedResource not found after update')
     }
-
-    // Sync remaining profiles (role-level, other NRs) for full project reconciliation
     await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
-
     await clearWeeklyDemandCache(projectId, tx)
     return updated
   })
+  if (guardRejected) return
   res.json(resource)
 }))
 // PATCH /projects/:projectId/resource-types/:rtId/named-resources/:id

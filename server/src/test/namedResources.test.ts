@@ -98,6 +98,9 @@ describe('named-resource capacity profile write', () => {
     } as never)
 
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1' }) },
       project: { update: vi.fn() },
     }
@@ -228,3 +231,130 @@ describe('named-resource capacity profile write', () => {
     expect(res.status).not.toBe(200)
   })
 })
+
+describe('named-resource capacity guard', () => {
+  async function makeRequest(_method: 'put' | 'patch', _body: Record<string, unknown>) {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
+    vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({
+      id: 'nr-1',
+      resourceTypeId: 'rt-1',
+      allocationMode: 'TIMELINE',
+      allocationPercent: 50,
+      allocationPct: 50,
+      allocationStartWeek: 2,
+      allocationEndWeek: 8,
+      startWeek: 2,
+      endWeek: 8,
+    } as never)
+
+    const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      namedResource: {
+        update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'nr-1' }),
+      },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+    return tx
+  }
+
+  it('rejects PUT with 409 for segmented profile', async () => {
+    const tx = await makeRequest('put', { allocationMode: 'TIMELINE', allocationPercent: 75, startWeek: 0, endWeek: 10 })
+    vi.mocked(tx.capacityProfile.findMany).mockResolvedValue([{
+      id: 'cp-1', planningBasis: 'availabilityWindow', ownerKind: 'NAMED_PERSON',
+      segments: [{ id: 'cs-1', startWeek: 0, endWeek: 5 }],
+    }] as never)
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ allocationMode: 'TIMELINE', allocationPercent: 75, startWeek: 0, endWeek: 10 })
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+  })
+
+  it('rejects PUT with 409 for capacityProfile planning basis', async () => {
+    const tx = await makeRequest('put', { allocationMode: 'TIMELINE', allocationPercent: 75 })
+    vi.mocked(tx.capacityProfile.findMany).mockResolvedValue([{
+      id: 'cp-1', planningBasis: 'capacityProfile', ownerKind: 'NAMED_PERSON',
+      segments: [],
+    }] as never)
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ allocationMode: 'TIMELINE', allocationPercent: 75 })
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+  })
+
+  it('rejects PUT with 409 for PLANNED_RESOURCE', async () => {
+    const tx = await makeRequest('put', { allocationMode: 'TIMELINE', allocationPercent: 75 })
+    vi.mocked(tx.capacityProfile.findMany).mockResolvedValue([{
+      id: 'cp-1', planningBasis: 'availabilityWindow', ownerKind: 'PLANNED_RESOURCE',
+      segments: [],
+    }] as never)
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ allocationMode: 'TIMELINE', allocationPercent: 75 })
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+  })
+
+  it('rejects PUT with 409 for conflicting duplicate profiles', async () => {
+    const tx = await makeRequest('put', { allocationMode: 'TIMELINE', allocationPercent: 75 })
+    vi.mocked(tx.capacityProfile.findMany).mockResolvedValue([
+      { id: 'cp-1', planningBasis: 'availabilityWindow', ownerKind: 'NAMED_PERSON', segments: [] },
+      { id: 'cp-2', planningBasis: 'demandFollowing', ownerKind: 'NAMED_PERSON', segments: [] },
+    ] as never)
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ allocationMode: 'TIMELINE', allocationPercent: 75 })
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+  })
+
+  it('allows name-only PUT for segmented profile (passes through guard)', async () => {
+    const tx = await makeRequest('put', { name: 'New Name' })
+    vi.mocked(tx.capacityProfile.findMany).mockResolvedValue([{
+      id: 'cp-1', planningBasis: 'availabilityWindow', ownerKind: 'NAMED_PERSON',
+      segments: [{ id: 'cs-1', startWeek: 0, endWeek: 5 }],
+    }] as never)
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ name: 'New Name' })
+
+    expect(res.status).toBe(200)
+    expect(tx.namedResource.findFirst).toHaveBeenCalled()
+  })
+
+  it('allows segmentless scalar NAMED_PERSON capacity update', async () => {
+    const tx = await makeRequest('put', { allocationMode: 'TIMELINE', allocationPercent: 75, startWeek: 0, endWeek: 10 })
+    vi.mocked(tx.capacityProfile.findMany).mockResolvedValue([{
+      id: 'cp-1', planningBasis: 'availabilityWindow', ownerKind: 'NAMED_PERSON',
+      segments: [],
+    }] as never)
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ allocationMode: 'TIMELINE', allocationPercent: 75, startWeek: 0, endWeek: 10 })
+
+    expect(res.status).toBe(200)
+  })
+})
+
