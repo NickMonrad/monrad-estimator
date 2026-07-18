@@ -299,9 +299,9 @@ async function seedSegmentedNamedPerson(page: Page, projectId: string, rtId: str
     { startWeek: 0, endWeek: 3, capacityPercent: 50 },
     { startWeek: 4, endWeek: 8, capacityPercent: 100 },
   ]
-
-  const nrId = `test-nr-${nrName.replace(/\s+/g, '-').toLowerCase()}`
-  const profileId = `test-cp-${nrName.replace(/\s+/g, '-').toLowerCase()}`
+  const scope = projectId.replace(/[^a-zA-Z0-9_-]/g, '-')
+  const nrId = `test-nr-${scope}-${nrName.replace(/\s+/g, '-').toLowerCase()}`
+  const profileId = `test-cp-${scope}-${nrName.replace(/\s+/g, '-').toLowerCase()}`
   const now = new Date().toISOString()
 
   const client = new Client({ connectionString: DATABASE_URL })
@@ -979,48 +979,53 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     const nameInput = row.getByRole('textbox')
     await expect(nameInput).toBeVisible()
     await expect(nameInput).toBeEnabled()
-    await nameInput.clear()
     await nameInput.fill('Segmented Alice Renamed')
-    // Blur triggers PUT (onBlur handler)
-    await nameInput.blur()
-
-    // Wait for rename PUT and assert exact body
-    await expect.poll(() => putBodies.length, 'Rename PUT should have been captured').toBeGreaterThanOrEqual(1)
-    const renamePutBody = JSON.parse(putBodies.find(b => JSON.parse(b).name !== undefined) || '{}')
-    expect(renamePutBody).toEqual({
-      name: 'Segmented Alice Renamed',
-    })
-    // Wait for rename PUT response to complete before proceeding
-    const renamePutResponse = await page.waitForResponse(
-      response => response.url().includes(`/named-resources/${nrId}`) && response.request().method() === 'PUT',
+    // Register rename response promise BEFORE the action to avoid race
+    const renameResponsePromise = page.waitForResponse(
+      response => {
+        if (!response.url().includes(`/named-resources/${nrId}`)) return false
+        if (response.request().method() !== 'PUT') return false
+        const body = response.request().postDataJSON()
+        return body?.name === 'Segmented Alice Renamed' && Object.keys(body).length === 1
+      },
       { timeout: 10_000 },
     )
-    expect(renamePutResponse.ok()).toBeTruthy()
+    // Blur triggers PUT (onBlur handler)
+    await nameInput.blur()
+    const renameResponse = await renameResponsePromise
+    expect(renameResponse.ok()).toBeTruthy()
+    // Verify the body was captured via route handler
+    const renamePutBody = JSON.parse(putBodies.find(b => {
+      try { return JSON.parse(b).name !== undefined }
+      catch { return false }
+    }) || '{}')
+    expect(renamePutBody).toEqual({ name: 'Segmented Alice Renamed' })
 
     // ── 7. Change billing basis via the row select ──
     const billingSelect = page.locator(`#billing-basis-${nrId}`)
     await expect(billingSelect).toBeVisible()
     await expect(billingSelect).toBeEnabled()
-    const preBillingLength = putBodies.length
+    // Register billing response promise BEFORE the action to avoid race
+    const billingResponsePromise = page.waitForResponse(
+      response => {
+        if (!response.url().includes(`/named-resources/${nrId}`)) return false
+        if (response.request().method() !== 'PUT') return false
+        const body = response.request().postDataJSON()
+        return body?.pricingModel === 'PRO_RATA' && Object.keys(body).length === 1
+      },
+      { timeout: 10_000 },
+    )
     await billingSelect.selectOption('PRO_RATA')
-
-    await expect.poll(() => putBodies.length, 'Billing PUT should have been captured').toBeGreaterThan(preBillingLength)
+    const billingResponse = await billingResponsePromise
+    expect(billingResponse.ok()).toBeTruthy()
+    // Verify the body was captured via route handler
     const billingPutBody = JSON.parse(
-      putBodies.slice(preBillingLength).find(b => {
+      putBodies.find(b => {
         try { return JSON.parse(b).pricingModel !== undefined }
         catch { return false }
       }) || '{}',
     )
-    expect(billingPutBody).toEqual({
-      pricingModel: 'PRO_RATA',
-    })
-
-    // Wait for billing PUT response to complete before proceeding
-    const billingPutResponse = await page.waitForResponse(
-      response => response.url().includes(`/named-resources/${nrId}`) && response.request().method() === 'PUT',
-      { timeout: 10_000 },
-    )
-    expect(billingPutResponse.ok()).toBeTruthy()
+    expect(billingPutBody).toEqual({ pricingModel: 'PRO_RATA' })
 
     // ── 8. Verify no scalar-capacity writes occurred ──
     // Check all captured PUTs — none should contain scalar capacity fields
@@ -1039,21 +1044,20 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     // ── 9. Reload and verify persistence ──
     await page.reload()
     await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
-
-    // Main row elements are visible without opening the panel
-    await expect(page.getByText('Segmented Alice Renamed')).toBeVisible()
-    const reloadedBilling = page.locator(`#billing-basis-${nrId}`)
-    await expect(reloadedBilling).toHaveValue('PRO_RATA')
-
     // Reopen the People panel before checking panel-scoped elements
     const roleRowReloaded = page.getByTestId(`resource-profile-row-${rtId}`)
     await expect(roleRowReloaded).toBeVisible({ timeout: 10_000 })
     await roleRowReloaded.getByRole('button', { name: /people/i }).click()
-
-    // Now panel-scoped locators are valid
-    await expect(ownerBadge).toHaveText('Varies by week')
-    await expect(ownerCard.getByText(/W1-W4: 50%/)).toBeVisible()
-    await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
+    // Named resource rows inside the People panel are now visible
+    await expect(page.getByTestId(`named-resource-row-${nrId}`).getByRole('textbox')).toHaveValue('Segmented Alice Renamed')
+    const reloadedBilling = page.locator(`#billing-basis-${nrId}`)
+    await expect(reloadedBilling).toHaveValue('PRO_RATA')
+    // Recreate panel-scoped locators after reload (avoid stale refs)
+    const reloadedOwnerCard = page.getByTestId(`named-resource-profile-${nrId}`)
+    const reloadedOwnerBadge = page.getByTestId(`profile-managed-owner-${nrId}`)
+    await expect(reloadedOwnerBadge).toHaveText('Varies by week')
+    await expect(reloadedOwnerCard.getByText(/W1-W4: 50%/)).toBeVisible()
+    await expect(reloadedOwnerCard.getByText(/W5-W9: 100%/)).toBeVisible()
 
     // ── 10. Capture canonical state AFTER and compare ──
     const after = await readNamedPersonCanonicalState(nrId, profileId)

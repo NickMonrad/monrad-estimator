@@ -319,6 +319,30 @@ function assertStateUnchanged(before: CanonicalGuardState, after: CanonicalGuard
   expect(JSON.stringify(after.cache)).toBe(JSON.stringify(before.cache))
 }
 
+/**
+ * Assert that exactly one named-resource field changed and everything
+ * else — profile, segments, cache — is preserved identically.
+ */
+function expectOnlyNamedResourceFieldChanged(
+  before: CanonicalGuardState,
+  after: CanonicalGuardState,
+  field: 'name' | 'pricingModel',
+  expectedValue: string,
+) {
+  // The specified field has the expected new value
+  expect(after.nr?.[field]).toBe(expectedValue)
+
+  // Every other named-resource field is unchanged: overwrite the
+  // changed field with the original value, then compare full objects.
+  const restored = { ...after.nr, [field]: before.nr?.[field] }
+  expect(restored).toEqual(before.nr)
+
+  // Profile, segments, and cache are completely unchanged
+  expect(after.profile).toEqual(before.profile)
+  expect(after.segments).toEqual(before.segments)
+  expect(JSON.stringify(after.cache)).toBe(JSON.stringify(before.cache))
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describeIf('Named-resource guard (real PostgreSQL)', () => {
@@ -381,24 +405,11 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
       .send({ name: 'Segmented Alice Renamed' })
 
     expect(res.status).toBe(200)
-
-    // Name changed in response
     expect(res.body.name).toBe('Segmented Alice Renamed')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    expect(after.nr?.name).toBe('Segmented Alice Renamed')
-    // Everything else unchanged
-    expect(after.nr?.pricingModel).toBe(initialSegState.nr?.pricingModel)
-    expect(after.nr?.allocationMode).toBe(initialSegState.nr?.allocationMode)
-    expect(after.nr?.allocationPercent).toBe(initialSegState.nr?.allocationPercent)
-    // Profile ID unchanged
-    expect(after.profile?.id).toBe(initialSegState.profile?.id)
-    // Segments unchanged
-    expect(after.segments).toHaveLength(initialSegState.segments.length)
-    for (let i = 0; i < initialSegState.segments.length; i++) {
-      expect(after.segments[i].id).toBe(initialSegState.segments[i].id)
-      expect(after.segments[i].capacityPercent).toBe(initialSegState.segments[i].capacityPercent)
-    }
+    // Only name changed — everything else exact
+    expectOnlyNamedResourceFieldChanged(initialSegState, after, 'name', 'Segmented Alice Renamed')
 
     // Reset name for other tests
     await prisma.namedResource.update({
@@ -406,8 +417,6 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
       data: { name: 'Segmented Alice' },
     })
   })
-
-  // ── D. Safe pricing-only PUT ────────────────────────────────────────────
 
   it('D: PUT with pricingModel only → 200, only pricingModel changes (segmented NAMED_PERSON)', async () => {
     const res = await request(app)
@@ -419,17 +428,8 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.pricingModel).toBe('PRO_RATA')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    expect(after.nr?.pricingModel).toBe('PRO_RATA')
-    // Everything else unchanged
-    expect(after.nr?.name).toBe(initialSegState.nr?.name)
-    expect(after.nr?.allocationMode).toBe(initialSegState.nr?.allocationMode)
-    // Profile ID unchanged
-    expect(after.profile?.id).toBe(initialSegState.profile?.id)
-    // Segments unchanged
-    expect(after.segments).toHaveLength(initialSegState.segments.length)
-    for (let i = 0; i < initialSegState.segments.length; i++) {
-      expect(after.segments[i].id).toBe(initialSegState.segments[i].id)
-    }
+    // Only pricingModel changed — everything else exact
+    expectOnlyNamedResourceFieldChanged(initialSegState, after, 'pricingModel', 'PRO_RATA')
 
     // Reset pricing for other tests
     await prisma.namedResource.update({
