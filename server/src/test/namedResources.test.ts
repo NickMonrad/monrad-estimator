@@ -292,9 +292,9 @@ describe('named-resource capacity guard', () => {
       expect(tx.namedResource.update).not.toHaveBeenCalled()
     })
 
-    it('rejects PUT with 409 for capacityProfile planning basis (no segments)', async () => {
+    it('rejects PUT with 409 for CAPACITY_PROFILE planning basis (no segments)', async () => {
       const tx = await setupProtectedProfile([{
-        id: 'cp-1', planningBasis: 'capacityProfile', ownerKind: 'NAMED_PERSON',
+        id: 'cp-1', planningBasis: 'CAPACITY_PROFILE', ownerKind: 'NAMED_PERSON',
         segments: [],
       }])
 

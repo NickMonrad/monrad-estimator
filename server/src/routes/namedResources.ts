@@ -7,6 +7,7 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityProfileWrites.js'
+import type { PrismaTransactionClient } from '../lib/squadPlannerProfileWriter.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 
 const router = Router({ mergeParams: true })
@@ -54,8 +55,7 @@ function isProfileManagedCapacityError(error: unknown): error is ProfileManagedC
  * Throws ProfileManagedCapacityError.
  */
 async function assertCapacityNotProtected(
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-  tx: { capacityProfile: { findMany: Function } },
+  tx: PrismaTransactionClient,
   namedResourceId: string,
   projectId: string,
 ): Promise<void> {
@@ -73,9 +73,9 @@ async function assertCapacityNotProtected(
   if (!profile) return
 
   const hasSegments = profile.segments.length > 0
-  const isCapacityProfile = profile.planningBasis === 'capacityProfile'
+  const isProtectedPlanningBasis = profile.planningBasis === 'CAPACITY_PROFILE'
   const isPlannedResource = profile.ownerKind === 'PLANNED_RESOURCE'
-  if (hasSegments || isCapacityProfile || isPlannedResource) {
+  if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
     throw new ProfileManagedCapacityError('This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.')
   }
 }

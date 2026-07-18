@@ -789,8 +789,11 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
   })
 })
 
+import { Client } from 'pg'
+import { DATABASE_URL } from './helpers'
+
 test.describe('Segmented NAMED_PERSON protection', () => {
-  test('capacity-edit protection and safe updates on segmented named person', async ({ page }) => {
+  test('safe updates preserve profile identity through People panel', async ({ page }) => {
     test.setTimeout(120_000)
 
     // ── 1. Create project with backlog ──
@@ -809,7 +812,7 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     expect(techLead).toBeDefined()
     const rtId = techLead!.id
 
-    // ── 3. Create a named resource ──
+    // ── 3. Create a named resource via API (seeds an initial profile) ──
     const nrRes = await page.request.post(
       `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources`,
       { headers: authHeaders, data: { name: 'Segmented Alice' } },
@@ -818,64 +821,128 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     const nrBody = await nrRes.json() as { id: string }
     const nrId = nrBody.id
 
-    // ── 4. Capture profile state before safe update ──
-    const cpBeforeRes = await page.request.get(
-      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
-      { headers: authHeaders },
-    )
-    expect(cpBeforeRes.ok()).toBeTruthy()
-    const cpBefore = await cpBeforeRes.json() as {
-      capacityProfiles: Array<{
-        id: string; owner: { kind: string; id: string }
-        planningBasis: string; source: string; defaultPercent: number
-        segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
-      }>
-    }
-    const nrProfileBefore = cpBefore.capacityProfiles.find(p => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
-    expect(nrProfileBefore, 'Profile should exist after POST').toBeDefined()
-    // ── 5. Seed scalar-safe capacity values ──
+    // ── 4. Seed scalar-safe capacity values via PUT (creates a segmentless profile) ──
     const seedRes = await page.request.put(
       `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
       { headers: authHeaders, data: { allocationMode: 'TIMELINE', startWeek: 2, endWeek: 10, allocationPct: 75 } },
     )
     expect(seedRes.ok(), `Seed PUT: ${seedRes.status()}`).toBeTruthy()
 
-    // ── 6. Capture profile state AFTER seed (seed PUT creates new profile) ──
-    const cpAfterSeedRes = await page.request.get(
+    // ── 5. Get the profile ID for this named person ──
+    const cpRes = await page.request.get(
       `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
       { headers: authHeaders },
     )
-    expect(cpAfterSeedRes.ok()).toBeTruthy()
-    const cpAfterSeed = await cpAfterSeedRes.json() as {
+    expect(cpRes.ok()).toBeTruthy()
+    const cpData = await cpRes.json() as {
       capacityProfiles: Array<{
         id: string; owner: { kind: string; id: string }
-        planningBasis: string; source: string; defaultPercent: number | null
-        segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+        planningBasis: string; source: string; defaultPercent: number | null; startWeek: number | null
       }>
     }
-    const nrProfileAfterSeed = cpAfterSeed.capacityProfiles.find(p => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
-    expect(nrProfileAfterSeed, 'Profile should exist after seed PUT').toBeDefined()
-    const profileAfterSeedId = nrProfileAfterSeed!.id
+    const nrProfile = cpData.capacityProfiles.find((p: any) => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
+    expect(nrProfile, 'Profile should exist for the named person').toBeDefined()
+    const profileId = nrProfile!.id
 
-    // ── 7. Rename the person via PUT, verify only name field ──
-    const namePutRes = await page.request.put(
-      `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-      { headers: authHeaders, data: { name: 'Segmented Alice Renamed' } },
-    )
-    expect(namePutRes.ok()).toBeTruthy()
-    const namePutBody = await namePutRes.json() as Record<string, unknown>
-    expect(namePutBody.name).toBe('Segmented Alice Renamed')
+    // ── 6. Insert two capacity segments via direct DB connection ──
+    const db = new Client({ connectionString: DATABASE_URL })
+    await db.connect()
+    try {
+      await db.query(
+        `INSERT INTO "CapacitySegment" (id, "capacityProfileId", "startWeek", "endWeek", "capacityPercent", source, "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()),
+                ($7, $8, $9, $10, $11, $12, NOW(), NOW())`,
+        [
+          'e2e-seg-a', profileId, 2, 4, 100, 'MANUAL',
+          'e2e-seg-b', profileId, 5, 9, 50, 'MANUAL',
+        ],
+      )
+      // Update the profile to reflect real segment state (stale compatibility values)
+      await db.query(
+        `UPDATE "CapacityProfile" SET "defaultPercent" = 100 WHERE id = $1`,
+        [profileId],
+      )
+    } finally {
+      await db.end()
+    }
 
-    // ── 8. Change billing basis, verify only pricingModel field ──
-    const pricingPutRes = await page.request.put(
-      `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-      { headers: authHeaders, data: { pricingModel: 'PRO_RATA' } },
-    )
-    expect(pricingPutRes.ok()).toBeTruthy()
-    const pricingPutBody = await pricingPutRes.json() as Record<string, unknown>
-    expect(pricingPutBody.pricingModel).toBe('PRO_RATA')
+    // ── 7. Navigate to Resource Profile page ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
 
-    // ── 9. Verify profile identity preserved after safe updates ──
+    // ── 8. Intercept PUT requests to the named-resource endpoint ──
+    const putBodies: string[] = []
+    await page.route(`**/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`, async route => {
+      if (route.request().method() === 'PUT') {
+        putBodies.push(route.request().postData() || '{}')
+      }
+      await route.continue()
+    })
+
+    // ── 9. Open the People panel for the Tech Lead row ──
+    const roleRow = page.getByTestId(`resource-profile-row-${rtId}`)
+    await expect(roleRow).toBeVisible({ timeout: 10_000 })
+    await roleRow.getByRole('button', { name: /people/i }).click()
+
+    // ── 10. Verify the segmented-profile UI ──
+    const ownerCard = page.getByTestId(`named-resource-profile-${nrId}`)
+    const ownerBadge = page.getByTestId(`profile-managed-owner-${nrId}`)
+    await expect(ownerCard).toBeVisible({ timeout: 10_000 })
+    await expect(ownerBadge).toHaveText('Varies by week')
+    await expect(ownerBadge).not.toHaveText(/%/)
+    // Verify ordered segment summaries
+    await expect(ownerCard.getByText(/W3-W5: 100%/)).toBeVisible()
+    await expect(ownerCard.getByText(/W6-W10: 50%/)).toBeVisible()
+
+    // Verify scalar capacity controls are absent
+    const ownerPanel = page.getByTestId(`profile-managed-panel-${nrId}`)
+    await ownerBadge.click()
+    await expect(ownerPanel).toBeVisible()
+    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
+    await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
+    // Verify non-planner protected guidance
+    await expect(ownerPanel.getByText(/protected/i)).toBeVisible()
+    // Verify no Squad Planner link for a NAMED_PERSON
+    await expect(ownerPanel.getByRole('link', { name: /open weekly profile editor/i })).toHaveCount(0)
+
+    // ── 11. Rename the person via UI (edit name input, blur to trigger PUT) ──
+    // The name input is the first input inside the named-resource row
+    const nameInput = ownerCard.locator('input').first()
+    await expect(nameInput).toBeVisible()
+    await nameInput.clear()
+    await nameInput.fill('Segmented Alice Renamed')
+    await nameInput.blur()
+
+    // Wait for the PUT to fire
+    await expect.poll(() => putBodies.length, 'Rename PUT should have been captured').toBeGreaterThanOrEqual(1)
+    const renameBody = JSON.parse(putBodies[0])
+    expect(Object.keys(renameBody)).toEqual(['name'])
+    expect(renameBody.name).toBe('Segmented Alice Renamed')
+
+    // ── 12. Change billing basis via UI ──
+    const billingSelect = page.locator(`#billing-basis-${nrId}`)
+    await expect(billingSelect).toBeVisible()
+    await billingSelect.selectOption('PRO_RATA')
+
+    await expect.poll(() => putBodies.length, 'Billing PUT should have been captured').toBeGreaterThanOrEqual(2)
+    const billingBody = JSON.parse(putBodies[1])
+    expect(Object.keys(billingBody)).toEqual(['pricingModel'])
+    expect(billingBody.pricingModel).toBe('PRO_RATA')
+
+    // ── 13. Reload and verify persistence ──
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
+
+    // Verify renamed person visible
+    await expect(page.getByText('Segmented Alice Renamed')).toBeVisible()
+    // Verify PRO_RATA billing visible
+    const reloadedBilling = page.locator(`#billing-basis-${nrId}`)
+    await expect(reloadedBilling).toHaveValue('PRO_RATA')
+
+    // ── 14. Query profiles via API and prove profile identity unchanged ──
     const cpFinalRes = await page.request.get(
       `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
       { headers: authHeaders },
@@ -888,12 +955,15 @@ test.describe('Segmented NAMED_PERSON protection', () => {
         segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
       }>
     }
-    const nrProfileFinal = cpFinal.capacityProfiles.find(p => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
-    expect(nrProfileFinal, 'Profile identity preserved after safe updates').toBeDefined()
-    expect(nrProfileFinal!.id).toBe(profileAfterSeedId)
-    expect(nrProfileFinal!.planningBasis).toBe(nrProfileAfterSeed!.planningBasis)
-    expect(nrProfileFinal!.defaultPercent).toBe(nrProfileAfterSeed!.defaultPercent)
-    expect(nrProfileFinal!.segments).toEqual(nrProfileAfterSeed!.segments)
-    expect(nrProfileFinal!.source).toBe(nrProfileAfterSeed!.source)
+    const finalProfile = cpFinal.capacityProfiles.find((p: any) => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
+    expect(finalProfile, 'Profile should still exist after reload').toBeDefined()
+    expect(finalProfile!.id).toBe(profileId)
+    expect(finalProfile!.planningBasis).toBe(nrProfile!.planningBasis)
+    expect(finalProfile!.source).toBe(nrProfile!.source)
+    expect(finalProfile!.defaultPercent).toBe(100)
+    // Verify exact ordered segments
+    expect(finalProfile!.segments).toHaveLength(2)
+    expect(finalProfile!.segments[0]).toMatchObject({ startWeek: 2, endWeek: 4, capacityPercent: 100 })
+    expect(finalProfile!.segments[1]).toMatchObject({ startWeek: 5, endWeek: 9, capacityPercent: 50 })
   })
 })
