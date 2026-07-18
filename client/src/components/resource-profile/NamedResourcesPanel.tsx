@@ -369,6 +369,8 @@ export default function NamedResourcesPanel({
                           </div>
                         )
                       })()}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
