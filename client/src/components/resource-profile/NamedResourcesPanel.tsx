@@ -1,5 +1,4 @@
 import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
-import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type { ResourceProfileRow } from '../../types/backlog'
@@ -60,7 +59,6 @@ export default function NamedResourcesPanel({
   allocations = [],
 }: NamedResourcesPanelProps) {
   const qc = useQueryClient()
-  const [profileInfoOwnerId, setProfileInfoOwnerId] = useState<string | null>(null)
 
   const { data: resources = [], isLoading } = useQuery<NamedResource[]>({
     queryKey: ['named-resources', projectId, rtId],
