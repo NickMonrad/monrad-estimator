@@ -112,6 +112,13 @@ beforeAll(async () => {
   })
   defaultRtId = defaultRt.id
 
+  // Seed a distinguishable weeklyDemandCache value that cannot be mistaken
+  // for the default empty object — proves rejected requests preserve it exactly.
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { weeklyDemandCache: { [`${rtId}|99`]: 42.5 } },
+  })
+
   // ── Fixture 1: Segmented NAMED_PERSON (for tests A, B, C, D) ──────────
   const segNr = await prisma.namedResource.create({
     data: {
@@ -284,17 +291,24 @@ async function readCanonicalState(nrId: string, profileId: string): Promise<Cano
   })
   return { nr, profile, segments, cache: cache?.weeklyDemandCache }
 }
-/** Assert exact state unchanged between before and after snapshots.
- * Excludes volatile timestamps and the project-wide weeklyDemandCache
- * (which may be invalidated by any named-resource write in the project).
+
+/**
+ * Assert that a rejected (409) request preserved the FULL canonical state
+ * — named resource, profile, ordered segments, AND weeklyDemandCache —
+ * exactly as it was before the request.
+ *
+ * The 409 guard runs before any writes or cache invalidation, so rejected
+ * requests must leave every database field untouched.
  */
-function assertStateUnchanged(before: CanonicalGuardState, after: CanonicalGuardState) {
+function expectRejectedStateUnchanged(before: CanonicalGuardState, after: CanonicalGuardState) {
+  // Named resource (excluding volatile timestamps)
   if (before.nr && after.nr) {
     const { createdAt: _bc, updatedAt: _bu, ...beforeClean } = before.nr as any
     const { createdAt: _ac, updatedAt: _au, ...afterClean } = after.nr as any
     expect(afterClean).toEqual(beforeClean)
   }
 
+  // Profile identity and metadata
   expect(after.profile?.id).toBe(before.profile?.id)
   expect(after.profile?.ownerKind).toBe(before.profile?.ownerKind)
   expect(after.profile?.planningBasis).toBe(before.profile?.planningBasis)
@@ -303,6 +317,7 @@ function assertStateUnchanged(before: CanonicalGuardState, after: CanonicalGuard
   expect(after.profile?.startWeek).toBe(before.profile?.startWeek)
   expect(after.profile?.endWeek).toBe(before.profile?.endWeek)
 
+  // Ordered segments — exact id and every field
   expect(after.segments).toHaveLength(before.segments.length)
   for (let i = 0; i < before.segments.length; i++) {
     expect(after.segments[i].id).toBe(before.segments[i].id)
@@ -311,7 +326,10 @@ function assertStateUnchanged(before: CanonicalGuardState, after: CanonicalGuard
     expect(after.segments[i].capacityPercent).toBe(before.segments[i].capacityPercent)
     expect(after.segments[i].source).toBe(before.segments[i].source)
   }
-  // Cache is ignored — may be invalidated by any named-resource write in the project
+
+  // weeklyDemandCache must be preserved exactly — the guard rejects
+  // before any write or cache invalidation can occur.
+  expect(JSON.stringify(after.cache)).toBe(JSON.stringify(before.cache))
 }
 
 /**
@@ -374,7 +392,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    assertStateUnchanged(initialSegState, after)
+    expectRejectedStateUnchanged(initialSegState, after)
   })
 
   // ── B. Rejected capacity PATCH ──────────────────────────────────────────
@@ -392,7 +410,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    assertStateUnchanged(initialSegState, after)
+    expectRejectedStateUnchanged(initialSegState, after)
   })
 
   // ── C. Safe name-only PUT ───────────────────────────────────────────────
@@ -450,7 +468,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
-    assertStateUnchanged(initialCapProfileState, after)
+    expectRejectedStateUnchanged(initialCapProfileState, after)
   })
 
   it('E2: PATCH with scalar capacity → 409 (segmentless CAPACITY_PROFILE)', async () => {
@@ -466,7 +484,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
-    assertStateUnchanged(initialCapProfileState, after)
+    expectRejectedStateUnchanged(initialCapProfileState, after)
   })
 
   // ── F. Scalar-safe segmentless profile ─────────────────────────────────
