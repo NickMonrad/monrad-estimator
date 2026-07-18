@@ -4136,6 +4136,56 @@ describe('persisted capacity-profile DTO integration', () => {
       // Weekly demand cache cleared
       expect(storeRef.current.project.weeklyDemandCache).toEqual({})
     })
+
+    it('rejected mixed-field PUT on segmented named person rolls back all changes, including non-capacity fields', async () => {
+      const before = JSON.parse(JSON.stringify(storeRef.current))
+
+      // Send PUT containing both non-capacity fields AND scalar capacity: all must be rejected
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${guardNrId}`)
+        .set('Authorization', authHeader)
+        .send({
+          name: 'Must Roll Back',
+          pricingModel: 'PRO_RATA',
+          allocationPercent: 75,
+          startWeek: 2,
+          endWeek: 10,
+        })
+
+      expect(res.status).toBe(409)
+      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+
+      // Exact state preservation: nothing changed
+      const after = JSON.parse(JSON.stringify(storeRef.current))
+      expect(after).toEqual(before)
+    })
+
+    it('capacity PUT on segmentless CAPACITY_PROFILE named person returns 409', async () => {
+      const capProfNrId = 'nr-capacity-profile-1'
+      const capProfCpId = 'cp-capacity-profile-1'
+
+      addNamedResource(capProfNrId, 'Capacity Profile Person', guardRtId, {
+        allocationMode: 'CAPACITY_PROFILE', allocationPercent: 100, allocationPct: 100,
+        allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null,
+      })
+      addPersistedProfile(capProfCpId, {
+        namedResourceId: capProfNrId, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL',
+      })
+
+      const before = JSON.parse(JSON.stringify(storeRef.current))
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${capProfNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 80, startWeek: 1 })
+
+      expect(res.status).toBe(409)
+      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+
+      const after = JSON.parse(JSON.stringify(storeRef.current))
+      expect(after).toEqual(before)
+    })
   })
 
   })

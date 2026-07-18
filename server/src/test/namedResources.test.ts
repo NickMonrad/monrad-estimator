@@ -45,7 +45,7 @@ const authHeader = `Bearer ${token}`
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // Guard runs before transaction; default to no profiles (passes guard)
+  // Guard runs inside the transaction; default to no profiles (passes guard)
   vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([])
 })
 

@@ -189,7 +189,7 @@ export default function NamedResourcesPanel({
               </div>
               {mergedResources.map((resource) => (
                 <div key={resource.id}>
-                  <div className="grid grid-cols-[1fr_110px_110px_80px_150px_minmax(180px,1fr)_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
+                  <div data-testid={`named-resource-row-${resource.id}`} className="grid grid-cols-[1fr_110px_110px_80px_150px_minmax(180px,1fr)_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
                   <div className="flex items-center gap-1">
                     <input
                       type="text"
