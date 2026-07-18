@@ -23,6 +23,49 @@ async function verifyResourceType(rtId: string, projectId: string) {
 
 const VALID_PRICING_MODELS = ['ACTUAL_DAYS', 'PRO_RATA']
 
+/**
+ * Assert that a capacity-bearing update is safe for the existing profile.
+ *
+ * A named resource is protected from scalar capacity mutation when its
+ * CapacityProfile has any of:
+ * - one or more CapacitySegment rows (segmented profile)
+ * - planningBasis = 'capacityProfile' (weekly-profile even without segments)
+ * - ownerKind = 'PLANNED_RESOURCE' (managed by Squad Planner)
+ *
+ * Multiple conflicting profiles also fail closed — we cannot determine
+ * which profile is authoritative, so scalar mutation is refused.
+ *
+ * Throws with `statusCode: 409` that the handler should send.
+ * When the check passes, returns the classified profile (or null if none exists).
+ */
+async function assertCapacityNotProtected(tx: { capacityProfile: { findMany: Function } }, namedResourceId: string, projectId: string) {
+  const profiles = await tx.capacityProfile.findMany({
+    where: { namedResourceId, projectId },
+    include: { segments: { select: { id: true, startWeek: true, endWeek: true } } },
+    orderBy: { createdAt: 'asc' },
+  }) as Array<{ id: string; planningBasis: string | null; ownerKind: string | null; segments: Array<{ id: string }> }>
+
+  if (profiles.length > 1) {
+    const err = new Error('This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.')
+    ;(err as unknown as Record<string, unknown>).status = 409
+    ;(err as unknown as Record<string, unknown>).code = 'PROFILE_MANAGED_CAPACITY'
+    throw err
+  }
+
+  const profile = profiles[0]
+  if (!profile) return
+
+  const hasSegments = profile.segments.length > 0
+  const isCapacityProfile = profile.planningBasis === 'capacityProfile'
+  const isPlannedResource = profile.ownerKind === 'PLANNED_RESOURCE'
+  if (hasSegments || isCapacityProfile || isPlannedResource) {
+    const err = new Error('This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.')
+    ;(err as unknown as Record<string, unknown>).status = 409
+    ;(err as unknown as Record<string, unknown>).code = 'PROFILE_MANAGED_CAPACITY'
+    throw err
+  }
+}
+
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
   (tx ?? prisma).project.update({
     where: { id: projectId },
@@ -280,9 +323,10 @@ function buildMissingProfilePayload(existing: any): NamedResourceCapacityPayload
   const resource = await prisma.$transaction(async tx => {
     // Write non-capacity fields first
     await tx.namedResource.update({ where: { id }, data: nrData })
-
     let updated
     if (hasCapacityInput) {
+      // Guard: reject capacity-bearing mutation against protected profiles
+      await assertCapacityNotProtected(tx, id, projectId)
       // Capacity fields provided — profile-first write + project back to legacy
       const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
       updated = await tx.namedResource.update({
@@ -366,6 +410,8 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   const resource = await prisma.$transaction(async tx => {
+    // Guard: reject capacity-bearing mutation against protected profiles
+    await assertCapacityNotProtected(tx, id, projectId)
     // Profile-first write + project back to legacy
     const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
     // Write projected legacy fields as compatibility

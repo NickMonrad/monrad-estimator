@@ -253,20 +253,19 @@ describe('NamedResourcesPanel capacity profile display', () => {
       expect(screen.getByDisplayValue('Alice')).toBeInTheDocument()
     })
 
-    // Capacity profile: planning basis badge
-    expect(screen.getByText('Fixed for selected weeks')).toBeInTheDocument()
+    // Capacity profile: shows "Varies by week" for segmented profile (profile-managed)
+    expect(screen.getByText('Varies by week')).toBeInTheDocument()
     // Source badge
     expect(screen.getByText('Squad Planner')).toBeInTheDocument()
     // Resolution source indicator
     expect(screen.getByText(/Resolution: Profile/)).toBeInTheDocument()
-    // Default capacity
-    expect(screen.getByText(/Default: 80%/)).toBeInTheDocument()
-    // Profile window
-    expect(screen.getByText(/Window: W1 → W12/)).toBeInTheDocument()
-    // Each of three segments
+    // Each of three segments (displayed with 1-based week labels)
     expect(screen.getByText('W1-W4: 50%')).toBeInTheDocument()
     expect(screen.getByText('W5-W8: 75%')).toBeInTheDocument()
     expect(screen.getByText('W9-W12: 100%')).toBeInTheDocument()
+    // Profile-managed guidance shown
+    expect(screen.getByText(/Availability varies by week/)).toBeInTheDocument()
+    expect(screen.getByText(/this weekly profile is protected/i)).toBeInTheDocument()
 
     // Billing basis label is separate from capacity profile
     const billingBasisElements = screen.getAllByText('Billing basis')
@@ -276,6 +275,10 @@ describe('NamedResourcesPanel capacity profile display', () => {
 
     // No "Planned resource" badge (this is a named person, not synthetic)
     expect(screen.queryByText('Planned resource')).not.toBeInTheDocument()
+
+    // No default percent or window for profile-managed state
+    expect(screen.queryByText(/Default:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Window:/)).not.toBeInTheDocument()
   })
 
   it('labels synthetic resources as Planned resource with Active capacity plan and disabled controls', async () => {
@@ -390,15 +393,11 @@ describe('NamedResourcesPanel capacity profile display', () => {
     )
 
     await screen.findByDisplayValue('Planned Tech Lead')
-    const owner = screen.getByTestId('profile-managed-owner-nr-persisted-profile')
-    expect(owner).toHaveTextContent('Varies by week')
-    expect(owner).not.toHaveTextContent('%')
 
-    fireEvent.click(owner)
-    expect(screen.getByTestId('profile-managed-panel-nr-persisted-profile')).toHaveTextContent(
-      'managed through the weekly capacity profile',
-    )
-    expect(screen.getByRole('link', { name: 'Open weekly profile editor ↗' })).toHaveAttribute(
+    // The guidance is shown inline (no toggle button needed)
+    expect(screen.getByText(/Availability varies by week/)).toBeInTheDocument()
+    expect(screen.getByText(/managed through the weekly capacity plan/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Open Squad Planner/i })).toHaveAttribute(
       'href',
       '/projects/proj-1/timeline?panel=squad-planner',
     )
