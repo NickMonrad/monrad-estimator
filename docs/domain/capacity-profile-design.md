@@ -990,3 +990,26 @@ the planning basis maps safely to a scalar mode:
 Availability pattern, assignment, and Billing basis remain separate concepts.
 Scalar editability is about profile editing safety, not about combining these concerns.
 
+## Edit protection
+
+To protect segmented named-resource profiles from accidental flattening through scalar capacity fields in the Resource Profile People panel, the PUT and PATCH routes for named resources reject capacity-bearing requests against protected profiles.
+
+A named resource is protected when its `CapacityProfile` has any of:
+- One or more `CapacitySegment` rows (segmented profile)
+- `planningBasis = 'capacityProfile'` (weekly profile even without segments)
+- `ownerKind = 'PLANNED_RESOURCE'` (managed through the Squad Planner)
+- Multiple conflicting profiles (ambiguous authority)
+
+Capacity-bearing fields are: `allocationMode`, `allocationPercent`, `allocationPct`, `allocationStartWeek`, `allocationEndWeek`, `startWeek`, `endWeek`.
+
+Rejected requests receive HTTP `409` with `code: PROFILE_MANAGED_CAPACITY` and an actionable error message. The transaction rolls back completely — no partial write is committed.
+
+### Non-capacity operations
+
+Name and billing/pricing model updates are non-capacity operations. They skip the guard and succeed even for protected profiles. The existing profile identity, segments, and metadata are preserved unchanged.
+
+### Client-side gating
+
+When `isProfileManaged === true`, the scalar capacity inputs (start week, end week, allocation percent) are replaced with read-only presentation ("Varies" / "—"). The "Varies by week" badge, exact ordered segment summaries, and protected guidance are shown. Squad Planner link appears only for planner-owned state (`ACTIVE_CAPACITY_PLAN` or `PLANNED_RESOURCE`).
+
+General named-person segment editing remains in scope of #363.
