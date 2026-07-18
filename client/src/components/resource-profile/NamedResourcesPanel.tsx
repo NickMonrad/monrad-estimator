@@ -314,7 +314,7 @@ export default function NamedResourcesPanel({
                   {resource.allocation?.capacityProfile && (resource.availability?.isProfileManaged || resource.allocation?.capacityProfile) && (
                     <div data-testid={`named-resource-profile-${resource.id}`} className="px-2 py-1 ml-2 mt-0.5 text-xs space-y-0.5 border-l-2 border-blue-200 dark:border-blue-700 bg-blue-50/50 dark:bg-blue-950/20 rounded-r">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300">
+                        <span data-testid={`profile-managed-owner-${resource.id}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300">
                           {resource.availability?.isProfileManaged ? 'Varies by week' : formatPlanningBasis(resource.allocation.capacityProfile.planningBasis)}
                         </span>
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 uppercase tracking-wide">
@@ -351,7 +351,7 @@ export default function NamedResourcesPanel({
                       {resource.availability?.isProfileManaged && (() => {
                         const isPlannerManaged = resource.allocation?.capacityProfile?.resolutionSource === 'ACTIVE_CAPACITY_PLAN' || resource.resourceIdentity === 'PLANNED_RESOURCE'
                         return (
-                          <div className="mt-1 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-2 text-xs">
+                          <div data-testid={`profile-managed-panel-${resource.id}`} className="mt-1 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-2 text-xs">
                             <p className="text-gray-600 dark:text-gray-300">
                               Availability varies by week.
                               {isPlannerManaged
@@ -369,8 +369,6 @@ export default function NamedResourcesPanel({
                           </div>
                         )
                       })()}
-                    </div>
-                  )}
                 </div>
               ))}
             </div>
