@@ -366,12 +366,10 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
   const base = () => `/api/projects/${projectId}/resource-types/${rtId}/named-resources`
   const namedUrl = (nrId: string) => `${base()}/${nrId}`
   let initialSegState: CanonicalGuardState
-  let initialCapProfileState: CanonicalGuardState
 
   // Snapshot initial state before any tests mutate
   beforeAll(async () => {
     initialSegState = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    initialCapProfileState = await readCanonicalState(capProfileNrId, capProfileProfileId)
   })
 
   // ── A. Rejected mixed-field PUT ─────────────────────────────────────────
@@ -394,8 +392,6 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
     expectRejectedStateUnchanged(initialSegState, after)
   })
-
-  // ── B. Rejected capacity PATCH ──────────────────────────────────────────
 
   it('B: PATCH with scalar capacity → 409, exact state preserved (segmented NAMED_PERSON)', async () => {
     const res = await request(app)
@@ -457,6 +453,10 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
 
   it('E1: PUT with capacity fields → 409 (segmentless CAPACITY_PROFILE)', async () => {
     const capBase = `/api/projects/${projectId}/resource-types/${defaultRtId}/named-resources`
+    // Capture state inline — successful earlier tests (C, D) may have
+    // invalidated the project-wide cache, so the initial snapshot from
+    // beforeAll no longer reflects current cache state.
+    const before = await readCanonicalState(capProfileNrId, capProfileProfileId)
     const res = await request(app)
       .put(`${capBase}/${capProfileNrId}`)
       .set('Authorization', authHeader)
@@ -468,11 +468,13 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
-    expectRejectedStateUnchanged(initialCapProfileState, after)
+    expectRejectedStateUnchanged(before, after)
   })
 
   it('E2: PATCH with scalar capacity → 409 (segmentless CAPACITY_PROFILE)', async () => {
     const capBase = `/api/projects/${projectId}/resource-types/${defaultRtId}/named-resources`
+    // Capture state inline — same reason as E1
+    const before = await readCanonicalState(capProfileNrId, capProfileProfileId)
     const res = await request(app)
       .patch(`${capBase}/${capProfileNrId}`)
       .set('Authorization', authHeader)
@@ -484,7 +486,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
-    expectRejectedStateUnchanged(initialCapProfileState, after)
+    expectRejectedStateUnchanged(before, after)
   })
 
   // ── F. Scalar-safe segmentless profile ─────────────────────────────────
