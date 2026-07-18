@@ -126,13 +126,12 @@ export default function NamedResourcesPanel({
         id: resource.id,
         resourceTypeId: resource.resourceTypeId,
         name: resource.name,
-        // Use authoritative profile values where available
-        startWeek: availability.startWeek != null ? availability.startWeek : resource.startWeek,
-        endWeek: availability.endWeek != null ? availability.endWeek : resource.endWeek,
-        allocationPct: availability.percentage != null ? availability.percentage : resource.allocationPct,
-        pricingModel: (resource.pricingModel ?? 'ACTUAL_DAYS') as PricingModel,
-        createdAt: resource.createdAt,
-        updatedAt: resource.updatedAt,
+        // Use authoritative profile values exactly (including nulls) when profile is authoritative.
+        // Never fall back to stale legacy compatibility values for authoritative profiles.
+        startWeek: availability.hasAuthoritativeProfile ? availability.startWeek : (availability.startWeek ?? resource.startWeek),
+        endWeek: availability.hasAuthoritativeProfile ? availability.endWeek : (availability.endWeek ?? resource.endWeek),
+        allocationPct: availability.hasAuthoritativeProfile ? availability.percentage : (availability.percentage ?? resource.allocationPct),
+        pricingModel: resource.pricingModel,
         allocation,
         availability,
         resourceIdentity: allocation?.resourceIdentity ?? (allocation?.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'),
@@ -211,58 +210,69 @@ export default function NamedResourcesPanel({
                       </span>
                     )}
                   </div>
-                  <input
-                    type="number"
-                    defaultValue={resource.startWeek ?? ''}
-                    placeholder="Project start"
-                    onBlur={(e) => {
-                      if (!resource.persisted || resource.availability?.isProfileManaged) return
-                      const value = e.target.value
-                        ? parseInt(e.target.value, 10)
-                        : null
-                      if (value !== resource.startWeek) {
-                        updateResource.mutate({ id: resource.id, startWeek: value })
-                      }
-                    }}
-                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE' || resource.availability?.isProfileManaged}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
-                  />
-                  <input
-                    type="number"
-                    defaultValue={resource.endWeek ?? ''}
-                    placeholder="Project end"
-                    onBlur={(e) => {
-                      if (!resource.persisted || resource.availability?.isProfileManaged) return
-                      const value = e.target.value
-                        ? parseInt(e.target.value, 10)
-                        : null
-                      if (value !== resource.endWeek) {
-                        updateResource.mutate({ id: resource.id, endWeek: value })
-                      }
-                    }}
-                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE' || resource.availability?.isProfileManaged}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    defaultValue={resource.allocationPct}
-                    onBlur={(e) => {
-                      if (!resource.persisted || resource.availability?.isProfileManaged) return
-                      const value = parseInt(e.target.value, 10)
-                      if (
-                        !isNaN(value) &&
-                        value >= 0 &&
-                        value <= 100 &&
-                        value !== resource.allocationPct
-                      ) {
-                        updateResource.mutate({ id: resource.id, allocationPct: value })
-                      }
-                    }}
-                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE' || resource.availability?.isProfileManaged}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
-                  />
+                  {resource.availability?.isProfileManaged ? (
+                    <span className="text-sm text-gray-400 dark:text-gray-500 italic" title="Capacity varies by week — see profile below">Varies</span>
+                  ) : (
+                    <input
+                      type="number"
+                      defaultValue={resource.startWeek ?? ''}
+                      placeholder="Project start"
+                      onBlur={(e) => {
+                        if (!resource.persisted) return
+                        const value = e.target.value
+                          ? parseInt(e.target.value, 10)
+                          : null
+                        if (value !== resource.startWeek) {
+                          updateResource.mutate({ id: resource.id, startWeek: value })
+                        }
+                      }}
+                      disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
+                      className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
+                    />
+                  )}
+                  {resource.availability?.isProfileManaged ? (
+                    <span className="text-sm text-gray-400 dark:text-gray-500 italic">Varies</span>
+                  ) : (
+                    <input
+                      type="number"
+                      defaultValue={resource.endWeek ?? ''}
+                      placeholder="Project end"
+                      onBlur={(e) => {
+                        if (!resource.persisted) return
+                        const value = e.target.value
+                          ? parseInt(e.target.value, 10)
+                          : null
+                        if (value !== resource.endWeek) {
+                          updateResource.mutate({ id: resource.id, endWeek: value })
+                        }
+                      }}
+                      disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
+                      className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
+                    />
+                  )}
+                  {resource.availability?.isProfileManaged ? (
+                    <span className="text-sm text-gray-400 dark:text-gray-500 italic">—</span>
+                  ) : (
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      defaultValue={resource.allocationPct ?? ''}
+                      onBlur={(e) => {
+                        if (!resource.persisted) return
+                        const value = parseInt(e.target.value, 10)
+                        if (
+                          !isNaN(value) &&
+                          value >= 0 &&
+                          value <= 100 &&
+                          value !== resource.allocationPct
+                        ) {
+                          updateResource.mutate({ id: resource.id, allocationPct: value })
+                        }
+                      }}
+                      disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
+                      className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60" />
+                  )}
                   <label htmlFor={`billing-basis-${resource.id}`} className="block text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium" title="Determines which days are used for commercial billing — does not affect the planning schedule">Billing basis</label>
                   <select
                     id={`billing-basis-${resource.id}`}
