@@ -833,8 +833,6 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     }
     const nrProfileBefore = cpBefore.capacityProfiles.find(p => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
     expect(nrProfileBefore, 'Profile should exist after POST').toBeDefined()
-    const profileId = nrProfileBefore!.id
-
     // ── 5. Seed scalar-safe capacity values ──
     const seedRes = await page.request.put(
       `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
@@ -842,7 +840,24 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     )
     expect(seedRes.ok(), `Seed PUT: ${seedRes.status()}`).toBeTruthy()
 
-    // ── 6. Rename the person via PUT, verify only name field ──
+    // ── 6. Capture profile state AFTER seed (seed PUT creates new profile) ──
+    const cpAfterSeedRes = await page.request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+      { headers: authHeaders },
+    )
+    expect(cpAfterSeedRes.ok()).toBeTruthy()
+    const cpAfterSeed = await cpAfterSeedRes.json() as {
+      capacityProfiles: Array<{
+        id: string; owner: { kind: string; id: string }
+        planningBasis: string; source: string; defaultPercent: number | null
+        segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+      }>
+    }
+    const nrProfileAfterSeed = cpAfterSeed.capacityProfiles.find(p => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
+    expect(nrProfileAfterSeed, 'Profile should exist after seed PUT').toBeDefined()
+    const profileAfterSeedId = nrProfileAfterSeed!.id
+
+    // ── 7. Rename the person via PUT, verify only name field ──
     const namePutRes = await page.request.put(
       `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
       { headers: authHeaders, data: { name: 'Segmented Alice Renamed' } },
@@ -851,7 +866,7 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     const namePutBody = await namePutRes.json() as Record<string, unknown>
     expect(namePutBody.name).toBe('Segmented Alice Renamed')
 
-    // ── 7. Change billing basis, verify only pricingModel field ──
+    // ── 8. Change billing basis, verify only pricingModel field ──
     const pricingPutRes = await page.request.put(
       `${API_BASE}/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
       { headers: authHeaders, data: { pricingModel: 'PRO_RATA' } },
@@ -860,24 +875,25 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     const pricingPutBody = await pricingPutRes.json() as Record<string, unknown>
     expect(pricingPutBody.pricingModel).toBe('PRO_RATA')
 
-    // ── 8. Verify profile identity preserved after safe updates ──
-    const cpAfterRes = await page.request.get(
+    // ── 9. Verify profile identity preserved after safe updates ──
+    const cpFinalRes = await page.request.get(
       `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
       { headers: authHeaders },
     )
-    expect(cpAfterRes.ok()).toBeTruthy()
-    const cpAfter = await cpAfterRes.json() as {
+    expect(cpFinalRes.ok()).toBeTruthy()
+    const cpFinal = await cpFinalRes.json() as {
       capacityProfiles: Array<{
         id: string; owner: { kind: string; id: string }
-        planningBasis: string; source: string; defaultPercent: number
+        planningBasis: string; source: string; defaultPercent: number | null
         segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
       }>
     }
-    const nrProfileAfter = cpAfter.capacityProfiles.find(p => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
-    expect(nrProfileAfter, 'Profile identity preserved').toBeDefined()
-    expect(nrProfileAfter!.id).toBe(profileId)
-    expect(nrProfileAfter!.planningBasis).toBe(nrProfileBefore!.planningBasis)
-    expect(nrProfileAfter!.defaultPercent).toBe(75)
-    expect(nrProfileAfter!.segments).toEqual(nrProfileBefore!.segments)
+    const nrProfileFinal = cpFinal.capacityProfiles.find(p => p.owner.kind === 'namedPerson' && p.owner.id === nrId)
+    expect(nrProfileFinal, 'Profile identity preserved after safe updates').toBeDefined()
+    expect(nrProfileFinal!.id).toBe(profileAfterSeedId)
+    expect(nrProfileFinal!.planningBasis).toBe(nrProfileAfterSeed!.planningBasis)
+    expect(nrProfileFinal!.defaultPercent).toBe(nrProfileAfterSeed!.defaultPercent)
+    expect(nrProfileFinal!.segments).toEqual(nrProfileAfterSeed!.segments)
+    expect(nrProfileFinal!.source).toBe(nrProfileAfterSeed!.source)
   })
 })
