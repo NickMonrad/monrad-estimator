@@ -78,8 +78,17 @@ For user-visible behaviour, navigation, permissions, persistence, or critical cr
 npm run test:e2e:local
 ```
 
-The local runner manages the database, ports, dev processes, test execution, and cleanup across Windows, macOS, and Linux.
+The local runner provisions one disposable PostgreSQL 15 Docker container per
+worktree/run, then runs migrations, cleanup, seed, API, Vite, and Playwright only
+against that container. It never probes, connects to, or modifies the persistent
+`DATABASE_URL` database. Before removing the container it terminates all spawned
+child processes: on POSIX the entire process tree receives SIGTERM with escalation
+to SIGKILL after a grace period; on Windows `taskkill /T /F` kills the process
+tree. The container is force-removed after success or failure.
 
+Use `npm run test:integration:local` for the PostgreSQL-backed snapshot rollback, clone, Squad Plan profile-first, and apply-parity suites. `npm run db:setup` safely creates the configured persistent development database if missing, then runs `prisma migrate deploy` and `prisma generate`. Shell variables override `server/.env` (or `MONRAD_ENV_FILE`). For an externally managed test database, set both `MONRAD_TEST_DATABASE_URL` (the exact database that receives migrations, seed, and cleanup — never auto-created or auto-dropped) and `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` (required opt-in). Setting `MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1` alone without a URL is rejected — the flag only has effect when paired with `MONRAD_TEST_DATABASE_URL`.
+
+list containers with `docker ps -a --filter name=monrad_pg_`
 For documentation-only work, internal refactors with unchanged behaviour, or narrowly scoped server work, E2E may be marked not applicable when the PR explains why and lists the focused tests used instead.
 
 When Playwright tests change, update `e2e/TESTS.md`.

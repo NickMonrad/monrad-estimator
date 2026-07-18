@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
+import { readEnvFile } from './local-postgres.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const backupDir = process.env.MONRAD_BACKUP_DIR ?? path.join(root, 'backups')
@@ -141,22 +142,6 @@ function sanitizeConnectionUrl(databaseUrl, parsed, rawQuery) {
   return `${base}${rawQuery ? `?${rawQuery}` : ''}${rawFragment}`
 }
 
-function readEnvFile(filename) {
-  if (!fs.existsSync(filename)) return {}
-  const values = {}
-  for (const rawLine of fs.readFileSync(filename, 'utf8').split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) continue
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (!match) continue
-    let value = match[2].trim()
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1)
-    }
-    values[match[1]] = value
-  }
-  return values
-}
 
 function resolveCommand(name, defaultCommand) {
   const command = process.env[`MONRAD_${name}_COMMAND`] ?? defaultCommand

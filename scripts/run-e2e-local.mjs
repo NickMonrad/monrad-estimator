@@ -6,6 +6,12 @@
  *   - Starts API and Vite on dynamic ports, runs Playwright tests.
  *   - Cleans up child processes on exit.
  *
+ * Awaited commands use the shared `runCommand` from local-postgres.mjs
+ * for cross-platform process-tree termination.  Long-lived API/Vite
+ * processes use explicit handles cleaned via `stopChildren()` which
+ * uses `terminateProcess` (POSIX group) or `windowsTerminateProcess`
+ * (taskkill /T /F).
+ *
  * Usage:
  *   cd <repo-root>
  *   npm run test:e2e:local
@@ -14,307 +20,402 @@
  *   npm run test:e2e:local -- --grep "auth"
  */
 import { spawn } from 'node:child_process'
-import fs from 'node:fs'
 import net from 'node:net'
-import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadLocalEnvironment, resolveCommand, runCommand, shutdownGuard, withIsolatedTestDatabase } from './local-postgres.mjs'
+import { terminateProcess, windowsTerminateProcess } from './terminate-process.mjs'
+import { AggregatedError, createFailureCollector } from './aggregated-error.mjs'
 
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const serverDir = fileURLToPath(new URL('../server/', import.meta.url))
 const clientDir = fileURLToPath(new URL('../client/', import.meta.url))
 const e2eDir = fileURLToPath(new URL('../e2e/', import.meta.url))
+export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOverride, withIsolatedTestDatabase: withIsolatedTestDatabaseOverride, loadLocalEnvironment: loadEnvOverride, waitForMonradApi: waitForMonradApiOverride, waitForClient: waitForClientOverride, waitForProxy: waitForProxyOverride, guardFactory = shutdownGuard, terminateChild } = {}) {
+  const children = []
+  const internalAbort = new AbortController()
+  const failures = createFailureCollector()
 
-// ── Environment loading ──────────────────────────────────────────────────────
+  // Override addPrimary to also abort the internal signal (for E2E runner).
+  const originalAddPrimary = failures.addPrimary.bind(failures)
+  failures.addPrimary = (err) => {
+    originalAddPrimary(err)
+    internalAbort.abort()
+  }
 
-/** Read and parse server/.env, return a plain object. */
-function loadDotEnv() {
-  const envPath = path.join(root, 'server', '.env')
-  let raw
+  function makeCombinedSignal(...signals) {
+    const ctrl = new AbortController()
+    for (const sig of signals) sig.addEventListener('abort', () => ctrl.abort(), { once: true })
+    return ctrl.signal
+  }
+
+  /**
+   * Cancel-aware sleep.  Resolves immediately when the signal aborts.
+   */
+  function cancellableSleep(ms, signal) {
+    return new Promise(resolve => {
+      if (signal?.aborted) return resolve()
+      const timer = setTimeout(resolve, ms)
+      const onAbort = () => { clearTimeout(timer); resolve() }
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
+  /**
+   * Race an active operation (e.g. proxy check, Playwright) against child
+   * failures.  If a child failure wins, the losing operation is awaited to
+   * settlement before returning so no in-flight timer or callback remains.
+   *
+   * @param {Promise} operationPromise  — the active operation
+   * @param {Promise<string>[]} childFailures  — api.failure / client.failure
+   * @returns {{ winner: 'operation'|'child-failure', settlementError: Error|null }}
+   */
+  async function raceAgainstChildren(operationPromise, childFailures) {
+    const winner = await Promise.race([
+      operationPromise.then(() => 'operation'),
+      ...childFailures,
+    ])
+    let settlementError = null
+    if (winner === 'child-failure') {
+      try { await operationPromise } catch (err) { settlementError = err }
+    }
+    return { winner, settlementError }
+  }
+
+  const resolvedEnv = loadEnvOverride ? loadEnvOverride(root) : loadLocalEnvironment(root)
+  const host = resolvedEnv.E2E_HOST ?? '127.0.0.1'
+
+  // ── Preflight checks ─────────────────────────────────────────────────────
+  const jwtSecret = resolvedEnv.JWT_SECRET ?? ''
+  if (!jwtSecret || jwtSecret === 'change-me-in-production' || jwtSecret.length < 32) {
+    console.error('[e2e-local] ERROR: JWT_SECRET is missing, too short, or still set to "change-me-in-production".')
+    console.error('[e2e-local] The example env uses "local-dev-jwt-secret-at-least-32-chars!!" — copy it:')
+    console.error('[e2e-local]   cp server/.env.example server/.env')
+    console.error('[e2e-local] Or set a custom value of 32+ characters.')
+    return { exitCode: 1, primaryChildFailure: null, aggregatedError: null, cleanupErrors: [] }
+  }
+
+  // ── Port discovery ───────────────────────────────────────────────────────
+  const preferredApiPort = Number(resolvedEnv.E2E_API_PORT ?? resolvedEnv.PORT ?? 3001)
+  const preferredClientPort = Number(resolvedEnv.E2E_CLIENT_PORT ?? 5173)
+  const apiPort = await findAvailablePort(preferredApiPort)
+  const clientPort = await findAvailablePort(preferredClientPort, new Set([apiPort]))
+  const apiUrl = `http://${host}:${apiPort}`
+  const baseUrl = `http://${host}:${clientPort}`
+
+  console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (preferred :${preferredApiPort} was unavailable)`}`)
+  console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
+
+  // ── Guard after preflight ────────────────────────────────────────────────
+  const guard = guardFactory()
+  const combinedSignal = AbortSignal.any
+    ? AbortSignal.any([guard.abortSignal, internalAbort.signal])
+    : makeCombinedSignal(guard.abortSignal, internalAbort.signal)
   try {
-    raw = fs.readFileSync(envPath, 'utf8')
-  } catch {
-    // server/.env missing — that's fine, use process.env only
-    return {}
-  }
+      await (withIsolatedTestDatabaseOverride ?? withIsolatedTestDatabase)({ root, signal: combinedSignal }, async testEnv => {
+        try {
+          // ── Cleanup before seed ──────────────────────────────────────────────
+          await (runCommandOverride ?? runCommand)('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: testEnv, signal: combinedSignal })
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
-  const parsed = {}
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
+          // ── Seed ─────────────────────────────────────────────────────────────
+          await (runCommandOverride ?? runCommand)('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: testEnv, signal: combinedSignal })
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
-    // Strip optional `export ` prefix
-    const cleaned = trimmed.startsWith('export ') ? trimmed.slice(7).trimStart() : trimmed
+          // ── Start API ────────────────────────────────────────────────────────
+          const api = start('npx', ['tsx', 'src/index.ts'], {
+            cwd: serverDir, env: testEnv,
+            extraEnv: { NODE_ENV: 'test', PORT: String(apiPort), CLIENT_URL: baseUrl },
+            label: 'api',
+          })
+          children.push(api)
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
-    const sepIdx = cleaned.indexOf('=')
-    if (sepIdx <= 0) continue
+          // Race API readiness against child failure.
+          await Promise.race([
+            (waitForMonradApiOverride ?? waitForMonradApi)(apiUrl).then(() => null),
+            api.failure,
+          ])
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
-    const key = cleaned.slice(0, sepIdx).trim()
-    if (!key) continue
+          const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
+            cwd: clientDir, env: testEnv,
+            extraEnv: { VITE_API_URL: apiUrl },
+            label: 'vite',
+          })
+          children.push(client)
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
-    let value = cleaned.slice(sepIdx + 1).trim()
+          // Race client readiness against child failure.
+          await Promise.race([
+            (waitForClientOverride ?? waitForClient)(baseUrl).then(() => null),
+            client.failure,
+          ])
+          if (guard.triggered) return
+          if (failures.primary) throw failures.toError()
 
-    // Unwrap matching quotes (single or double)
-    if ((value.startsWith("'") && value.endsWith("'")) ||
-        (value.startsWith('"') && value.endsWith('"'))) {
-      value = value.slice(1, -1)
+          // ── Proxy check ──────────────────────────────────────────────────────
+          const { winner: proxyWinner } = await raceAgainstChildren(
+            (waitForProxyOverride ?? waitForProxy)(baseUrl),
+            [api.failure, client.failure],
+          )
+          if (proxyWinner === 'child-failure') {
+            if (failures.primary) throw failures.toError()
+          }
+          if (guard.triggered) return
+          // ── Playwright ───────────────────────────────────────────────────────
+          const playwrightPromise = (runCommandOverride ?? runCommand)('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
+            cwd: e2eDir, env: testEnv,
+            extraEnv: { BASE_URL: baseUrl, API_URL: apiUrl, NODE_ENV: 'test' },
+            inherit: true,
+            signal: combinedSignal,
+          })
+          const { winner: pwWinner, settlementError } = await raceAgainstChildren(playwrightPromise, [api.failure, client.failure])
+          if (pwWinner === 'child-failure') {
+            if (settlementError?.message?.includes('process-tree termination failed')) {
+              failures.addSecondary('playwright termination', settlementError)
+            }
+            throw failures.toError() ?? new Error('Child failure')
+          }
+        } finally {
+          // Always stop API/Vite children before database cleanup.
+          try {
+            await stopChildren()
+          } catch (childErr) {
+            failures.addSecondary('child-process termination', childErr)
+          }
+        }
+      })
+  } catch (error) {
+    if (error) {
+      failures.addError(error, { primaryType: 'runner' })
     }
-
-    parsed[key] = value
+  } finally {
+    guard.dispose()
   }
 
-  return parsed
-}
-
-/** Merged env: file values first, shell env wins. */
-const fileEnv = loadDotEnv()
-const resolvedEnv = { ...fileEnv, ...process.env }
-
-// ── Validation mode ──────────────────────────────────────────────────────────
-// `--validate` loads and merges server/.env then exits — lets CI check the
-// runner can parse without starting servers.
-if (process.argv.includes('--validate')) {
-  const keys = Object.keys(fileEnv).sort()
-  console.log(`[e2e-local] server/.env loaded: ${keys.length} var(s)`)
-  console.log(`[e2e-local] DATABASE_URL: ${resolvedEnv.DATABASE_URL ? 'set' : 'unset'}`)
-  // Also validate JWT_SECRET — catches stale .env files with old placeholder
-  const js = resolvedEnv.JWT_SECRET ?? ''
-  if (!js || js === 'change-me-in-production' || js.length < 32) {
-    console.error('[e2e-local] JWT_SECRET: INVALID (missing, too short, or placeholder)')
-    process.exit(1)
+  const aggregated = failures.toError()
+  return {
+    exitCode: computeExitCode(),
+    primaryChildFailure: failures.primary,
+    aggregatedError: aggregated,
+    cleanupErrors: aggregated
+      ? aggregated.secondaryErrors.filter(s =>
+          !(guard.triggered && s.type === 'runner' && s.error?.message?.endsWith('was cancelled'))
+        )
+      : [],
   }
-  console.log('[e2e-local] Validation OK')
-  process.exit(0)
-}
 
-// ── Preflight checks ─────────────────────────────────────────────────────────
-// Must have a valid JWT_SECRET — the API rejects the old placeholder at startup.
-const jwtSecret = resolvedEnv.JWT_SECRET ?? ''
-if (!jwtSecret || jwtSecret === 'change-me-in-production' || jwtSecret.length < 32) {
-  console.error('[e2e-local] ERROR: JWT_SECRET is missing, too short, or still set to "change-me-in-production".')
-  console.error('[e2e-local] The example env uses "local-dev-jwt-secret-at-least-32-chars!!" — copy it:')
-  console.error('[e2e-local]   cp server/.env.example server/.env')
-  console.error('[e2e-local] Or set a custom value of 32+ characters.')
-  process.exit(1)
-}
+  // ── Helpers (closured) ─────────────────────────────────────────────────────
 
-// ── Port discovery ──────────────────────────────────────────────────────────
-
-const host = process.env.E2E_HOST ?? '127.0.0.1'
-const preferredApiPort = Number(process.env.E2E_API_PORT ?? process.env.PORT ?? 3001)
-const preferredClientPort = Number(process.env.E2E_CLIENT_PORT ?? 5173)
-const apiPort = await findAvailablePort(preferredApiPort)
-const clientPort = await findAvailablePort(preferredClientPort, new Set([apiPort]))
-const apiUrl = `http://${host}:${apiPort}`
-const baseUrl = `http://${host}:${clientPort}`
-const children = []
-
-console.log(`[e2e-local] API: ${apiUrl}${apiPort === preferredApiPort ? '' : ` (preferred :${preferredApiPort} was unavailable)`}`)
-console.log(`[e2e-local] Client: ${baseUrl}${clientPort === preferredClientPort ? '' : ` (preferred :${preferredClientPort} was unavailable)`}`)
-
-try {
-  // ── Prisma ──────────────────────────────────────────────────────────────
-  await run('npx', ['prisma', 'migrate', 'deploy'], { cwd: serverDir, env: resolvedEnv })
-  await run('npx', ['prisma', 'generate'], { cwd: serverDir, env: resolvedEnv })
-
-  // ── Cleanup before seed ─────────────────────────────────────────────────
-  await run('npx', ['tsx', 'scripts/e2e-cleanup.ts'], { cwd: serverDir, env: resolvedEnv })
-
-  // ── Seed ────────────────────────────────────────────────────────────────
-  await run('npx', ['tsx', 'prisma/seed.ts'], { cwd: serverDir, env: resolvedEnv })
-
-  // ── Start API ───────────────────────────────────────────────────────────
-  const api = start('npx', ['tsx', 'src/index.ts'], {
-    cwd: serverDir,
-    env: resolvedEnv,
-    extraEnv: {
-      NODE_ENV: 'test',
-      PORT: String(apiPort),
-      CLIENT_URL: baseUrl,
-    },
-    label: 'api',
-  })
-  children.push(api)
-
-  // ── Start Vite ──────────────────────────────────────────────────────────
-  const client = start('npx', ['vite', '--host', host, '--port', String(clientPort), '--strictPort'], {
-    cwd: clientDir,
-    env: resolvedEnv,
-    extraEnv: {
-      VITE_API_URL: apiUrl,
-    },
-    label: 'vite',
-  })
-  children.push(client)
-
-  // ── Wait for services ───────────────────────────────────────────────────
-  await waitForMonradApi(apiUrl)
-  await waitForClient(baseUrl)
-  await waitForProxy(baseUrl)
-
-  // ── Playwright ──────────────────────────────────────────────────────────
-  await run('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
-    cwd: e2eDir,
-    env: resolvedEnv,
-    extraEnv: {
-      BASE_URL: baseUrl,
-      API_URL: apiUrl,
-      NODE_ENV: 'test',
-    },
-    inherit: true,
-  })
-} finally {
-  await stopChildren()
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function start(command, args, { cwd, env, extraEnv = {}, label }) {
-  const spec = resolveCommand(command, args)
-  const child = spawn(spec.command, spec.args, {
-    cwd,
-    env: { ...env, ...extraEnv },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
-  child.stdout.on('data', data => process.stdout.write(`[${label}] ${data}`))
-  child.stderr.on('data', data => process.stderr.write(`[${label}] ${data}`))
-  child.on('error', error => {
-    console.error(`[${label}] failed to start: ${error.message}`)
-  })
-  child.on('exit', code => {
-    if (code !== null && code !== 0) {
-      console.error(`[${label}] exited with code ${code}`)
+  function monitorChild(child, label) {
+    let expectedShutdown = false
+    const failure = new Promise(resolve => {
+      child.on('error', err => {
+        if (expectedShutdown) return
+        const msg = `${label} could not start: ${err.message}`
+        failures.addPrimary(new Error(msg))
+        resolve('child-failure')
+      })
+      child.on('exit', code => {
+        if (expectedShutdown) return
+        failures.addPrimary(new Error(`${label} exited unexpectedly with code ${code}`))
+        resolve('child-failure')
+      })
+    })
+    return {
+      child,
+      failure,
+      markExpectedShutdown: () => { expectedShutdown = true },
     }
-  })
-
-  return child
-}
-
-function run(command, args, { cwd, env, extraEnv = {}, inherit, allowFailure } = {}) {
-  return new Promise((resolve, reject) => {
+  }
+  function start(command, args, { cwd, env, extraEnv = {}, label }) {
     const spec = resolveCommand(command, args)
-    const child = spawn(spec.command, spec.args, {
+    const child = (spawnOption ?? spawn)(spec.command, spec.args, {
       cwd,
       env: { ...env, ...extraEnv },
-      stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     })
 
-    let output = ''
-    if (!inherit) {
-      child.stdout.on('data', data => {
-        output += data.toString()
-        process.stdout.write(data)
-      })
-      child.stderr.on('data', data => {
-        output += data.toString()
-        process.stderr.write(data)
-      })
-    }
-    child.on('error', reject)
+    child.stdout.on('data', data => process.stdout.write(`[${label}] ${data}`))
+    child.stderr.on('data', data => process.stderr.write(`[${label}] ${data}`))
 
-    child.on('exit', code => {
-      if (code === 0 || allowFailure) resolve(output)
-      else reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}`))
+    return monitorChild(child, label)
+  }
+
+  async function stopChildren() {
+    const termFn = terminateChild ?? (
+      process.platform === 'win32'
+        ? (child) => windowsTerminateProcess(child)
+        : (child) => terminateProcess(child, undefined, { useProcessGroup: true })
+    )
+    const results = await Promise.allSettled(
+      children.reverse().map(async entry => {
+        entry.markExpectedShutdown?.()
+        await termFn(entry.child)
+      })
+    )
+    const rejected = results.filter(r => r.status === 'rejected')
+    if (rejected.length > 0) {
+      const msg = rejected.map((r, i) => `child ${i}: ${r.reason?.message ?? r.reason}`).join('; ')
+      failures.addSecondary('process termination', new Error(msg))
+    }
+  }
+
+  async function findAvailablePort(startPort, reserved = new Set()) {
+    for (let port = startPort; port < startPort + 100; port++) {
+      if (reserved.has(port)) continue
+      if (await isPortAvailable(port)) return port
+    }
+    throw new Error(`No available port found starting at ${startPort}`)
+  }
+
+  async function isPortAvailable(port) {
+    if (await portRespondsToHttp(port)) return false
+    return new Promise(resolve => {
+      const server = net.createServer()
+      server.once('error', () => resolve(false))
+      server.once('listening', () => server.close(() => resolve(true)))
+      server.listen(port, host)
     })
-  })
-}
-
-function resolveCommand(command, args) {
-  if (process.platform === 'win32' && command === 'npx') {
-    const npmCli = process.env.npm_execpath
-    if (!npmCli) throw new Error('npm_execpath is required to run npx commands on Windows')
-    return { command: process.execPath, args: [npmCli, 'exec', '--', ...args] }
   }
-  return { command, args }
-}
 
-async function findAvailablePort(startPort, reserved = new Set()) {
-  for (let port = startPort; port < startPort + 100; port++) {
-    if (reserved.has(port)) continue
-    if (await isPortAvailable(port)) return port
-  }
-  throw new Error(`No available port found starting at ${startPort}`)
-}
-
-async function isPortAvailable(port) {
-  if (await portRespondsToHttp(port)) return false
-
-  return new Promise(resolve => {
-    const server = net.createServer()
-    server.once('error', () => resolve(false))
-    server.once('listening', () => server.close(() => resolve(true)))
-    server.listen(port, host)
-  })
-}
-
-async function portRespondsToHttp(port) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 500)
-  try {
-    await fetch(`http://${host}:${port}/health`, { signal: controller.signal })
-    return true
-  } catch {
-    return false
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-async function waitForMonradApi(url) {
-  await waitFor(`Monrad API at ${url}`, async () => {
-    const response = await fetch(`${url}/health`)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const body = await response.json()
-    if (body.status !== 'ok' || body.service !== 'monrad-estimator') {
-      throw new Error(`Unexpected health payload: ${JSON.stringify(body)}`)
-    }
-  })
-}
-
-async function waitForClient(url) {
-  await waitFor(`Vite client at ${url}`, async () => {
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const html = await response.text()
-    if (!html.includes('Monrad Estimator')) throw new Error('Client HTML did not contain Monrad title')
-  })
-}
-
-async function waitForProxy(url) {
-  await waitFor(`Vite API proxy at ${url}/api/projects`, async () => {
-    const response = await fetch(`${url}/api/projects`)
-    const body = await response.json()
-    if (response.status !== 401 || !['AUTH_REQUIRED', 'Unauthorized'].includes(body.code ?? body.error)) {
-      throw new Error(`Unexpected proxy response ${response.status}: ${JSON.stringify(body)}`)
-    }
-  })
-}
-
-async function waitFor(label, check) {
-  const deadline = Date.now() + 60_000
-  let lastError
-  while (Date.now() < deadline) {
+  async function portRespondsToHttp(port) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 500)
     try {
-      await check()
-      console.log(`[e2e-local] Ready: ${label}`)
-      return
-    } catch (error) {
-      lastError = error
-      await new Promise(resolve => setTimeout(resolve, 1_000))
+      await fetch(`http://${host}:${port}/health`, { signal: controller.signal })
+      return true
+    } catch {
+      return false
+    } finally {
+      clearTimeout(timeout)
     }
   }
-  throw new Error(`Timed out waiting for ${label}: ${lastError?.message ?? 'unknown error'}`)
-}
 
-async function stopChildren() {
-  for (const child of children.reverse()) {
-    if (child.killed) continue
-    if (process.platform === 'win32' && child.pid) {
-      await run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { allowFailure: true })
-    } else {
-      child.kill('SIGTERM')
+  async function waitForMonradApi(url) {
+    await waitFor(`Monrad API at ${url}`, async () => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 10_000)
+      const fetchSignal = AbortSignal.any
+        ? AbortSignal.any([controller.signal, combinedSignal])
+        : controller.signal
+      try {
+        const response = await fetch(`${url}/health`, { signal: fetchSignal })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const body = await response.json()
+        if (body.status !== 'ok' || body.service !== 'monrad-estimator') {
+          throw new Error(`Unexpected health payload: ${JSON.stringify(body)}`)
+        }
+      } catch (err) {
+        if (err?.name === 'AbortError') throw new Error('Request timed out')
+        throw err
+      } finally {
+        clearTimeout(timeout)
+      }
+    })
+  }
+
+  async function waitForClient(url) {
+    await waitFor(`Vite client at ${url}`, async () => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 10_000)
+      const fetchSignal = AbortSignal.any
+        ? AbortSignal.any([controller.signal, combinedSignal])
+        : controller.signal
+      try {
+        const response = await fetch(url, { signal: fetchSignal })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const html = await response.text()
+        if (!html.includes('Monrad Estimator')) throw new Error('Client HTML did not contain Monrad title')
+      } catch (err) {
+        if (err?.name === 'AbortError') throw new Error('Request timed out')
+        throw err
+      } finally {
+        clearTimeout(timeout)
+      }
+    })
+  }
+
+  async function waitForProxy(url) {
+    await waitFor(`Vite API proxy at ${url}/api/projects`, async () => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 10_000)
+      const fetchSignal = AbortSignal.any
+        ? AbortSignal.any([controller.signal, combinedSignal])
+        : controller.signal
+      try {
+        const response = await fetch(`${url}/api/projects`, { signal: fetchSignal })
+        const body = await response.json()
+        if (response.status !== 401 || !['AUTH_REQUIRED', 'Unauthorized'].includes(body.code ?? body.error)) {
+          throw new Error(`Unexpected proxy response ${response.status}: ${JSON.stringify(body)}`)
+        }
+      } catch (err) {
+        if (err?.name === 'AbortError') throw new Error('Request timed out')
+        throw err
+      } finally {
+        clearTimeout(timeout)
+      }
+    })
+  }
+
+  async function waitFor(label, check) {
+    const deadline = Date.now() + 60_000
+    let lastError
+    while (Date.now() < deadline) {
+      if (combinedSignal.aborted) {
+        if (failures.primary) throw failures.primary
+        throw new Error(`Cancelled: ${label}`)
+      }
+      try {
+        await check()
+        console.log(`[e2e-local] Ready: ${label}`)
+        return
+      } catch (error) {
+        lastError = error
+        await cancellableSleep(1_000, combinedSignal)
+      }
+    }
+    throw new Error(`Timed out waiting for ${label}: ${lastError?.message ?? 'unknown error'}`)
+  }
+
+  function computeExitCode() {
+    if (guard.triggered) return guard.signalExitCode
+    // Any failure — primary, process termination, cleanup — causes non-zero.
+    if (failures.primary || failures.secondary.length > 0) return 1
+    return 0
+  }
+}
+// Only run when this file is executed directly, not when imported by tests.
+const isMain = process.argv[1] === fileURLToPath(import.meta.url)
+if (isMain) {
+  // Validation mode: load env and exit without starting servers.
+  const validateEnv = loadLocalEnvironment(root)
+  if (process.argv.includes('--validate')) {
+    console.log(`[e2e-local] DATABASE_URL: ${validateEnv.DATABASE_URL ? 'set' : 'unset'}`)
+    const js = validateEnv.JWT_SECRET ?? ''
+    if (!js || js === 'change-me-in-production' || js.length < 32) {
+      console.error('[e2e-local] JWT_SECRET: INVALID (missing, too short, or placeholder)')
+      process.exit(1)
+    }
+    console.log('[e2e-local] Validation OK')
+    process.exit(0)
+  }
+
+  // Run the full lifecycle.
+  const result = await runE2eLocal()
+  if (result.aggregatedError) {
+    const primaryMsg = result.aggregatedError.primary?.message ?? String(result.aggregatedError.primary ?? 'Unknown failure')
+    console.error(`[e2e-local] ERROR: ${primaryMsg}`)
+    for (const s of result.cleanupErrors) {
+      console.error(`[e2e-local] SECONDARY [${s.type}]: ${s.error?.message ?? String(s.error)}`)
     }
   }
-  await new Promise(resolve => setTimeout(resolve, 1_000))
+  process.exit(result.exitCode)
 }
