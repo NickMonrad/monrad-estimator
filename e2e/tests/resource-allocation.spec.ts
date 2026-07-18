@@ -300,8 +300,9 @@ async function seedSegmentedNamedPerson(page: Page, projectId: string, rtId: str
     { startWeek: 4, endWeek: 8, capacityPercent: 100 },
   ]
 
-  const nrId = `nr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-  const profileId = `cp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const nrId = `test-nr-${nrName.replace(/\s+/g, '-').toLowerCase()}`
+  const profileId = `test-cp-${nrName.replace(/\s+/g, '-').toLowerCase()}`
+  const now = new Date().toISOString()
 
   const client = new Client({ connectionString: DATABASE_URL })
   await client.connect()
@@ -309,24 +310,24 @@ async function seedSegmentedNamedPerson(page: Page, projectId: string, rtId: str
     // Stale NamedResource scalar compatibility values — different from profile defaults
     // to prove UI displays authoritative profile values, not these stale legacy fields
     await client.query(
-      'INSERT INTO "NamedResource" (id, "resourceTypeId", name, "startWeek", "endWeek", "allocationPct", "allocationMode", "allocationPercent", "allocationStartWeek", "allocationEndWeek", "pricingModel") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
-      [nrId, rtId, nrName, 0, 9, 75, 'TIMELINE', 75, 0, 9, 'ACTUAL_DAYS'],
+      'INSERT INTO "NamedResource" (id, "resourceTypeId", name, "startWeek", "endWeek", "allocationPct", "allocationMode", "allocationPercent", "allocationStartWeek", "allocationEndWeek", "pricingModel", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+      [nrId, rtId, nrName, 0, 9, 75, 'TIMELINE', 75, 0, 9, 'ACTUAL_DAYS', now, now],
     )
 
     // CapacityProfile with NAMED_PERSON owner, scalar planning basis, non-planner source
     await client.query(
-      'INSERT INTO "CapacityProfile" (id, "projectId", "resourceTypeId", "namedResourceId", "ownerKind", "planningBasis", "source", "defaultPercent", "startWeek", "endWeek") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-      [profileId, projectId, rtId, nrId, 'NAMED_PERSON', 'AVAILABILITY_WINDOW', 'MANUAL', 60, 3, 6],
+      'INSERT INTO "CapacityProfile" (id, "projectId", "resourceTypeId", "namedResourceId", "ownerKind", "planningBasis", "source", "defaultPercent", "startWeek", "endWeek", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
+      [profileId, projectId, rtId, nrId, 'NAMED_PERSON', 'AVAILABILITY_WINDOW', 'MANUAL', 60, 3, 6, now, now],
     )
 
-    // Two ordered CapacitySegment rows
-    for (const seg of segments) {
-      const segId = `seg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-      await client.query(
-        'INSERT INTO "CapacitySegment" (id, "capacityProfileId", "startWeek", "endWeek", "capacityPercent", "source") VALUES ($1, $2, $3, $4, $5, $6)',
-        [segId, profileId, seg.startWeek, seg.endWeek, seg.capacityPercent, 'MANUAL'],
-      )
-    }
+    // Two ordered CapacitySegment rows with deterministic IDs
+    const segId1 = `test-seg-${nrId}-w1`
+    const segId2 = `test-seg-${nrId}-w5`
+    await client.query(
+      'INSERT INTO "CapacitySegment" (id, "capacityProfileId", "startWeek", "endWeek", "capacityPercent", "source", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8), ($9, $10, $11, $12, $13, $14, $15, $16)',
+      [segId1, profileId, segments[0].startWeek, segments[0].endWeek, segments[0].capacityPercent, 'MANUAL', now, now,
+       segId2, profileId, segments[1].startWeek, segments[1].endWeek, segments[1].capacityPercent, 'MANUAL', now, now],
+    )
 
     return { nrId, profileId }
   } finally {
@@ -498,15 +499,14 @@ test.describe('Resource Allocation', () => {
 
     const ownerPanel = page.getByTestId(`profile-managed-panel-${before.namedResourceId}`)
     await ownerProfile.click()
-    await expect(ownerPanel).toBeVisible()
-    await expect(ownerPanel.getByText(/managed through the weekly capacity profile/i)).toBeVisible()
+    await expect(ownerPanel.getByText(/managed through the weekly capacity plan/i)).toBeVisible()
     await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
     await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
 
-    await ownerPanel.getByRole('link', { name: /open weekly profile editor/i }).click()
+    await ownerPanel.getByRole('link', { name: /Open Squad Planner/i }).click()
     await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
     await expect(page.getByRole('dialog', { name: 'Squad Planner' })).toBeVisible({ timeout: 15_000 })
 
@@ -990,9 +990,12 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     expect(renamePutBody).toEqual({
       name: 'Segmented Alice Renamed',
     })
-
-    // Wait for request to succeed
-    await page.waitForTimeout(500)
+    // Wait for rename PUT response to complete before proceeding
+    const renamePutResponse = await page.waitForResponse(
+      response => response.url().includes(`/named-resources/${nrId}`) && response.request().method() === 'PUT',
+      { timeout: 10_000 },
+    )
+    expect(renamePutResponse.ok()).toBeTruthy()
 
     // ── 7. Change billing basis via the row select ──
     const billingSelect = page.locator(`#billing-basis-${nrId}`)
@@ -1012,7 +1015,12 @@ test.describe('Segmented NAMED_PERSON protection', () => {
       pricingModel: 'PRO_RATA',
     })
 
-    await page.waitForTimeout(500)
+    // Wait for billing PUT response to complete before proceeding
+    const billingPutResponse = await page.waitForResponse(
+      response => response.url().includes(`/named-resources/${nrId}`) && response.request().method() === 'PUT',
+      { timeout: 10_000 },
+    )
+    expect(billingPutResponse.ok()).toBeTruthy()
 
     // ── 8. Verify no scalar-capacity writes occurred ──
     // Check all captured PUTs — none should contain scalar capacity fields
@@ -1031,9 +1039,18 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     // ── 9. Reload and verify persistence ──
     await page.reload()
     await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
+
+    // Main row elements are visible without opening the panel
     await expect(page.getByText('Segmented Alice Renamed')).toBeVisible()
     const reloadedBilling = page.locator(`#billing-basis-${nrId}`)
     await expect(reloadedBilling).toHaveValue('PRO_RATA')
+
+    // Reopen the People panel before checking panel-scoped elements
+    const roleRowReloaded = page.getByTestId(`resource-profile-row-${rtId}`)
+    await expect(roleRowReloaded).toBeVisible({ timeout: 10_000 })
+    await roleRowReloaded.getByRole('button', { name: /people/i }).click()
+
+    // Now panel-scoped locators are valid
     await expect(ownerBadge).toHaveText('Varies by week')
     await expect(ownerCard.getByText(/W1-W4: 50%/)).toBeVisible()
     await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
