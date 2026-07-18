@@ -264,7 +264,7 @@ export async function syncCapacityProfilesForProject(
   const persistedByKey = new Map<string, any>()
   for (const pp of scopedPersistedProfiles) {
     const ownerKind = prismaOwnerKindToDtoKind(pp.ownerKind)
-    const ownerId = pp.resourceTypeId ?? pp.namedResourceId ?? ''
+    const ownerId = pp.namedResourceId ?? pp.resourceTypeId ?? ''
     const key = `${projectId}::${ownerKind}::${ownerId}`
     if (!persistedByKey.has(key)) {
       persistedByKey.set(key, pp)
