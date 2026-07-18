@@ -141,12 +141,6 @@ test('First child failure remains primary when both children fail', async () => 
   assert.doesNotMatch(result.primaryChildFailure.message, /vite/, 'vite error is not primary')
 })
 
-// ── Deferred promise helper ───────────────────────────────────────
-function deferred() {
-  let resolve, reject
-  const p = new Promise((res, rej) => { resolve = res; reject = rej })
-  return { promise: p, resolve, reject }
-}
 
 // ── Controllable child factory ────────────────────────────────────
 function controllableChild() {
@@ -174,8 +168,6 @@ test('API fails during proxy check (after readiness)', async () => {
     throw new Error('unexpected third spawn')
   }
 
-  const proxyDeferred = deferred()
-
   const result = await runE2eLocal({
     loadLocalEnvironment: mockEnvLoader,
     spawn,
@@ -186,8 +178,8 @@ test('API fails during proxy check (after readiness)', async () => {
     waitForProxy: async () => {
       // Trigger API exit during proxy check
       apiChild.emit('exit', 1)
-      // Don't resolve — the child failure path must win
-      return proxyDeferred.promise
+      // Yield to let the child-failure path settle, then resolve.
+      await new Promise(resolve => setTimeout(resolve, 5))
     },
   })
 
@@ -210,8 +202,6 @@ test('Vite fails during proxy check (after readiness)', async () => {
     throw new Error('unexpected third spawn')
   }
 
-  const proxyDeferred = deferred()
-
   const result = await runE2eLocal({
     loadLocalEnvironment: mockEnvLoader,
     spawn,
@@ -221,13 +211,56 @@ test('Vite fails during proxy check (after readiness)', async () => {
     waitForClient: async () => {},
     waitForProxy: async () => {
       viteChild.emit('exit', 42)
-      return proxyDeferred.promise
+      await new Promise(resolve => setTimeout(resolve, 5))
     },
   })
 
   assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
   assert.match(result.primaryChildFailure.message, /vite.*exit.*code 42/i, 'Vite failure is primary')
   assert.equal(result.exitCode, 1, 'must exit non-zero')
+})
+
+test('Proxy cancellation settles before child cleanup', async () => {
+  let apiChild, viteChild
+  const events = []
+  let proxyResolved = false
+
+  const spawn = () => {
+    if (!apiChild) {
+      apiChild = controllableChild()
+      return apiChild
+    }
+    if (!viteChild) {
+      viteChild = controllableChild()
+      return viteChild
+    }
+    throw new Error('unexpected third spawn')
+  }
+
+  const result = await runE2eLocal({
+    loadLocalEnvironment: mockEnvLoader,
+    spawn,
+    runCommand: noop,
+    withIsolatedTestDatabase: mockDbLifecycle,
+    waitForMonradApi: async () => {},
+    waitForClient: async () => {},
+    waitForProxy: async () => {
+      events.push('proxy-start')
+      apiChild.emit('exit', 1)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      events.push('proxy-settled')
+      proxyResolved = true
+    },
+  })
+
+  assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
+  assert.match(result.primaryChildFailure.message, /api.*exit.*code 1/i, 'API failure is primary')
+  assert.equal(result.exitCode, 1, 'must exit non-zero')
+
+  // Proxy must have settled (awaited after child failure) before we return.
+  assert.ok(proxyResolved, 'proxy operation must settle')
+  assert.ok(events.includes('proxy-start'), 'proxy must start')
+  assert.ok(events.includes('proxy-settled'), 'proxy must settle')
 })
 
 test('API fails while Playwright is pending', async () => {
@@ -305,7 +338,64 @@ test('Vite fails while Playwright is pending', async () => {
   assert.match(result.primaryChildFailure.message, /vite.*exit.*code 42/i, 'Vite failure is primary')
   assert.equal(result.exitCode, 1, 'must exit non-zero')
 })
-test('Playwright termination failure is retained as secondary', async () => {
+test('Playwright runCommand termination failure is retained as secondary', async () => {
+  const events = []
+  let apiChild, viteChild
+
+  const spawn = () => {
+    if (!apiChild) {
+      apiChild = controllableChild()
+      return apiChild
+    }
+    viteChild = controllableChild()
+    return viteChild
+  }
+
+  const result = await runE2eLocal({
+    loadLocalEnvironment: mockEnvLoader,
+    spawn,
+    withIsolatedTestDatabase: mockDbLifecycle,
+    waitForMonradApi: async () => {},
+    waitForClient: async () => {},
+    waitForProxy: async () => {},
+    runCommand: (_cmd, args, opts = {}) => {
+      if (args?.some(a => a.includes('playwright'))) {
+        events.push('playwright-start')
+        /* Trigger API failure during Playwright, then reject the
+           playwrightPromise with a termination error when the combined
+           signal aborts.  This exercises the real Playwright termination
+           path: child failure → internalAbort → combinedSignal → abort
+           listener → termination rejection. */
+        setTimeout(() => apiChild.emit('exit', 1), 0)
+        return new Promise((_resolve, reject) => {
+          opts.signal?.addEventListener('abort', () => {
+            events.push('playwright-abort-observed')
+            reject(new Error('process-tree termination failed: mock'))
+          }, { once: true })
+        })
+      }
+      return Promise.resolve('')
+    },
+  })
+
+  assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
+  assert.ok(result.aggregatedError, 'aggregatedError must be set')
+  assert.equal(result.exitCode, 1, 'must exit non-zero')
+
+  // The termination failure must be retained with type 'playwright termination'
+  const hasPwTermination = result.cleanupErrors.some(
+    e => e.type === 'playwright termination'
+  )
+  assert.ok(hasPwTermination, 'playwright termination must be in cleanupErrors')
+
+  // Verify ordering: playwright started before child failure before abort
+  assert.ok(events.includes('playwright-start'), 'playwright must start')
+  assert.ok(events.includes('playwright-abort-observed'), 'playwright abort observed')
+  const pwStartIdx = events.indexOf('playwright-start')
+  const pwAbortIdx = events.indexOf('playwright-abort-observed')
+  assert.ok(pwAbortIdx > pwStartIdx, 'abort observed after playwright start')
+})
+test('App-child terminateChild failure is retained as secondary', async () => {
   let callCount = 0
   const spawn = () => {
     callCount++
@@ -326,20 +416,19 @@ test('Playwright termination failure is retained as secondary', async () => {
     waitForMonradApi: yieldToEventLoop,
     waitForClient: yieldToEventLoop,
     waitForProxy: yieldToEventLoop,
-    // Inject a termination function that always fails.
+    // Inject a terminateChild that always fails — this exercises the
+    // API/Vite child-process termination failure path (stopChildren).
     terminateChild: async () => { throw new Error('process-tree termination failed: mock failure') },
   })
 
   assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
   assert.ok(result.aggregatedError, 'aggregatedError must be set')
   assert.equal(result.exitCode, 1, 'must exit non-zero')
-  // Verify aggregatedError includes the termination failure
   assert.match(result.aggregatedError.message, /process-tree termination/i, 'aggregated message contains termination failure')
-  // Verify cleanupErrors contains the termination failure
   const hasTermination = result.cleanupErrors.some(
     e => e.type === 'process termination' || e.type === 'child-process termination'
   )
-  assert.ok(hasTermination, 'termination failure must be in cleanupErrors')
+  assert.ok(hasTermination, 'app-child termination must be in cleanupErrors')
 })
 
 test('Expected shutdown does not create false child failures', async () => {
@@ -466,34 +555,51 @@ test('Shutdown guard is not created when JWT validation fails (early return)', a
   assert.equal(result.exitCode, 1, 'must exit non-zero')
   assert.equal(result.primaryChildFailure, null, 'no child failure')
 })
-test('Child failure plus termination failure plus cleanup failure all remain visible in aggregated error', async () => {
+test('Child failure + playwright termination + docker cleanup all visible in aggregated error', async () => {
+  const events = []
   let apiChild, viteChild
+
   const spawn = () => {
     if (!apiChild) {
       apiChild = controllableChild()
-      process.nextTick(() => apiChild.emit('exit', 1))
       return apiChild
     }
-    viteChild = controllableChild()
-    return viteChild
+    if (!viteChild) {
+      viteChild = controllableChild()
+      return viteChild
+    }
+    throw new Error('unexpected third spawn')
   }
 
   const result = await runE2eLocal({
     loadLocalEnvironment: mockEnvLoader,
     spawn,
-    runCommand: noop,
-    waitForMonradApi: yieldToEventLoop,
-    waitForClient: yieldToEventLoop,
-    waitForProxy: yieldToEventLoop,
-    // Inject termination failure
-    terminateChild: async () => { throw new Error('process-tree termination failed: mock') },
     withIsolatedTestDatabase: async (_opts, action) => {
       try {
         await action({ DATABASE_URL: 'postgresql://test@localhost/test', INTEGRATION_TEST: 'true' })
       } finally {
-        // Simulate Docker cleanup failure
+        events.push('docker-cleanup-failed')
         throw new Error('Docker cleanup failed: process timeout')
       }
+    },
+    waitForMonradApi: async () => {},
+    waitForClient: async () => {},
+    waitForProxy: async () => {},
+    runCommand: (_cmd, args, opts = {}) => {
+      if (args?.some(a => a.includes('playwright'))) {
+        events.push('playwright-start')
+        /* Trigger API failure during Playwright, then reject with a
+           termination error — this exercises the Playwright runCommand
+           termination path. */
+        setTimeout(() => apiChild.emit('exit', 1), 0)
+        return new Promise((_resolve, reject) => {
+          opts.signal?.addEventListener('abort', () => {
+            events.push('playwright-aborted')
+            reject(new Error('process-tree termination failed: mock'))
+          }, { once: true })
+        })
+      }
+      return Promise.resolve('')
     },
   })
 
@@ -506,17 +612,20 @@ test('Child failure plus termination failure plus cleanup failure all remain vis
   assert.match(msg, /process-tree termination/i, 'aggregated message must contain termination failure')
   assert.match(msg, /cleanup/i, 'aggregated message must contain cleanup failure')
 
-  // Verify cleanupErrors contains both termination and docker failure
-  const hasTermination = result.cleanupErrors.some(
-    e => e.type === 'process termination' || e.type === 'child-process termination'
+  // Verify cleanupErrors contains both playwright termination and docker failure
+  const hasPwTermination = result.cleanupErrors.some(
+    e => e.type === 'playwright termination'
   )
-  assert.ok(hasTermination, 'termination failure in cleanupErrors')
+  assert.ok(hasPwTermination, 'playwright termination in cleanupErrors')
   const hasDockerError = result.cleanupErrors.some(
     e => (e.error?.message ?? '').includes('Docker')
   )
   assert.ok(hasDockerError, 'Docker cleanup failure in cleanupErrors')
 
   assert.equal(result.exitCode, 1, 'must exit non-zero')
+  assert.ok(events.includes('playwright-start'), 'playwright must start')
+  assert.ok(events.includes('playwright-aborted'), 'playwright must be aborted')
+  assert.ok(events.includes('docker-cleanup-failed'), 'docker cleanup must run')
 })
 
 test('No unhandled promise rejection on child failure during Playwright', async () => {
@@ -670,4 +779,63 @@ test('Child failure stops Playwright before Docker cleanup', async () => {
   if (dcCleanup >= 0) {
     assert.ok(dcCleanup > pwAbort, `Docker cleanup (${dcCleanup}) must occur after Playwright abort (${pwAbort})`)
   }
+})
+
+test('Runner secondary-error type is set correctly', async () => {
+  // The outer catch of runE2eLocal uses failures.addError(error, { primaryType: 'runner' }).
+  // For a plain Error caught after the primary is set, the secondary must have type 'runner'.
+  let apiChild, viteChild
+  let cleanupCalled = false
+
+  const spawn = () => {
+    if (!apiChild) {
+      apiChild = controllableChild()
+      return apiChild
+    }
+    if (!viteChild) {
+      viteChild = controllableChild()
+      return viteChild
+    }
+    throw new Error('unexpected third spawn')
+  }
+
+  // Make the proxy throw a non-primary, non-AggregatedError that reaches
+  // the outer catch after the primary is already set.
+  const result = await runE2eLocal({
+    loadLocalEnvironment: mockEnvLoader,
+    spawn,
+    runCommand: noop,
+    withIsolatedTestDatabase: async (opts, action) => {
+      try {
+        await action({ DATABASE_URL: 'postgresql://test@localhost/test', INTEGRATION_TEST: 'true' })
+      } finally {
+        cleanupCalled = true
+        // Throw a non-standard error from Docker cleanup so it reaches the outer catch
+        // as a plain Error (not an AggregatedError), after the primary is set.
+        throw new Error('Unexpected cleanup error: network timeout')
+      }
+    },
+    waitForMonradApi: async () => {},
+    waitForClient: async () => {},
+    waitForProxy: async () => {
+      apiChild.emit('exit', 1)
+      // Yield briefly so raceAgainstChildren can settle the proxy promise.
+      await new Promise(resolve => setTimeout(resolve, 5))
+    },
+  })
+
+  assert.ok(result.primaryChildFailure, 'primaryChildFailure must be set')
+  assert.ok(result.aggregatedError, 'aggregatedError must be set')
+  assert.equal(result.exitCode, 1, 'must exit non-zero')
+  assert.ok(cleanupCalled, 'cleanup must have been called')
+
+  // The Docker cleanup error from the finally block is a plain Error caught
+  // by runE2eLocal's outer catch.  It should be recorded as type 'runner'.
+  const runnerErrors = result.cleanupErrors.filter(e => e.type === 'runner')
+  assert.equal(runnerErrors.length, 1, 'must have exactly one runner-type secondary')
+  assert.match(
+    (runnerErrors[0]?.error?.message ?? ''),
+    /cleanup error|network timeout/i,
+    'runner error message matches caught error'
+  )
 })

@@ -49,6 +49,39 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
     return ctrl.signal
   }
 
+  /**
+   * Cancel-aware sleep.  Resolves immediately when the signal aborts.
+   */
+  function cancellableSleep(ms, signal) {
+    return new Promise(resolve => {
+      if (signal?.aborted) return resolve()
+      const timer = setTimeout(resolve, ms)
+      const onAbort = () => { clearTimeout(timer); resolve() }
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
+  /**
+   * Race an active operation (e.g. proxy check, Playwright) against child
+   * failures.  If a child failure wins, the losing operation is awaited to
+   * settlement before returning so no in-flight timer or callback remains.
+   *
+   * @param {Promise} operationPromise  — the active operation
+   * @param {Promise<string>[]} childFailures  — api.failure / client.failure
+   * @returns {{ winner: 'operation'|'child-failure', settlementError: Error|null }}
+   */
+  async function raceAgainstChildren(operationPromise, childFailures) {
+    const winner = await Promise.race([
+      operationPromise.then(() => 'operation'),
+      ...childFailures,
+    ])
+    let settlementError = null
+    if (winner === 'child-failure') {
+      try { await operationPromise } catch (err) { settlementError = err }
+    }
+    return { winner, settlementError }
+  }
+
   const resolvedEnv = loadEnvOverride ? loadEnvOverride(root) : loadLocalEnvironment(root)
   const host = resolvedEnv.E2E_HOST ?? '127.0.0.1'
 
@@ -127,17 +160,14 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
           if (failures.primary) throw failures.toError()
 
           // ── Proxy check ──────────────────────────────────────────────────────
-          if (guard.triggered) return
-          const proxyRace = await Promise.race([
-            (waitForProxyOverride ?? waitForProxy)(baseUrl).then(() => 'proxy-ok'),
-            api.failure,
-            client.failure,
-          ])
-          if (proxyRace === 'child-failure') {
+          const { winner: proxyWinner } = await raceAgainstChildren(
+            (waitForProxyOverride ?? waitForProxy)(baseUrl),
+            [api.failure, client.failure],
+          )
+          if (proxyWinner === 'child-failure') {
             if (failures.primary) throw failures.toError()
           }
           if (guard.triggered) return
-
           // ── Playwright ───────────────────────────────────────────────────────
           const playwrightPromise = (runCommandOverride ?? runCommand)('npx', ['playwright', 'test', '--grep-invert', '@screenshots', ...process.argv.slice(2)], {
             cwd: e2eDir, env: testEnv,
@@ -145,20 +175,10 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
             inherit: true,
             signal: combinedSignal,
           })
-          const pwWinner = await Promise.race([
-            playwrightPromise.then(
-              () => 'playwright',
-              err => { throw err },
-            ),
-            api.failure,
-            client.failure,
-          ])
+          const { winner: pwWinner, settlementError } = await raceAgainstChildren(playwrightPromise, [api.failure, client.failure])
           if (pwWinner === 'child-failure') {
-            // Await forced Playwright termination before cleanup removes DB.
-            try { await playwrightPromise } catch (pwErr) {
-              if (pwErr?.message?.includes('process-tree termination failed')) {
-                failures.addSecondary('playwright termination', pwErr)
-              }
+            if (settlementError?.message?.includes('process-tree termination failed')) {
+              failures.addSecondary('playwright termination', settlementError)
             }
             throw failures.toError() ?? new Error('Child failure')
           }
@@ -173,7 +193,7 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
       })
   } catch (error) {
     if (error) {
-      failures.addError(error, { secondaryType: 'runner' })
+      failures.addError(error, { primaryType: 'runner' })
     }
   } finally {
     guard.dispose()
@@ -359,11 +379,12 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
         return
       } catch (error) {
         lastError = error
-        await new Promise(resolve => setTimeout(resolve, 1_000))
+        await cancellableSleep(1_000, combinedSignal)
       }
     }
     throw new Error(`Timed out waiting for ${label}: ${lastError?.message ?? 'unknown error'}`)
   }
+
   function computeExitCode() {
     if (guard.triggered) return guard.signalExitCode
     // Any failure — primary, process termination, cleanup — causes non-zero.
@@ -371,8 +392,6 @@ export async function runE2eLocal({ spawn: spawnOption, runCommand: runCommandOv
     return 0
   }
 }
-
-// ── CLI entrypoint ──────────────────────────────────────────────────────────
 // Only run when this file is executed directly, not when imported by tests.
 const isMain = process.argv[1] === fileURLToPath(import.meta.url)
 if (isMain) {
