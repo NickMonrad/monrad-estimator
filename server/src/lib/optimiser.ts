@@ -403,13 +403,14 @@ export function runOptimiser(
     }
   }
 
-  // When ramp-up is enabled, the apply route shifts namedResources[].startWeek
-  // to the first demand week (only when > 0). Mirror that in scoring so a
-  // candidate's metrics reflect the schedule that will actually be applied;
-  // otherwise a scenario can look feasible here but be infeasible after apply.
+  /** Resource types explicitly in countRanges — ramp-up applies only here. */
+  const optimiserScope = new Set(countRanges.map(r => r.resourceTypeId))
+
+  /** Scoped ramp-up: only overlays RTs the user asked about. */
   function applyRampUp(rts: SchedulerResourceType[]): SchedulerResourceType[] {
     if (!allowRampUp) return rts
     return rts.map(rt => {
+      if (!optimiserScope.has(rt.id)) return rt
       const sw = firstDemandWeekByRtId.get(rt.id)
       if (sw === undefined || sw <= 0) return rt
       return {
@@ -441,7 +442,7 @@ export function runOptimiser(
     resourceTypes: baseInput.resourceTypes.map(rt => ({
       resourceTypeId: rt.id,
       count: rt.count,
-      suggestedStartWeek: allowRampUp ? (firstDemandWeekByRtId.get(rt.id) ?? 0) : 0,
+      suggestedStartWeek: allowRampUp && optimiserScope.has(rt.id) ? (firstDemandWeekByRtId.get(rt.id) ?? 0) : 0,
     })),
     metrics: baselineMetrics,
     score: 0,
@@ -511,7 +512,7 @@ export function runOptimiser(
       resourceTypes: baseInput.resourceTypes.map(rt => ({
         resourceTypeId: rt.id,
         count: overrideMap.get(rt.id) ?? rt.count,
-        suggestedStartWeek: allowRampUp ? (firstDemandWeekByRtId.get(rt.id) ?? 0) : 0,
+        suggestedStartWeek: allowRampUp && optimiserScope.has(rt.id) ? (firstDemandWeekByRtId.get(rt.id) ?? 0) : 0,
       })),
       metrics,
     })
