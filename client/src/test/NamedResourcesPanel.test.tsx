@@ -253,20 +253,19 @@ describe('NamedResourcesPanel capacity profile display', () => {
       expect(screen.getByDisplayValue('Alice')).toBeInTheDocument()
     })
 
-    // Capacity profile: planning basis badge
-    expect(screen.getByText('Fixed for selected weeks')).toBeInTheDocument()
+    // Capacity profile: shows "Varies by week" for segmented profile (profile-managed)
+    expect(screen.getByText('Varies by week')).toBeInTheDocument()
     // Source badge
     expect(screen.getByText('Squad Planner')).toBeInTheDocument()
     // Resolution source indicator
     expect(screen.getByText(/Resolution: Profile/)).toBeInTheDocument()
-    // Default capacity
-    expect(screen.getByText(/Default: 80%/)).toBeInTheDocument()
-    // Profile window
-    expect(screen.getByText(/Window: W1 → W12/)).toBeInTheDocument()
-    // Each of three segments
+    // Each of three segments (displayed with 1-based week labels)
     expect(screen.getByText('W1-W4: 50%')).toBeInTheDocument()
     expect(screen.getByText('W5-W8: 75%')).toBeInTheDocument()
     expect(screen.getByText('W9-W12: 100%')).toBeInTheDocument()
+    // Profile-managed guidance shown
+    expect(screen.getByText(/Availability varies by week/)).toBeInTheDocument()
+    expect(screen.getByText(/this weekly profile is protected/i)).toBeInTheDocument()
 
     // Billing basis label is separate from capacity profile
     const billingBasisElements = screen.getAllByText('Billing basis')
@@ -276,6 +275,10 @@ describe('NamedResourcesPanel capacity profile display', () => {
 
     // No "Planned resource" badge (this is a named person, not synthetic)
     expect(screen.queryByText('Planned resource')).not.toBeInTheDocument()
+
+    // No default percent or window for profile-managed state
+    expect(screen.queryByText(/Default:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Window:/)).not.toBeInTheDocument()
   })
 
   it('labels synthetic resources as Planned resource with Active capacity plan and disabled controls', async () => {
@@ -390,15 +393,11 @@ describe('NamedResourcesPanel capacity profile display', () => {
     )
 
     await screen.findByDisplayValue('Planned Tech Lead')
-    const owner = screen.getByTestId('profile-managed-owner-nr-persisted-profile')
-    expect(owner).toHaveTextContent('Varies by week')
-    expect(owner).not.toHaveTextContent('%')
 
-    fireEvent.click(owner)
-    expect(screen.getByTestId('profile-managed-panel-nr-persisted-profile')).toHaveTextContent(
-      'managed through the weekly capacity profile',
-    )
-    expect(screen.getByRole('link', { name: 'Open weekly profile editor ↗' })).toHaveAttribute(
+    // The guidance is shown inline (no toggle button needed)
+    expect(screen.getByText(/Availability varies by week/)).toBeInTheDocument()
+    expect(screen.getByText(/managed through the weekly capacity plan/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Open Squad Planner/i })).toHaveAttribute(
       'href',
       '/projects/proj-1/timeline?panel=squad-planner',
     )
@@ -563,5 +562,334 @@ describe('planned resource UI', () => {
 
     // Named person has enabled controls
     expect(screen.getByDisplayValue('Actual Person')).not.toBeDisabled()
+  })
+})
+
+
+describe('NamedResourcesPanel authoritative null handling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders Varies by week and read-only scalar display for segmented named person with authoritative nulls', async () => {
+    // Segmented NAMED_PERSON with authoritative nulls and stale compatibility values
+    const profileAllocations: ResourceProfileRow['namedResources'] = [
+      {
+        id: 'nr-auth-null',
+        name: 'Alice',
+        allocationMode: 'EFFORT',
+        allocationPercent: 100, // stale - should NOT be displayed
+        allocationStartWeek: 2, // stale
+        allocationEndWeek: 9, // stale
+        startWeek: 2, // stale
+        endWeek: 9, // stale
+        allocatedDays: 15,
+        derivedStartWeek: null,
+        derivedEndWeek: null,
+        actualAllocatedDays: 10,
+        actualAllocationStartWeek: 2,
+        actualAllocationEndWeek: 6,
+        actualAllocatedWeeks: [
+          { week: 2, days: 2, capacityDays: 5 },
+          { week: 3, days: 2, capacityDays: 5 },
+          { week: 4, days: 3, capacityDays: 5 },
+        ],
+        actualAllocationSegments: [
+          { startWeek: 2, endWeek: 6, days: 7 },
+        ],
+        synthetic: false,
+        capacityProfile: {
+          planningBasis: 'availabilityWindow',
+          source: 'manualEntry',
+          defaultPercent: null, // authoritative null
+          startWeek: null, // authoritative null (no fixed window)
+          endWeek: null, // authoritative null
+          segments: [
+            { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+            { startWeek: 4, endWeek: 7, capacityPercent: 75 },
+          ],
+          resolutionSource: 'PROFILE',
+        },
+      },
+    ]
+
+    api.get.mockResolvedValue({
+      data: [{
+        id: 'nr-auth-null', resourceTypeId: 'rt-1', name: 'Alice',
+        startWeek: 2, endWeek: 9, allocationPct: 100, // stale compatibility values
+        pricingModel: 'ACTUAL_DAYS', createdAt: '2024-01-01', updatedAt: '2024-01-01',
+      }],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={1}
+              columnCount={8}
+              allocations={profileAllocations}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Alice')).toBeInTheDocument()
+    })
+
+    // "Varies by week" badge shown
+    expect(screen.getByText('Varies by week')).toBeInTheDocument()
+    // Exact ordered segments displayed
+    expect(screen.getByText('W1-W4: 50%')).toBeInTheDocument()
+    expect(screen.getByText('W5-W8: 75%')).toBeInTheDocument()
+
+    expect(screen.queryByDisplayValue('100')).not.toBeInTheDocument()
+    const variesElements = screen.getAllByText('Varies')
+    expect(variesElements.length).toBe(2) // one for startWeek, one for endWeek
+    // Stale values replaced by "Varies"/"—"; name editable
+
+    // Protected guidance visible
+    expect(screen.getByText(/Availability varies by week/)).toBeInTheDocument()
+    expect(screen.getByText(/this weekly profile is protected/i)).toBeInTheDocument()
+
+    // No Squad Planner link (non-planner-owned named person)
+    expect(screen.queryByText(/Open Squad Planner/i)).not.toBeInTheDocument()
+
+    expect(screen.getByDisplayValue('Alice')).not.toBeDisabled()
+    // Billing basis still present (labeled)
+    const billingLabels = screen.getAllByText('Billing basis')
+    expect(billingLabels.length).toBeGreaterThanOrEqual(1)
+    // Delete button enabled
+    const deleteButton = screen.getByTitle('Delete')
+    expect(deleteButton).not.toBeDisabled()
+  })
+
+  it('renders segmentless authoritative scalar profile with profile values, not stale compatibility', async () => {
+    const profileAllocations: ResourceProfileRow['namedResources'] = [
+      {
+        id: 'nr-scalar',
+        name: 'Bob',
+        allocationMode: 'EFFORT',
+        allocationPercent: 100, // stale
+        allocationStartWeek: 2, // stale
+        allocationEndWeek: 9, // stale
+        startWeek: 2, // stale
+        endWeek: 9, // stale
+        allocatedDays: 15,
+        derivedStartWeek: null,
+        derivedEndWeek: null,
+        actualAllocatedDays: 10,
+        actualAllocationStartWeek: 2,
+        actualAllocationEndWeek: 6,
+        actualAllocatedWeeks: [],
+        actualAllocationSegments: [],
+        synthetic: false,
+        capacityProfile: {
+          planningBasis: 'availabilityWindow',
+          source: 'manualEntry',
+          defaultPercent: 75, // authoritative
+          startWeek: 3, // authoritative
+          endWeek: 10, // authoritative
+          segments: [],
+          resolutionSource: 'PROFILE',
+        },
+      },
+    ]
+
+    api.get.mockResolvedValue({
+      data: [{
+        id: 'nr-scalar', resourceTypeId: 'rt-1', name: 'Bob',
+        startWeek: 2, endWeek: 9, allocationPct: 100, // stale
+        pricingModel: 'ACTUAL_DAYS', createdAt: '2024-01-01', updatedAt: '2024-01-01',
+      }],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={1}
+              columnCount={8}
+              allocations={profileAllocations}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Bob')).toBeInTheDocument()
+    })
+
+    // Scalar controls editable (no "Varies by week" badge)
+    expect(screen.queryByText('Varies by week')).not.toBeInTheDocument()
+
+    // Inputs are enabled (not profile-managed)
+    const bobAllocInput = document.querySelector('input[type="number"]')
+    expect(bobAllocInput).not.toBeDisabled()
+  })
+
+  it('sends minimal PUT body for name-only change on segmented named person', async () => {
+    const profileAllocations: ResourceProfileRow['namedResources'] = [
+      {
+        id: 'nr-body-test',
+        name: 'Charlie',
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: 0,
+        allocationEndWeek: 9,
+        startWeek: 0,
+        endWeek: 9,
+        allocatedDays: 10,
+        derivedStartWeek: null,
+        derivedEndWeek: null,
+        actualAllocatedDays: 10,
+        actualAllocationStartWeek: 0,
+        actualAllocationEndWeek: 9,
+        actualAllocatedWeeks: [],
+        actualAllocationSegments: [],
+        synthetic: false,
+        capacityProfile: {
+          planningBasis: 'availabilityWindow',
+          source: 'manualEntry',
+          defaultPercent: null,
+          startWeek: null,
+          endWeek: null,
+          segments: [
+            { startWeek: 0, endWeek: 4, capacityPercent: 50 },
+          ],
+          resolutionSource: 'PROFILE',
+        },
+      },
+    ]
+
+    api.get.mockResolvedValue({
+      data: [{
+        id: 'nr-body-test', resourceTypeId: 'rt-1', name: 'Charlie',
+        startWeek: 0, endWeek: 9, allocationPct: 100,
+        pricingModel: 'ACTUAL_DAYS', createdAt: '2024-01-01', updatedAt: '2024-01-01',
+      }],
+    })
+    api.put.mockReset()
+    api.put.mockResolvedValue({ data: {} })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={1}
+              columnCount={8}
+              allocations={profileAllocations}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Charlie')).toBeInTheDocument()
+    })
+
+    // Change name
+    const nameInput = screen.getByDisplayValue('Charlie')
+    fireEvent.change(nameInput, { target: { value: 'Charlie Updated' } })
+    fireEvent.blur(nameInput)
+
+    await waitFor(() => {
+      expect(api.put).toHaveBeenCalledWith(
+        '/projects/proj-1/resource-types/rt-1/named-resources/nr-body-test',
+        { name: 'Charlie Updated' },
+      )
+    })
+  })
+
+  it('sends minimal PUT body for billing change on segmented named person', async () => {
+    const profileAllocations: ResourceProfileRow['namedResources'] = [
+      {
+        id: 'nr-body-bill',
+        name: 'Diana',
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: 0,
+        allocationEndWeek: 9,
+        startWeek: 0,
+        endWeek: 9,
+        allocatedDays: 10,
+        derivedStartWeek: null,
+        derivedEndWeek: null,
+        actualAllocatedDays: 10,
+        actualAllocationStartWeek: 0,
+        actualAllocationEndWeek: 9,
+        actualAllocatedWeeks: [],
+        actualAllocationSegments: [],
+        synthetic: false,
+        capacityProfile: {
+          planningBasis: 'availabilityWindow',
+          source: 'manualEntry',
+          defaultPercent: null,
+          startWeek: null,
+          endWeek: null,
+          segments: [
+            { startWeek: 0, endWeek: 4, capacityPercent: 50 },
+          ],
+          resolutionSource: 'PROFILE',
+        },
+      },
+    ]
+
+    api.get.mockResolvedValue({
+      data: [{
+        id: 'nr-body-bill', resourceTypeId: 'rt-1', name: 'Diana',
+        startWeek: 0, endWeek: 9, allocationPct: 100,
+        pricingModel: 'ACTUAL_DAYS', createdAt: '2024-01-01', updatedAt: '2024-01-01',
+      }],
+    })
+    api.put.mockReset()
+    api.put.mockResolvedValue({ data: {} })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={1}
+              columnCount={8}
+              allocations={profileAllocations}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Diana')).toBeInTheDocument()
+    })
+
+    // Change billing basis from ACTUAL_DAYS to PRO_RATA
+    const select = screen.getAllByRole('combobox', { name: 'Billing basis' })[0]
+    fireEvent.change(select, { target: { value: 'PRO_RATA' } })
+
+    await waitFor(() => {
+      expect(api.put).toHaveBeenCalledWith(
+        '/projects/proj-1/resource-types/rt-1/named-resources/nr-body-bill',
+        { pricingModel: 'PRO_RATA' },
+      )
+    })
   })
 })

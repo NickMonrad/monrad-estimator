@@ -597,3 +597,9 @@ assertion.
 
 See [`capacity-profile-source-of-truth-migration-plan.md`](capacity-profile-source-of-truth-migration-plan.md#phase-5-—-squad-planner-apply--pr-359)
 for the complete flow description.
+
+### Capacity profile guard ✅
+
+The capacity-edit protection guard (`assertCapacityNotProtected`) is independent of the commercial domain. It runs before the transaction in named-resource PUT and PATCH routes and returns HTTP `409` with `code: PROFILE_MANAGED_CAPACITY` when a capacity-bearing request targets a profile with segments, `capacityProfile` planning basis, `PLANNED_RESOURCE` owner kind, or conflicting duplicates.
+
+Name and billing updates pass through without triggering the guard, preserving the commercial domain's independence.

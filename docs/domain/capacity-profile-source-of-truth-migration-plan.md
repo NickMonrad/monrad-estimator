@@ -934,3 +934,9 @@ are already done from PR #356 — focus on `scheduler.ts`, `timeline.ts`,
 `projectPlanningModel.ts`, and `leveller.ts`).
 
 
+
+## Guard boundary
+
+The `assertCapacityNotProtected` guard runs before any write in named-resource PUT and PATCH routes. This ensures that segmented and `capacityProfile`-type profiles cannot be flattened through scalar capacity updates even before the migration to full profile-first writes is complete.
+
+Rejected requests return HTTP 409 with `code: PROFILE_MANAGED_CAPACITY` and an actionable error. The rejection is consistent between PUT and PATCH, and the transaction rolls back completely.

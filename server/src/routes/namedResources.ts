@@ -7,6 +7,7 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityProfileWrites.js'
+import type { PrismaTransactionClient } from '../lib/squadPlannerProfileWriter.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 
 const router = Router({ mergeParams: true })
@@ -22,6 +23,63 @@ async function verifyResourceType(rtId: string, projectId: string) {
 }
 
 const VALID_PRICING_MODELS = ['ACTUAL_DAYS', 'PRO_RATA']
+
+/**
+ * Typed error for protected-capacity rejection.
+ * Caught by PUT/PATCH routes and mapped to HTTP 409.
+ */
+class ProfileManagedCapacityError extends Error {
+  readonly code = 'PROFILE_MANAGED_CAPACITY'
+  constructor(message: string) {
+    super(message)
+    this.name = 'ProfileManagedCapacityError'
+  }
+}
+
+function isProfileManagedCapacityError(error: unknown): error is ProfileManagedCapacityError {
+  return error instanceof ProfileManagedCapacityError
+}
+
+/**
+ * Assert that a capacity-bearing update is safe for the existing profile.
+ *
+ * A named resource is protected from scalar capacity mutation when its
+ * CapacityProfile has any of:
+ * - one or more CapacitySegment rows (segmented profile)
+ * - planningBasis = 'capacityProfile' (weekly-profile even without segments)
+ * - ownerKind = 'PLANNED_RESOURCE' (managed by Squad Planner)
+ *
+ * Multiple conflicting profiles also fail closed — we cannot determine
+ * which profile is authoritative, so scalar mutation is refused.
+ *
+ * Throws ProfileManagedCapacityError.
+ */
+async function assertCapacityNotProtected(
+  tx: PrismaTransactionClient,
+  namedResourceId: string,
+  projectId: string,
+): Promise<void> {
+  const profiles = await tx.capacityProfile.findMany({
+    where: { namedResourceId, projectId },
+    include: { segments: { select: { id: true, startWeek: true, endWeek: true } } },
+    orderBy: { createdAt: 'asc' },
+  }) as Array<{ id: string; planningBasis: string | null; ownerKind: string | null; segments: Array<{ id: string }> }>
+
+  if (profiles.length > 1) {
+    throw new ProfileManagedCapacityError('This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.')
+  }
+
+  const profile = profiles[0]
+  if (!profile) return
+
+  const hasSegments = profile.segments.length > 0
+  const isProtectedPlanningBasis = profile.planningBasis === 'CAPACITY_PROFILE'
+  const isPlannedResource = profile.ownerKind === 'PLANNED_RESOURCE'
+  if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
+    throw new ProfileManagedCapacityError('This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.')
+  }
+}
+
 
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
   (tx ?? prisma).project.update({
@@ -164,6 +222,29 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   res.status(201).json(resource)
 }))
+/**
+ * Build a capacity payload for the missing-profile case in non-capacity PUT.
+ * When no CapacityProfile exists and the PUT only changes non-capacity fields
+ * (name/pricingModel), create a profile from existing legacy fields.
+ */
+function buildMissingProfilePayload(existing: any): NamedResourceCapacityPayload {
+  const isTimeline = existing.allocationMode === 'TIMELINE'
+  const startWeek = isTimeline
+    ? (existing.allocationStartWeek ?? existing.startWeek ?? null)
+    : null
+  const endWeek = isTimeline
+    ? (existing.allocationEndWeek ?? existing.endWeek ?? null)
+    : null
+  return {
+    allocationMode: existing.allocationMode,
+    allocationPercent: existing.allocationPercent,
+    allocationPct: existing.allocationPct,
+    allocationStartWeek: startWeek,
+    allocationEndWeek: endWeek,
+    startWeek,
+    endWeek,
+  }
+}
 
 router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
@@ -230,7 +311,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       : has('allocationStartWeek')
         ? allocationStartWeek
         : has('startWeek')
-          ? undefined
+          ? startWeek
           : existing.allocationStartWeek,
 
     allocationEndWeek: isExplicitNonWindow
@@ -238,91 +319,72 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       : has('allocationEndWeek')
         ? allocationEndWeek
         : has('endWeek')
-          ? undefined
+          ? endWeek
           : existing.allocationEndWeek,
 
-    startWeek: isExplicitNonWindow
-      ? null
-      : has('startWeek') ? startWeek : existing.startWeek,
+    startWeek: has('startWeek')
+      ? startWeek
+      : has('allocationStartWeek')
+        ? allocationStartWeek
+        : existing.startWeek,
 
     endWeek: isExplicitNonWindow
       ? null
       : has('endWeek') ? endWeek : existing.endWeek,
   }
-
-/**
- * Build a capacity payload for the missing-profile case in non-capacity PUT.
- *
- * When no CapacityProfile exists and the PUT only changes non-capacity fields
- * (name/pricingModel), create a profile from existing legacy fields.
- * - TIMELINE mode preserves existing window fields (allocationStartWeek > startWeek)
- * - Non-window modes (EFFORT, FULL_PROJECT, CAPACITY_PLAN) suppress window fields
- */
-function buildMissingProfilePayload(existing: any): NamedResourceCapacityPayload {
-  const isTimeline = existing.allocationMode === 'TIMELINE'
-  const startWeek = isTimeline
-    ? (existing.allocationStartWeek ?? existing.startWeek ?? null)
-    : null
-  const endWeek = isTimeline
-    ? (existing.allocationEndWeek ?? existing.endWeek ?? null)
-    : null
-  return {
-    allocationMode: existing.allocationMode,
-    allocationPercent: existing.allocationPercent,
-    allocationPct: existing.allocationPct,
-    allocationStartWeek: startWeek,
-    allocationEndWeek: endWeek,
-    startWeek,
-    endWeek,
-  }
-}
-
-  const resource = await prisma.$transaction(async tx => {
-    // Write non-capacity fields first
-    await tx.namedResource.update({ where: { id }, data: nrData })
-
-    let updated
-    if (hasCapacityInput) {
-      // Capacity fields provided — profile-first write + project back to legacy
-      const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
-      updated = await tx.namedResource.update({
-        where: { id },
-        data: {
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 100,
-          allocationPct: projection.allocationPercent ?? 100,
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
-          startWeek: projection.allocationStartWeek,
-          endWeek: projection.allocationEndWeek,
-        },
-      })
-
-    } else {
-      // No capacity changes — preserve existing profile row identity if present.
-      // Only create a profile if one does not already exist.
-      const existingProfiles = await tx.capacityProfile.findMany({
-        where: { namedResourceId: id, projectId },
-        select: { id: true },
-      })
-      if (existingProfiles.length === 0) {
-        // Create a profile from existing legacy fields
-        // For TIMELINE mode, preserve existing window fields.
-        // For non-window modes, suppress stale windows.
-        await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, buildMissingProfilePayload(existing))
+  try {
+    const resource = await prisma.$transaction(async tx => {
+      // Guard runs inside the transaction, before any write.
+      // If the profile is protected, ProfileManagedCapacityError escapes the transaction.
+      if (hasCapacityInput) {
+        await assertCapacityNotProtected(tx, id, projectId)
       }
-      // Don't touch legacy fields — existing values remain intact
-      updated = await tx.namedResource.findFirst({ where: { id } })
-      if (!updated) throw new Error('NamedResource not found after update')
+
+      // Write non-capacity fields first
+      await tx.namedResource.update({ where: { id }, data: nrData })
+      let updated
+      if (hasCapacityInput) {
+        // Capacity fields provided — profile-first write + project back to legacy
+        const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
+        updated = await tx.namedResource.update({
+          where: { id },
+          data: {
+            allocationMode: projection.allocationMode,
+            allocationPercent: projection.allocationPercent ?? 100,
+            allocationPct: projection.allocationPercent ?? 100,
+            allocationStartWeek: projection.allocationStartWeek,
+            allocationEndWeek: projection.allocationEndWeek,
+            startWeek: projection.allocationStartWeek,
+            endWeek: projection.allocationEndWeek,
+          },
+        })
+      } else {
+        // No capacity changes — preserve existing profile row identity if present.
+        const existingProfiles = await tx.capacityProfile.findMany({
+          where: { namedResourceId: id, projectId },
+          select: { id: true },
+        })
+        if (existingProfiles.length === 0) {
+          await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, buildMissingProfilePayload(existing))
+        }
+        updated = await tx.namedResource.findFirst({ where: { id } })
+        if (!updated) throw new Error('NamedResource not found after update')
+      }
+      await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
+      await clearWeeklyDemandCache(projectId, tx)
+      return updated
+    })
+    res.json(resource)
+  } catch (error) {
+    if (isProfileManagedCapacityError(error)) {
+      res.status(409).json({
+        error: error.message,
+        code: 'PROFILE_MANAGED_CAPACITY',
+      })
+      return
     }
-
-    // Sync remaining profiles (role-level, other NRs) for full project reconciliation
-    await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
-
-    await clearWeeklyDemandCache(projectId, tx)
-    return updated
-  })
-  res.json(resource)
+    throw error
+  }
 }))
 // PATCH /projects/:projectId/resource-types/:rtId/named-resources/:id
 router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -335,7 +397,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
-  const { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
+  const { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek, startWeek, endWeek } = req.body
 
   const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
   const hasPatch = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
@@ -353,41 +415,64 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       ? null
       : hasPatch('allocationStartWeek')
         ? allocationStartWeek
-        : existing.allocationStartWeek,
+        : hasPatch('startWeek')
+          ? startWeek
+          : existing.allocationStartWeek,
 
     allocationEndWeek: isExplicitNonWindowPatch
       ? null
       : hasPatch('allocationEndWeek')
         ? allocationEndWeek
-        : existing.allocationEndWeek,
+        : hasPatch('endWeek')
+          ? endWeek
+          : existing.allocationEndWeek,
 
-    startWeek: existing.startWeek,
-    endWeek: existing.endWeek,
+    startWeek: hasPatch('startWeek')
+      ? startWeek
+      : hasPatch('allocationStartWeek')
+        ? allocationStartWeek
+        : existing.startWeek,
+
+    endWeek: hasPatch('endWeek') ? endWeek : existing.endWeek,
   }
+  try {
+    const resource = await prisma.$transaction(async tx => {
+      // Guard runs inside transaction, before any write.
+      // PATCH is always a capacity operation.
+      await assertCapacityNotProtected(tx, id, projectId)
 
-  const resource = await prisma.$transaction(async tx => {
-    // Profile-first write + project back to legacy
-    const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
-    // Write projected legacy fields as compatibility
-    const updated = await tx.namedResource.update({
-      where: { id },
-      data: {
-        allocationMode: projection.allocationMode,
-        allocationPercent: projection.allocationPercent ?? 100,
-        allocationPct: projection.allocationPercent ?? 100,
-        allocationStartWeek: projection.allocationStartWeek,
-        allocationEndWeek: projection.allocationEndWeek,
-        startWeek: projection.allocationStartWeek,
-        endWeek: projection.allocationEndWeek,
-      },
+      // Profile-first write + project back to legacy
+      const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
+      // Write projected legacy fields as compatibility
+      const updated = await tx.namedResource.update({
+        where: { id },
+        data: {
+          allocationMode: projection.allocationMode,
+          allocationPercent: projection.allocationPercent ?? 100,
+          allocationPct: projection.allocationPercent ?? 100,
+          allocationStartWeek: projection.allocationStartWeek,
+          allocationEndWeek: projection.allocationEndWeek,
+          startWeek: projection.allocationStartWeek,
+          endWeek: projection.allocationEndWeek,
+        },
+      })
+      // Sync remaining profiles (role-level, other NRs) for full project reconciliation
+      await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
+
+      await clearWeeklyDemandCache(projectId, tx)
+      return updated
     })
-    // Sync remaining profiles (role-level, other NRs) for full project reconciliation
-    await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
-
-    await clearWeeklyDemandCache(projectId, tx)
-    return updated
-  })
-  res.json(resource)
+    res.json(resource)
+  } catch (error) {
+    if (isProfileManagedCapacityError(error)) {
+      res.status(409).json({
+        error: error.message,
+        code: 'PROFILE_MANAGED_CAPACITY',
+      })
+      return
+    }
+    throw error
+  }
 }))
 
 // DELETE /projects/:projectId/resource-types/:rtId/named-resources/:id
