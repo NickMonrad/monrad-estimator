@@ -14,26 +14,22 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
-import { buildSnapshot } from './snapshots.js'
-import { pruneSnapshots } from '../lib/snapshotUtils.js'
 import {
-  runScheduler,
   type SchedulerInput,
   type SchedulerResourceType,
 } from '../lib/scheduler.js'
-import { runSAPlanner } from '../lib/sa-planner.js'
 import {
   runOptimiser,
   type OptimiserConfig,
   type OptimiserMode,
   type OptimiserCandidate,
 } from '../lib/optimiser.js'
+import {
+  applyOptimiserCandidate,
+  OptimiserApplyConflictError,
+  type ApplyCandidateResourceType,
+} from '../lib/optimiserApplyService.js'
 
-interface ApplyCandidateResourceType {
-  resourceTypeId: string
-  count: number
-  suggestedStartWeek: number
-}
 
 interface RequestedCountRange {
   resourceTypeId: string
@@ -164,7 +160,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
-  // Expected body: { resourceTypes: [{ resourceTypeId, count, suggestedStartWeek }], staggerEpics?: boolean }
   const { resourceTypes: candidateRTs, staggerEpics } = req.body as {
     resourceTypes: ApplyCandidateResourceType[]
     staggerEpics?: boolean
@@ -173,214 +168,53 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'resourceTypes array is required' }); return
   }
 
-  // Fix 4: element-level validation — run BEFORE snapshot to avoid wasteful writes
   const invalid = candidateRTs.some(
-    r => typeof r.resourceTypeId !== 'string'
-      || !Number.isInteger(r.count) || r.count < 1
-      || typeof r.suggestedStartWeek !== 'number' || r.suggestedStartWeek < 0,
+    entry => typeof entry.resourceTypeId !== 'string'
+      || !Number.isInteger(entry.count)
+      || entry.count < 1
+      || !Number.isInteger(entry.suggestedStartWeek)
+      || entry.suggestedStartWeek < 0,
   )
   if (invalid) {
     res.status(400).json({ error: 'Invalid resourceTypes element' }); return
   }
 
-  const candidateIds = candidateRTs.map(rt => rt.resourceTypeId)
+  const candidateIds = candidateRTs.map(entry => entry.resourceTypeId)
   if (new Set(candidateIds).size !== candidateIds.length) {
     res.status(400).json({ error: 'Duplicate resourceTypeId in resourceTypes array' }); return
   }
 
   const projectResourceTypes = await prisma.resourceType.findMany({
-    where: {
-      projectId,
-      id: { in: candidateIds },
-    },
+    where: { projectId, id: { in: candidateIds } },
     select: { id: true },
   })
-
   if (projectResourceTypes.length !== candidateIds.length) {
     res.status(400).json({ error: 'All candidate resource types must belong to this project' }); return
   }
 
-  // ── 1. Create pre-apply snapshot for undo support ─────────────────────────
-  const snapshotData = await buildSnapshot(projectId)
-  const dateStr = new Date().toISOString().slice(0, 10)
-  const snap = await prisma.backlogSnapshot.create({
-    data: {
+  try {
+    const result = await applyOptimiserCandidate({
       projectId,
-      label: `Auto-saved before optimiser apply — ${dateStr}`,
-      trigger: 'optimiser_apply',
-      snapshot: snapshotData as unknown as object,
-      createdById: req.userId!,
-    },
-    select: { id: true, label: true, trigger: true, createdAt: true },
-  })
-  await pruneSnapshots(prisma, projectId)
-
-  // ── 2. Load full scheduler input BEFORE transaction (reads are outside tx) ─
-  const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay)
-
-  // ── 3. Transaction: update counts + start weeks + materialise timeline ─────
-  const countMap = new Map(candidateRTs.map(rt => [rt.resourceTypeId, rt.count]))
-  const startWeekMap = new Map(candidateRTs.map(rt => [rt.resourceTypeId, rt.suggestedStartWeek]))
-
-  await prisma.$transaction(async tx => {
-    // 3a. Update ResourceType counts
-    for (const [rtId, count] of countMap) {
-      await tx.resourceType.updateMany({
-        where: { id: rtId, projectId },
-        data: { count },
+      userId: req.userId!,
+      candidate: candidateRTs,
+      staggerEpics,
+    })
+    res.status(200).json(result)
+  } catch (error) {
+    if (error instanceof OptimiserApplyConflictError) {
+      res.status(409).json({
+        error: error.message,
+        code: error.code,
+        conflicts: error.conflicts.map(conflict => ({
+          code: conflict.code,
+          resourceTypeName: conflict.resourceTypeName,
+          namedResourceName: conflict.namedResourceName,
+        })),
       })
+      return
     }
-
-    // 3b. Update NamedResource.startWeek for ramp-up (only when > 0 to avoid
-    //     accidentally zeroing out NRs that were already at week 0)
-    for (const [rtId, startWeek] of startWeekMap) {
-      if (startWeek > 0) {
-        await tx.namedResource.updateMany({
-          where: {
-            resourceTypeId: rtId,
-            resourceType: { projectId },
-          },
-          data: { startWeek },
-        })
-      }
-    }
-
-    // 3c. Prepare updated SchedulerInput with new counts AND new namedResource startWeeks.
-    // Fix: the DB is updated in 3b but the in-memory schedulerInput still holds the old
-    // startWeek values loaded before the transaction — override them here so the scheduler
-    // call materialises the timeline with the correct ramp-up start week.
-    const updatedRTs = schedulerInput.resourceTypes.map(rt => {
-      const newCount = countMap.get(rt.id) ?? rt.count
-      const newStartWeek = startWeekMap.get(rt.id)
-      return {
-        ...rt,
-        count: newCount,
-        namedResources: newStartWeek !== undefined && newStartWeek > 0
-          ? rt.namedResources.map(nr => ({ ...nr, startWeek: newStartWeek }))
-          : rt.namedResources,
-      }
-    }) as SchedulerResourceType[]
-
-    const { featureSchedule, storySchedule } = runScheduler({
-      ...schedulerInput,
-      resourceTypes: updatedRTs,
-      resourceLevel: false,
-    })
-
-    // 3d. Rewrite non-manual timeline entries (preserve manual pins)
-    await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
-    const featureRows = featureSchedule
-      .filter(e => !e.isManual)
-      .map(e => ({
-        projectId,
-        featureId: e.featureId,
-        startWeek: e.startWeek,
-        durationWeeks: e.durationWeeks,
-        isManual: false,
-      }))
-    if (featureRows.length > 0) {
-      await tx.timelineEntry.createMany({ data: featureRows, skipDuplicates: true })
-    }
-
-    // 3e. Rewrite non-manual story entries
-    await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
-    const storyRows = storySchedule
-      .filter(e => !e.isManual)
-      .map(e => ({
-        projectId,
-        storyId: e.storyId,
-        startWeek: e.startWeek,
-        durationWeeks: e.durationWeeks,
-        isManual: false,
-      }))
-    if (storyRows.length > 0) {
-      await tx.storyTimelineEntry.createMany({ data: storyRows, skipDuplicates: true })
-    }
-  })
-
-  // Scheduler rewrite invalidates cached demand — clear to force recompute
-  await prisma.project.update({
-    where: { id: projectId },
-    data: { weeklyDemandCache: {} },
-  })
-
-
-  // ── 4. Optional: stagger epics to level demand ────────────────────────────
-  let levellingResult: { epicStartWeeks: Map<string, number>; featureStartWeeks: Map<string, number>; totalDeliveryWeeks: number; peakUtilisationPct: number } | null = null
-
-  if (staggerEpics) {
-    // Re-load scheduler input (counts/NRs are now updated in DB)
-    const updatedInput = await loadSchedulerInput(projectId, project.hoursPerDay)
-
-    // Use SA planner for optimised staggering
-    const saResult = runSAPlanner(updatedInput, {
-      targetDurationWeeks: updatedInput.epics.length * 13, // reasonable default
-      maxParallelismPerFeature: 2,
-    })
-    levellingResult = {
-      epicStartWeeks: saResult.epicStartWeeks,
-      featureStartWeeks: saResult.featureStartWeeks,
-      totalDeliveryWeeks: saResult.totalDeliveryWeeks,
-      peakUtilisationPct: saResult.peakUtilisationPct,
-    }
-
-    // Persist levelled start weeks
-    await Promise.all(
-      Array.from(levellingResult.epicStartWeeks.entries()).map(([epicId, startWeek]) =>
-        prisma.epic.update({ where: { id: epicId }, data: { timelineStartWeek: startWeek } })
-      )
-    )
-
-    // Re-run scheduler with levelled start weeks and re-materialise
-    const levelledEpics = updatedInput.epics.map(e => ({
-      ...e,
-      timelineStartWeek: levellingResult!.epicStartWeeks.get(e.id) ?? e.timelineStartWeek,
-    }))
-
-    const { featureSchedule: lfs, storySchedule: lss } = runScheduler({
-      ...updatedInput,
-      epics: levelledEpics,
-    })
-    await prisma.$transaction(async tx => {
-      await tx.timelineEntry.deleteMany({ where: { projectId, isManual: false } })
-      const fRows = lfs
-        .filter(e => !e.isManual)
-        .map(e => ({ projectId, featureId: e.featureId, startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: false }))
-      if (fRows.length > 0) await tx.timelineEntry.createMany({ data: fRows, skipDuplicates: true })
-
-      await tx.storyTimelineEntry.deleteMany({ where: { projectId, isManual: false } })
-      const sRows = lss
-        .filter(e => !e.isManual)
-        .map(e => ({ projectId, storyId: e.storyId, startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: false }))
-      if (sRows.length > 0) await tx.storyTimelineEntry.createMany({ data: sRows, skipDuplicates: true })
-    })
-
-    // Staggered level rewrite invalidates cached demand
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { weeklyDemandCache: {} },
-    })
+    throw error
   }
-
-
-  const responseBody: {
-    message: string
-    snapshotId: string
-    levellingResult?: { epicStartWeeks: Record<string, number>; totalDeliveryWeeks: number; peakUtilisationPct: number }
-  } = {
-    message: 'Optimiser scenario applied successfully',
-    snapshotId: snap.id,
-  }
-
-  if (levellingResult) {
-    responseBody.levellingResult = {
-      epicStartWeeks: Object.fromEntries(levellingResult.epicStartWeeks),
-      totalDeliveryWeeks: levellingResult.totalDeliveryWeeks,
-      peakUtilisationPct: levellingResult.peakUtilisationPct,
-    }
-  }
-
-  res.status(200).json(responseBody)
 }))
 
 // ─────────────────────────────────────────────────────────────────────────────

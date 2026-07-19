@@ -25,15 +25,15 @@ import {
   type SchedulerResourceType,
 } from '../lib/scheduler.js'
 
-vi.mock('../routes/snapshots.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../routes/snapshots.js')>()
+vi.mock('../lib/projectSnapshotService.js', async importOriginal => {
+  const actual = await importOriginal() as Record<string, unknown>
   return {
     ...actual,
     buildSnapshot: vi.fn().mockResolvedValue({}),
   }
 })
 
-import { buildSnapshot } from '../routes/snapshots.js'
+import { buildSnapshot } from '../lib/projectSnapshotService.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test helpers — mirrors scheduler.test.ts conventions
@@ -966,6 +966,37 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
     expect(res.body.error).toBe('Invalid resourceTypes element')
   })
 
+  it('returns 400 when suggestedStartWeek is fractional', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [
+          { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 1.5 },
+        ],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid resourceTypes element')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when candidate resource IDs are duplicated', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [
+          { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 },
+          { resourceTypeId: 'rt-1', count: 3, suggestedStartWeek: 2 },
+        ],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Duplicate resourceTypeId in resourceTypes array')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+  })
+
   it('returns 400 before snapshotting when a candidate resource type is outside the project', async () => {
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-1' }] as never)
 
@@ -1029,11 +1060,20 @@ describe('POST /api/projects/:projectId/optimise — count range validation', ()
 describe('POST /api/projects/:projectId/optimise/apply — buildSnapshot rejection', () => {
   beforeEach(() => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([] as never)
   })
 
   it('returns 500 when buildSnapshot rejects, preventing snapshot persistence and mutation', async () => {
-    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-1' }] as never)
+    vi.mocked(buildSnapshot).mockClear()
+    vi.mocked(prisma.resourceType.findMany)
+      .mockResolvedValueOnce([{ id: 'rt-1' }] as never)
+      .mockResolvedValueOnce([{ id: 'rt-1', name: 'Developer', count: 2 }] as never)
     vi.mocked(buildSnapshot).mockRejectedValueOnce(new Error('Snapshot null-state rejection'))
+    vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: unknown) => {
+      return (fn as (tx: typeof prisma) => Promise<unknown>)(prisma)
+    })
 
     const res = await request(app)
       .post(`/api/projects/${projectId}/optimise/apply`)
@@ -1045,6 +1085,63 @@ describe('POST /api/projects/:projectId/optimise/apply — buildSnapshot rejecti
       })
 
     expect(res.status).toBe(500)
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).toHaveBeenCalledOnce()
+  })
+})
+
+describe('POST /api/projects/:projectId/optimise/apply — protected preflight', () => {
+  it('returns a stable 409 before snapshotting for explicit scalar capacity', async () => {
+    vi.mocked(prisma.$transaction).mockClear()
+    vi.mocked(buildSnapshot).mockClear()
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany)
+      .mockResolvedValueOnce([{ id: 'rt-1' }] as never)
+      .mockResolvedValueOnce([{ id: 'rt-1', name: 'Developer', count: 2 }] as never)
+    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([{
+      id: 'nr-1',
+      name: 'Alice',
+      resourceTypeId: 'rt-1',
+      startWeek: 1,
+      endWeek: 10,
+      allocationPct: 80,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationStartWeek: 1,
+      allocationEndWeek: 10,
+    }] as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.capacityProfile.findMany)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([{
+        id: 'profile-explicit',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'MANUAL',
+        namedResourceId: 'nr-1',
+        resourceTypeId: null,
+        defaultPercent: 80,
+        startWeek: 1,
+        endWeek: 10,
+        legacy: null,
+        segments: [],
+      }] as never)
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 4 }],
+      })
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('OPTIMISER_APPLY_CONFLICT')
+    expect(res.body.conflicts).toEqual([{
+      code: 'EXPLICIT_SCALAR_PROTECTED',
+      resourceTypeName: 'Developer',
+      namedResourceName: 'Alice',
+    }])
+    expect(buildSnapshot).not.toHaveBeenCalled()
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
     expect(prisma.$transaction).not.toHaveBeenCalled()
   })

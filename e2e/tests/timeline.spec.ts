@@ -393,25 +393,25 @@ test.describe('Starting Team Finder drawer — with resources', () => {
     await expect(drawer.getByRole('button', { name: /apply directly/i }).first()).toBeVisible()
   })
 
-  test('apply button is present on candidate cards, dialog is dismissed without mutation', async ({ page }) => {
+  test('apply candidate persists through the direct-apply workflow', async ({ page }) => {
     const drawer = await openStartingTeamFinder(page)
 
     await drawer.getByRole('button', { name: /find starting teams/i }).click()
     await expect(drawer.getByText(/Evaluated [\d,]+ team options/)).toBeVisible({ timeout: 30_000 })
-    const startingTeamOptions = drawer.locator('div').filter({ hasText: /^Starting team options$/ }).first()
-    await expect(startingTeamOptions).toBeVisible()
+    const applyButton = drawer.getByRole('button', { name: /apply directly/i }).first()
+    await expect(applyButton).toBeVisible()
 
-    // Each candidate card has a visible Apply directly button
-    const applyButtons = drawer.getByRole('button', { name: /apply directly/i })
-    const count = await applyButtons.count()
-    expect(count).toBeGreaterThan(0)
+    const applyResponse = page.waitForResponse(
+      response => response.url().includes('/optimise/apply') && response.request().method() === 'POST',
+      { timeout: 15_000 },
+    )
+    page.once('dialog', dialog => dialog.accept())
+    await applyButton.click()
 
-    // Click Apply on the first card but DISMISS the confirm dialog so no data is mutated
-    page.once('dialog', dialog => dialog.dismiss())
-    await applyButtons.first().click()
-
-    // Drawer must still be open (apply was aborted by the user)
-    await expect(drawer).toBeVisible({ timeout: 5_000 })
+    const response = await applyResponse
+    expect(response.status()).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ snapshotId: expect.any(String) })
+    await expect(drawer).not.toBeVisible({ timeout: 10_000 })
   })
 })
 

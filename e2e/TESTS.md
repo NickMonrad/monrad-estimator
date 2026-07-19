@@ -108,7 +108,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (15 tests)
+### `timeline.spec.ts` — Timeline (16 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -125,7 +125,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 |------|-------------|
 | open and close the drawer | Navigates to a Timeline page, clicks `🔧 Starting Team Finder`, asserts the drawer dialog with accessible name and heading "Starting Team Finder" is visible, clicks the Close (×) button, asserts drawer is removed from the DOM |
 
-#### `Starting Team Finder drawer — with resources` describe block (2 tests — Phase 4, issue #233)
+#### `Starting Team Finder drawer — with resources` describe block (3 tests — Phase 4, issue #233)
 
 `beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import, navigates to Timeline, and runs Quick schedule. Each test has a 90 s timeout.
 
@@ -133,6 +133,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 |------|-------------|
 | run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
 | apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts the exact `Starting team options` section label and that candidate cards expose `Apply directly` buttons, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
+| apply candidate persists through the direct-apply workflow | Runs the finder, applies the first candidate, verifies the `POST /optimise/apply` response returns a snapshot ID, and asserts the drawer closes only after the profile-first direct apply succeeds |
 
 #### `Timeline — Resource-counts layout` describe block (3 tests — issue #369)
 
