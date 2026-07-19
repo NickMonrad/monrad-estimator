@@ -5,11 +5,12 @@ Repository-wide implementation and review rules are defined in `.github/instruct
 ## Branching strategy
 
 - `main` is the stable, reviewed branch.
-- Start each piece of work from the latest `main`.
+- For new issue work, start a new issue branch from the latest `main`.
+- For remediation of an existing pull request, fetch and inspect the latest PR head and continue on the existing PR branch. Do not create a replacement branch, retarget the PR, rebase, force-push, or rewrite shared history unless explicitly requested.
 - Target `main` directly; do not chain feature branches.
 - Use one branch per issue or independently reviewable work item.
 
-Branch names:
+Branch names for new work:
 
 ```text
 feature/<issue>-<slug>
@@ -24,18 +25,31 @@ feature/365-agent-instruction-hardening
 fix/353-windows-e2e-runner
 ```
 
+## Worktrees
+
+Implementation and pull-request remediation must use a dedicated Git worktree so concurrent work does not interfere.
+
+- Verify the selected worktree and branch before editing.
+- Reuse an existing dedicated worktree when it already owns the branch.
+- Do not modify, clean, reset, delete, or otherwise disturb another contributor's or agent's worktree.
+- Leave the worktree clean after the intended changes are committed and pushed.
+
 ## Pull-request process
 
-1. Confirm the issue scope and acceptance criteria.
-2. Implement the smallest complete change and add appropriate tests.
-3. Run the repository validation contract.
-4. Update affected documentation and screenshots.
-5. Raise a PR against `main` using `.github/pull_request_template.md`.
-6. Include `Closes #N` in the PR body.
-7. Wait for human review and approval.
-8. The repository owner merges the PR.
+1. Confirm the issue scope, acceptance criteria, approved design, and exclusions.
+2. Confirm whether the task is new work or remediation of an existing PR and select the correct branch and dedicated worktree.
+3. Implement the smallest complete change and add appropriate tests.
+4. Run the repository validation contract.
+5. Update affected documentation and screenshots.
+6. Review the final diff against the original issue and acceptance criteria.
+7. Commit only the intended changes and push them to the correct branch.
+8. Raise or update the PR against `main` using `.github/pull_request_template.md`.
+9. Include `Closes #N` in the PR body for new issue work.
+10. Confirm the remote branch contains the final commit, record the commit SHA and PR URL, and leave the worktree clean.
+11. Wait for human review and approval.
+12. The repository owner merges the PR.
 
-Contributors and agents must not push directly to `main`, merge their own PR, enable auto-merge, approve their own PR, or bypass required checks.
+Incomplete, uncommitted, or unpushed work must be reported as incomplete. Contributors and agents must not push directly to `main`, merge their own PR, enable auto-merge, approve their own PR, force-push shared history without explicit approval, or bypass required checks.
 
 ## Commit messages
 
@@ -131,9 +145,15 @@ Update documentation when behaviour, setup, architecture, commands, or supported
 
 ## Review standard
 
+Before reviewing, inspect the latest PR head and read the issue, acceptance criteria, approved design, agreed exclusions, prior required feedback, and relevant CI results. Verify that earlier findings still exist before repeating them.
+
 Every review includes:
 
 1. a correctness pass covering behaviour, security, data safety, tests, accessibility, UX, and API contracts
 2. a simplicity pass covering unnecessary abstraction, duplicated state, unused flexibility, new dependencies, and code that can be deleted
+
+Classify findings as `Blocking defect`, `Required completion`, or `Optional follow-up`. Only the first two block merge. Optional follow-ups must remain explicitly non-blocking and must not be included in required remediation or agent prompts.
+
+Stop once the approved scope is correctly implemented, adequately tested, and acceptably structured. End with exactly one verdict: `Ready to merge`, `Ready to merge once CI passes`, or `Changes required`.
 
 See `.github/instructions/simplicity-review.instructions.md` for the complete review procedure.
