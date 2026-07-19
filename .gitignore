@@ -10,3 +10,4 @@ server/uploads/generated/*
 !server/uploads/generated/.gitkeep
 backups/
 test-results/
+xd/

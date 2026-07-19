@@ -243,37 +243,14 @@ afterAll(async () => {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+function canonicalize<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value))
+}
+
 type CanonicalGuardState = {
-  nr: {
-    id: string
-    name: string
-    pricingModel: string
-    allocationMode: string
-    allocationPercent: number
-    allocationPct: number
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
-    startWeek: number | null
-    endWeek: number | null
-  } | null
-  profile: {
-    id: string
-    namedResourceId: string | null
-    resourceTypeId: string | null
-    ownerKind: string | null
-    planningBasis: string | null
-    source: string | null
-    defaultPercent: number | null
-    startWeek: number | null
-    endWeek: number | null
-  } | null
-  segments: Array<{
-    id: string
-    startWeek: number
-    endWeek: number
-    capacityPercent: number
-    source: string
-  }>
+  nr: Record<string, unknown> | null
+  profile: Record<string, unknown> | null
+  segments: Record<string, unknown>[]
   cache: unknown
 }
 
@@ -283,58 +260,49 @@ async function readCanonicalState(nrId: string, profileId: string): Promise<Cano
   const profile = await prisma.capacityProfile.findFirst({ where: { id: profileId } })
   const segments = await prisma.capacitySegment.findMany({
     where: { capacityProfileId: profileId },
-    orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }],
+    orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }, { id: 'asc' }],
   })
-  const cache = await prisma.project.findFirst({
+  const cacheRow = await prisma.project.findFirst({
     where: { id: projectId },
     select: { weeklyDemandCache: true },
   })
-  return { nr, profile, segments, cache: cache?.weeklyDemandCache }
+  return {
+    nr: canonicalize(nr ?? null),
+    profile: canonicalize(profile ?? null),
+    segments: canonicalize(segments),
+    cache: cacheRow?.weeklyDemandCache ?? null,
+  }
 }
 
 /**
- * Assert that a rejected (409) request preserved the FULL canonical state
- * — named resource, profile, ordered segments, AND weeklyDemandCache —
- * exactly as it was before the request.
- *
- * The 409 guard runs before any writes or cache invalidation, so rejected
- * requests must leave every database field untouched.
+ * Write a deterministic non-empty weeklyDemandCache value keyed by a
+ * per-test marker, so each rejected test independently proves the cache
+ * was preserved.
+ */
+async function seedDistinctWeeklyDemandCache(marker: string) {
+  const value = { [`${rtId}|${marker}`]: 42.5 }
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { weeklyDemandCache: value },
+  })
+  return value
+}
+
+/**
+ * Assert that a rejected (409) request preserved the FULL canonical state.
+ * Every persisted field — including createdAt, updatedAt, projectId,
+ * resourceTypeId, namedResourceId — must be identical after a rejected
+ * request, because the guard rejects before any writes or cache invalidation.
  */
 function expectRejectedStateUnchanged(before: CanonicalGuardState, after: CanonicalGuardState) {
-  // Named resource (excluding volatile timestamps)
-  if (before.nr && after.nr) {
-    const { createdAt: _bc, updatedAt: _bu, ...beforeClean } = before.nr as any
-    const { createdAt: _ac, updatedAt: _au, ...afterClean } = after.nr as any
-    expect(afterClean).toEqual(beforeClean)
-  }
-
-  // Profile identity and metadata
-  expect(after.profile?.id).toBe(before.profile?.id)
-  expect(after.profile?.ownerKind).toBe(before.profile?.ownerKind)
-  expect(after.profile?.planningBasis).toBe(before.profile?.planningBasis)
-  expect(after.profile?.source).toBe(before.profile?.source)
-  expect(after.profile?.defaultPercent).toBe(before.profile?.defaultPercent)
-  expect(after.profile?.startWeek).toBe(before.profile?.startWeek)
-  expect(after.profile?.endWeek).toBe(before.profile?.endWeek)
-
-  // Ordered segments — exact id and every field
-  expect(after.segments).toHaveLength(before.segments.length)
-  for (let i = 0; i < before.segments.length; i++) {
-    expect(after.segments[i].id).toBe(before.segments[i].id)
-    expect(after.segments[i].startWeek).toBe(before.segments[i].startWeek)
-    expect(after.segments[i].endWeek).toBe(before.segments[i].endWeek)
-    expect(after.segments[i].capacityPercent).toBe(before.segments[i].capacityPercent)
-    expect(after.segments[i].source).toBe(before.segments[i].source)
-  }
-
-  // weeklyDemandCache must be preserved exactly — the guard rejects
-  // before any write or cache invalidation can occur.
-  expect(JSON.stringify(after.cache)).toBe(JSON.stringify(before.cache))
+  expect(after).toEqual(before)
 }
 
 /**
- * Assert that exactly one named-resource field changed and everything
- * else — profile, segments, cache — is preserved identically.
+ * Assert that a successful named-resource update changed exactly the
+ * intended field. The named-resource updatedAt may legitimately change;
+ * all other records (profile, segments) must be untouched. Cache is
+ * project-wide and may be invalidated by sync side effects.
  */
 function expectOnlyNamedResourceFieldChanged(
   before: CanonicalGuardState,
@@ -343,21 +311,23 @@ function expectOnlyNamedResourceFieldChanged(
   expectedValue: string,
 ) {
   // The specified field has the expected new value
-  expect(after.nr?.[field]).toBe(expectedValue)
+  expect((after.nr as any)?.[field]).toBe(expectedValue)
 
-  // Compare named-resource fields excluding volatile timestamps
+  // Compare named-resource fields excluding volatile updatedAt
   if (before.nr && after.nr) {
-    const { createdAt: _bc, updatedAt: _bu, ...beforeClean } = before.nr as any
-    const { createdAt: _ac, updatedAt: _au, ...afterClean } = after.nr as any
-    afterClean[field] = before.nr[field]
+    const { updatedAt: _bu, ...beforeClean } = before.nr as any
+    const { updatedAt: _au, ...afterClean } = after.nr as any
+    // Reset the changed field to its before value so we can assert
+    // that nothing else changed.
+    afterClean[field] = (before.nr as any)[field]
     expect(afterClean).toEqual(beforeClean)
   }
 
   // Profile and segments are completely unchanged
   expect(after.profile).toEqual(before.profile)
   expect(after.segments).toEqual(before.segments)
-  // NOTE: Cache is project-wide and may change due to sync side effects;
-  // the caller may optionally verify cache separately.
+  // NOTE: Cache is project-wide and may be invalidated by successful
+  // writes; the caller may optionally verify cache separately.
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -365,16 +335,15 @@ function expectOnlyNamedResourceFieldChanged(
 describeIf('Named-resource guard (real PostgreSQL)', () => {
   const base = () => `/api/projects/${projectId}/resource-types/${rtId}/named-resources`
   const namedUrl = (nrId: string) => `${base()}/${nrId}`
-  let initialSegState: CanonicalGuardState
-
-  // Snapshot initial state before any tests mutate
-  beforeAll(async () => {
-    initialSegState = await readCanonicalState(segmentedNrId, segmentedProfileId)
-  })
 
   // ── A. Rejected mixed-field PUT ─────────────────────────────────────────
 
   it('A: PUT with name + pricing + capacity fields → 409, exact state preserved (segmented NAMED_PERSON)', async () => {
+    seedDistinctWeeklyDemandCache('A')
+    const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
+    // Verify the cache is non-empty
+    expect(before.cache).toEqual({ [`${rtId}|A`]: 42.5 })
+
     const res = await request(app)
       .put(namedUrl(segmentedNrId))
       .set('Authorization', authHeader)
@@ -390,10 +359,14 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    expectRejectedStateUnchanged(initialSegState, after)
+    expectRejectedStateUnchanged(before, after)
   })
 
   it('B: PATCH with scalar capacity → 409, exact state preserved (segmented NAMED_PERSON)', async () => {
+    seedDistinctWeeklyDemandCache('B')
+    const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
+    expect(before.cache).toEqual({ [`${rtId}|B`]: 42.5 })
+
     const res = await request(app)
       .patch(namedUrl(segmentedNrId))
       .set('Authorization', authHeader)
@@ -406,11 +379,13 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    expectRejectedStateUnchanged(initialSegState, after)
+    expectRejectedStateUnchanged(before, after)
   })
 
   // ── C. Safe name-only PUT ───────────────────────────────────────────────
   it('C: PUT with name only → 200, only name changes (segmented NAMED_PERSON)', async () => {
+    const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
+
     const res = await request(app)
       .put(namedUrl(segmentedNrId))
       .set('Authorization', authHeader)
@@ -420,8 +395,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.name).toBe('Segmented Alice Renamed')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    // Only name changed — everything else exact
-    expectOnlyNamedResourceFieldChanged(initialSegState, after, 'name', 'Segmented Alice Renamed')
+    expectOnlyNamedResourceFieldChanged(before, after, 'name', 'Segmented Alice Renamed')
 
     // Reset name for other tests
     await prisma.namedResource.update({
@@ -431,6 +405,8 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
   })
 
   it('D: PUT with pricingModel only → 200, only pricingModel changes (segmented NAMED_PERSON)', async () => {
+    const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
+
     const res = await request(app)
       .put(namedUrl(segmentedNrId))
       .set('Authorization', authHeader)
@@ -439,8 +415,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.body.pricingModel).toBe('PRO_RATA')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
-    // Only pricingModel changed — everything else exact
-    expectOnlyNamedResourceFieldChanged(initialSegState, after, 'pricingModel', 'PRO_RATA')
+    expectOnlyNamedResourceFieldChanged(before, after, 'pricingModel', 'PRO_RATA')
 
     // Reset pricing for other tests
     await prisma.namedResource.update({
@@ -451,12 +426,14 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
 
   // ── E. Segmentless CAPACITY_PROFILE PUT/PATCH ───────────────────────────
 
-  it('E1: PUT with capacity fields → 409 (segmentless CAPACITY_PROFILE)', async () => {
+  it('E1: PUT with capacity fields → 409, cache preserved (segmentless CAPACITY_PROFILE)', async () => {
+    // Reseed with a distinct marker so this test proves cache preservation
+    // independently — it does not rely on cache state left by earlier tests.
+    seedDistinctWeeklyDemandCache('E1')
     const capBase = `/api/projects/${projectId}/resource-types/${defaultRtId}/named-resources`
-    // Capture state inline — successful earlier tests (C, D) may have
-    // invalidated the project-wide cache, so the initial snapshot from
-    // beforeAll no longer reflects current cache state.
     const before = await readCanonicalState(capProfileNrId, capProfileProfileId)
+    expect(before.cache).toEqual({ [`${rtId}|E1`]: 42.5 })
+
     const res = await request(app)
       .put(`${capBase}/${capProfileNrId}`)
       .set('Authorization', authHeader)
@@ -471,10 +448,12 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expectRejectedStateUnchanged(before, after)
   })
 
-  it('E2: PATCH with scalar capacity → 409 (segmentless CAPACITY_PROFILE)', async () => {
+  it('E2: PATCH with scalar capacity → 409, cache preserved (segmentless CAPACITY_PROFILE)', async () => {
+    seedDistinctWeeklyDemandCache('E2')
     const capBase = `/api/projects/${projectId}/resource-types/${defaultRtId}/named-resources`
-    // Capture state inline — same reason as E1
     const before = await readCanonicalState(capProfileNrId, capProfileProfileId)
+    expect(before.cache).toEqual({ [`${rtId}|E2`]: 42.5 })
+
     const res = await request(app)
       .patch(`${capBase}/${capProfileNrId}`)
       .set('Authorization', authHeader)
