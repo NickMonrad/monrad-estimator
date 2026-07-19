@@ -339,7 +339,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
   // ── A. Rejected mixed-field PUT ─────────────────────────────────────────
 
   it('A: PUT with name + pricing + capacity fields → 409, exact state preserved (segmented NAMED_PERSON)', async () => {
-    seedDistinctWeeklyDemandCache('A')
+    await seedDistinctWeeklyDemandCache('A')
     const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
     // Verify the cache is non-empty
     expect(before.cache).toEqual({ [`${rtId}|A`]: 42.5 })
@@ -363,7 +363,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
   })
 
   it('B: PATCH with scalar capacity → 409, exact state preserved (segmented NAMED_PERSON)', async () => {
-    seedDistinctWeeklyDemandCache('B')
+    await seedDistinctWeeklyDemandCache('B')
     const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
     expect(before.cache).toEqual({ [`${rtId}|B`]: 42.5 })
 
@@ -429,7 +429,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
   it('E1: PUT with capacity fields → 409, cache preserved (segmentless CAPACITY_PROFILE)', async () => {
     // Reseed with a distinct marker so this test proves cache preservation
     // independently — it does not rely on cache state left by earlier tests.
-    seedDistinctWeeklyDemandCache('E1')
+    await seedDistinctWeeklyDemandCache('E1')
     const capBase = `/api/projects/${projectId}/resource-types/${defaultRtId}/named-resources`
     const before = await readCanonicalState(capProfileNrId, capProfileProfileId)
     expect(before.cache).toEqual({ [`${rtId}|E1`]: 42.5 })
@@ -449,7 +449,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
   })
 
   it('E2: PATCH with scalar capacity → 409, cache preserved (segmentless CAPACITY_PROFILE)', async () => {
-    seedDistinctWeeklyDemandCache('E2')
+    await seedDistinctWeeklyDemandCache('E2')
     const capBase = `/api/projects/${projectId}/resource-types/${defaultRtId}/named-resources`
     const before = await readCanonicalState(capProfileNrId, capProfileProfileId)
     expect(before.cache).toEqual({ [`${rtId}|E2`]: 42.5 })
