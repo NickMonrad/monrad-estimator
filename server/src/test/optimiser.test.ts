@@ -998,7 +998,12 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
   })
 
   it('returns 400 before snapshotting when a candidate resource type is outside the project', async () => {
-    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-1' }] as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-1', name: 'Developer', count: 2,
+    }] as never)
+    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([] as never)
 
     const res = await request(app)
       .post(`/api/projects/${projectId}/optimise/apply`)
@@ -1008,10 +1013,25 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
           { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 },
           { resourceTypeId: 'rt-foreign', count: 1, suggestedStartWeek: 2 },
         ],
+        rampUpScopeResourceTypeIds: ['rt-1'],
       })
 
     expect(res.status).toBe(400)
     expect(res.body.error).toBe('All candidate resource types must belong to this project')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects an invalid ramp-up scope before mutation', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 }],
+        rampUpScopeResourceTypeIds: ['rt-foreign'],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('rampUpScopeResourceTypeIds must be unique candidate resource type IDs')
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
   })
 })
@@ -1067,9 +1087,9 @@ describe('POST /api/projects/:projectId/optimise/apply — buildSnapshot rejecti
 
   it('returns 500 when buildSnapshot rejects, preventing snapshot persistence and mutation', async () => {
     vi.mocked(buildSnapshot).mockClear()
-    vi.mocked(prisma.resourceType.findMany)
-      .mockResolvedValueOnce([{ id: 'rt-1' }] as never)
-      .mockResolvedValueOnce([{ id: 'rt-1', name: 'Developer', count: 2 }] as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-1', name: 'Developer', count: 2,
+    }] as never)
     vi.mocked(buildSnapshot).mockRejectedValueOnce(new Error('Snapshot null-state rejection'))
     vi.mocked(prisma.$transaction).mockImplementationOnce(async (fn: unknown) => {
       return (fn as (tx: typeof prisma) => Promise<unknown>)(prisma)
@@ -1082,6 +1102,7 @@ describe('POST /api/projects/:projectId/optimise/apply — buildSnapshot rejecti
         resourceTypes: [
           { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 },
         ],
+        rampUpScopeResourceTypeIds: [],
       })
 
     expect(res.status).toBe(500)
@@ -1095,9 +1116,9 @@ describe('POST /api/projects/:projectId/optimise/apply — protected preflight',
     vi.mocked(prisma.$transaction).mockClear()
     vi.mocked(buildSnapshot).mockClear()
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
-    vi.mocked(prisma.resourceType.findMany)
-      .mockResolvedValueOnce([{ id: 'rt-1' }] as never)
-      .mockResolvedValueOnce([{ id: 'rt-1', name: 'Developer', count: 2 }] as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{
+      id: 'rt-1', name: 'Developer', count: 2,
+    }] as never)
     vi.mocked(prisma.namedResource.findMany).mockResolvedValue([{
       id: 'nr-1',
       name: 'Alice',
@@ -1132,6 +1153,7 @@ describe('POST /api/projects/:projectId/optimise/apply — protected preflight',
       .set('Authorization', authHeader)
       .send({
         resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 4 }],
+        rampUpScopeResourceTypeIds: ['rt-1'],
       })
 
     expect(res.status).toBe(409)

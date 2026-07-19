@@ -23,6 +23,8 @@ import {
 import { runSAPlanner } from './sa-planner.js'
 
 export type PrismaTransactionClient = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0]
+type OptimiserApplyPlanDb = Pick<PrismaClient,
+  'resourceType' | 'namedResource' | 'capacityPlan' | 'capacityProfile'>
 
 export interface ApplyCandidateResourceType {
   resourceTypeId: string
@@ -73,6 +75,9 @@ export type OptimiserRampUpClassification =
   | { outcome: 'PLANNER_MANAGED_PROTECTED' }
   | { outcome: 'AMBIGUOUS_OR_DUPLICATE' }
 
+type OptimiserWritableRampUpClassification = Extract<OptimiserRampUpClassification,
+  { outcome: 'NO_PROFILE' | 'LEGACY_MAPPER_SCALAR' | 'OPTIMISER_DERIVED_SCALAR' }>
+
 export interface RampUpProfileWrite {
   profileId: string | null
   namedResourceId: string
@@ -103,6 +108,8 @@ export interface ApplyOptimiserCandidateParams {
   projectId: string
   userId: string
   candidate: ApplyCandidateResourceType[]
+  /** Resource types covered by the count ranges used to generate the candidate. */
+  rampUpScopeResourceTypeIds: readonly string[]
   staggerEpics?: boolean
 }
 
@@ -123,6 +130,17 @@ export class OptimiserApplyConflictError extends Error {
     super(conflicts.map(conflict => conflict.message).join('; '))
     this.name = 'OptimiserApplyConflictError'
   }
+}
+
+/**
+ * Recognises service conflicts across duplicate module instances in test and
+ * runtime loaders. The route deliberately maps only this fixed error shape.
+ */
+export function isOptimiserApplyConflictError(error: unknown): error is OptimiserApplyConflictError {
+  if (error instanceof OptimiserApplyConflictError) return true
+  if (!(error instanceof Error) || error.name !== 'OptimiserApplyConflictError') return false
+  if (!isRecord(error) || error.code !== 'OPTIMISER_APPLY_CONFLICT') return false
+  return Array.isArray(error.conflicts)
 }
 
 export const RESOURCE_OPTIMISER_PROFILE_PROVENANCE = Object.freeze({
@@ -147,18 +165,32 @@ const MAPPER_KEYS = [
   'endWeek',
 ] as const
 
-function isNullableFinite(value: unknown): boolean {
-  return value == null || (typeof value === 'number' && Number.isFinite(value))
+function isNullableFinite(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isFinite(value))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function readNullableFiniteLegacyValue(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key]
+  if (!isNullableFinite(value)) throw new TypeError(`Expected ${key} to be a finite number or null`)
+  return value
+}
+
+function hasValidAvailabilityWindow(profile: Pick<PersistedOptimiserProfile, 'defaultPercent' | 'startWeek' | 'endWeek'>): boolean {
+  return Number.isFinite(profile.defaultPercent)
+    && isNullableFinite(profile.startWeek)
+    && isNullableFinite(profile.endWeek)
+    && (profile.startWeek == null || profile.endWeek == null || profile.startWeek <= profile.endWeek)
+}
+
 /** Proves that a scalar NAMED_PERSON profile came from the legacy mapper. */
 export function isValidNamedResourceMapperProvenance(profile: PersistedOptimiserProfile): boolean {
   if (profile.ownerKind !== 'NAMED_PERSON') return false
   if (profile.namedResourceId == null || profile.resourceTypeId != null) return false
+  if (!hasValidAvailabilityWindow(profile)) return false
   if (!isRecord(profile.legacy)) return false
 
   for (const key of MAPPER_KEYS) {
@@ -178,15 +210,15 @@ export function isValidNamedResourceMapperProvenance(profile: PersistedOptimiser
     if (!isNullableFinite(profile.legacy[key])) return false
   }
 
-  const expectedPercent = (profile.legacy.allocationPercent
-    ?? profile.legacy.allocationPct
-    ?? 100) as number
-  const expectedStart = (profile.legacy.allocationStartWeek
-    ?? profile.legacy.startWeek
-    ?? null) as number | null
-  const expectedEnd = (profile.legacy.allocationEndWeek
-    ?? profile.legacy.endWeek
-    ?? null) as number | null
+  const expectedPercent = readNullableFiniteLegacyValue(profile.legacy, 'allocationPercent')
+    ?? readNullableFiniteLegacyValue(profile.legacy, 'allocationPct')
+    ?? 100
+  const expectedStart = readNullableFiniteLegacyValue(profile.legacy, 'allocationStartWeek')
+    ?? readNullableFiniteLegacyValue(profile.legacy, 'startWeek')
+    ?? null
+  const expectedEnd = readNullableFiniteLegacyValue(profile.legacy, 'allocationEndWeek')
+    ?? readNullableFiniteLegacyValue(profile.legacy, 'endWeek')
+    ?? null
 
   return profile.defaultPercent === expectedPercent
     && profile.startWeek === expectedStart
@@ -199,6 +231,7 @@ function isOptimiserDerivedProfile(profile: PersistedOptimiserProfile): boolean 
     && profile.resourceTypeId == null
     && profile.source === 'DERIVED'
     && profile.planningBasis === 'AVAILABILITY_WINDOW'
+    && hasValidAvailabilityWindow(profile)
     && isRecord(profile.legacy)
     && profile.legacy.writer === RESOURCE_OPTIMISER_PROFILE_PROVENANCE.writer
     && profile.legacy.version === RESOURCE_OPTIMISER_PROFILE_PROVENANCE.version
@@ -235,6 +268,14 @@ export function classifyOptimiserRampUpOwner(
     return { outcome: 'OPTIMISER_DERIVED_SCALAR', profileId: profile.id }
   }
   return { outcome: 'EXPLICIT_SCALAR_PROTECTED' }
+}
+
+function isOptimiserWritableRampUpClassification(
+  classification: OptimiserRampUpClassification,
+): classification is OptimiserWritableRampUpClassification {
+  return classification.outcome === 'NO_PROFILE'
+    || classification.outcome === 'LEGACY_MAPPER_SCALAR'
+    || classification.outcome === 'OPTIMISER_DERIVED_SCALAR'
 }
 
 function effectiveCurrentStart(
@@ -275,8 +316,7 @@ function effectiveScalarEnd(
 }
 
 export function buildOptimiserRampUpProfileWrite(
-  classification: Extract<OptimiserRampUpClassification,
-    { outcome: 'NO_PROFILE' | 'LEGACY_MAPPER_SCALAR' | 'OPTIMISER_DERIVED_SCALAR' }>,
+  classification: OptimiserWritableRampUpClassification,
   namedResource: OptimiserNamedResourceState,
   profile: PersistedOptimiserProfile | undefined,
   suggestedStartWeek: number,
@@ -337,6 +377,7 @@ function conflictForClassification(
 /** Pure mutation-plan derivation from persisted state. */
 export function buildOptimiserMutationIntent(input: {
   candidate: readonly ApplyCandidateResourceType[]
+  rampUpScopeResourceTypeIds: ReadonlySet<string>
   resourceTypes: readonly OptimiserResourceTypeState[]
   namedResources: readonly OptimiserNamedResourceState[]
   profilesByNamedResourceId: ReadonlyMap<string, readonly PersistedOptimiserProfile[]>
@@ -367,7 +408,7 @@ export function buildOptimiserMutationIntent(input: {
 
     const countChanges = candidateEntry.count !== resourceType.count
     const rampWrites: RampUpProfileWrite[] = []
-    if (candidateEntry.suggestedStartWeek > 0) {
+    if (candidateEntry.suggestedStartWeek > 0 && input.rampUpScopeResourceTypeIds.has(resourceType.id)) {
       for (const namedResource of namedResourcesByType.get(resourceType.id) ?? []) {
         const profiles = input.profilesByNamedResourceId.get(namedResource.id) ?? []
         const profile = profiles.length === 1 ? profiles[0] : undefined
@@ -375,14 +416,13 @@ export function buildOptimiserMutationIntent(input: {
         const currentStart = effectiveCurrentStart(classification, profile, namedResource)
 
         if (currentStart === candidateEntry.suggestedStartWeek) continue
-        if (!['NO_PROFILE', 'LEGACY_MAPPER_SCALAR', 'OPTIMISER_DERIVED_SCALAR'].includes(classification.outcome)) {
+        if (!isOptimiserWritableRampUpClassification(classification)) {
           conflicts.push(conflictForClassification(classification, resourceType, namedResource))
           continue
         }
 
         rampWrites.push(buildOptimiserRampUpProfileWrite(
-          classification as Extract<OptimiserRampUpClassification,
-            { outcome: 'NO_PROFILE' | 'LEGACY_MAPPER_SCALAR' | 'OPTIMISER_DERIVED_SCALAR' }>,
+          classification,
           namedResource,
           profile,
           candidateEntry.suggestedStartWeek,
@@ -410,9 +450,10 @@ export function buildOptimiserMutationIntent(input: {
 }
 
 async function loadOptimiserApplyPlan(
-  db: PrismaTransactionClient,
+  db: OptimiserApplyPlanDb,
   projectId: string,
   candidate: readonly ApplyCandidateResourceType[],
+  rampUpScopeResourceTypeIds: ReadonlySet<string>,
 ): Promise<OptimiserApplyPlan> {
   const candidateIds = candidate.map(entry => entry.resourceTypeId)
   const [resourceTypes, namedResources, activePlan, rolePlannerProfiles] = await Promise.all([
@@ -499,6 +540,7 @@ async function loadOptimiserApplyPlan(
 
   return buildOptimiserMutationIntent({
     candidate,
+    rampUpScopeResourceTypeIds,
     resourceTypes,
     namedResources,
     profilesByNamedResourceId,
@@ -644,17 +686,22 @@ async function persistSchedule(
 export async function applyOptimiserCandidate(
   params: ApplyOptimiserCandidateParams,
 ): Promise<ApplyOptimiserResult> {
-  const { projectId, userId, candidate, staggerEpics = false } = params
-  const rootDb = prisma as unknown as PrismaTransactionClient
-
+  const {
+    projectId,
+    userId,
+    candidate,
+    rampUpScopeResourceTypeIds,
+    staggerEpics = false,
+  } = params
+  const rampUpScope = new Set(rampUpScopeResourceTypeIds)
   // Preflight must complete before entering the mutation transaction.
-  await loadOptimiserApplyPlan(rootDb, projectId, candidate)
+  await loadOptimiserApplyPlan(prisma, projectId, candidate, rampUpScope)
   await preTransactionSeam?.()
 
   const dateStr = new Date().toISOString().slice(0, 10)
   const transactionResult = await prisma.$transaction(async tx => {
     // Fresh state inside Serializable transaction closes the preflight race.
-    const plan = await loadOptimiserApplyPlan(tx, projectId, candidate)
+    const plan = await loadOptimiserApplyPlan(tx, projectId, candidate, rampUpScope)
     const snapshotData = await buildSnapshot(projectId, tx)
     const snapshot = await tx.backlogSnapshot.create({
       data: {
@@ -716,11 +763,11 @@ export async function applyOptimiserCandidate(
     await persistSchedule(tx, projectId, schedule.featureSchedule, schedule.storySchedule)
     await failureSeam?.('cache')
     await tx.project.update({ where: { id: projectId }, data: { weeklyDemandCache: {} } })
+    await pruneSnapshots(tx, projectId)
 
     return { snapshotId: snapshot.id, levellingResult }
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
 
-  await pruneSnapshots(prisma, projectId)
 
   return {
     message: 'Optimiser scenario applied successfully',

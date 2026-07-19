@@ -87,6 +87,14 @@ describe('classifyOptimiserRampUpOwner', () => {
   })
 
   it.each([
+    ['missing scalar percentage', profile({ source: 'DERIVED', legacy: RESOURCE_OPTIMISER_PROFILE_PROVENANCE, defaultPercent: null }), 'EXPLICIT_SCALAR_PROTECTED'],
+    ['reversed availability window', profile({ source: 'DERIVED', legacy: RESOURCE_OPTIMISER_PROFILE_PROVENANCE, startWeek: 10, endWeek: 2 }), 'EXPLICIT_SCALAR_PROTECTED'],
+    ['reversed mapper availability window', profile({ source: 'AVAILABILITY_WINDOW', legacy: mapperLegacy({ allocationStartWeek: 10, startWeek: 10, allocationEndWeek: 2, endWeek: 2 }), startWeek: 10, endWeek: 2 }), 'EXPLICIT_SCALAR_PROTECTED'],
+  ])('does not adopt malformed %s', (_label, persisted, outcome) => {
+    expect(classifyOptimiserRampUpOwner([persisted as PersistedOptimiserProfile], namedResource()).outcome).toBe(outcome)
+  })
+
+  it.each([
     ['explicit scalar', profile(), 'EXPLICIT_SCALAR_PROTECTED'],
     ['segmented scalar', profile({ source: 'DERIVED', legacy: RESOURCE_OPTIMISER_PROFILE_PROVENANCE, segments: [{ id: 'segment-1' }] }), 'SEGMENTED_PROTECTED'],
     ['capacity profile', profile({ planningBasis: 'CAPACITY_PROFILE' }), 'CAPACITY_PROFILE_PROTECTED'],
@@ -181,6 +189,7 @@ describe('buildOptimiserMutationIntent', () => {
   it('emits no writes for unchanged full-candidate entries', () => {
     expect(buildOptimiserMutationIntent({
       candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 3 }],
+      rampUpScopeResourceTypeIds: new Set(['rt-dev']),
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
       namedResources: [namedResource({ allocationStartWeek: 3 })],
       profilesByNamedResourceId: new Map(),
@@ -199,6 +208,7 @@ describe('buildOptimiserMutationIntent', () => {
         { id: 'rt-test', name: 'Tester', count: 1 },
       ],
       namedResources: [namedResource({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 3 })],
+      rampUpScopeResourceTypeIds: new Set(['rt-test']),
       profilesByNamedResourceId: new Map(),
       plannerManagedResourceTypeIds: new Set(['rt-dev']),
     })
@@ -211,6 +221,7 @@ describe('buildOptimiserMutationIntent', () => {
       candidate: [{ resourceTypeId: 'rt-dev', count: 3, suggestedStartWeek: 0 }],
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
       namedResources: [],
+      rampUpScopeResourceTypeIds: new Set(),
       profilesByNamedResourceId: new Map(),
       plannerManagedResourceTypeIds: new Set(['rt-dev']),
     })).toThrow('Refine in Squad Planner')
@@ -221,8 +232,20 @@ describe('buildOptimiserMutationIntent', () => {
       candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 5 }],
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
       namedResources: [namedResource()],
+      rampUpScopeResourceTypeIds: new Set(['rt-dev']),
       profilesByNamedResourceId: new Map([['nr-dev', [profile()]]]),
       plannerManagedResourceTypeIds: new Set(),
     })).toThrow(OptimiserApplyConflictError)
+  })
+
+  it('does not mutate protected owners outside the ramp-up scope', () => {
+    expect(buildOptimiserMutationIntent({
+      candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 5 }],
+      rampUpScopeResourceTypeIds: new Set(),
+      resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
+      namedResources: [namedResource()],
+      profilesByNamedResourceId: new Map([['nr-dev', [profile()]]]),
+      plannerManagedResourceTypeIds: new Set(),
+    }).intents).toEqual([])
   })
 })

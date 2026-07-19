@@ -26,7 +26,7 @@ import {
 } from '../lib/optimiser.js'
 import {
   applyOptimiserCandidate,
-  OptimiserApplyConflictError,
+  isOptimiserApplyConflictError,
   type ApplyCandidateResourceType,
 } from '../lib/optimiserApplyService.js'
 
@@ -160,8 +160,9 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
-  const { resourceTypes: candidateRTs, staggerEpics } = req.body as {
+  const { resourceTypes: candidateRTs, rampUpScopeResourceTypeIds, staggerEpics } = req.body as {
     resourceTypes: ApplyCandidateResourceType[]
+    rampUpScopeResourceTypeIds?: unknown
     staggerEpics?: boolean
   }
   if (!Array.isArray(candidateRTs) || candidateRTs.length === 0) {
@@ -184,13 +185,13 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'Duplicate resourceTypeId in resourceTypes array' }); return
   }
 
-  const projectResourceTypes = await prisma.resourceType.findMany({
-    where: { projectId, id: { in: candidateIds } },
-    select: { id: true },
-  })
-  if (projectResourceTypes.length !== candidateIds.length) {
-    res.status(400).json({ error: 'All candidate resource types must belong to this project' }); return
+  if (!Array.isArray(rampUpScopeResourceTypeIds)
+      || rampUpScopeResourceTypeIds.some(id => typeof id !== 'string')
+      || new Set(rampUpScopeResourceTypeIds).size !== rampUpScopeResourceTypeIds.length
+      || rampUpScopeResourceTypeIds.some(id => !candidateIds.includes(id))) {
+    res.status(400).json({ error: 'rampUpScopeResourceTypeIds must be unique candidate resource type IDs' }); return
   }
+
 
   try {
     const result = await applyOptimiserCandidate({
@@ -198,10 +199,16 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       userId: req.userId!,
       candidate: candidateRTs,
       staggerEpics,
+      rampUpScopeResourceTypeIds,
     })
     res.status(200).json(result)
   } catch (error) {
-    if (error instanceof OptimiserApplyConflictError) {
+    if (isOptimiserApplyConflictError(error)) {
+      const foreignResourceType = error.conflicts.find(conflict => conflict.code === 'FOREIGN_RESOURCE_TYPE')
+      if (foreignResourceType) {
+        res.status(400).json({ error: 'All candidate resource types must belong to this project' })
+        return
+      }
       res.status(409).json({
         error: error.message,
         code: error.code,
