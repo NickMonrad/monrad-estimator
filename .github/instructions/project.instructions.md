@@ -47,17 +47,18 @@ An implementation agent may analyse, modify code, add appropriate tests, update 
 
 For each task:
 
-1. Read the issue, relevant code, tests, and applicable path-scoped instructions.
+1. Read the issue, acceptance criteria, approved design, agreed exclusions, relevant code, tests, and applicable path-scoped instructions.
 2. Identify the current source of truth and affected API/data/UI contracts.
 3. Prefer the smallest correct change that fully satisfies the acceptance criteria.
 4. Add focused tests at the lowest useful level and E2E coverage when user-visible behaviour changes.
 5. Run the relevant validation commands and report exact results.
 6. Update documentation that became inaccurate because of the change.
-7. Prepare the branch and pull request for human review.
+7. Review the final diff against the original issue and acceptance criteria.
+8. Commit and push the intended changes to the correct issue or existing PR branch, then prepare the pull request for human review.
 
 Do not ask for guidance on routine implementation choices that can be resolved from existing patterns. Escalate genuine ambiguity, destructive data impact, security trade-offs, or scope that materially exceeds the issue.
 
-## Git and human-review safety
+## Git, worktree, and human-review safety
 
 Agents must never:
 
@@ -68,13 +69,18 @@ Agents must never:
 - close the tracked issue manually when the PR should close it
 - force-push or rewrite shared history without explicit user approval
 - discard unrelated worktree changes
+- modify, clean, reset, delete, or otherwise disturb another agent's worktree
 - bypass failing required checks
 
-Branch from current `main` and use:
+Implementation and pull-request remediation must use a dedicated Git worktree. Before editing, verify the worktree path, current branch, tracked issue, and whether the task is new work or remediation of an existing PR. Reuse an existing dedicated worktree when it already owns the branch, and leave the selected worktree clean after the intended changes are committed and pushed.
+
+For new issue work, branch from current `main` and use:
 
 - `feature/<issue>-<slug>` for features and planned improvements
 - `fix/<issue>-<slug>` for defects
 - `docs/<issue>-<slug>` for documentation-only work
+
+For remediation of an existing pull request, fetch and inspect the latest PR head and continue on that PR's existing branch in its dedicated worktree. Do not create a replacement branch, retarget the PR, rebase, force-push, or rewrite shared history unless explicitly instructed.
 
 Commit messages use:
 
@@ -86,7 +92,7 @@ Valid types include `feat`, `fix`, `refactor`, `docs`, `test`, and `chore`.
 
 Do not add a hard-coded Copilot co-author trailer. Attribution must reflect the actual authoring workflow.
 
-Every implementation PR must include `Closes #N`, use the PR template, and end in a reviewable state. The final handoff must say: **Do not merge — wait for review.**
+Every implementation PR must include `Closes #N`, use the PR template, and end in a reviewable state. Work is not complete while intended changes are incomplete, uncommitted, or unpushed. The final handoff must report the final pushed commit SHA, PR URL, worktree and branch, validation and CI state, and confirmation that the worktree is clean. It must say: **Do not merge — wait for review.**
 
 ## Simplicity and review discipline
 
@@ -97,6 +103,7 @@ Follow `.github/instructions/simplicity-review.instructions.md` for all implemen
 - Do not create generic frameworks for a single current use case.
 - Keep calculation logic and state in the owning domain rather than mirroring it elsewhere.
 - Every review has a correctness pass followed by a simplicity/over-engineering pass.
+- Reviews must inspect the latest PR head, verify prior findings still exist, distinguish required work from optional follow-ups, and stop once the approved scope is correctly implemented and adequately tested.
 
 ## Domain ownership boundaries
 
@@ -322,9 +329,10 @@ The PR description must explain:
 - important design or migration decisions
 - validation commands and exact results
 - E2E tests added/updated, or why E2E is not applicable
-- risks, limitations, and follow-up work
+- risks, limitations, and optional follow-up work kept separate from required work
+- the final pushed commit SHA
 
-After every push, check required CI and report its current state. Do not merge even when all checks pass.
+After every push, confirm the remote branch contains the intended commit, check required CI, and report its current state. Before reporting completion, verify the worktree is clean. If intended work remains incomplete, uncommitted, or unpushed, report the task as incomplete. Do not merge even when all checks pass.
 
 ## Optional local accelerators
 
