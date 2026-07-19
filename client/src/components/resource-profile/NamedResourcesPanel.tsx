@@ -1,5 +1,4 @@
 import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
-import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type { ResourceProfileRow } from '../../types/backlog'
@@ -7,6 +6,7 @@ import {
   formatPlanningBasis,
   formatCapacityProfileSource,
   formatResolutionSource,
+  getEffectiveAvailabilityDisplay,
 } from '../../lib/capacityProfileFormatting'
 
 
@@ -59,7 +59,6 @@ export default function NamedResourcesPanel({
   allocations = [],
 }: NamedResourcesPanelProps) {
   const qc = useQueryClient()
-  const [profileInfoOwnerId, setProfileInfoOwnerId] = useState<string | null>(null)
 
   const { data: resources = [], isLoading } = useQuery<NamedResource[]>({
     queryKey: ['named-resources', projectId, rtId],
@@ -121,19 +120,20 @@ export default function NamedResourcesPanel({
   const mergedResources = [
     ...resources.map(resource => {
       const allocation = allocationById.get(resource.id)
+      const allocationRow = allocation ?? resource
+      const availability = getEffectiveAvailabilityDisplay(allocationRow as Parameters<typeof getEffectiveAvailabilityDisplay>[0])
       return {
         id: resource.id,
         resourceTypeId: resource.resourceTypeId,
         name: resource.name,
-        // Display authoritative projected values from allocation when present, else raw API values
-        startWeek: allocation ? allocation.startWeek : resource.startWeek,
-        endWeek: allocation ? allocation.endWeek : resource.endWeek,
-        allocationPct: allocation ? allocation.allocationPercent : resource.allocationPct,
-        pricingModel: (resource.pricingModel ?? 'ACTUAL_DAYS') as PricingModel,
-        createdAt: resource.createdAt,
-        updatedAt: resource.updatedAt,
+        // Use authoritative profile values exactly (including nulls) when profile is authoritative.
+        // Never fall back to stale legacy compatibility values for authoritative profiles.
+        startWeek: availability.hasAuthoritativeProfile ? availability.startWeek : (availability.startWeek ?? resource.startWeek),
+        endWeek: availability.hasAuthoritativeProfile ? availability.endWeek : (availability.endWeek ?? resource.endWeek),
+        allocationPct: availability.hasAuthoritativeProfile ? availability.percentage : (availability.percentage ?? resource.allocationPct),
+        pricingModel: resource.pricingModel,
         allocation,
-        // resourceIdentity from profile when available; fall back to synthetic for backward compat
+        availability,
         resourceIdentity: allocation?.resourceIdentity ?? (allocation?.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'),
         synthetic: allocation?.synthetic ?? false,
         persisted: true,
@@ -141,21 +141,25 @@ export default function NamedResourcesPanel({
     }),
     ...allocations
       .filter(allocation => !resources.some(resource => resource.id === allocation.id))
-      .map(allocation => ({
-        id: allocation.id,
-        resourceTypeId: rtId,
-        name: allocation.name,
-        startWeek: allocation.startWeek,
-        endWeek: allocation.endWeek,
-        allocationPct: allocation.allocationPercent,
-        pricingModel: (allocation.pricingModel ?? 'ACTUAL_DAYS') as PricingModel,
-        createdAt: '',
-        updatedAt: '',
-        allocation,
-        resourceIdentity: allocation?.resourceIdentity === 'PLANNED_RESOURCE' ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
-        synthetic: true,
-        persisted: false,
-      })),
+      .map(allocation => {
+        const availability = getEffectiveAvailabilityDisplay(allocation as Parameters<typeof getEffectiveAvailabilityDisplay>[0])
+        return {
+          id: allocation.id,
+          resourceTypeId: rtId,
+          name: allocation.name,
+          startWeek: allocation.startWeek,
+          endWeek: allocation.endWeek,
+          allocationPct: allocation.allocationPercent,
+          pricingModel: (allocation.pricingModel ?? 'ACTUAL_DAYS') as PricingModel,
+          createdAt: '',
+          updatedAt: '',
+          allocation,
+          availability,
+          synthetic: true,
+          persisted: false,
+          resourceIdentity: allocation?.resourceIdentity === 'PLANNED_RESOURCE' ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
+        }
+      }),
   ]
 
   return (
@@ -185,7 +189,7 @@ export default function NamedResourcesPanel({
               </div>
               {mergedResources.map((resource) => (
                 <div key={resource.id}>
-                  <div className="grid grid-cols-[1fr_110px_110px_80px_150px_minmax(180px,1fr)_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
+                  <div data-testid={`named-resource-row-${resource.id}`} className="grid grid-cols-[1fr_110px_110px_80px_150px_minmax(180px,1fr)_28px] gap-2 items-center px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
                   <div className="flex items-center gap-1">
                     <input
                       type="text"
@@ -206,58 +210,69 @@ export default function NamedResourcesPanel({
                       </span>
                     )}
                   </div>
-                  <input
-                    type="number"
-                    defaultValue={resource.startWeek ?? ''}
-                    placeholder="Project start"
-                    onBlur={(e) => {
-                      if (!resource.persisted) return
-                      const value = e.target.value
-                        ? parseInt(e.target.value, 10)
-                        : null
-                      if (value !== resource.startWeek) {
-                        updateResource.mutate({ id: resource.id, startWeek: value })
-                      }
-                    }}
-                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
-                  />
-                  <input
-                    type="number"
-                    defaultValue={resource.endWeek ?? ''}
-                    placeholder="Project end"
-                    onBlur={(e) => {
-                      if (!resource.persisted) return
-                      const value = e.target.value
-                        ? parseInt(e.target.value, 10)
-                        : null
-                      if (value !== resource.endWeek) {
-                        updateResource.mutate({ id: resource.id, endWeek: value })
-                      }
-                    }}
-                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    defaultValue={resource.allocationPct}
-                    onBlur={(e) => {
-                      if (!resource.persisted) return
-                      const value = parseInt(e.target.value, 10)
-                      if (
-                        !isNaN(value) &&
-                        value >= 0 &&
-                        value <= 100 &&
-                        value !== resource.allocationPct
-                      ) {
-                        updateResource.mutate({ id: resource.id, allocationPct: value })
-                      }
-                    }}
-                    disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
-                    className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
-                  />
+                  {resource.availability?.isProfileManaged ? (
+                    <span className="text-sm text-gray-400 dark:text-gray-500 italic" title="Capacity varies by week — see profile below">Varies</span>
+                  ) : (
+                    <input
+                      type="number"
+                      defaultValue={resource.startWeek ?? ''}
+                      placeholder="Project start"
+                      onBlur={(e) => {
+                        if (!resource.persisted) return
+                        const value = e.target.value
+                          ? parseInt(e.target.value, 10)
+                          : null
+                        if (value !== resource.startWeek) {
+                          updateResource.mutate({ id: resource.id, startWeek: value })
+                        }
+                      }}
+                      disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
+                      className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
+                    />
+                  )}
+                  {resource.availability?.isProfileManaged ? (
+                    <span className="text-sm text-gray-400 dark:text-gray-500 italic">Varies</span>
+                  ) : (
+                    <input
+                      type="number"
+                      defaultValue={resource.endWeek ?? ''}
+                      placeholder="Project end"
+                      onBlur={(e) => {
+                        if (!resource.persisted) return
+                        const value = e.target.value
+                          ? parseInt(e.target.value, 10)
+                          : null
+                        if (value !== resource.endWeek) {
+                          updateResource.mutate({ id: resource.id, endWeek: value })
+                        }
+                      }}
+                      disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
+                      className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60"
+                    />
+                  )}
+                  {resource.availability?.isProfileManaged ? (
+                    <span className="text-sm text-gray-400 dark:text-gray-500 italic">—</span>
+                  ) : (
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      defaultValue={resource.allocationPct ?? ''}
+                      onBlur={(e) => {
+                        if (!resource.persisted) return
+                        const value = parseInt(e.target.value, 10)
+                        if (
+                          !isNaN(value) &&
+                          value >= 0 &&
+                          value <= 100 &&
+                          value !== resource.allocationPct
+                        ) {
+                          updateResource.mutate({ id: resource.id, allocationPct: value })
+                        }
+                      }}
+                      disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
+                      className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-lab3-blue w-full disabled:opacity-60" />
+                  )}
                   <label htmlFor={`billing-basis-${resource.id}`} className="block text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium" title="Determines which days are used for commercial billing — does not affect the planning schedule">Billing basis</label>
                   <select
                     id={`billing-basis-${resource.id}`}
@@ -296,11 +311,11 @@ export default function NamedResourcesPanel({
                     x
                   </button>
                   </div>
-                  {resource.allocation?.capacityProfile && (
+                  {resource.allocation?.capacityProfile && (resource.availability?.isProfileManaged || resource.allocation?.capacityProfile) && (
                     <div data-testid={`named-resource-profile-${resource.id}`} className="px-2 py-1 ml-2 mt-0.5 text-xs space-y-0.5 border-l-2 border-blue-200 dark:border-blue-700 bg-blue-50/50 dark:bg-blue-950/20 rounded-r">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
-                          {formatPlanningBasis(resource.allocation.capacityProfile.planningBasis)}
+                        <span data-testid={`profile-managed-owner-${resource.id}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300">
+                          {resource.availability?.isProfileManaged ? 'Varies by week' : formatPlanningBasis(resource.allocation.capacityProfile.planningBasis)}
                         </span>
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                           {formatCapacityProfileSource(resource.allocation.capacityProfile.source)}
@@ -308,18 +323,20 @@ export default function NamedResourcesPanel({
                         <span className="text-[10px] text-gray-400 dark:text-gray-500">
                           Resolution: {formatResolutionSource(resource.allocation.capacityProfile.resolutionSource)}
                         </span>
-                        {resource.allocation.capacityProfile.defaultPercent != null && (
+                        {resource.allocation.capacityProfile.defaultPercent != null && !resource.availability?.isProfileManaged && (
                           <span className="text-[10px] text-gray-500 dark:text-gray-400">
                             Default: {resource.allocation.capacityProfile.defaultPercent}%
                           </span>
                         )}
                       </div>
-                      <div className="text-[10px] text-gray-400 dark:text-gray-500">
-                        {resource.allocation.capacityProfile.startWeek != null && resource.allocation.capacityProfile.endWeek != null
-                          ? <>Window: W{resource.allocation.capacityProfile.startWeek + 1} → W{resource.allocation.capacityProfile.endWeek + 1}</>
-                          : <span className="italic">No fixed window</span>
-                        }
-                      </div>
+                      {!resource.availability?.isProfileManaged && (
+                        <div className="text-[10px] text-gray-400 dark:text-gray-500">
+                          {resource.allocation.capacityProfile.startWeek != null && resource.allocation.capacityProfile.endWeek != null
+                            ? <>Window: W{resource.allocation.capacityProfile.startWeek + 1} → W{resource.allocation.capacityProfile.endWeek + 1}</>
+                            : <span className="italic">No fixed window</span>
+                          }
+                        </div>
+                      )}
                       {resource.allocation.capacityProfile.segments.length > 0 && (
                         <div className="text-[10px] text-gray-500 dark:text-gray-400">
                           Profile: {resource.allocation.capacityProfile.segments.map((seg, i) => (
@@ -330,32 +347,28 @@ export default function NamedResourcesPanel({
                           ))}
                         </div>
                       )}
-                      {resource.resourceIdentity === 'PLANNED_RESOURCE' && resource.allocation.capacityProfile.planningBasis === 'capacityProfile' && resource.allocation.capacityProfile.segments.length > 0 && (
-                        <>
-                          <button
-                            type="button"
-                            data-testid={`profile-managed-owner-${resource.id}`}
-                            onClick={() => setProfileInfoOwnerId(current => current === resource.id ? null : resource.id)}
-                            className="mt-1 text-[10px] font-medium text-lab3-blue hover:text-lab3-navy"
-                            aria-expanded={profileInfoOwnerId === resource.id}
-                          >
-                            Varies by week
-                          </button>
-                          {profileInfoOwnerId === resource.id && (
-                            <div data-testid={`profile-managed-panel-${resource.id}`} className="mt-1 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-2 text-xs">
-                              <p className="text-gray-600 dark:text-gray-300">
-                                Availability varies by week. This planned-resource profile is managed through the weekly capacity profile.
-                              </p>
+                      {/* Profile-managed guidance */}
+                      {resource.availability?.isProfileManaged && (() => {
+                        const isPlannerManaged = resource.allocation?.capacityProfile?.resolutionSource === 'ACTIVE_CAPACITY_PLAN' || resource.resourceIdentity === 'PLANNED_RESOURCE'
+                        return (
+                          <div data-testid={`profile-managed-panel-${resource.id}`} className="mt-1 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-2 text-xs">
+                            <p className="text-gray-600 dark:text-gray-300">
+                              Availability varies by week.
+                              {isPlannerManaged
+                                ? ' This profile is managed through the weekly capacity plan.'
+                                : ' This weekly profile is protected and cannot be edited through the scalar input fields.'}
+                            </p>
+                            {isPlannerManaged && (
                               <a
                                 href={`/projects/${projectId}/timeline?panel=squad-planner`}
                                 className="mt-2 inline-flex items-center rounded-lg bg-lab3-navy px-3 py-1 text-xs font-medium text-white hover:bg-lab3-blue"
                               >
-                                Open weekly profile editor ↗
+                                Open Squad Planner ↗
                               </a>
-                            </div>
-                          )}
-                        </>
-                      )}
+                            )}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )}
                 </div>

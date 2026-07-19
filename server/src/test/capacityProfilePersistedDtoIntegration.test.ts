@@ -1769,32 +1769,33 @@ describe('persisted capacity-profile DTO integration', () => {
         { id: 'seg-clean-2', capacityProfileId: 'cp-seg-clean', startWeek: 6, endWeek: 10, capacityPercent: 75, source: 'AVAILABILITY_WINDOW', createdAt: new Date(), updatedAt: new Date() },
       )
 
-      // Call PUT to EFFORT (non-segmented)
+      // PUT with capacity fields on a segmented profile is BLOCKED by the capacity-edit
+      // protection guard (PROFILE_MANAGED_CAPACITY). State must remain unchanged.
       const res = await request(app)
         .put(`/api/projects/${projectId}/resource-types/${segRtId}/named-resources/${segNrId}`)
         .set('Authorization', authHeader)
         .send({ name: 'Cleaned Person', allocationMode: 'EFFORT', allocationPercent: 100 })
 
-      expect(res.status).toBe(200)
+      expect(res.status).toBe(409)
+      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
 
-      // Old profile removed
+      // Old profile and segments preserved
       const oldProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-seg-clean')
-      expect(oldProfile).toBeUndefined()
+      expect(oldProfile).toBeDefined()
+      expect(oldProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(oldProfile!.defaultPercent).toBe(75)
 
-      // New profile exists with correct planning basis
-      const newProfile = storeRef.current.capacityProfiles.find(
-        (p: any) => p.namedResourceId === segNrId,
-      )
-      expect(newProfile).toBeDefined()
-      expect(newProfile!.planningBasis).toBe('DEMAND_FOLLOWING')
-      expect(newProfile!.source).toBe('FIXED')
-
-      // No stale segments remain for the old profile
-      const staleSegments = storeRef.current.capacitySegments.filter(
+      const segments = storeRef.current.capacitySegments.filter(
         (s: any) => s.capacityProfileId === 'cp-seg-clean',
       )
-      expect(staleSegments).toHaveLength(0)
+      expect(segments).toHaveLength(2)
+      expect(segments[0].startWeek).toBe(2)
+      expect(segments[0].endWeek).toBe(5)
+      expect(segments[1].startWeek).toBe(6)
+      expect(segments[1].endWeek).toBe(10)
 
+      // Weekly demand cache unchanged (same {})
+      expect(storeRef.current.project.weeklyDemandCache).toEqual({})
       // Resource Profile response still has one named-resource row
       const rpRes = await request(app)
         .get(`/api/projects/${projectId}/resource-profile`)
@@ -3986,6 +3987,204 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(roleInDTO.length).toBe(1)
       expect(roleInDTO[0].id).toBe(roleProfileId)
       expect(roleInDTO[0].defaultPercent).toBe(70)
+    })
+  })
+
+  describe('13. Capacity-edit protection guard (PROFILE_MANAGED_CAPACITY)', () => {
+    const guardRtId = 'rt-guard-1'
+    const guardNrId = 'nr-guard-1'
+    const guardCpId = 'cp-guard-1'
+    const scalarNrId = 'nr-scalar-1'
+    const scalarCpId = 'cp-scalar-1'
+
+    beforeEach(() => {
+      addResourceType(guardRtId, 'Guard RT', 2)
+      // Segmented named person (protected)
+      addNamedResource(guardNrId, 'Guard Person', guardRtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 50,
+        allocationStartWeek: 2, allocationEndWeek: 8, startWeek: 2, endWeek: 8,
+      })
+      addPersistedProfile(guardCpId, {
+        namedResourceId: guardNrId, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL',
+        defaultPercent: 50, startWeek: 2, endWeek: 8,
+      })
+      storeRef.current.capacitySegments.push(
+        { id: 'cseg-guard-a', capacityProfileId: guardCpId, startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'MANUAL', createdAt: new Date(), updatedAt: new Date() },
+        { id: 'cseg-guard-b', capacityProfileId: guardCpId, startWeek: 5, endWeek: 8, capacityPercent: 50, source: 'MANUAL', createdAt: new Date(), updatedAt: new Date() },
+      )
+      // Scalar-safe named person (not protected)
+      addNamedResource(scalarNrId, 'Scalar Person', guardRtId, {
+        allocationMode: 'TIMELINE', allocationPercent: 60, allocationPct: 60,
+        allocationStartWeek: 3, allocationEndWeek: 9, startWeek: 3, endWeek: 9,
+      })
+      addPersistedProfile(scalarCpId, {
+        namedResourceId: scalarNrId, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL',
+        defaultPercent: 60, startWeek: 3, endWeek: 9,
+      })
+      // Scalar-safe named person — segmentless, not protected
+      // No segment entries added to capacitySegments for this profile
+      // Set a distinguishable weekly demand cache value to prove it is unchanged by rejection
+      storeRef.current.project.weeklyDemandCache = { week0: { hours: 40 } }
+    })
+
+    it('capacity PUT on segmented named person returns 409 and does not change state', async () => {
+      const before = JSON.parse(JSON.stringify(storeRef.current))
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${guardNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 75, startWeek: 0, endWeek: 10 })
+
+      expect(res.status).toBe(409)
+      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+
+      const after = JSON.parse(JSON.stringify(storeRef.current))
+      expect(after).toEqual(before)
+    })
+
+    it('capacity PATCH on segmented named person returns 409 and does not change state', async () => {
+      const before = JSON.parse(JSON.stringify(storeRef.current))
+
+      const res = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${guardNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 50 })
+
+      expect(res.status).toBe(409)
+      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+
+      const after = JSON.parse(JSON.stringify(storeRef.current))
+      expect(after).toEqual(before)
+    })
+
+    it('name-only PUT on segmented named person succeeds and changes only the name', async () => {
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${guardNrId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'Renamed Person' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.name).toBe('Renamed Person')
+
+      // Named resource name changed
+      const nr = storeRef.current.namedResources.find((n: any) => n.id === guardNrId)
+      expect(nr.name).toBe('Renamed Person')
+      // Other NR fields unchanged
+      expect(nr.pricingModel).toBe('ACTUAL_DAYS')
+      expect(nr.allocationMode).toBe('TIMELINE')
+      expect(nr.allocationPercent).toBe(50)
+      expect(nr.startWeek).toBe(2)
+      expect(nr.endWeek).toBe(8)
+      // Profile unchanged
+      const profile = storeRef.current.capacityProfiles.find((p: any) => p.id === guardCpId)
+      expect(profile.defaultPercent).toBe(50)
+      expect(profile.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(profile.ownerKind).toBe('NAMED_PERSON')
+      // Segments unchanged (count and order)
+      const segments = storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === guardCpId)
+      expect(segments).toHaveLength(2)
+      expect(segments[0].startWeek).toBe(2)
+      expect(segments[0].endWeek).toBe(4)
+      expect(segments[1].startWeek).toBe(5)
+      expect(segments[1].endWeek).toBe(8)
+      // Weekly demand cache cleared after successful transaction
+      expect(storeRef.current.project.weeklyDemandCache).toEqual({})
+    })
+
+    it('pricing-only PUT on segmented named person succeeds and changes only pricing', async () => {
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${guardNrId}`)
+        .set('Authorization', authHeader)
+        .send({ pricingModel: 'PRO_RATA' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.pricingModel).toBe('PRO_RATA')
+
+      // Name unchanged
+      const nr = storeRef.current.namedResources.find((n: any) => n.id === guardNrId)
+      expect(nr.pricingModel).toBe('PRO_RATA')
+      expect(nr.name).toBe('Guard Person')
+      // Profile unchanged
+      const profile = storeRef.current.capacityProfiles.find((p: any) => p.id === guardCpId)
+      expect(profile.defaultPercent).toBe(50)
+      // Segments unchanged
+      const segments = storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === guardCpId)
+      expect(segments).toHaveLength(2)
+      // Weekly demand cache cleared after successful transaction
+      expect(storeRef.current.project.weeklyDemandCache).toEqual({})
+    })
+
+    it('scalar-safe PUT on segmentless named person writes capacity and updates compatibility fields', async () => {
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${scalarNrId}`)
+        .set('Authorization', authHeader)
+        .send({ startWeek: 4, endWeek: 9, allocationPct: 70 })
+
+      expect(res.status).toBe(200)
+
+      // Compatibility fields updated
+      const nr = storeRef.current.namedResources.find((n: any) => n.id === scalarNrId)
+      expect(nr.startWeek).toBe(4)
+      expect(nr.endWeek).toBe(9)
+      expect(nr.allocationPct).toBe(70)
+      expect(nr.allocationPercent).toBe(70)
+      expect(nr.allocationStartWeek).toBe(4)
+      expect(nr.allocationEndWeek).toBe(9)
+      // Weekly demand cache cleared
+      expect(storeRef.current.project.weeklyDemandCache).toEqual({})
+    })
+
+    it('rejected mixed-field PUT on segmented named person rolls back all changes, including non-capacity fields', async () => {
+      const before = JSON.parse(JSON.stringify(storeRef.current))
+
+      // Send PUT containing both non-capacity fields AND scalar capacity: all must be rejected
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${guardNrId}`)
+        .set('Authorization', authHeader)
+        .send({
+          name: 'Must Roll Back',
+          pricingModel: 'PRO_RATA',
+          allocationPercent: 75,
+          startWeek: 2,
+          endWeek: 10,
+        })
+
+      expect(res.status).toBe(409)
+      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+
+      // Exact state preservation: nothing changed
+      const after = JSON.parse(JSON.stringify(storeRef.current))
+      expect(after).toEqual(before)
+    })
+
+    it('capacity PUT on segmentless CAPACITY_PROFILE named person returns 409', async () => {
+      const capProfNrId = 'nr-capacity-profile-1'
+      const capProfCpId = 'cp-capacity-profile-1'
+
+      addNamedResource(capProfNrId, 'Capacity Profile Person', guardRtId, {
+        allocationMode: 'CAPACITY_PROFILE', allocationPercent: 100, allocationPct: 100,
+        allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null,
+      })
+      addPersistedProfile(capProfCpId, {
+        namedResourceId: capProfNrId, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL',
+      })
+
+      const before = JSON.parse(JSON.stringify(storeRef.current))
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${guardRtId}/named-resources/${capProfNrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 80, startWeek: 1 })
+
+      expect(res.status).toBe(409)
+      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+
+      const after = JSON.parse(JSON.stringify(storeRef.current))
+      expect(after).toEqual(before)
     })
   })
 

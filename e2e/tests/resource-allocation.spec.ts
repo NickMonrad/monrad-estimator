@@ -1,7 +1,8 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
-import { login, createProject, createUserAndLogin, quickSchedule, API_BASE } from './helpers'
+import { login, createProject, createUserAndLogin, quickSchedule, API_BASE, DATABASE_URL } from './helpers'
 import path from 'path'
 import fs from 'fs'
+import { Client } from 'pg'
 import os from 'os'
 
 const CSV_CONTENT = [
@@ -230,6 +231,110 @@ async function setupSquadPlannerCapacityPlan(page: Page) {
   return { projectId, authHeaders, applyPayload, before }
 }
 
+// ─── Segmented NAMED_PERSON helpers ─────────────────────────────────────
+
+type NamedPersonCanonicalState = {
+  namedResource: {
+    id: string
+    name: string
+    pricingModel: string
+    allocationMode: string
+    allocationPercent: number
+    allocationPct: number
+    allocationStartWeek: number | null
+    allocationEndWeek: number | null
+    startWeek: number | null
+    endWeek: number | null
+  }
+  profile: {
+    id: string
+    namedResourceId: string
+    resourceTypeId: string
+    ownerKind: string
+    source: string
+    planningBasis: string
+    defaultPercent: number | null
+    startWeek: number | null
+    endWeek: number | null
+  }
+  segments: Array<{
+    id: string
+    startWeek: number
+    endWeek: number
+    capacityPercent: number
+    source: string
+  }>
+}
+
+async function readNamedPersonCanonicalState(nrId: string, profileId: string): Promise<NamedPersonCanonicalState> {
+  const client = new Client({ connectionString: DATABASE_URL })
+  await client.connect()
+  try {
+    const nrResult = await client.query(
+      'SELECT id, name, "pricingModel", "allocationMode", "allocationPercent", "allocationPct", "allocationStartWeek", "allocationEndWeek", "startWeek", "endWeek" FROM "NamedResource" WHERE id = $1',
+      [nrId],
+    )
+    const profileResult = await client.query(
+      'SELECT id, "namedResourceId", "resourceTypeId", "ownerKind", "source", "planningBasis", "defaultPercent", "startWeek", "endWeek" FROM "CapacityProfile" WHERE id = $1',
+      [profileId],
+    )
+    const segsResult = await client.query(
+      'SELECT id, "startWeek", "endWeek", "capacityPercent", "source" FROM "CapacitySegment" WHERE "capacityProfileId" = $1 ORDER BY "startWeek" ASC, "endWeek" ASC',
+      [profileId],
+    )
+
+    return {
+      namedResource: nrResult.rows[0] as NamedPersonCanonicalState['namedResource'],
+      profile: profileResult.rows[0] as NamedPersonCanonicalState['profile'],
+      segments: segsResult.rows as NamedPersonCanonicalState['segments'],
+    }
+  } finally {
+    await client.end()
+  }
+}
+
+/** Create a real persisted segmented NAMED_PERSON for the test user's project. */
+async function seedSegmentedNamedPerson(page: Page, projectId: string, rtId: string, nrName: string) {
+  const segments = [
+    { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+    { startWeek: 4, endWeek: 8, capacityPercent: 100 },
+  ]
+  const scope = projectId.replace(/[^a-zA-Z0-9_-]/g, '-')
+  const nrId = `test-nr-${scope}-${nrName.replace(/\s+/g, '-').toLowerCase()}`
+  const profileId = `test-cp-${scope}-${nrName.replace(/\s+/g, '-').toLowerCase()}`
+  const now = new Date().toISOString()
+
+  const client = new Client({ connectionString: DATABASE_URL })
+  await client.connect()
+  try {
+    // Stale NamedResource scalar compatibility values — different from profile defaults
+    // to prove UI displays authoritative profile values, not these stale legacy fields
+    await client.query(
+      'INSERT INTO "NamedResource" (id, "resourceTypeId", name, "startWeek", "endWeek", "allocationPct", "allocationMode", "allocationPercent", "allocationStartWeek", "allocationEndWeek", "pricingModel", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+      [nrId, rtId, nrName, 0, 9, 75, 'TIMELINE', 75, 0, 9, 'ACTUAL_DAYS', now, now],
+    )
+
+    // CapacityProfile with NAMED_PERSON owner, scalar planning basis, non-planner source
+    await client.query(
+      'INSERT INTO "CapacityProfile" (id, "projectId", "resourceTypeId", "namedResourceId", "ownerKind", "planningBasis", "source", "defaultPercent", "startWeek", "endWeek", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
+      [profileId, projectId, rtId, nrId, 'NAMED_PERSON', 'AVAILABILITY_WINDOW', 'MANUAL', 60, 3, 6, now, now],
+    )
+
+    // Two ordered CapacitySegment rows with deterministic IDs
+    const segId1 = `test-seg-${nrId}-w1`
+    const segId2 = `test-seg-${nrId}-w5`
+    await client.query(
+      'INSERT INTO "CapacitySegment" (id, "capacityProfileId", "startWeek", "endWeek", "capacityPercent", "source", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8), ($9, $10, $11, $12, $13, $14, $15, $16)',
+      [segId1, profileId, segments[0].startWeek, segments[0].endWeek, segments[0].capacityPercent, 'MANUAL', now, now,
+       segId2, profileId, segments[1].startWeek, segments[1].endWeek, segments[1].capacityPercent, 'MANUAL', now, now],
+    )
+
+    return { nrId, profileId }
+  } finally {
+    await client.end()
+  }
+}
+
 test.describe('Resource Allocation', () => {
   test('commercial tab shows allocation badge', async ({ page }) => {
     test.setTimeout(90_000)
@@ -394,15 +499,14 @@ test.describe('Resource Allocation', () => {
 
     const ownerPanel = page.getByTestId(`profile-managed-panel-${before.namedResourceId}`)
     await ownerProfile.click()
-    await expect(ownerPanel).toBeVisible()
-    await expect(ownerPanel.getByText(/managed through the weekly capacity profile/i)).toBeVisible()
+    await expect(ownerPanel.getByText(/managed through the weekly capacity plan/i)).toBeVisible()
     await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
     await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
 
-    await ownerPanel.getByRole('link', { name: /open weekly profile editor/i }).click()
+    await ownerPanel.getByRole('link', { name: /Open Squad Planner/i }).click()
     await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
     await expect(page.getByRole('dialog', { name: 'Squad Planner' })).toBeVisible({ timeout: 15_000 })
 
@@ -786,5 +890,213 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(row820Box).not.toBeNull()
     expect(rp820Box!.x).toBeGreaterThanOrEqual(row820Box!.x - 1)
     expect(rp820Box!.x + rp820Box!.width).toBeLessThanOrEqual(row820Box!.x + row820Box!.width + 1)
+  })
+})
+
+test.describe('Segmented NAMED_PERSON protection', () => {
+  test('safe updates preserve profile identity through People panel', async ({ page }) => {
+    test.setTimeout(120_000)
+
+    // ── Create test user, project, and seed a true segmented NAMED_PERSON ──
+    const user = await createUserAndLogin(page)
+    const projectId = await seedBacklogProject(page, true)
+    const authHeaders = { Authorization: `Bearer ${user.token}` }
+
+    // Discover resource types
+    const rtsRes = await page.request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-types`,
+      { headers: authHeaders },
+    )
+    expect(rtsRes.ok(), 'resource type discovery failed').toBeTruthy()
+    const rts = await rtsRes.json() as Array<{ id: string; name: string }>
+    const techLead = rts.find(rt => rt.name === 'Tech Lead')
+    expect(techLead, 'Expected seeded Tech Lead resource type').toBeDefined()
+    const rtId = techLead!.id
+
+    // Seed a real segmented NAMED_PERSON via direct database access
+    const { nrId, profileId } = await seedSegmentedNamedPerson(page, projectId, rtId, 'Segmented Alice')
+
+    // Capture canonical state BEFORE any UI changes
+    const before = await readNamedPersonCanonicalState(nrId, profileId)
+
+    // ── 1. Navigate to Resource Profile page ──
+    await gotoResourceProfile(page, projectId)
+    // ── 2. Intercept PUT requests to the named-resource endpoint ──
+    const putBodies: string[] = []
+    // Monitor all three scalar-write routes for any capacity-bearing request
+    const scalarMonitorRequests: Array<{ method: string; url: string; body?: string }> = []
+    const namedResMonitor = `/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`
+    const rtMonitor = `/api/projects/${projectId}/resource-types/${rtId}`
+    page.on('request', request => {
+      const url = request.url()
+      // Check if this is a relevant route
+      if (request.method() === 'PUT' && url.includes(rtMonitor) && !url.includes('/named-resources/')) {
+        // PUT to /resource-types/:rtId (scalar allocation update)
+        scalarMonitorRequests.push({ method: 'PUT', url })
+      } else if ((request.method() === 'PUT' || request.method() === 'PATCH') && url.includes(namedResMonitor)) {
+        // PUT or PATCH to named-resource
+        scalarMonitorRequests.push({ method: request.method(), url })
+      }
+    })
+    await page.route((url) => url.pathname.includes(`/named-resources/${nrId}`), async route => {
+      if (route.request().method() === 'PUT') {
+        putBodies.push(route.request().postData() || '{}')
+      }
+      await route.continue()
+    })
+
+    // ── 3. Open the People panel ──
+    const roleRow = page.getByTestId(`resource-profile-row-${rtId}`)
+    await expect(roleRow).toBeVisible({ timeout: 10_000 })
+    await roleRow.getByRole('button', { name: /people/i }).click()
+
+    // ── 4. Verify the segmented-profile UI ──
+    const ownerCard = page.getByTestId(`named-resource-profile-${nrId}`)
+    const ownerBadge = page.getByTestId(`profile-managed-owner-${nrId}`)
+    await expect(ownerCard).toBeVisible({ timeout: 10_000 })
+    await expect(ownerBadge).toHaveText('Varies by week')
+    await expect(ownerBadge).not.toHaveText(/%/)
+    // Verify ordered segment summaries
+    await expect(ownerCard.getByText(/W1-W4: 50%/)).toBeVisible()
+    await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
+
+    // ── 5. Verify scalar capacity controls are absent ──
+    // The profile-managed panel guidance is always rendered (no badge click needed)
+    const ownerPanel = page.getByTestId(`profile-managed-panel-${nrId}`)
+    await expect(ownerPanel).toBeVisible()
+    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
+    await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
+    await expect(ownerPanel.getByText(/protected/i)).toBeVisible()
+    // No Squad Planner link for manually created named person
+    await expect(ownerPanel.getByText(/squad planner/i)).toHaveCount(0)
+
+    // ── 6. Rename via the actual row name input ──
+    const row = page.getByTestId(`named-resource-row-${nrId}`)
+    await expect(row).toBeVisible()
+    const nameInput = row.getByRole('textbox')
+    await expect(nameInput).toBeVisible()
+    await expect(nameInput).toBeEnabled()
+    await nameInput.fill('Segmented Alice Renamed')
+    // Register rename response promise BEFORE the action to avoid race
+    const renameResponsePromise = page.waitForResponse(
+      response => {
+        if (!response.url().includes(`/named-resources/${nrId}`)) return false
+        if (response.request().method() !== 'PUT') return false
+        const body = response.request().postDataJSON()
+        return body?.name === 'Segmented Alice Renamed' && Object.keys(body).length === 1
+      },
+      { timeout: 10_000 },
+    )
+    // Blur triggers PUT (onBlur handler)
+    await nameInput.blur()
+    const renameResponse = await renameResponsePromise
+    expect(renameResponse.ok()).toBeTruthy()
+    // Verify the body was captured via route handler
+    const renamePutBody = JSON.parse(putBodies.find(b => {
+      try { return JSON.parse(b).name !== undefined }
+      catch { return false }
+    }) || '{}')
+    expect(renamePutBody).toEqual({ name: 'Segmented Alice Renamed' })
+
+    // ── 7. Change billing basis via the row select ──
+    const billingSelect = page.locator(`#billing-basis-${nrId}`)
+    await expect(billingSelect).toBeVisible()
+    await expect(billingSelect).toBeEnabled()
+    // Register billing response promise BEFORE the action to avoid race
+    const billingResponsePromise = page.waitForResponse(
+      response => {
+        if (!response.url().includes(`/named-resources/${nrId}`)) return false
+        if (response.request().method() !== 'PUT') return false
+        const body = response.request().postDataJSON()
+        return body?.pricingModel === 'PRO_RATA' && Object.keys(body).length === 1
+      },
+      { timeout: 10_000 },
+    )
+    await billingSelect.selectOption('PRO_RATA')
+    const billingResponse = await billingResponsePromise
+    expect(billingResponse.ok()).toBeTruthy()
+    // Verify the body was captured via route handler
+    const billingPutBody = JSON.parse(
+      putBodies.find(b => {
+        try { return JSON.parse(b).pricingModel !== undefined }
+        catch { return false }
+      }) || '{}',
+    )
+    expect(billingPutBody).toEqual({ pricingModel: 'PRO_RATA' })
+
+    // ── 8. Verify no scalar-capacity writes occurred ──
+    // Check all captured PUTs — none should contain scalar capacity fields
+    for (const rawBody of putBodies) {
+      const body = JSON.parse(rawBody)
+      const scalarKeys = ['allocationMode', 'allocationPercent', 'allocationPct', 'allocationStartWeek', 'allocationEndWeek', 'startWeek', 'endWeek']
+      for (const key of scalarKeys) {
+        expect(body).not.toHaveProperty(key)
+      }
+    }
+    // Verify no PATCH or RT-level PUT occurred during the test
+    const riskyRequests = scalarMonitorRequests.filter(r =>
+      r.method === 'PATCH' || (r.method === 'PUT' && !r.url.includes('/named-resources/')),
+    )
+    expect(riskyRequests).toEqual([])
+    // ── 9. Reload and verify persistence ──
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /capacity profile summary/i })).toBeVisible({ timeout: 15_000 })
+    // Reopen the People panel before checking panel-scoped elements
+    const roleRowReloaded = page.getByTestId(`resource-profile-row-${rtId}`)
+    await expect(roleRowReloaded).toBeVisible({ timeout: 10_000 })
+    await roleRowReloaded.getByRole('button', { name: /people/i }).click()
+    // Named resource rows inside the People panel are now visible
+    await expect(page.getByTestId(`named-resource-row-${nrId}`).getByRole('textbox')).toHaveValue('Segmented Alice Renamed')
+    const reloadedBilling = page.locator(`#billing-basis-${nrId}`)
+    await expect(reloadedBilling).toHaveValue('PRO_RATA')
+    // Recreate panel-scoped locators after reload (avoid stale refs)
+    const reloadedOwnerCard = page.getByTestId(`named-resource-profile-${nrId}`)
+    const reloadedOwnerBadge = page.getByTestId(`profile-managed-owner-${nrId}`)
+    await expect(reloadedOwnerBadge).toHaveText('Varies by week')
+    await expect(reloadedOwnerCard.getByText(/W1-W4: 50%/)).toBeVisible()
+    await expect(reloadedOwnerCard.getByText(/W5-W9: 100%/)).toBeVisible()
+
+    // ── 10. Capture canonical state AFTER and compare ──
+    const after = await readNamedPersonCanonicalState(nrId, profileId)
+
+    // Name changed
+    expect(after.namedResource.name).toBe('Segmented Alice Renamed')
+    expect(after.namedResource.name).not.toBe(before.namedResource.name)
+
+    // Pricing changed
+    expect(after.namedResource.pricingModel).toBe('PRO_RATA')
+
+    // All compatibility capacity fields unchanged (stale, as intended)
+    expect(after.namedResource.allocationMode).toBe(before.namedResource.allocationMode)
+    expect(after.namedResource.allocationPercent).toBe(before.namedResource.allocationPercent)
+    expect(after.namedResource.allocationPct).toBe(before.namedResource.allocationPct)
+    expect(after.namedResource.allocationStartWeek).toBe(before.namedResource.allocationStartWeek)
+    expect(after.namedResource.allocationEndWeek).toBe(before.namedResource.allocationEndWeek)
+    expect(after.namedResource.startWeek).toBe(before.namedResource.startWeek)
+    expect(after.namedResource.endWeek).toBe(before.namedResource.endWeek)
+
+    // Profile identity unchanged
+    expect(after.profile.id).toBe(before.profile.id)
+    expect(after.profile.namedResourceId).toBe(before.profile.namedResourceId)
+    expect(after.profile.resourceTypeId).toBe(before.profile.resourceTypeId)
+    expect(after.profile.ownerKind).toBe(before.profile.ownerKind)
+    expect(after.profile.source).toBe(before.profile.source)
+    expect(after.profile.planningBasis).toBe(before.profile.planningBasis)
+    expect(after.profile.defaultPercent).toBe(before.profile.defaultPercent)
+    expect(after.profile.startWeek).toBe(before.profile.startWeek)
+    expect(after.profile.endWeek).toBe(before.profile.endWeek)
+
+    // Segments unchanged
+    expect(after.segments).toHaveLength(before.segments.length)
+    for (let i = 0; i < before.segments.length; i++) {
+      expect(after.segments[i].id).toBe(before.segments[i].id)
+      expect(after.segments[i].startWeek).toBe(before.segments[i].startWeek)
+      expect(after.segments[i].endWeek).toBe(before.segments[i].endWeek)
+      expect(after.segments[i].capacityPercent).toBe(before.segments[i].capacityPercent)
+      expect(after.segments[i].source).toBe(before.segments[i].source)
+    }
   })
 })
