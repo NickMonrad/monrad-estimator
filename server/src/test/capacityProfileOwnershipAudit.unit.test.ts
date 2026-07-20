@@ -17,6 +17,7 @@ import {
   selectSurvivor,
   formatAuditReport,
   auditReportToJson,
+  deepEqual,
   type AuditedProfile,
   type AuditReport,
   type LegacyNullStatus,
@@ -37,6 +38,7 @@ function makeProfile(overrides: Partial<AuditedProfile> = {}): AuditedProfile {
     startWeek: 0,
     endWeek: 10,
     legacyStatus: 'DB_NULL' as LegacyNullStatus,
+    legacyValue: undefined,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     segments: [],
     ...overrides,
@@ -196,6 +198,94 @@ describe('profilesAreSemanticEqual', () => {
   })
 })
 
+describe('deepEqual', () => {
+  it('identical primitives are equal', () => {
+    expect(deepEqual(1, 1)).toBe(true)
+    expect(deepEqual('a', 'a')).toBe(true)
+    expect(deepEqual(true, true)).toBe(true)
+    expect(deepEqual(null, null)).toBe(true)
+  })
+
+  it('different primitives are not equal', () => {
+    expect(deepEqual(1, 2)).toBe(false)
+    expect(deepEqual('a', 'b')).toBe(false)
+    expect(deepEqual(true, false)).toBe(false)
+    expect(deepEqual(null, undefined)).toBe(false)
+  })
+
+  it('identical objects are equal', () => {
+    expect(deepEqual({ a: 1, b: { c: 2 } }, { a: 1, b: { c: 2 } })).toBe(true)
+    expect(deepEqual({ a: null }, { a: null })).toBe(true)
+  })
+
+  it('different objects are not equal', () => {
+    expect(deepEqual({ a: 1 }, { a: 2 })).toBe(false)
+    expect(deepEqual({ a: 1 }, { b: 1 })).toBe(false)
+    expect(deepEqual({ a: { b: 1 } }, { a: { b: 2 } })).toBe(false)
+  })
+
+  it('identical arrays are equal', () => {
+    expect(deepEqual([1, 2, 3], [1, 2, 3])).toBe(true)
+    expect(deepEqual([], [])).toBe(true)
+  })
+
+  it('different arrays are not equal', () => {
+    expect(deepEqual([1, 2], [1, 2, 3])).toBe(false)
+    expect(deepEqual([1, 2], [2, 1])).toBe(false)
+  })
+})
+
+describe('Profiles with legacy JSON VALUE differences', () => {
+  it('different JSON legacy values are conflicting duplicates', () => {
+    const a = makeProfile({
+      legacyStatus: 'VALUE' as LegacyNullStatus,
+      legacyValue: { allocationMode: 'TIMELINE', allocationPercent: 80 },
+    })
+    const b = makeProfile({
+      id: 'p-2',
+      legacyStatus: 'VALUE' as LegacyNullStatus,
+      legacyValue: { allocationMode: 'FULL_PROJECT', allocationPercent: 100 },
+    })
+    expect(profilesAreSemanticEqual(a, b)).toBe(false)
+  })
+
+  it('equivalent JSON legacy values are repairable', () => {
+    const a = makeProfile({
+      legacyStatus: 'VALUE' as LegacyNullStatus,
+      legacyValue: { allocationMode: 'TIMELINE', allocationPercent: 80 },
+    })
+    const b = makeProfile({
+      id: 'p-2',
+      legacyStatus: 'VALUE' as LegacyNullStatus,
+      legacyValue: { allocationMode: 'TIMELINE', allocationPercent: 80 },
+    })
+    expect(profilesAreSemanticEqual(a, b)).toBe(true)
+  })
+
+  it('equivalent deeply nested JSON is equal', () => {
+    const a = makeProfile({
+      legacyStatus: 'VALUE' as LegacyNullStatus,
+      legacyValue: { nested: { deep: { value: 42, items: [1, 2] } } },
+    })
+    const b = makeProfile({
+      id: 'p-2',
+      legacyStatus: 'VALUE' as LegacyNullStatus,
+      legacyValue: { nested: { deep: { value: 42, items: [1, 2] } } },
+    })
+    expect(profilesAreSemanticEqual(a, b)).toBe(true)
+  })
+
+  it('SQL null and JSON null are not equal', () => {
+    const a = makeProfile({
+      legacyStatus: 'DB_NULL' as LegacyNullStatus,
+    })
+    const b = makeProfile({
+      id: 'p-2',
+      legacyStatus: 'JSON_NULL' as LegacyNullStatus,
+    })
+    expect(profilesAreSemanticEqual(a, b)).toBe(false)
+  })
+})
 // ─── Survivor selection ─────────────────────────────────────────────────────
 
 describe('selectSurvivor', () => {

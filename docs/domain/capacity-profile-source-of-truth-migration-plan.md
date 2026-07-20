@@ -1039,11 +1039,10 @@ that enforces capacity-profile ownership invariants:
 
 **Schema rollback:**
 
-Roll back the constraints/indexes by reverting the migration:
-```bash
-cd server && npx prisma migrate down
-```
-Or, to drop only the #361 constraints while keeping later migrations:
+Roll back the constraints/indexes by dropping them manually. A follow-up
+migration (or the next schema change PR) will naturally pick up the schema
+state from the altered table. To drop only the #361 constraints while
+preserving valid data:
 ```sql
 ALTER TABLE "CapacityProfile" DROP CONSTRAINT "chk_CapacityProfile_exactly_one_owner";
 ALTER TABLE "CapacityProfile" DROP CONSTRAINT "chk_CapacityProfile_owner_kind_fk";
@@ -1073,9 +1072,10 @@ To restore data after repair:
 - Identical duplicate repair is not reversible by dropping constraints.
   Always retain the step-1 backup until the next full database backup
   confirms the new state.
-- The migration preflight checks report but do not block on cross-project
-  owner mismatches. These are tracked for future automated enforcement
-  (#362) but currently require manual resolution.
+- Cross-project owner mismatches block the migration preflight. They must
+  be resolved manually before the migration can proceed. The audit reports
+  them as errors (#361), and the migration preflight counts them toward the
+  failure threshold so they halt deployment until resolved.
 - Existing runtime duplicate and malformed-state validation in
   `persistedCapacityProfileValidation.ts` and `syncCapacityProfiles.ts`
   remains as defence in depth. It is not removed by this migration.

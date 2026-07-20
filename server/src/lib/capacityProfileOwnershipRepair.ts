@@ -37,49 +37,71 @@ export async function repairIdenticalDuplicates(
 
   let profilesDeleted = 0
 
-  await prisma.$transaction(async (tx) => {
-    // Fresh audit inside the transaction
-    const freshProfiles = await loadAllProfiles(tx as unknown as PrismaClient)
+  // Use Serializable isolation to prevent concurrent inserts/updates from
+  // creating phantom duplicates while we re-read and verify.
+  await prisma.$transaction(
+    async (tx) => {
+      // Fresh audit inside the transaction
+      const freshProfiles = await loadAllProfiles(tx as unknown as PrismaClient)
 
-    for (const group of report.repairableGroups) {
-      if (group.profiles.length < 2) continue
+      for (const group of report.repairableGroups) {
+        if (group.profiles.length < 2) continue
 
-      const reference = group.profiles[0]
-      const ownerKey = buildOwnerKey(reference.resourceTypeId, reference.namedResourceId)
+        const reference = group.profiles[0]
+        const ownerKey = buildOwnerKey(reference.resourceTypeId, reference.namedResourceId)
 
-      // Re-read and reclassify inside transaction
-      const currentGroup = freshProfiles.filter(p =>
-        buildOwnerKey(p.resourceTypeId, p.namedResourceId) === ownerKey,
-      )
+        // Build a set of exact profile IDs from the audit report for this group
+        const auditedIds = new Set(group.profiles.map(p => p.id))
 
-      if (currentGroup.length !== group.profiles.length) {
-        throw new Error(
-          `Repair aborted: owner key "${ownerKey}" group size changed from ${group.profiles.length} to ${currentGroup.length}`,
+        // Re-read: find profiles matching this owner key in fresh state
+        const currentGroup = freshProfiles.filter(p =>
+          buildOwnerKey(p.resourceTypeId, p.namedResourceId) === ownerKey,
         )
-      }
 
-      // Verify all are still identical
-      for (const p of currentGroup) {
-        if (!profilesAreSemanticEqual(p, reference)) {
+        // Verify group size is unchanged
+        if (currentGroup.length !== group.profiles.length) {
           throw new Error(
-            `Repair aborted: profile ${p.id} (owner key "${ownerKey}") is no longer identical to reference`,
+            `Repair aborted: owner key "${ownerKey}" group size changed from ${group.profiles.length} to ${currentGroup.length}`,
           )
         }
-      }
 
-      // Select survivor deterministically
-      const survivor = selectSurvivor(currentGroup)
-      const redundant = currentGroup.filter(p => p.id !== survivor.id)
+        // Verify every profile ID in the current group is one we audited
+        // (prevents same-sized replacement: swapped IDs or new ID replacing deleted)
+        for (const p of currentGroup) {
+          if (!auditedIds.has(p.id)) {
+            throw new Error(
+              `Repair aborted: profile ${p.id} (owner key "${ownerKey}") was not in the audited group. ` +
+              'Concurrent mutation detected.',
+            )
+          }
+          // Verify the profile is still semantically equal to the audited reference
+          if (!profilesAreSemanticEqual(p, reference)) {
+            throw new Error(
+              `Repair aborted: profile ${p.id} (owner key "${ownerKey}") is no longer identical to audited reference`,
+            )
+          }
+        }
 
-      // Delete redundant profiles (cascade deletes segments)
-      for (const p of redundant) {
-        await tx.capacityProfile.delete({
-          where: { id: p.id },
-        })
-        profilesDeleted++
+        // Select survivor deterministically
+        const survivor = selectSurvivor(currentGroup)
+        const redundant = currentGroup.filter(p => p.id !== survivor.id)
+
+        // Delete redundant profiles (cascade deletes segments)
+        for (const p of redundant) {
+          await tx.capacityProfile.delete({
+            where: { id: p.id },
+          })
+          profilesDeleted++
+        }
       }
-    }
-  })
+    },
+    {
+      isolationLevel: 'Serializable',
+      // Max 5 retries on serialization conflicts
+      maxWait: 5000,
+      timeout: 10000,
+    },
+  )
 
   return { profilesDeleted }
 }

@@ -15,7 +15,7 @@
  * This module produces deterministic structured output. It never writes.
  */
 
-import type { PrismaClient } from '@prisma/client'
+import { Prisma, type PrismaClient } from '@prisma/client'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -41,6 +41,8 @@ export interface AuditedProfile {
   startWeek: number | null
   endWeek: number | null
   legacyStatus: LegacyNullStatus
+  /** The raw legacy value when legacyStatus === 'VALUE'; undefined for DB_NULL/JSON_NULL. */
+  legacyValue: unknown
   createdAt: Date
   segments: AuditedSegment[]
 }
@@ -148,6 +150,10 @@ export function profilesAreSemanticEqual(a: AuditedProfile, b: AuditedProfile): 
   if (a.startWeek !== b.startWeek) return false
   if (a.endWeek !== b.endWeek) return false
   if (!legacyStatusEqual(a.legacyStatus, b.legacyStatus)) return false
+  // Deep-compare actual JSON values when both are VALUE
+  if (a.legacyStatus === 'VALUE' && b.legacyStatus === 'VALUE') {
+    if (!deepEqual(a.legacyValue, b.legacyValue)) return false
+  }
   // Compare ordered segments
   if (a.segments.length !== b.segments.length) return false
   const aSegs = [...a.segments].sort(compareSegments)
@@ -162,7 +168,36 @@ export function profilesAreSemanticEqual(a: AuditedProfile, b: AuditedProfile): 
   }
   return true
 }
-
+/**
+ * Deep compare two unknown values for equality. Handles plain objects, arrays,
+ * primitives, null. Covers the JSON-serialisable shapes stored in legacy JSONB.
+ */
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a == null || b == null) return a === b
+  if (typeof a !== typeof b) return false
+  if (typeof a === 'object' && typeof b === 'object') {
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false
+      for (let i = 0; i < a.length; i++) {
+        if (!deepEqual(a[i], b[i])) return false
+      }
+      return true
+    }
+    if (Array.isArray(a) !== Array.isArray(b)) return false
+    const aKeys = Object.keys(a as Record<string, unknown>).sort()
+    const bKeys = Object.keys(b as Record<string, unknown>).sort()
+    if (!deepEqual(aKeys, bKeys)) return false
+    for (const key of aKeys) {
+      if (!deepEqual(
+        (a as Record<string, unknown>)[key],
+        (b as Record<string, unknown>)[key],
+      )) return false
+    }
+    return true
+  }
+  return a === b
+}
 /**
  * Select the deterministic survivor from a group of semantically identical profiles.
  * Rule: earliest createdAt wins; lexical profile id is the tie-breaker.
@@ -175,13 +210,7 @@ export function selectSurvivor(profiles: AuditedProfile[]): AuditedProfile {
   })
   return sorted[0]
 }
-
-// ─── Null-state raw query (reuses exact-reader pattern) ──────────────────────
-
-import { Prisma } from '@prisma/client'
-
 type ProfileIdOnly = { id: string }
-
 async function loadLegacyNullMap(
   prisma: PrismaClient,
   ormProfileIds: ProfileIdOnly[],
@@ -201,7 +230,12 @@ async function loadLegacyNullMap(
   )
 
   const map = new Map<string, LegacyNullStatus>()
+  const seenRows = new Set<string>()
   for (const row of rows) {
+    if (seenRows.has(row.id)) {
+      throw new Error(`Ownership audit: duplicate row for capacity profile ${row.id} in raw SQL query`)
+    }
+    seenRows.add(row.id)
     if (row.legacy_is_null) {
       map.set(row.id, 'DB_NULL')
     } else if (row.legacy_typeof === 'null') {
@@ -210,10 +244,14 @@ async function loadLegacyNullMap(
       map.set(row.id, 'VALUE')
     }
   }
-  // Validate 1:1 correspondence — every ORM-loaded profile must have a raw row.
+  // Validate exact 1:1 correspondence — fail closed when any ORM-loaded profile
+  // has no matching raw row (database consistency error or concurrent change).
   for (const p of ormProfileIds) {
     if (!map.has(p.id)) {
-      map.set(p.id, 'DB_NULL') // defensive fallback for safety
+      throw new Error(
+        `Ownership audit: raw SQL query returned no row for ORM-loaded capacity profile ${p.id}. ` +
+        'This indicates a database consistency error or concurrent schema change. Aborting audit.',
+      )
     }
   }
   return map
@@ -257,6 +295,7 @@ export async function loadAllProfiles(prisma: PrismaClient): Promise<AuditedProf
       startWeek: p.startWeek,
       endWeek: p.endWeek,
       legacyStatus,
+      legacyValue: legacyStatus === 'VALUE' ? p.legacy : undefined,
       createdAt: p.createdAt,
       segments: p.segments.map(s => ({
         startWeek: s.startWeek,
@@ -493,7 +532,10 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
     repairableGroups,
     conflictingGroups,
     validSingletons: Math.max(0, validSingletons),
-    isClean: findings.every(f => f.severity !== 'error') && conflictingGroups.length === 0,
+    isClean:
+      findings.every(f => f.severity !== 'error') &&
+      conflictingGroups.length === 0 &&
+      repairableGroups.length === 0,
   }
 }
 

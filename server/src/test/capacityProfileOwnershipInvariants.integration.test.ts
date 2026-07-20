@@ -75,42 +75,133 @@ async function recreateNonUniqueIndexes(): Promise<void> {
 }
 
 /**
- * Apply the #361 migration constraints.
+ * Execute Phase 1 of the actual migration SQL (preflight dirty-data checks).
+ * Runs the PL/pgSQL block verbatim from the committed migration artifact.
  */
-async function applyConstraints(): Promise<void> {
-  // This simulates what the migration does — in test setup we drop + re-apply
-  // to verify the migration logic against both clean and dirty fixtures.
+async function runMigrationPreflight(): Promise<void> {
+  const preflightSql = `
+DO $$
+DECLARE
+    v_error_count INTEGER := 0;
+    v_err TEXT;
+BEGIN
+    -- Check 1: Both owner FKs set (XOR violation)
+    FOR v_err IN
+        SELECT 'Profile "' || id || '": both resourceTypeId and namedResourceId are set (project "' || "projectId" || '")'
+        FROM "CapacityProfile"
+        WHERE "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NOT NULL
+    LOOP
+        RAISE WARNING '[preflight] %', v_err;
+        v_error_count := v_error_count + 1;
+    END LOOP;
+    -- Check 2: Neither owner FK set
+    FOR v_err IN
+        SELECT 'Profile "' || id || '": neither resourceTypeId nor namedResourceId is set (project "' || "projectId" || '")'
+        FROM "CapacityProfile"
+        WHERE "resourceTypeId" IS NULL AND "namedResourceId" IS NULL
+    LOOP
+        RAISE WARNING '[preflight] %', v_err;
+        v_error_count := v_error_count + 1;
+    END LOOP;
+    -- Check 3: ownerKind = ROLE without resourceTypeId
+    FOR v_err IN
+        SELECT 'Profile "' || id || '": ownerKind ROLE but resourceTypeId is null (project "' || "projectId" || '")'
+        FROM "CapacityProfile"
+        WHERE "ownerKind" = 'ROLE' AND "resourceTypeId" IS NULL
+    LOOP
+        RAISE WARNING '[preflight] %', v_err;
+        v_error_count := v_error_count + 1;
+    END LOOP;
+    -- Check 4: ownerKind = ROLE with namedResourceId
+    FOR v_err IN
+        SELECT 'Profile "' || id || '": ownerKind ROLE but namedResourceId is set (project "' || "projectId" || '")'
+        FROM "CapacityProfile"
+        WHERE "ownerKind" = 'ROLE' AND "namedResourceId" IS NOT NULL
+    LOOP
+        RAISE WARNING '[preflight] %', v_err;
+        v_error_count := v_error_count + 1;
+    END LOOP;
+    -- Check 5: ownerKind = NAMED_PERSON or PLANNED_RESOURCE without namedResourceId
+    FOR v_err IN
+        SELECT 'Profile "' || id || '": ownerKind "' || "ownerKind" || '" but namedResourceId is null (project "' || "projectId" || '")'
+        FROM "CapacityProfile"
+        WHERE "ownerKind" IN ('NAMED_PERSON', 'PLANNED_RESOURCE') AND "namedResourceId" IS NULL
+    LOOP
+        RAISE WARNING '[preflight] %', v_err;
+        v_error_count := v_error_count + 1;
+    END LOOP;
+    -- Check 6: ownerKind = NAMED_PERSON or PLANNED_RESOURCE with resourceTypeId
+    FOR v_err IN
+        SELECT 'Profile "' || id || '": ownerKind "' || "ownerKind" || '" but resourceTypeId is set (project "' || "projectId" || '")'
+        FROM "CapacityProfile"
+        WHERE "ownerKind" IN ('NAMED_PERSON', 'PLANNED_RESOURCE') AND "resourceTypeId" IS NOT NULL
+    LOOP
+        RAISE WARNING '[preflight] %', v_err;
+        v_error_count := v_error_count + 1;
+    END LOOP;
+    -- Check 7: Duplicate resourceTypeId (non-null)
+    FOR v_err IN
+        SELECT 'Duplicate resourceTypeId "' || "resourceTypeId" || '": profiles ' || string_agg(id, ', ')
+        FROM "CapacityProfile"
+        WHERE "resourceTypeId" IS NOT NULL
+        GROUP BY "resourceTypeId"
+        HAVING COUNT(*) > 1
+    LOOP
+        RAISE WARNING '[preflight] %', v_err;
+        v_error_count := v_error_count + 1;
+    END LOOP;
+    -- Check 8: Duplicate namedResourceId (non-null)
+    FOR v_err IN
+        SELECT 'Duplicate namedResourceId "' || "namedResourceId" || '": profiles ' || string_agg(id, ', ')
+        FROM "CapacityProfile"
+        WHERE "namedResourceId" IS NOT NULL
+        GROUP BY "namedResourceId"
+        HAVING COUNT(*) > 1
+    LOOP
+        RAISE WARNING '[preflight] %', v_err;
+        v_error_count := v_error_count + 1;
+    END LOOP;
+    IF v_error_count > 0 THEN
+        RAISE EXCEPTION 'Preflight FAILED: % integrity issue(s) detected. Run audit and resolve errors before retrying.', v_error_count;
+    END IF;
+END $$;
+`
+  await prisma.$executeRawUnsafe(preflightSql)
+}
 
-  // Preflight checks are done by the PL/pgSQL block in the migration SQL.
-  // For tests we apply the raw constraint SQL directly.
-
+/**
+ * Execute Phases 2 and 3 of the actual migration SQL (CHECK constraints + unique indexes).
+ * Mirrors the exact SQL from the committed migration artifact.
+ */
+async function runMigrationConstraints(): Promise<void> {
   await prisma.$executeRawUnsafe(`
     ALTER TABLE "CapacityProfile"
     ADD CONSTRAINT "chk_CapacityProfile_exactly_one_owner"
     CHECK (
-      ("resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
-      OR
-      ("resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+        ("resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
+        OR
+        ("resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
     )
   `)
-
   await prisma.$executeRawUnsafe(`
     ALTER TABLE "CapacityProfile"
     ADD CONSTRAINT "chk_CapacityProfile_owner_kind_fk"
     CHECK (
-      ("ownerKind" = 'ROLE' AND "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
-      OR
-      ("ownerKind" = 'NAMED_PERSON' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
-      OR
-      ("ownerKind" = 'PLANNED_RESOURCE' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+        ("ownerKind" = 'ROLE' AND "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
+        OR
+        ("ownerKind" = 'NAMED_PERSON' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+        OR
+        ("ownerKind" = 'PLANNED_RESOURCE' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
     )
   `)
-
+  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_idx"')
   await prisma.$executeRawUnsafe(`
     CREATE UNIQUE INDEX "CapacityProfile_resourceTypeId_key"
     ON "CapacityProfile"("resourceTypeId") WHERE "resourceTypeId" IS NOT NULL
   `)
-
+  await prisma.$executeRawUnsafe(`
+    DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_idx"
+  `)
   await prisma.$executeRawUnsafe(`
     CREATE UNIQUE INDEX "CapacityProfile_namedResourceId_key"
     ON "CapacityProfile"("namedResourceId") WHERE "namedResourceId" IS NOT NULL
@@ -705,8 +796,7 @@ describeIf('Migration constraint enforcement', () => {
         legacy: Prisma.DbNull,
       },
     })
-
-    await expect(applyConstraints()).rejects.toThrow()
+    await expect(runMigrationPreflight()).rejects.toThrow()
   })
 
   it('migration refuses neither FK set', async () => {
@@ -724,8 +814,7 @@ describeIf('Migration constraint enforcement', () => {
         legacy: Prisma.DbNull,
       },
     })
-
-    await expect(applyConstraints()).rejects.toThrow()
+    await expect(runMigrationPreflight()).rejects.toThrow()
   })
 
   it('migration refuses ownerKind/FK mismatch', async () => {
@@ -743,12 +832,10 @@ describeIf('Migration constraint enforcement', () => {
         legacy: Prisma.DbNull,
       },
     })
-
-    await expect(applyConstraints()).rejects.toThrow()
+    await expect(runMigrationPreflight()).rejects.toThrow()
   })
 
   it('migration refuses duplicate resourceTypeId', async () => {
-    // Create two profiles with same resourceTypeId
     await prisma.capacityProfile.create({
       data: {
         projectId,
@@ -777,84 +864,49 @@ describeIf('Migration constraint enforcement', () => {
         legacy: Prisma.DbNull,
       },
     })
-
-    await expect(applyConstraints()).rejects.toThrow()
+    await expect(runMigrationPreflight()).rejects.toThrow()
   })
 
-  it('migration succeeds after clean audit and repair', async () => {
+  it('migration succeeds after clean audit', async () => {
     await resetToCleanState()
     const report = await runOwnershipAudit(prisma)
     expect(report.isClean).toBe(true)
-
-    await expect(applyConstraints()).resolves.not.toThrow()
+    await expect(runMigrationPreflight()).resolves.not.toThrow()
+    await expect(runMigrationConstraints()).resolves.not.toThrow()
   })
-
-  // ─── PostgreSQL constraint enforcement ────────────────────────────────────
 
   it('PostgreSQL rejects both FK after migration', async () => {
     await resetToCleanState()
-    await applyConstraints()
-
+    await runMigrationPreflight()
+    await runMigrationConstraints()
     await expect(
       prisma.capacityProfile.create({
-        data: {
-          projectId,
-          resourceTypeId: rtId,
-          namedResourceId: nrId,
-          ownerKind: 'ROLE',
-          planningBasis: 'DEMAND_FOLLOWING',
-          source: 'FIXED',
-          defaultPercent: 100,
-          startWeek: 0,
-          endWeek: 10,
-          legacy: Prisma.DbNull,
-        },
+        data: { projectId, resourceTypeId: rtId, namedResourceId: nrId, ownerKind: 'ROLE',
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
       }),
     ).rejects.toThrow()
   })
 
   it('PostgreSQL rejects duplicate resourceTypeId after migration', async () => {
     await resetToCleanState()
-    await applyConstraints()
-
+    await runMigrationPreflight()
+    await runMigrationConstraints()
     await expect(
       prisma.capacityProfile.create({
-        data: {
-          projectId,
-          resourceTypeId: rtId,
-          namedResourceId: null,
-          ownerKind: 'ROLE',
-          planningBasis: 'DEMAND_FOLLOWING',
-          source: 'FIXED',
-          defaultPercent: 100,
-          startWeek: 0,
-          endWeek: 10,
-          legacy: Prisma.DbNull,
-        },
+        data: { projectId, resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
       }),
     ).rejects.toThrow()
   })
 
   it('PostgreSQL rejects cross-kind named resource duplicate', async () => {
     await resetToCleanState()
-    await applyConstraints()
-
-    // nrProfileId already exists as NAMED_PERSON
-    // Try to create PLANNED_RESOURCE with same namedResourceId
+    await runMigrationPreflight()
+    await runMigrationConstraints()
     await expect(
       prisma.capacityProfile.create({
-        data: {
-          projectId,
-          resourceTypeId: null,
-          namedResourceId: nrId, // same as existing NAMED_PERSON profile
-          ownerKind: 'PLANNED_RESOURCE',
-          planningBasis: 'DEMAND_FOLLOWING',
-          source: 'FIXED',
-          defaultPercent: 100,
-          startWeek: 0,
-          endWeek: 10,
-          legacy: Prisma.DbNull,
-        },
+        data: { projectId, resourceTypeId: null, namedResourceId: nrId, ownerKind: 'PLANNED_RESOURCE',
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
       }),
     ).rejects.toThrow()
   })
@@ -873,7 +925,8 @@ describeIf('Constraint rollback preserves valid data', () => {
 
   it('dropping constraints preserves existing valid data', async () => {
     await resetToCleanState()
-    await applyConstraints()
+    await runMigrationPreflight()
+    await runMigrationConstraints()
 
     // Verify data is intact
     const count = await prisma.capacityProfile.count()
@@ -902,7 +955,8 @@ describeIf('Existing write path compatibility under constraints', () => {
 
   it('creates a valid named-resource profile under constraints', async () => {
     await resetToCleanState()
-    await applyConstraints()
+    await runMigrationPreflight()
+    await runMigrationConstraints()
 
     // Try creating a valid new named-resource profile for nrId2
     const profile = await prisma.capacityProfile.create({
@@ -924,10 +978,9 @@ describeIf('Existing write path compatibility under constraints', () => {
 
   it('concurrent duplicate attempt rolls back cleanly', async () => {
     await resetToCleanState()
-    await applyConstraints()
+    await runMigrationPreflight()
+    await runMigrationConstraints()
 
-    // Simulate concurrent duplicate by trying to insert a duplicate
-    // (in real code this would be a 409 conflict)
     await expect(
       prisma.capacityProfile.create({
         data: {
@@ -966,10 +1019,9 @@ describeIf('Backfill/reconcile safety under constraints', () => {
 
   it('backfill cannot create duplicate owners under constraints', async () => {
     await resetToCleanState()
-    await applyConstraints()
+    await runMigrationPreflight()
+    await runMigrationConstraints()
 
-    // syncCapacityProfilesForProject should fail to create a duplicate
-    // This simulates a backfill that would create a duplicate
     await expect(
       prisma.capacityProfile.create({
         data: {

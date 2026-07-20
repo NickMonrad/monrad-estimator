@@ -35,15 +35,18 @@ const repairIdentical = args.includes('--repair-identical')
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('═══ Capacity Profile Ownership Audit ═══')
-  console.log('')
+  // In --json mode, send only JSON to stdout; human-readable output to stderr.
+  const log = showJson ? (...args: unknown[]) => process.stderr.write(args.join(' ') + '\n') : console.log
+
+  log('═══ Capacity Profile Ownership Audit ═══')
+  log('')
 
   if (repairIdentical) {
-    console.log('Mode: AUDIT + REPAIR identical duplicates')
-    console.log('')
+    log('Mode: AUDIT + REPAIR identical duplicates')
+    log('')
   } else {
-    console.log('Mode: AUDIT ONLY (no writes)')
-    console.log('')
+    log('Mode: AUDIT ONLY (no writes)')
+    log('')
   }
 
   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL })
@@ -51,58 +54,57 @@ async function main() {
 
   try {
     // Phase 1: Audit
-    console.log('Phase 1: Running ownership audit…')
+    log('Phase 1: Running ownership audit…')
     const report = await runOwnershipAudit(prisma)
-
     if (showJson) {
-      console.log(auditReportToJson(report))
+      // JSON output to stdout only — one valid JSON document
+      process.stdout.write(auditReportToJson(report) + '\n')
     } else {
-      console.log(formatAuditReport(report))
+      log(formatAuditReport(report))
     }
 
     // Phase 2: Repair (only with explicit flag)
     if (repairIdentical) {
       if (report.repairableGroups.length === 0) {
-        console.log('')
-        console.log('No identical duplicate groups found. Nothing to repair.')
+        log('')
+        log('No identical duplicate groups found. Nothing to repair.')
       } else {
-        console.log('')
-        console.log(`Phase 2: Repairing ${report.repairableGroups.length} identical duplicate group(s)…`)
+        log('')
+        log(`Phase 2: Repairing ${report.repairableGroups.length} identical duplicate group(s)…`)
         const repairResult = await repairIdenticalDuplicates(prisma, report)
-        console.log(`  Profiles deleted: ${repairResult.profilesDeleted}`)
-        console.log(`  Segments cascade-deleted: auto (cascade)`)
+        log(`  Profiles deleted: ${repairResult.profilesDeleted}`)
+        log(`  Segments cascade-deleted: auto (cascade)`)
 
         // Phase 3: Final audit
-        console.log('')
-        console.log('Phase 3: Running final audit after repair…')
+        log('')
+        log('Phase 3: Running final audit after repair…')
         const finalReport = await runOwnershipAudit(prisma)
 
         if (showJson) {
-          console.log(auditReportToJson(finalReport))
+          process.stdout.write(auditReportToJson(finalReport) + '\n')
         } else {
-          console.log(formatAuditReport(finalReport))
+          log(formatAuditReport(finalReport))
         }
 
         if (!finalReport.isClean) {
-          console.log('')
-          console.log('❌ Database is NOT clean after repair. Manual resolution required.')
+          log('')
+          log('❌ Database is NOT clean after repair. Manual resolution required.')
           process.exit(1)
         }
-        console.log('')
-        console.log('✅ Repair complete. Database ready for migration.')
+        log('')
+        log('✅ Repair complete. Database ready for migration.')
       }
     }
 
-    // Exit code
+    // Exit non-zero when database is not clean (including repairable duplicates)
     if (!report.isClean && !repairIdentical) {
-      console.log('')
-      console.log('❌ Audit FAILED — blocking issues detected.')
+      log('')
+      log('❌ Audit FAILED — blocking issues detected.')
       process.exit(1)
     }
 
-    // After repair, check final state
+    // After repair, verify final state
     if (repairIdentical) {
-      // Re-read state and exit appropriately
       const finalReport = await runOwnershipAudit(prisma)
       if (!finalReport.isClean) {
         process.exit(1)
@@ -111,8 +113,8 @@ async function main() {
 
     process.exit(0)
   } catch (error) {
-    console.error('')
-    console.error('❌ Audit failed with error:', error instanceof Error ? error.message : String(error))
+    log('')
+    log('❌ Audit failed with error:', error instanceof Error ? error.message : String(error))
     process.exit(1)
   } finally {
     await prisma.$disconnect()
