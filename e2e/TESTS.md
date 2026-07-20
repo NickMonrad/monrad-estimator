@@ -125,7 +125,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 |------|-------------|
 | open and close the drawer | Navigates to a Timeline page, clicks `🔧 Starting Team Finder`, asserts the drawer dialog with accessible name and heading "Starting Team Finder" is visible, clicks the Close (×) button, asserts drawer is removed from the DOM |
 
-#### `Starting Team Finder drawer — with resources` describe block (3 tests — Phase 4, issue #233)
+#### `Starting Team Finder drawer — with resources` describe block (4 tests — Phase 4, issue #233; profile-first apply, issue #360)
 
 `beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import, navigates to Timeline, and runs Quick schedule. Each test has a 90 s timeout.
 
@@ -134,6 +134,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 | run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
 | apply candidate submits only that candidate’s positive ramp-up scope | Enables later ramp-up suggestions, runs the finder, applies the first candidate, and asserts the `POST /optimise/apply` payload scopes ramp-up to exactly that candidate’s positive `suggestedStartWeek` resource types |
 | apply candidate persists through the direct-apply workflow | Runs the finder, applies the first candidate, verifies the `POST /optimise/apply` response returns a snapshot ID, and asserts the drawer closes only after the profile-first direct apply succeeds |
+| direct apply fails closed for an explicit named-person profile | Adds a named person through Resource Profile, submits a direct ramp-up apply request, and asserts `409 OPTIMISER_APPLY_CONFLICT` with `EXPLICIT_SCALAR_PROTECTED`; user-configured capacity is never replaced |
 
 #### `Timeline — Resource-counts layout` describe block (3 tests — issue #369)
 

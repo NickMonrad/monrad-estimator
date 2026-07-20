@@ -442,6 +442,71 @@ test.describe('Starting Team Finder drawer — with resources', () => {
     await expect(response.json()).resolves.toMatchObject({ snapshotId: expect.any(String) })
     await expect(drawer).not.toBeVisible({ timeout: 10_000 })
   })
+
+  test('direct apply fails closed for an explicit named-person profile', async ({ page }) => {
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    const developerRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(developerRow).toBeVisible({ timeout: 15_000 })
+    await developerRow.getByRole('button', { name: /people/i }).click()
+
+    const addResponse = page.waitForResponse(
+      response => response.request().method() === 'POST'
+        && response.ok()
+        && /\/named-resources$/.test(new URL(response.url()).pathname),
+      { timeout: 15_000 },
+    )
+    await page.getByRole('button', { name: /add person/i }).click()
+    const namedResource = await addResponse.then(response => response.json() as Promise<{
+      id: string
+      resourceTypeId: string
+    }>)
+
+    const resourceProfile = await page.evaluate(async ({ id }) => {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`/api/projects/${id}/resource-profile`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      return { status: response.status, body: await response.json() }
+    }, { id: projectId })
+    expect(resourceProfile.status).toBe(200)
+    const resourceType = resourceProfile.body.resourceRows.find(
+      (row: { resourceTypeId: string }) => row.resourceTypeId === namedResource.resourceTypeId,
+    ) as { count: number }
+    expect(resourceType).toBeDefined()
+
+    const applyResult = await page.evaluate(async ({ id, resourceTypeId, count }) => {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`/api/projects/${id}/optimise/apply`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          resourceTypes: [{ resourceTypeId, count, suggestedStartWeek: 2 }],
+          rampUpScopeResourceTypeIds: [resourceTypeId],
+          staggerEpics: false,
+        }),
+      })
+      return { status: response.status, body: await response.json() }
+    }, {
+      id: projectId,
+      resourceTypeId: namedResource.resourceTypeId,
+      count: resourceType.count,
+    })
+    expect(applyResult).toMatchObject({
+      status: 409,
+      body: {
+        code: 'OPTIMISER_APPLY_CONFLICT',
+        conflicts: [expect.objectContaining({
+          code: 'EXPLICIT_SCALAR_PROTECTED',
+          namedResourceName: expect.any(String),
+        })],
+      },
+    })
+  })
 })
 
 
