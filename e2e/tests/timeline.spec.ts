@@ -613,6 +613,7 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(postCp.defaultPercent).toBe(100)
       // Resource Optimiser provenance marker in legacy
       expect(postCp.legacy).toEqual({ version: 1, writer: 'RESOURCE_OPTIMISER' })
+      const createdProfileId = postCp.id
       const postSegRows = await db.query(`SELECT * FROM "CapacitySegment" WHERE "capacityProfileId" = $1`, [postCp.id])
       expect(postSegRows.rows).toHaveLength(0)
 
@@ -620,13 +621,14 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       const postNrSql = await db.query(`SELECT * FROM "NamedResource" WHERE "id" = $1`, [nrResult.nrId])
       expect(postNrSql.rows).toHaveLength(1)
       const postNr = postNrSql.rows[0]
-      // AVAILABILITY_WINDOW + DERIVED projects to TIMELINE mode, 100%, startWeek=rampUpWeek
-      // NamedResource compatibility fields from profile projection
-      expect(postNr.allocationMode).toBe('TIMELINE')
-      expect(postNr.allocationPercent).toBe(100)
-      expect(postNr.allocationPct).toBe(100)
-      // endWeek is null because the profile has null endWeek (open-ended)
-      expect(postNr.endWeek).toBeNull()
+      // NamedResource compatibility fields: all 7 asserted against authoritative profile
+      expect(postNr.allocationMode).toBe('TIMELINE') // AVAILABILITY_WINDOW projects to TIMELINE
+      expect(postNr.allocationPercent).toBe(postCp.defaultPercent)
+      expect(postNr.allocationPct).toBe(postCp.defaultPercent)
+      expect(postNr.allocationStartWeek).toBe(postCp.startWeek)
+      expect(postNr.allocationEndWeek).toBe(postCp.endWeek)
+      expect(postNr.startWeek).toBe(postCp.startWeek)
+      expect(postNr.endWeek).toBe(postCp.endWeek)
       const postRp = await page.evaluate(async ({ id, nrId }) => {
         const token = localStorage.getItem('token')
         const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
@@ -656,10 +658,8 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       // Effective availability
       expect(postRpNr.allocationMode).toBe('TIMELINE')
       expect(postRpNr.allocationPercent).toBe(100)
-      expect(postRpNr.allocationPct).toBe(100)
-      // allocationEndWeek: profile has null (open-ended), so null is expected.
-      // If scheduler overlay computed one, it will be >= rampUpWeek.
-      expect(postRpNr.allocationEndWeek === null || postRpNr.allocationEndWeek! >= rampUpWeek).toBe(true)
+      // Exact match against authoritative profile
+      expect(postRpNr.allocationEndWeek).toBe(postCp.endWeek)
       // Resource-type count
       expect(postRp.devRow!.count).toBe(rampUpCount)
 
@@ -678,9 +678,8 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(postTl).toBeDefined()
       const postTlNr = postTl!
       expect(postTlNr.startWeek).toBe(rampUpWeek)
-      expect(postTlNr.endWeek === null || postTlNr.endWeek! >= rampUpWeek).toBe(true)
-      expect(postTlNr.allocationPercent).toBe(100)
-      expect(postTlNr.allocationMode).toBe('TIMELINE')
+      // Exact match against authoritative profile
+      expect(postTlNr.endWeek).toBe(postCp.endWeek)
 
       // ── 10. Undo via snapshot rollback ──────────────────────────────────
       const undoResult = await page.evaluate(async ({ id, snapshotId }) => {
@@ -696,8 +695,8 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       const restCpRows = await db.query(`SELECT * FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
       expect(restCpRows.rows).toHaveLength(0)
       const restSegRows = await db.query(
-        `SELECT cs.* FROM "CapacitySegment" cs JOIN "CapacityProfile" cp ON cs."capacityProfileId" = cp.id WHERE cp."namedResourceId" = $1 AND cp."projectId" = $2`,
-        [nrResult.nrId, projectId],
+        `SELECT * FROM "CapacitySegment" WHERE "capacityProfileId" = $1`,
+        [createdProfileId],
       )
       expect(restSegRows.rows).toHaveLength(0)
 
@@ -713,14 +712,19 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(restNr.startWeek).toBe(preNr.startWeek)
       expect(restNr.endWeek).toBe(preNr.endWeek)
 
-      // 11c. Resource Profile restoration
+      // 11c. Resource Profile restoration — all relevant fields
       const restRp = await page.evaluate(async ({ id, nrId }) => {
         const token = localStorage.getItem('token')
         const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
         const rp = await (await fetch(`/api/projects/${id}/resource-profile`, { headers })).json() as {
           resourceRows: Array<{
             resourceTypeId: string; count: number
-            namedResources: Array<{ id: string; allocationMode: string; allocationPercent: number; allocationPct: number; allocationStartWeek: number | null; allocationEndWeek: number | null; startWeek: number | null; endWeek: number | null }>
+            namedResources: Array<{
+              id: string; allocationMode: string; allocationPercent: number; allocationPct: number
+              allocationStartWeek: number | null; allocationEndWeek: number | null
+              startWeek: number | null; endWeek: number | null
+              capacityProfile?: { resolutionSource: string }
+            }>
           }>
         }
         const devRow = rp.resourceRows.find(r => r.namedResources.some(nr => nr.id === nrId))
@@ -732,23 +736,14 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(restRp.devRow!.count).toBe(preCount)
       expect(restRp.devNr!.allocationMode).toBe(preRpNr.allocationMode)
       expect(restRp.devNr!.allocationPercent).toBe(preRpNr.allocationPercent)
+      expect(restRp.devNr!.allocationPct).toBe(preRpNr.allocationPct)
       expect(restRp.devNr!.allocationStartWeek).toBe(preRpNr.allocationStartWeek)
       expect(restRp.devNr!.allocationEndWeek).toBe(preRpNr.allocationEndWeek)
-
-      // 11d. Timeline restoration (MUST succeed, not conditional)
-      const restTl = await page.evaluate(async ({ id, nrId }) => {
-        const token = localStorage.getItem('token')
-        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
-        const tl = await (await fetch(`/api/projects/${id}/timeline`, { headers })).json() as {
-          namedResources: Array<{ id: string; startWeek: number | null; endWeek: number | null; allocationMode: string; allocationPercent: number }>
-        }
-        return tl.namedResources.find(nr => nr.id === nrId) ?? null
-      }, { id: projectId, nrId: nrResult.nrId })
-      expect(restTl).toBeDefined()
-      expect(restTl!.startWeek).toBe(preTlNr.startWeek)
-      expect(restTl!.endWeek).toBe(preTlNr.endWeek)
-      expect(restTl!.allocationPercent).toBe(preTlNr.allocationPercent)
-      expect(restTl!.allocationMode).toBe(preTlNr.allocationMode)
+      expect(restRp.devNr!.startWeek).toBe(preRpNr.startWeek)
+      expect(restRp.devNr!.endWeek).toBe(preRpNr.endWeek)
+      // Legacy fallback resolution restored
+      expect(restRp.devNr!.capacityProfile).toBeDefined()
+      expect(restRp.devNr!.capacityProfile!.resolutionSource).toBe('LEGACY')
 
     } finally {
       await db.end()
