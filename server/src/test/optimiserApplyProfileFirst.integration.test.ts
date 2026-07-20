@@ -355,6 +355,28 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     expect((await prisma.resourceType.findUniqueOrThrow({ where: { id: scenario.resourceTypeId } })).count).toBe(2)
   })
 
+  it('rejects malformed EFFORT scalar state with 409 before snapshot or mutation', async () => {
+    const scenario = await createScenario('malformed-effort', {
+      allocationMode: 'EFFORT',
+      startWeek: -3,
+    })
+
+    const beforeCount = await prisma.resourceType.findUniqueOrThrow({ where: { id: scenario.resourceTypeId } }).then(r => r.count)
+
+    const response = await applyScenario(scenario, 3, 5)
+    expect(response.status).toBe(409)
+    expect(response.body.code).toBe('OPTIMISER_APPLY_CONFLICT')
+    expect(response.body.conflicts).toEqual([expect.objectContaining({
+      code: 'MALFORMED_SCALAR_STATE',
+    })])
+
+    // Verify no snapshot or mutation occurred
+    const afterCount = await prisma.resourceType.findUniqueOrThrow({ where: { id: scenario.resourceTypeId } }).then(r => r.count)
+    expect(afterCount).toBe(beforeCount)
+    expect(await prisma.backlogSnapshot.findMany({ where: { projectId: scenario.projectId } })).toEqual([])
+    expect(await prisma.capacityProfile.findMany({ where: { namedResourceId: scenario.namedResourceId } })).toEqual([])
+  })
+
   it('rolls back snapshot, profile, count, schedule, and cache on a late failure', async () => {
     const scenario = await createScenario('rollback', { withBacklog: true })
     __setOptimiserApplyFailureSeam(stage => {

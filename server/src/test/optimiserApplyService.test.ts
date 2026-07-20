@@ -180,6 +180,51 @@ describe('validateNoProfileScalarState', () => {
     }))).toEqual({ valid: true })
   })
 
+  it('rejects EFFORT with negative start week', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'EFFORT',
+      startWeek: -1,
+    }))).toEqual({ valid: false, reason: expect.stringContaining('startWeek') })
+  })
+
+  it('rejects EFFORT with fractional start week', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'EFFORT',
+      startWeek: 2.5,
+    }))).toEqual({ valid: false, reason: expect.stringContaining('startWeek') })
+  })
+
+  it('rejects EFFORT with start after end week', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'EFFORT',
+      allocationStartWeek: 10,
+      allocationEndWeek: 5,
+    }))).toEqual({ valid: false, reason: expect.stringContaining('after') })
+  })
+
+  it('rejects EFFORT with contradictory start aliases', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'EFFORT',
+      startWeek: 1,
+      allocationStartWeek: 3,
+    }))).toEqual({ valid: false, reason: expect.stringContaining('Contradictory') })
+  })
+
+  it('rejects EFFORT with contradictory end aliases', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'EFFORT',
+      endWeek: 10,
+      allocationEndWeek: 12,
+    }))).toEqual({ valid: false, reason: expect.stringContaining('Contradictory') })
+  })
+
+  it('rejects EFFORT with negative allocationEndWeek', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'EFFORT',
+      allocationEndWeek: -5,
+    }))).toEqual({ valid: false, reason: expect.stringContaining('allocationEndWeek') })
+  })
+
   it('accepts valid TIMELINE with allocationPercent', () => {
     expect(validateNoProfileScalarState(namedResource({
       allocationMode: 'TIMELINE',

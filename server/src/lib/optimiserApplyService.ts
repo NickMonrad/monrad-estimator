@@ -297,34 +297,31 @@ export function validateNoProfileScalarState(
     return { valid: false, reason: `Unsupported allocation mode "${mode}". Use EFFORT, TIMELINE or FULL_PROJECT.` }
   }
 
-  // EFFORT: effective percent is always 100 regardless of stored data
-  if (mode === 'EFFORT') {
-    return { valid: true }
-  }
+  // TIMELINE / FULL_PROJECT require a valid percentage
+  if (mode !== 'EFFORT') {
+    const hasAllocPct = nr.allocationPercent != null
+    const hasAllocPctAlias = nr.allocationPct != null
 
-  // TIMELINE / FULL_PROJECT — validate percentage
-  const hasAllocPct = nr.allocationPercent != null
-  const hasAllocPctAlias = nr.allocationPct != null
+    if (!hasAllocPct && !hasAllocPctAlias) {
+      return { valid: false, reason: `Missing allocation percent for mode "${mode}".` }
+    }
 
-  if (!hasAllocPct && !hasAllocPctAlias) {
-    return { valid: false, reason: `Missing allocation percent for mode "${mode}".` }
-  }
-
-  if (hasAllocPct) {
-    if (!Number.isFinite(nr.allocationPercent) || nr.allocationPercent! < 0 || nr.allocationPercent! > 100) {
-      return { valid: false, reason: `allocationPercent ${nr.allocationPercent} is invalid; must be a finite number between 0 and 100.` }
+    if (hasAllocPct) {
+      if (!Number.isFinite(nr.allocationPercent) || nr.allocationPercent! < 0 || nr.allocationPercent! > 100) {
+        return { valid: false, reason: `allocationPercent ${nr.allocationPercent} is invalid; must be a finite number between 0 and 100.` }
+      }
+    }
+    if (hasAllocPctAlias) {
+      if (!Number.isFinite(nr.allocationPct) || nr.allocationPct! < 0 || nr.allocationPct! > 100) {
+        return { valid: false, reason: `allocationPct ${nr.allocationPct} is invalid; must be a finite number between 0 and 100.` }
+      }
+    }
+    if (hasAllocPct && hasAllocPctAlias && nr.allocationPercent !== nr.allocationPct) {
+      return { valid: false, reason: `Contradictory allocationPercent (${nr.allocationPercent}) and allocationPct (${nr.allocationPct}).` }
     }
   }
-  if (hasAllocPctAlias) {
-    if (!Number.isFinite(nr.allocationPct) || nr.allocationPct! < 0 || nr.allocationPct! > 100) {
-      return { valid: false, reason: `allocationPct ${nr.allocationPct} is invalid; must be a finite number between 0 and 100.` }
-    }
-  }
-  if (hasAllocPct && hasAllocPctAlias && nr.allocationPercent !== nr.allocationPct) {
-    return { valid: false, reason: `Contradictory allocationPercent (${nr.allocationPercent}) and allocationPct (${nr.allocationPct}).` }
-  }
 
-  // Validate week values
+  // All modes: validate week fields, alias consistency, window validity
   const weekFields: Array<{ key: string; value: number | null | undefined; label: string }> = [
     { key: 'startWeek', value: nr.startWeek, label: 'startWeek' },
     { key: 'endWeek', value: nr.endWeek, label: 'endWeek' },

@@ -144,6 +144,7 @@ function CandidateCard({
   onRefineScenario: (candidate: OptimiserCandidate) => void
 }) {
   const [applyError, setApplyError] = useState<string | null>(null)
+  const [staggerEpics, setStaggerEpics] = useState(true)
   const applyMutation = useMutation({
     mutationFn: () => applyOptimiserScenario(projectId, candidate.resourceTypes, {
       optimiserScopeResourceTypeIds,
