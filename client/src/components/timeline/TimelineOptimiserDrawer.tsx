@@ -132,7 +132,6 @@ function CandidateCard({
   baselineRtMap,
   allowRampUp,
   projectId,
-  rampUpScopeResourceTypeIds,
   onApplied,
   onRefineScenario,
 }: {
@@ -143,7 +142,6 @@ function CandidateCard({
   baselineRtMap: Map<string, { count: number; suggestedStartWeek: number }>
   allowRampUp: boolean
   projectId: string
-  rampUpScopeResourceTypeIds: string[]
   onApplied: (snapshotId: string) => void
   onRefineScenario: (candidate: OptimiserCandidate) => void
 }) {
@@ -152,7 +150,9 @@ function CandidateCard({
 
   const applyMutation = useMutation({
     mutationFn: () => applyOptimiserScenario(projectId, candidate.resourceTypes, {
-      rampUpScopeResourceTypeIds,
+      rampUpScopeResourceTypeIds: candidate.resourceTypes
+        .filter(resourceType => resourceType.suggestedStartWeek > 0)
+        .map(resourceType => resourceType.resourceTypeId),
       staggerEpics,
     }),
     onSuccess: (data) => {
@@ -372,8 +372,6 @@ export default function TimelineOptimiserDrawer({
   // ── local state ──────────────────────────────────────────────────────────
   const [mode, setMode] = useState<Mode>('balanced')
   const [countRanges, setCountRanges] = useState<Map<string, CountRange>>(new Map())
-  const [lastRunScopeResourceTypeIds, setLastRunScopeResourceTypeIds] = useState<string[]>([])
-  const pendingRunScopeRef = useRef<string[]>([])
   const [allowRampUp, setAllowRampUp] = useState(false)
   const [maxBudget, setMaxBudget] = useState('')
   const [maxDurationWeeks, setMaxDurationWeeks] = useState('')
@@ -470,7 +468,6 @@ export default function TimelineOptimiserDrawer({
           max: range.max,
         }
       })
-      pendingRunScopeRef.current = countRangesArr.map(range => range.resourceTypeId)
       return runOptimiser(projectId, {
         mode,
         constraints: {
@@ -484,7 +481,6 @@ export default function TimelineOptimiserDrawer({
     },
     onSuccess: (data) => {
       setLastResult(data)
-      setLastRunScopeResourceTypeIds(pendingRunScopeRef.current)
       setRunError(null)
     },
     onError: (err: unknown) => {
@@ -787,7 +783,6 @@ export default function TimelineOptimiserDrawer({
                   baselineRtMap={baselineRtMap}
                   allowRampUp={allowRampUp}
                   projectId={projectId}
-                  rampUpScopeResourceTypeIds={lastRunScopeResourceTypeIds}
                   onRefineScenario={(candidate) => {
                     onRefineScenario(candidate, {
                       allowRampUp,

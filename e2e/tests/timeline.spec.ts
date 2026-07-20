@@ -393,6 +393,35 @@ test.describe('Starting Team Finder drawer — with resources', () => {
     await expect(drawer.getByRole('button', { name: /apply directly/i }).first()).toBeVisible()
   })
 
+  test('apply candidate submits only that candidate’s positive ramp-up scope', async ({ page }) => {
+    const drawer = await openStartingTeamFinder(page)
+
+    await drawer.getByRole('checkbox').check()
+    await drawer.getByRole('button', { name: /find starting teams/i }).click()
+    await expect(drawer.getByText(/Evaluated [\d,]+ team options/)).toBeVisible({ timeout: 30_000 })
+    const applyButton = drawer.getByRole('button', { name: /apply directly/i }).first()
+    await expect(applyButton).toBeVisible()
+
+    const applyResponse = page.waitForResponse(
+      response => response.url().includes('/optimise/apply') && response.request().method() === 'POST',
+      { timeout: 15_000 },
+    )
+    page.once('dialog', dialog => dialog.accept())
+    await applyButton.click()
+
+    const response = await applyResponse
+    expect(response.status()).toBe(200)
+    const payload = response.request().postDataJSON() as {
+      resourceTypes: Array<{ resourceTypeId: string; suggestedStartWeek: number }>
+      rampUpScopeResourceTypeIds: string[]
+    }
+    expect(payload.rampUpScopeResourceTypeIds).toEqual(
+      payload.resourceTypes
+        .filter(resourceType => resourceType.suggestedStartWeek > 0)
+        .map(resourceType => resourceType.resourceTypeId),
+    )
+  })
+
   test('apply candidate persists through the direct-apply workflow', async ({ page }) => {
     const drawer = await openStartingTeamFinder(page)
 

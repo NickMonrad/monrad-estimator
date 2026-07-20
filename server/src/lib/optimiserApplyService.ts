@@ -148,6 +148,29 @@ export const RESOURCE_OPTIMISER_PROFILE_PROVENANCE = Object.freeze({
   version: 1,
 })
 
+/**
+ * The apply request is only allowed to ramp up the exact candidate entries
+ * that declare a positive start week. Keeping these sets equal prevents a
+ * caller from broadening ownership protection beyond the selected scenario.
+ */
+export function hasExactOptimiserRampUpScope(
+  candidate: readonly ApplyCandidateResourceType[],
+  rampUpScopeResourceTypeIds: readonly string[],
+): boolean {
+  const candidateIds = new Set(candidate.map(entry => entry.resourceTypeId))
+  const scopedIds = new Set(rampUpScopeResourceTypeIds)
+
+  if (candidateIds.size !== candidate.length || scopedIds.size !== rampUpScopeResourceTypeIds.length) {
+    return false
+  }
+
+  if (scopedIds.size !== candidate.filter(entry => entry.suggestedStartWeek > 0).length) {
+    return false
+  }
+
+  return candidate.every(entry => scopedIds.has(entry.resourceTypeId) === (entry.suggestedStartWeek > 0))
+}
+
 const MAPPER_PAIRS: Record<string, readonly [string, string]> = {
   EFFORT: ['FIXED', 'DEMAND_FOLLOWING'],
   TIMELINE: ['AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
@@ -187,7 +210,10 @@ function hasValidAvailabilityWindow(profile: Pick<PersistedOptimiserProfile, 'de
 }
 
 /** Proves that a scalar NAMED_PERSON profile came from the legacy mapper. */
-export function isValidNamedResourceMapperProvenance(profile: PersistedOptimiserProfile): boolean {
+export function isValidNamedResourceMapperProvenance(
+  profile: PersistedOptimiserProfile,
+  namedResource: OptimiserNamedResourceState,
+): boolean {
   if (profile.ownerKind !== 'NAMED_PERSON') return false
   if (profile.namedResourceId == null || profile.resourceTypeId != null) return false
   if (!hasValidAvailabilityWindow(profile)) return false
@@ -223,6 +249,13 @@ export function isValidNamedResourceMapperProvenance(profile: PersistedOptimiser
   return profile.defaultPercent === expectedPercent
     && profile.startWeek === expectedStart
     && profile.endWeek === expectedEnd
+    && profile.legacy.allocationMode === namedResource.allocationMode
+    && profile.legacy.allocationPercent === namedResource.allocationPercent
+    && profile.legacy.allocationStartWeek === namedResource.allocationStartWeek
+    && profile.legacy.allocationEndWeek === namedResource.allocationEndWeek
+    && profile.legacy.allocationPct === namedResource.allocationPct
+    && profile.legacy.startWeek === namedResource.startWeek
+    && profile.legacy.endWeek === namedResource.endWeek
 }
 
 function isOptimiserDerivedProfile(profile: PersistedOptimiserProfile): boolean {
@@ -239,7 +272,7 @@ function isOptimiserDerivedProfile(profile: PersistedOptimiserProfile): boolean 
 
 export function classifyOptimiserRampUpOwner(
   profiles: readonly PersistedOptimiserProfile[],
-  namedResource: Pick<OptimiserNamedResourceState, 'id' | 'allocationMode'>,
+  namedResource: OptimiserNamedResourceState,
 ): OptimiserRampUpClassification {
   if (profiles.length === 0) {
     return namedResource.allocationMode === 'CAPACITY_PLAN'
@@ -261,7 +294,7 @@ export function classifyOptimiserRampUpOwner(
     return { outcome: 'CAPACITY_PROFILE_PROTECTED' }
   }
   if (profile.segments.length > 0) return { outcome: 'SEGMENTED_PROTECTED' }
-  if (isValidNamedResourceMapperProvenance(profile)) {
+  if (isValidNamedResourceMapperProvenance(profile, namedResource)) {
     return { outcome: 'LEGACY_MAPPER_SCALAR', profileId: profile.id }
   }
   if (isOptimiserDerivedProfile(profile)) {
@@ -694,6 +727,9 @@ export async function applyOptimiserCandidate(
     staggerEpics = false,
   } = params
   const rampUpScope = new Set(rampUpScopeResourceTypeIds)
+  if (!hasExactOptimiserRampUpScope(candidate, rampUpScopeResourceTypeIds)) {
+    throw new Error('Invalid optimiser ramp-up scope')
+  }
   // Preflight must complete before entering the mutation transaction.
   await loadOptimiserApplyPlan(prisma, projectId, candidate, rampUpScope)
   await preTransactionSeam?.()
@@ -766,7 +802,11 @@ export async function applyOptimiserCandidate(
     await pruneSnapshots(tx, projectId)
 
     return { snapshotId: snapshot.id, levellingResult }
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+  }, {
+    isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    timeout: 30_000,
+    maxWait: 5_000,
+  })
 
 
   return {

@@ -677,9 +677,10 @@ whether profiles were written by the Squad Planner or by legacy paths.
 
 Resource Optimiser apply derives a minimal mutation intent from the selected
 candidate and applies it through a dedicated service rather than directly
-editing compatibility fields. Ramp-up changes are limited to resource types
-present in the optimiser request's `countRanges`; resource types outside that
-scope keep their current named-resource availability.
+editing compatibility fields. The direct-apply client derives its ramp-up scope
+from exactly the selected candidate's positive `suggestedStartWeek` entries.
+Those entries originate only from resource types in the optimiser request's
+`countRanges`; all other named-resource availability remains unchanged.
 
 For each in-scope named resource whose start week changes, the service proves
 that it owns the existing capacity state before writing. It accepts an absent

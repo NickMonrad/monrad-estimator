@@ -5,6 +5,7 @@ import {
   buildOptimiserMutationIntent,
   buildOptimiserRampUpProfileWrite,
   classifyOptimiserRampUpOwner,
+  hasExactOptimiserRampUpScope,
   isValidNamedResourceMapperProvenance,
   type OptimiserNamedResourceState,
   type PersistedOptimiserProfile,
@@ -61,14 +62,25 @@ describe('classifyOptimiserRampUpOwner', () => {
     expect(classifyOptimiserRampUpOwner([], namedResource()).outcome).toBe('NO_PROFILE')
   })
 
-  it('proves and allows a mapper-derived scalar profile', () => {
+  it('proves and allows a mapper-derived scalar profile only while legacy fields match', () => {
+    const mappedOwner = namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 60,
+      allocationPct: 60,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+      startWeek: 2,
+      endWeek: 10,
+    })
     const mapped = profile({
       source: 'AVAILABILITY_WINDOW',
       legacy: mapperLegacy(),
     })
 
-    expect(isValidNamedResourceMapperProvenance(mapped)).toBe(true)
-    expect(classifyOptimiserRampUpOwner([mapped], namedResource()).outcome).toBe('LEGACY_MAPPER_SCALAR')
+    expect(isValidNamedResourceMapperProvenance(mapped, mappedOwner)).toBe(true)
+    expect(classifyOptimiserRampUpOwner([mapped], mappedOwner).outcome).toBe('LEGACY_MAPPER_SCALAR')
+    expect(isValidNamedResourceMapperProvenance(mapped, namedResource())).toBe(false)
+    expect(classifyOptimiserRampUpOwner([mapped], namedResource()).outcome).toBe('EXPLICIT_SCALAR_PROTECTED')
   })
 
   it('allows only marked optimiser-derived scalar profiles', () => {
@@ -109,6 +121,20 @@ describe('classifyOptimiserRampUpOwner', () => {
       profile(),
       profile({ id: 'profile-2' }),
     ], namedResource()).outcome).toBe('AMBIGUOUS_OR_DUPLICATE')
+  })
+})
+
+describe('hasExactOptimiserRampUpScope', () => {
+  it('requires the scope to exactly match positive candidate start weeks', () => {
+    const candidate = [
+      { resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 4 },
+      { resourceTypeId: 'rt-test', count: 1, suggestedStartWeek: 0 },
+    ]
+
+    expect(hasExactOptimiserRampUpScope(candidate, ['rt-dev'])).toBe(true)
+    expect(hasExactOptimiserRampUpScope(candidate, [])).toBe(false)
+    expect(hasExactOptimiserRampUpScope(candidate, ['rt-test'])).toBe(false)
+    expect(hasExactOptimiserRampUpScope(candidate, ['rt-dev', 'rt-test'])).toBe(false)
   })
 })
 
@@ -200,7 +226,7 @@ describe('buildOptimiserMutationIntent', () => {
   it('does not let an inert planner role block an unrelated count change', () => {
     const plan = buildOptimiserMutationIntent({
       candidate: [
-        { resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 3 },
+        { resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 0 },
         { resourceTypeId: 'rt-test', count: 3, suggestedStartWeek: 0 },
       ],
       resourceTypes: [
@@ -208,7 +234,7 @@ describe('buildOptimiserMutationIntent', () => {
         { id: 'rt-test', name: 'Tester', count: 1 },
       ],
       namedResources: [namedResource({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 3 })],
-      rampUpScopeResourceTypeIds: new Set(['rt-test']),
+      rampUpScopeResourceTypeIds: new Set(),
       profilesByNamedResourceId: new Map(),
       plannerManagedResourceTypeIds: new Set(['rt-dev']),
     })
@@ -240,7 +266,7 @@ describe('buildOptimiserMutationIntent', () => {
 
   it('does not mutate protected owners outside the ramp-up scope', () => {
     expect(buildOptimiserMutationIntent({
-      candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 5 }],
+      candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 0 }],
       rampUpScopeResourceTypeIds: new Set(),
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
       namedResources: [namedResource()],

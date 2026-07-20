@@ -1013,7 +1013,7 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
           { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 },
           { resourceTypeId: 'rt-foreign', count: 1, suggestedStartWeek: 2 },
         ],
-        rampUpScopeResourceTypeIds: ['rt-1'],
+        rampUpScopeResourceTypeIds: ['rt-foreign'],
       })
 
     expect(res.status).toBe(400)
@@ -1032,6 +1032,34 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
 
     expect(res.status).toBe(400)
     expect(res.body.error).toBe('rampUpScopeResourceTypeIds must be unique candidate resource type IDs')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing ramp-up scope for a candidate ramp before mutation', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 3 }],
+        rampUpScopeResourceTypeIds: [],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid rampUpScopeResourceTypeIds')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects an out-of-scope ramp-up selection before mutation', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/optimise/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 }],
+        rampUpScopeResourceTypeIds: ['rt-1'],
+      })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Invalid rampUpScopeResourceTypeIds')
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
   })
 })

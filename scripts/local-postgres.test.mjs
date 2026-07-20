@@ -72,10 +72,13 @@ test('normalizeDatabaseIdentity handles loopback aliases', () => {
 })
 
 
-test('isSameDatabase missing persistent DATABASE_URL fails closed', async () => {
+test('isSameDatabase missing persistent DATABASE_URL fails closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monrad-env-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
   await assert.rejects(
     withIsolatedTestDatabase({
-      root: process.cwd(),
+      root,
       environment: {
         MONRAD_TEST_DATABASE_URL: 'postgresql://tester:secret@localhost/test_db',
         MONRAD_ALLOW_EXTERNAL_TEST_DATABASE: '1',

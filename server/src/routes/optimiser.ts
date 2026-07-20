@@ -26,6 +26,7 @@ import {
 } from '../lib/optimiser.js'
 import {
   applyOptimiserCandidate,
+  hasExactOptimiserRampUpScope,
   isOptimiserApplyConflictError,
   type ApplyCandidateResourceType,
 } from '../lib/optimiserApplyService.js'
@@ -190,6 +191,9 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       || new Set(rampUpScopeResourceTypeIds).size !== rampUpScopeResourceTypeIds.length
       || rampUpScopeResourceTypeIds.some(id => !candidateIds.includes(id))) {
     res.status(400).json({ error: 'rampUpScopeResourceTypeIds must be unique candidate resource type IDs' }); return
+  }
+  if (!hasExactOptimiserRampUpScope(candidateRTs, rampUpScopeResourceTypeIds)) {
+    res.status(400).json({ error: 'Invalid rampUpScopeResourceTypeIds' }); return
   }
 
 
