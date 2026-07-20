@@ -1,11 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import {
-  runOptimiser,
-  applyOptimiserScenario,
-  type OptimiserResponse,
-  type OptimiserCandidate,
-} from '../../lib/api'
+import { runOptimiser, applyOptimiserScenario } from '../../lib/api'
+import type { OptimiserResponse, OptimiserCandidate } from '../../lib/api'
 import {
   getPlannerResourceTypeVisibility,
   getStartingTeamFinderDefaultRange,
@@ -132,6 +128,7 @@ function CandidateCard({
   baselineRtMap,
   allowRampUp,
   projectId,
+  optimiserScopeResourceTypeIds,
   onApplied,
   onRefineScenario,
 }: {
@@ -142,14 +139,17 @@ function CandidateCard({
   baselineRtMap: Map<string, { count: number; suggestedStartWeek: number }>
   allowRampUp: boolean
   projectId: string
+  optimiserScopeResourceTypeIds: string[]
   onApplied: (snapshotId: string) => void
   onRefineScenario: (candidate: OptimiserCandidate) => void
 }) {
   const [applyError, setApplyError] = useState<string | null>(null)
   const [staggerEpics, setStaggerEpics] = useState(true)
-
   const applyMutation = useMutation({
-    mutationFn: () => applyOptimiserScenario(projectId, candidate.resourceTypes, { staggerEpics }),
+    mutationFn: () => applyOptimiserScenario(projectId, candidate.resourceTypes, {
+      optimiserScopeResourceTypeIds,
+      staggerEpics,
+    }),
     onSuccess: (data) => {
       onApplied(data.snapshotId)
     },
@@ -762,39 +762,39 @@ export default function TimelineOptimiserDrawer({
             <BaselineCard baseline={lastResult.baseline} showCost={showCost} />
           )}
 
-          {/* Candidate cards */}
           {lastResult && lastResult.candidates.length > 0 && (
             <div className="space-y-3">
               <div className="text-xs font-semibold text-gray-700 dark:text-gray-300">
                 Starting team options
               </div>
-              {lastResult.candidates.map((c, i) => (
-                <CandidateCard
-                  key={i}
-                  candidate={c}
-                  rank={i + 1}
-                  baseline={lastResult.baseline}
-                  rtNameMap={rtNameMap}
-                  baselineRtMap={baselineRtMap}
-                  allowRampUp={allowRampUp}
-                  projectId={projectId}
-                  onRefineScenario={(candidate) => {
-                    onRefineScenario(candidate, {
-                      allowRampUp,
-                      seedResourceTypeIds: visibleResourceTypes.map(rt => rt.id),
-                    })
-                    onClose()
-                  }}
-                  onApplied={(snapshotId) => {
-                    onApplied(snapshotId)
-                    onClose()
-                  }}
-                />
-              ))}
+              {lastResult.candidates.map((c, i) => {
+                return (
+                  <CandidateCard
+                    key={i}
+                    candidate={c}
+                    rank={i + 1}
+                    baseline={lastResult.baseline}
+                    rtNameMap={rtNameMap}
+                    baselineRtMap={baselineRtMap}
+                    allowRampUp={allowRampUp}
+                    projectId={projectId}
+                    optimiserScopeResourceTypeIds={lastResult.optimiserScopeResourceTypeIds}
+                    onRefineScenario={(candidate) => {
+                      onRefineScenario(candidate, {
+                        allowRampUp,
+                        seedResourceTypeIds: visibleResourceTypes.map(rt => rt.id),
+                      })
+                      onClose()
+                    }}
+                    onApplied={(snapshotId) => {
+                      onApplied(snapshotId)
+                      onClose()
+                    }}
+                  />
+                )
+              })}
             </div>
           )}
-
-          {/* Empty state: run was completed but all scenarios were infeasible */}
           {lastResult && lastResult.candidates.length === 0 && (
             <div className="rounded-xl border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-4 space-y-2">
               <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">

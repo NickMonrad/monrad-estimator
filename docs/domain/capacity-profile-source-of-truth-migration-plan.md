@@ -673,6 +673,31 @@ a separate testing contract — the parity assertion validates that the same
 backlog and resource state produce identical commercial output regardless of
 whether profiles were written by the Squad Planner or by legacy paths.
 
+### Phase 5b — Resource Optimiser apply ✅ (issue #360)
+
+Resource Optimiser apply derives a minimal mutation intent from the selected
+candidate and applies it through a dedicated service rather than directly
+editing compatibility fields. The direct-apply client derives its ramp-up scope
+from exactly the selected candidate's positive `suggestedStartWeek` entries.
+Those entries originate only from resource types in the optimiser request's
+`countRanges`; all other named-resource availability remains unchanged.
+
+For each in-scope named resource whose start week changes, the service proves
+that it owns the existing capacity state before writing. It accepts an absent
+profile, validated mapper-derived scalar compatibility state, or its own prior
+optimiser-derived scalar profile. It rejects segmented, explicit/manual,
+planner-managed, malformed, or duplicate profiles with HTTP 409 and actionable
+guidance. This preflight runs again inside the `Serializable` transaction to
+close the race between validation and mutation.
+
+Eligible ramp-up writes persist a `NAMED_PERSON` profile with
+`AVAILABILITY_WINDOW` planning basis and `DERIVED` source, then project its
+scalar compatibility fields. Snapshot creation, count updates, profile writes,
+compatibility projections, scheduler materialisation, Timeline updates,
+optional staggering, and cache clearing commit atomically. A failed mutation
+rolls back the newly created pre-apply snapshot together with every domain
+write; successful applies retain that snapshot for undo.
+
 ### Phase 6 — Reverse reconciliation direction
 
 Once writes are profile-first:
