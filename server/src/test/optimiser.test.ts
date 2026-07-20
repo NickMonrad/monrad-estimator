@@ -1013,7 +1013,7 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
           { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 },
           { resourceTypeId: 'rt-foreign', count: 1, suggestedStartWeek: 2 },
         ],
-        rampUpScopeResourceTypeIds: ['rt-foreign'],
+        optimiserScopeResourceTypeIds: ['rt-foreign'],
       })
 
     expect(res.status).toBe(400)
@@ -1021,47 +1021,37 @@ describe('POST /api/projects/:projectId/optimise/apply — element-level validat
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
   })
 
-  it('rejects an invalid ramp-up scope before mutation', async () => {
+  it('rejects an invalid optimiser scope before mutation', async () => {
     const res = await request(app)
       .post(`/api/projects/${projectId}/optimise/apply`)
       .set('Authorization', authHeader)
       .send({
         resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 }],
-        rampUpScopeResourceTypeIds: ['rt-foreign'],
+        optimiserScopeResourceTypeIds: ['rt-foreign'],
       })
 
     expect(res.status).toBe(400)
-    expect(res.body.error).toBe('rampUpScopeResourceTypeIds must be unique candidate resource type IDs')
+    expect(res.body.error).toBe('Scope resource type rt-foreign is not in the candidate list')
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
   })
 
-  it('rejects a missing ramp-up scope for a candidate ramp before mutation', async () => {
+  it('rejects a positive ramp-up entry outside the optimiser scope before mutation', async () => {
     const res = await request(app)
       .post(`/api/projects/${projectId}/optimise/apply`)
       .set('Authorization', authHeader)
       .send({
-        resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 3 }],
-        rampUpScopeResourceTypeIds: [],
+        resourceTypes: [
+          { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 4 },
+          { resourceTypeId: 'rt-2', count: 1, suggestedStartWeek: 0 },
+        ],
+        optimiserScopeResourceTypeIds: ['rt-2'],
       })
 
     expect(res.status).toBe(400)
-    expect(res.body.error).toBe('Invalid rampUpScopeResourceTypeIds')
+    expect(res.body.error).toBe('Invalid optimiserScopeResourceTypeIds')
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
   })
 
-  it('rejects an out-of-scope ramp-up selection before mutation', async () => {
-    const res = await request(app)
-      .post(`/api/projects/${projectId}/optimise/apply`)
-      .set('Authorization', authHeader)
-      .send({
-        resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 }],
-        rampUpScopeResourceTypeIds: ['rt-1'],
-      })
-
-    expect(res.status).toBe(400)
-    expect(res.body.error).toBe('Invalid rampUpScopeResourceTypeIds')
-    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
-  })
 })
 
 describe('POST /api/projects/:projectId/optimise — count range validation', () => {
@@ -1130,15 +1120,14 @@ describe('POST /api/projects/:projectId/optimise/apply — buildSnapshot rejecti
         resourceTypes: [
           { resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 0 },
         ],
-        rampUpScopeResourceTypeIds: [],
+        optimiserScopeResourceTypeIds: [],
       })
 
     expect(res.status).toBe(500)
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
-    expect(prisma.$transaction).toHaveBeenCalledOnce()
+    expect(prisma.$transaction).toHaveBeenCalled()
   })
 })
-
 describe('POST /api/projects/:projectId/optimise/apply — protected preflight', () => {
   it('returns a stable 409 before snapshotting for explicit scalar capacity', async () => {
     vi.mocked(prisma.$transaction).mockClear()
@@ -1181,7 +1170,7 @@ describe('POST /api/projects/:projectId/optimise/apply — protected preflight',
       .set('Authorization', authHeader)
       .send({
         resourceTypes: [{ resourceTypeId: 'rt-1', count: 2, suggestedStartWeek: 4 }],
-        rampUpScopeResourceTypeIds: ['rt-1'],
+        optimiserScopeResourceTypeIds: ['rt-1'],
       })
 
     expect(res.status).toBe(409)

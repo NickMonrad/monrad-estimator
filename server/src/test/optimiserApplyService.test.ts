@@ -5,7 +5,8 @@ import {
   buildOptimiserMutationIntent,
   buildOptimiserRampUpProfileWrite,
   classifyOptimiserRampUpOwner,
-  hasExactOptimiserRampUpScope,
+  isValidOptimiserScopeForApply,
+  validateNoProfileScalarState,
   isValidNamedResourceMapperProvenance,
   type OptimiserNamedResourceState,
   type PersistedOptimiserProfile,
@@ -123,18 +124,164 @@ describe('classifyOptimiserRampUpOwner', () => {
     ], namedResource()).outcome).toBe('AMBIGUOUS_OR_DUPLICATE')
   })
 })
-
-describe('hasExactOptimiserRampUpScope', () => {
-  it('requires the scope to exactly match positive candidate start weeks', () => {
+describe('isValidOptimiserScopeForApply', () => {
+  it('accepts positive ramp-up entries that are in scope', () => {
     const candidate = [
       { resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 4 },
+    ]
+    expect(isValidOptimiserScopeForApply(candidate, ['rt-dev'])).toBe(true)
+  })
+
+  it('rejects a positive ramp-up whose resource type is not in scope', () => {
+    const candidate = [
+      { resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 4 },
+    ]
+    expect(isValidOptimiserScopeForApply(candidate, [])).toBe(false)
+    expect(isValidOptimiserScopeForApply(candidate, ['rt-other'])).toBe(false)
+  })
+
+  it('allows scope to contain resource types with zero start week', () => {
+    const candidate = [
+      { resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 0 },
       { resourceTypeId: 'rt-test', count: 1, suggestedStartWeek: 0 },
     ]
+    expect(isValidOptimiserScopeForApply(candidate, ['rt-dev'])).toBe(true)
+    expect(isValidOptimiserScopeForApply(candidate, ['rt-dev', 'rt-test'])).toBe(true)
+    expect(isValidOptimiserScopeForApply(candidate, [])).toBe(true)
+  })
 
-    expect(hasExactOptimiserRampUpScope(candidate, ['rt-dev'])).toBe(true)
-    expect(hasExactOptimiserRampUpScope(candidate, [])).toBe(false)
-    expect(hasExactOptimiserRampUpScope(candidate, ['rt-test'])).toBe(false)
-    expect(hasExactOptimiserRampUpScope(candidate, ['rt-dev', 'rt-test'])).toBe(false)
+  it('rejects non-array scope', () => {
+    const candidate = [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 4 }]
+    expect(isValidOptimiserScopeForApply(candidate, null as unknown as string[])).toBe(false)
+    expect(isValidOptimiserScopeForApply(candidate, undefined as unknown as string[])).toBe(false)
+  })
+
+  it('rejects scope with duplicates', () => {
+    const candidate = [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 4 }]
+    expect(isValidOptimiserScopeForApply(candidate, ['rt-dev', 'rt-dev'])).toBe(false)
+  })
+
+  it('rejects scope with non-string elements', () => {
+    const candidate = [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 4 }]
+    expect(isValidOptimiserScopeForApply(candidate, [42 as unknown as string])).toBe(false)
+  })
+})
+
+describe('validateNoProfileScalarState', () => {
+  it('accepts valid EFFORT state', () => {
+    expect(validateNoProfileScalarState(namedResource({ allocationMode: 'EFFORT' }))).toEqual({ valid: true })
+  })
+
+  it('accepts EFFORT with null percentage fields', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'EFFORT',
+      allocationPercent: null,
+      allocationPct: null,
+    }))).toEqual({ valid: true })
+  })
+
+  it('accepts valid TIMELINE with allocationPercent', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationPct: 80,
+    }))).toEqual({ valid: true })
+  })
+
+  it('accepts valid TIMELINE with allocationPct only', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: null,
+      allocationPct: 75,
+    }))).toEqual({ valid: true })
+  })
+
+  it('accepts valid FULL_PROJECT with allocationPercent only', () => {
+    expect(validateNoProfileScalarState(namedResource({
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 100,
+      allocationPct: null,
+    }))).toEqual({ valid: true })
+  })
+
+  it('rejects CAPACITY_PLAN mode', () => {
+    const result = validateNoProfileScalarState(namedResource({ allocationMode: 'CAPACITY_PLAN' }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('CAPACITY_PLAN') })
+  })
+
+  it('rejects unsupported mode XYZ', () => {
+    const result = validateNoProfileScalarState(namedResource({ allocationMode: 'XYZ' as never }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('XYZ') })
+  })
+
+  it('rejects missing allocation percent for TIMELINE', () => {
+    const result = validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: null,
+      allocationPct: null,
+    }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('Missing allocation percent') })
+  })
+
+  it('rejects contradictory allocationPercent and allocationPct', () => {
+    const result = validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationPct: 50,
+    }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('Contradictory') })
+  })
+
+  it('rejects start week after end week', () => {
+    const result = validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationPct: 80,
+      startWeek: 10,
+      endWeek: 5,
+      allocationStartWeek: 10,
+      allocationEndWeek: 5,
+    }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('after') })
+  })
+
+  it('rejects contradictory startWeek and allocationStartWeek', () => {
+    const result = validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationPct: 80,
+      startWeek: 1,
+      allocationStartWeek: 3,
+    }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('Contradictory') })
+  })
+
+  it('rejects negative start week', () => {
+    const result = validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 80,
+      allocationPct: 80,
+      allocationStartWeek: -1,
+    }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('-1') })
+  })
+
+  it('rejects percentage over 100', () => {
+    const result = validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 150,
+      allocationPct: 150,
+    }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('150') })
+  })
+
+  it('rejects non-finite percentage', () => {
+    const result = validateNoProfileScalarState(namedResource({
+      allocationMode: 'TIMELINE',
+      allocationPercent: Infinity,
+      allocationPct: null,
+    }))
+    expect(result).toEqual({ valid: false, reason: expect.stringContaining('Infinity') })
   })
 })
 
@@ -215,7 +362,7 @@ describe('buildOptimiserMutationIntent', () => {
   it('emits no writes for unchanged full-candidate entries', () => {
     expect(buildOptimiserMutationIntent({
       candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 3 }],
-      rampUpScopeResourceTypeIds: new Set(['rt-dev']),
+      optimiserScopeResourceTypeIds: new Set(['rt-dev']),
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
       namedResources: [namedResource({ allocationStartWeek: 3 })],
       profilesByNamedResourceId: new Map(),
@@ -234,7 +381,7 @@ describe('buildOptimiserMutationIntent', () => {
         { id: 'rt-test', name: 'Tester', count: 1 },
       ],
       namedResources: [namedResource({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 3 })],
-      rampUpScopeResourceTypeIds: new Set(),
+      optimiserScopeResourceTypeIds: new Set(),
       profilesByNamedResourceId: new Map(),
       plannerManagedResourceTypeIds: new Set(['rt-dev']),
     })
@@ -247,7 +394,7 @@ describe('buildOptimiserMutationIntent', () => {
       candidate: [{ resourceTypeId: 'rt-dev', count: 3, suggestedStartWeek: 0 }],
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
       namedResources: [],
-      rampUpScopeResourceTypeIds: new Set(),
+      optimiserScopeResourceTypeIds: new Set(),
       profilesByNamedResourceId: new Map(),
       plannerManagedResourceTypeIds: new Set(['rt-dev']),
     })).toThrow('Refine in Squad Planner')
@@ -258,7 +405,7 @@ describe('buildOptimiserMutationIntent', () => {
       candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 5 }],
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
       namedResources: [namedResource()],
-      rampUpScopeResourceTypeIds: new Set(['rt-dev']),
+      optimiserScopeResourceTypeIds: new Set(['rt-dev']),
       profilesByNamedResourceId: new Map([['nr-dev', [profile()]]]),
       plannerManagedResourceTypeIds: new Set(),
     })).toThrow(OptimiserApplyConflictError)
@@ -267,7 +414,7 @@ describe('buildOptimiserMutationIntent', () => {
   it('does not mutate protected owners outside the ramp-up scope', () => {
     expect(buildOptimiserMutationIntent({
       candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 0 }],
-      rampUpScopeResourceTypeIds: new Set(),
+      optimiserScopeResourceTypeIds: new Set(),
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
       namedResources: [namedResource()],
       profilesByNamedResourceId: new Map([['nr-dev', [profile()]]]),

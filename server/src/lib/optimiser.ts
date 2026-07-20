@@ -84,22 +84,19 @@ export interface OptimiserCandidate {
 }
 
 export interface OptimiserResult {
-  candidates: OptimiserCandidate[] // top N, ranked best-first
-  baseline: OptimiserCandidate     // current config metrics for diff display
+  candidates: OptimiserCandidate[]
+  baseline: OptimiserCandidate
   searchStats: {
-    /** Total number of scheduler invocations (includes filtered-out scenarios) */
     scenariosEvaluated: number
-    /** Number of scenarios that passed all constraints (≤ scenariosEvaluated) */
     candidatesFound: number
     durationMs: number
-    /** true when search space exceeded MAX_SCENARIOS and random sampling was used */
     sampled: boolean
   }
-  /**
-   * Count of scenarios filtered out specifically because parallelWarningCount > 0.
-   * These are strictly infeasible: a parallel-mode epic exceeded RT capacity.
-   */
   infeasibleCount: number
+  /** Resource-type IDs from the validated countRanges. Every scoped resource type
+   *  may appear in candidate entries; those with suggestedStartWeek > 0 are a
+   *  subset of this set. */
+  optimiserScopeResourceTypeIds: string[]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -581,5 +578,6 @@ export function runOptimiser(
       sampled,
     },
     infeasibleCount,
+    optimiserScopeResourceTypeIds: Array.from(optimiserScope),
   }
 }

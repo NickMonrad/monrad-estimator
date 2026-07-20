@@ -132,6 +132,7 @@ function CandidateCard({
   baselineRtMap,
   allowRampUp,
   projectId,
+  optimiserScopeResourceTypeIds,
   onApplied,
   onRefineScenario,
 }: {
@@ -142,17 +143,14 @@ function CandidateCard({
   baselineRtMap: Map<string, { count: number; suggestedStartWeek: number }>
   allowRampUp: boolean
   projectId: string
+  optimiserScopeResourceTypeIds: string[]
   onApplied: (snapshotId: string) => void
   onRefineScenario: (candidate: OptimiserCandidate) => void
 }) {
   const [applyError, setApplyError] = useState<string | null>(null)
-  const [staggerEpics, setStaggerEpics] = useState(true)
-
   const applyMutation = useMutation({
     mutationFn: () => applyOptimiserScenario(projectId, candidate.resourceTypes, {
-      rampUpScopeResourceTypeIds: candidate.resourceTypes
-        .filter(resourceType => resourceType.suggestedStartWeek > 0)
-        .map(resourceType => resourceType.resourceTypeId),
+      optimiserScopeResourceTypeIds,
       staggerEpics,
     }),
     onSuccess: (data) => {
@@ -783,6 +781,7 @@ export default function TimelineOptimiserDrawer({
                   baselineRtMap={baselineRtMap}
                   allowRampUp={allowRampUp}
                   projectId={projectId}
+                  optimiserScopeResourceTypeIds={lastResult.optimiserScopeResourceTypeIds}
                   onRefineScenario={(candidate) => {
                     onRefineScenario(candidate, {
                       allowRampUp,
@@ -796,7 +795,6 @@ export default function TimelineOptimiserDrawer({
                   }}
                 />
               ))}
-            </div>
           )}
 
           {/* Empty state: run was completed but all scenarios were infeasible */}

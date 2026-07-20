@@ -74,9 +74,7 @@ export type OptimiserRampUpClassification =
   | { outcome: 'CAPACITY_PROFILE_PROTECTED' }
   | { outcome: 'PLANNER_MANAGED_PROTECTED' }
   | { outcome: 'AMBIGUOUS_OR_DUPLICATE' }
-
-type OptimiserWritableRampUpClassification = Extract<OptimiserRampUpClassification,
-  { outcome: 'NO_PROFILE' | 'LEGACY_MAPPER_SCALAR' | 'OPTIMISER_DERIVED_SCALAR' }>
+  | { outcome: 'MALFORMED_SCALAR_STATE' }
 
 export interface RampUpProfileWrite {
   profileId: string | null
@@ -107,9 +105,9 @@ export interface OptimiserApplyPlan {
 export interface ApplyOptimiserCandidateParams {
   projectId: string
   userId: string
-  candidate: ApplyCandidateResourceType[]
-  /** Resource types covered by the count ranges used to generate the candidate. */
-  rampUpScopeResourceTypeIds: readonly string[]
+  candidate: readonly ApplyCandidateResourceType[]
+  /** Resource-type IDs from the validated countRanges scope. */
+  optimiserScopeResourceTypeIds: readonly string[]
   staggerEpics?: boolean
 }
 
@@ -149,26 +147,32 @@ export const RESOURCE_OPTIMISER_PROFILE_PROVENANCE = Object.freeze({
 })
 
 /**
- * The apply request is only allowed to ramp up the exact candidate entries
- * that declare a positive start week. Keeping these sets equal prevents a
- * caller from broadening ownership protection beyond the selected scenario.
+ * Validate the optimiser scope sent with an apply request.
+ *
+ * Requirements (review #360, finding 1):
+ * - scope is present;
+ * - contains only string resource-type IDs;
+ * - contains no duplicates;
+ * - every candidate entry with suggestedStartWeek > 0 belongs to scope.
+ *
+ * The scope MAY contain resource types whose suggestedStartWeek is zero.
+ * Candidate count entries MAY include all project resource types.
+ * Callers must also verify that each scoped ID references a real resource
+ * type belonging to the current project.
  */
-export function hasExactOptimiserRampUpScope(
+export function isValidOptimiserScopeForApply(
   candidate: readonly ApplyCandidateResourceType[],
-  rampUpScopeResourceTypeIds: readonly string[],
+  optimiserScopeResourceTypeIds: readonly string[],
 ): boolean {
-  const candidateIds = new Set(candidate.map(entry => entry.resourceTypeId))
-  const scopedIds = new Set(rampUpScopeResourceTypeIds)
-
-  if (candidateIds.size !== candidate.length || scopedIds.size !== rampUpScopeResourceTypeIds.length) {
-    return false
+  if (!Array.isArray(optimiserScopeResourceTypeIds)) return false
+  if (optimiserScopeResourceTypeIds.some(id => typeof id !== 'string')) return false
+  if (new Set(optimiserScopeResourceTypeIds).size !== optimiserScopeResourceTypeIds.length) return false
+  if (optimiserScopeResourceTypeIds.length === 0) {
+    return candidate.every(entry => entry.suggestedStartWeek <= 0)
   }
 
-  if (scopedIds.size !== candidate.filter(entry => entry.suggestedStartWeek > 0).length) {
-    return false
-  }
-
-  return candidate.every(entry => scopedIds.has(entry.resourceTypeId) === (entry.suggestedStartWeek > 0))
+  const scopeSet = new Set(optimiserScopeResourceTypeIds)
+  return candidate.every(entry => entry.suggestedStartWeek <= 0 || scopeSet.has(entry.resourceTypeId))
 }
 
 const MAPPER_PAIRS: Record<string, readonly [string, string]> = {
@@ -270,14 +274,100 @@ function isOptimiserDerivedProfile(profile: PersistedOptimiserProfile): boolean 
     && profile.legacy.version === RESOURCE_OPTIMISER_PROFILE_PROVENANCE.version
 }
 
+/**
+ * Validate that a named resource with no persisted profile represents a
+ * coherent scalar state that can be promoted to an authoritative profile.
+ *
+ * Requirements (review #360, finding 2):
+ * - allocationMode must be EFFORT, TIMELINE or FULL_PROJECT.
+ * - For EFFORT: effective percent is always 100 regardless of stored fields.
+ * - For TIMELINE/FULL_PROJECT: allocationPercent and/or allocationPct must
+ *   be present, finite, in [0, 100], and not contradictory.
+ * - Week values must be finite, non-negative integers when present.
+ * - Contradictory alias pairs (allocationPercent vs allocationPct,
+ *   allocationStartWeek vs startWeek, allocationEndWeek vs endWeek)
+ *   must match when both are present.
+ * - If both start and end are present, start must not be after end.
+ */
+export function validateNoProfileScalarState(
+  nr: OptimiserNamedResourceState,
+): { valid: true } | { valid: false; reason: string } {
+  const mode = nr.allocationMode
+  if (mode !== 'EFFORT' && mode !== 'TIMELINE' && mode !== 'FULL_PROJECT') {
+    return { valid: false, reason: `Unsupported allocation mode "${mode}". Use EFFORT, TIMELINE or FULL_PROJECT.` }
+  }
+
+  // EFFORT: effective percent is always 100 regardless of stored data
+  if (mode === 'EFFORT') {
+    return { valid: true }
+  }
+
+  // TIMELINE / FULL_PROJECT — validate percentage
+  const hasAllocPct = nr.allocationPercent != null
+  const hasAllocPctAlias = nr.allocationPct != null
+
+  if (!hasAllocPct && !hasAllocPctAlias) {
+    return { valid: false, reason: `Missing allocation percent for mode "${mode}".` }
+  }
+
+  if (hasAllocPct) {
+    if (!Number.isFinite(nr.allocationPercent) || nr.allocationPercent! < 0 || nr.allocationPercent! > 100) {
+      return { valid: false, reason: `allocationPercent ${nr.allocationPercent} is invalid; must be a finite number between 0 and 100.` }
+    }
+  }
+  if (hasAllocPctAlias) {
+    if (!Number.isFinite(nr.allocationPct) || nr.allocationPct! < 0 || nr.allocationPct! > 100) {
+      return { valid: false, reason: `allocationPct ${nr.allocationPct} is invalid; must be a finite number between 0 and 100.` }
+    }
+  }
+  if (hasAllocPct && hasAllocPctAlias && nr.allocationPercent !== nr.allocationPct) {
+    return { valid: false, reason: `Contradictory allocationPercent (${nr.allocationPercent}) and allocationPct (${nr.allocationPct}).` }
+  }
+
+  // Validate week values
+  const weekFields: Array<{ key: string; value: number | null | undefined; label: string }> = [
+    { key: 'startWeek', value: nr.startWeek, label: 'startWeek' },
+    { key: 'endWeek', value: nr.endWeek, label: 'endWeek' },
+    { key: 'allocationStartWeek', value: nr.allocationStartWeek, label: 'allocationStartWeek' },
+    { key: 'allocationEndWeek', value: nr.allocationEndWeek, label: 'allocationEndWeek' },
+  ]
+  for (const f of weekFields) {
+    if (f.value != null) {
+      if (!Number.isFinite(f.value) || !Number.isInteger(f.value) || f.value < 0) {
+        return { valid: false, reason: `${f.label} ${f.value} is invalid; must be a non-negative integer.` }
+      }
+    }
+  }
+
+  // Contradictory alias pairs
+  if (nr.allocationStartWeek != null && nr.startWeek != null && nr.allocationStartWeek !== nr.startWeek) {
+    return { valid: false, reason: `Contradictory allocationStartWeek (${nr.allocationStartWeek}) and startWeek (${nr.startWeek}).` }
+  }
+  if (nr.allocationEndWeek != null && nr.endWeek != null && nr.allocationEndWeek !== nr.endWeek) {
+    return { valid: false, reason: `Contradictory allocationEndWeek (${nr.allocationEndWeek}) and endWeek (${nr.endWeek}).` }
+  }
+
+  // Window validity: start must not be after end
+  const resolvedStart = nr.allocationStartWeek ?? nr.startWeek
+  const resolvedEnd = nr.allocationEndWeek ?? nr.endWeek
+  if (resolvedStart != null && resolvedEnd != null && resolvedStart > resolvedEnd) {
+    return { valid: false, reason: `Start week ${resolvedStart} is after end week ${resolvedEnd}.` }
+  }
+
+  return { valid: true }
+}
+
 export function classifyOptimiserRampUpOwner(
   profiles: readonly PersistedOptimiserProfile[],
   namedResource: OptimiserNamedResourceState,
 ): OptimiserRampUpClassification {
   if (profiles.length === 0) {
-    return namedResource.allocationMode === 'CAPACITY_PLAN'
-      ? { outcome: 'PLANNER_MANAGED_PROTECTED' }
-      : { outcome: 'NO_PROFILE', profileId: null }
+    if (namedResource.allocationMode === 'CAPACITY_PLAN') {
+      return { outcome: 'PLANNER_MANAGED_PROTECTED' }
+    }
+    const validation = validateNoProfileScalarState(namedResource)
+    if (!validation.valid) return { outcome: 'MALFORMED_SCALAR_STATE' }
+    return { outcome: 'NO_PROFILE', profileId: null }
   }
   if (profiles.length !== 1) return { outcome: 'AMBIGUOUS_OR_DUPLICATE' }
 
@@ -402,6 +492,8 @@ function conflictForClassification(
       return { resourceTypeId: resourceType.id, resourceTypeName: resourceType.name, namedResourceName: namedResource.name, code: classification.outcome, message: `${prefix} is managed by Squad Planner. Refine in Squad Planner instead.` }
     case 'AMBIGUOUS_OR_DUPLICATE':
       return { resourceTypeId: resourceType.id, resourceTypeName: resourceType.name, namedResourceName: namedResource.name, code: classification.outcome, message: `${prefix} has ambiguous or duplicate capacity ownership and must be repaired before apply.` }
+    case 'MALFORMED_SCALAR_STATE':
+      return { resourceTypeId: resourceType.id, resourceTypeName: resourceType.name, namedResourceName: namedResource.name, code: classification.outcome, message: `${prefix} has malformed or contradictory scalar state that must be corrected before apply.` }
     default:
       return { resourceTypeId: resourceType.id, resourceTypeName: resourceType.name, namedResourceName: namedResource.name, code: 'EXPLICIT_SCALAR_PROTECTED', message: `${prefix} has explicit capacity that Resource Optimiser cannot replace.` }
   }
@@ -410,7 +502,7 @@ function conflictForClassification(
 /** Pure mutation-plan derivation from persisted state. */
 export function buildOptimiserMutationIntent(input: {
   candidate: readonly ApplyCandidateResourceType[]
-  rampUpScopeResourceTypeIds: ReadonlySet<string>
+  optimiserScopeResourceTypeIds: ReadonlySet<string>
   resourceTypes: readonly OptimiserResourceTypeState[]
   namedResources: readonly OptimiserNamedResourceState[]
   profilesByNamedResourceId: ReadonlyMap<string, readonly PersistedOptimiserProfile[]>
@@ -441,7 +533,7 @@ export function buildOptimiserMutationIntent(input: {
 
     const countChanges = candidateEntry.count !== resourceType.count
     const rampWrites: RampUpProfileWrite[] = []
-    if (candidateEntry.suggestedStartWeek > 0 && input.rampUpScopeResourceTypeIds.has(resourceType.id)) {
+    if (candidateEntry.suggestedStartWeek > 0 && input.optimiserScopeResourceTypeIds.has(resourceType.id)) {
       for (const namedResource of namedResourcesByType.get(resourceType.id) ?? []) {
         const profiles = input.profilesByNamedResourceId.get(namedResource.id) ?? []
         const profile = profiles.length === 1 ? profiles[0] : undefined
@@ -486,7 +578,7 @@ async function loadOptimiserApplyPlan(
   db: OptimiserApplyPlanDb,
   projectId: string,
   candidate: readonly ApplyCandidateResourceType[],
-  rampUpScopeResourceTypeIds: ReadonlySet<string>,
+  optimiserScopeResourceTypeIds: ReadonlySet<string>,
 ): Promise<OptimiserApplyPlan> {
   const candidateIds = candidate.map(entry => entry.resourceTypeId)
   const [resourceTypes, namedResources, activePlan, rolePlannerProfiles] = await Promise.all([
@@ -573,7 +665,7 @@ async function loadOptimiserApplyPlan(
 
   return buildOptimiserMutationIntent({
     candidate,
-    rampUpScopeResourceTypeIds,
+    optimiserScopeResourceTypeIds,
     resourceTypes,
     namedResources,
     profilesByNamedResourceId,
@@ -723,21 +815,18 @@ export async function applyOptimiserCandidate(
     projectId,
     userId,
     candidate,
-    rampUpScopeResourceTypeIds,
+    optimiserScopeResourceTypeIds,
     staggerEpics = false,
   } = params
-  const rampUpScope = new Set(rampUpScopeResourceTypeIds)
-  if (!hasExactOptimiserRampUpScope(candidate, rampUpScopeResourceTypeIds)) {
-    throw new Error('Invalid optimiser ramp-up scope')
-  }
+  const optimiserScope = new Set(optimiserScopeResourceTypeIds)
   // Preflight must complete before entering the mutation transaction.
-  await loadOptimiserApplyPlan(prisma, projectId, candidate, rampUpScope)
+  await loadOptimiserApplyPlan(prisma, projectId, candidate, optimiserScope)
   await preTransactionSeam?.()
 
   const dateStr = new Date().toISOString().slice(0, 10)
   const transactionResult = await prisma.$transaction(async tx => {
     // Fresh state inside Serializable transaction closes the preflight race.
-    const plan = await loadOptimiserApplyPlan(tx, projectId, candidate, rampUpScope)
+    const plan = await loadOptimiserApplyPlan(tx, projectId, candidate, optimiserScope)
     const snapshotData = await buildSnapshot(projectId, tx)
     const snapshot = await tx.backlogSnapshot.create({
       data: {

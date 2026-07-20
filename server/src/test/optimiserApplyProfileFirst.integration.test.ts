@@ -159,7 +159,7 @@ async function applyScenario(
         count,
         suggestedStartWeek,
       }],
-      rampUpScopeResourceTypeIds: [scenario.resourceTypeId],
+      optimiserScopeResourceTypeIds: [scenario.resourceTypeId],
     })
 }
 

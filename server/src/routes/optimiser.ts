@@ -26,7 +26,7 @@ import {
 } from '../lib/optimiser.js'
 import {
   applyOptimiserCandidate,
-  hasExactOptimiserRampUpScope,
+  isValidOptimiserScopeForApply,
   isOptimiserApplyConflictError,
   type ApplyCandidateResourceType,
 } from '../lib/optimiserApplyService.js'
@@ -161,9 +161,9 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
 
-  const { resourceTypes: candidateRTs, rampUpScopeResourceTypeIds, staggerEpics } = req.body as {
+  const { resourceTypes: candidateRTs, optimiserScopeResourceTypeIds, staggerEpics } = req.body as {
     resourceTypes: ApplyCandidateResourceType[]
-    rampUpScopeResourceTypeIds?: unknown
+    optimiserScopeResourceTypeIds?: unknown
     staggerEpics?: boolean
   }
   if (!Array.isArray(candidateRTs) || candidateRTs.length === 0) {
@@ -186,16 +186,16 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'Duplicate resourceTypeId in resourceTypes array' }); return
   }
 
-  if (!Array.isArray(rampUpScopeResourceTypeIds)
-      || rampUpScopeResourceTypeIds.some(id => typeof id !== 'string')
-      || new Set(rampUpScopeResourceTypeIds).size !== rampUpScopeResourceTypeIds.length
-      || rampUpScopeResourceTypeIds.some(id => !candidateIds.includes(id))) {
-    res.status(400).json({ error: 'rampUpScopeResourceTypeIds must be unique candidate resource type IDs' }); return
+  // Validate the optimiser scope (review #360, finding 1)
+  if (!isValidOptimiserScopeForApply(candidateRTs, optimiserScopeResourceTypeIds ?? [])) {
+    res.status(400).json({ error: 'Invalid optimiserScopeResourceTypeIds' }); return
   }
-  if (!hasExactOptimiserRampUpScope(candidateRTs, rampUpScopeResourceTypeIds)) {
-    res.status(400).json({ error: 'Invalid rampUpScopeResourceTypeIds' }); return
+  // Every resource type in scope must belong to this project's candidate list
+  const scopeIds = (optimiserScopeResourceTypeIds as string[] | undefined) ?? []
+  const scopeForeign = scopeIds.find(id => !candidateIds.includes(id))
+  if (scopeForeign) {
+    res.status(400).json({ error: `Scope resource type ${scopeForeign} is not in the candidate list` }); return
   }
-
 
   try {
     const result = await applyOptimiserCandidate({
@@ -203,7 +203,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       userId: req.userId!,
       candidate: candidateRTs,
       staggerEpics,
-      rampUpScopeResourceTypeIds,
+      optimiserScopeResourceTypeIds: scopeIds,
     })
     res.status(200).json(result)
   } catch (error) {
@@ -326,6 +326,8 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     infeasibleCount: result.infeasibleCount,
     /** Lookup table: id → name for gapWeeksByResourceTypeId consumers */
     resourceTypes: schedulerInput.resourceTypes.map(rt => ({ id: rt.id, name: rt.name })),
+    /** The validated optimiser scope for direct apply. */
+    optimiserScopeResourceTypeIds: result.optimiserScopeResourceTypeIds,
   })
 }))
 
