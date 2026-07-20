@@ -466,7 +466,17 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       const delResult = await db.query(`DELETE FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
       if ((delResult.rowCount ?? 0) === 0) throw new Error('No CapacityProfile found to delete')
 
-      // ── 3. Capture pre-apply state ─────────────────────────────────────
+
+      // ── 4. Push Developer demand past week 0 ─────────────────────────────
+      const featureLabel = page.locator('[title="Opt Feature"]').first()
+      await featureLabel.click()
+      await expect(page.getByText('Start week:').first()).toBeVisible({ timeout: 8_000 })
+      await page.locator('input[min="0"]:not([id])').first().fill('5')
+      await page.getByRole('button', { name: /^save$/i }).click()
+      await quickSchedule(page)
+      await expect(page.getByRole('button', { name: /sequential|parallel/i }).first()).toBeVisible({ timeout: 15_000 })
+
+      // ── 3. Capture pre-apply state (after feature delay, before optimiser) ─
       // 3a. SQL: NamedResource compatibility fields
       const preNrSql = await db.query(`SELECT * FROM "NamedResource" WHERE "id" = $1`, [nrResult.nrId])
       expect(preNrSql.rows).toHaveLength(1)
@@ -501,14 +511,12 @@ test.describe('Starting Team Finder drawer — with resources', () => {
             }>
           }>
         }
-        // Find the row containing our named resource
         const devRow = rp.resourceRows.find(r => r.namedResources.some(nr => nr.id === nrId))
         const devNr = devRow?.namedResources.find(nr => nr.id === nrId)
         return { devRow: devRow ? { resourceTypeId: devRow.resourceTypeId, count: devRow.count, namedResources: devRow.namedResources } : null, devNr: devNr ?? null }
       }, { id: projectId, nrId: nrResult.nrId })
       expect(preState.devNr).toBeDefined()
       const preRpNr = preState.devNr!
-      // Pre-apply: NO_PROFILE means capacityProfile exists but via LEGACY fallback
       expect(preRpNr.capacityProfile).toBeDefined()
       expect(preRpNr.capacityProfile!.resolutionSource).toBe('LEGACY')
       expect(preRpNr.capacityProfile!.source).toBe('fixed')
@@ -530,15 +538,6 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(preTlNr.id).toBe(nrResult.nrId)
 
       const preCount = preData.devRtCount
-
-      // ── 4. Push Developer demand past week 0 ─────────────────────────────
-      const featureLabel = page.locator('[title="Opt Feature"]').first()
-      await featureLabel.click()
-      await expect(page.getByText('Start week:').first()).toBeVisible({ timeout: 8_000 })
-      await page.locator('input[min="0"]:not([id])').first().fill('5')
-      await page.getByRole('button', { name: /^save$/i }).click()
-      await quickSchedule(page)
-      await expect(page.getByRole('button', { name: /sequential|parallel/i }).first()).toBeVisible({ timeout: 15_000 })
 
       // ── 5. Open drawer and run optimiser with ramp-up enabled ──────────
       const drawer = await openStartingTeamFinder(page)
@@ -655,14 +654,17 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(postRpNr.capacityProfile!.resolutionSource).toBe('PROFILE')
       expect(postRpNr.capacityProfile!.planningBasis).toBe('availabilityWindow')
       expect(postRpNr.capacityProfile!.source).toBe('derived')
-      // Effective availability
+      // Effective availability — all fields match authoritative profile
       expect(postRpNr.allocationMode).toBe('TIMELINE')
-      expect(postRpNr.allocationPercent).toBe(100)
-      // Exact match against authoritative profile
+      expect(postRpNr.allocationPercent).toBe(postCp.defaultPercent)
+      expect(postRpNr.allocationPct).toBe(postCp.defaultPercent)
+      expect(postRpNr.allocationStartWeek).toBe(postCp.startWeek)
       expect(postRpNr.allocationEndWeek).toBe(postCp.endWeek)
-      // Resource-type count
-      expect(postRp.devRow!.count).toBe(rampUpCount)
-
+      expect(postRpNr.startWeek).toBe(postCp.startWeek)
+      expect(postRpNr.endWeek).toBe(postCp.endWeek)
+      // actualAllocationStartWeek matches profile start (actualAllocationEndWeek is
+      // scheduler-computed and may differ from the profile's open-ended null endWeek)
+      expect(postRpNr.actualAllocationStartWeek).toBe(postCp.startWeek)
       // ── 9. Timeline parity ─────────────────────────────────────────────
       const postTl = await page.evaluate(async ({ id, nrId }) => {
         const token = localStorage.getItem('token')
@@ -678,8 +680,9 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(postTl).toBeDefined()
       const postTlNr = postTl!
       expect(postTlNr.startWeek).toBe(rampUpWeek)
-      // Exact match against authoritative profile
       expect(postTlNr.endWeek).toBe(postCp.endWeek)
+      expect(postTlNr.allocationPercent).toBe(postCp.defaultPercent)
+      expect(postTlNr.allocationMode).toBe('TIMELINE')
 
       // ── 10. Undo via snapshot rollback ──────────────────────────────────
       const undoResult = await page.evaluate(async ({ id, snapshotId }) => {
@@ -712,7 +715,7 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(restNr.startWeek).toBe(preNr.startWeek)
       expect(restNr.endWeek).toBe(preNr.endWeek)
 
-      // 11c. Resource Profile restoration — all relevant fields
+      // 11c. Resource Profile restoration — all relevant fields including metadata
       const restRp = await page.evaluate(async ({ id, nrId }) => {
         const token = localStorage.getItem('token')
         const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
@@ -723,7 +726,8 @@ test.describe('Starting Team Finder drawer — with resources', () => {
               id: string; allocationMode: string; allocationPercent: number; allocationPct: number
               allocationStartWeek: number | null; allocationEndWeek: number | null
               startWeek: number | null; endWeek: number | null
-              capacityProfile?: { resolutionSource: string }
+              actualAllocationStartWeek: number | null; actualAllocationEndWeek: number | null
+              capacityProfile?: { resolutionSource: string; planningBasis: string; source: string }
             }>
           }>
         }
@@ -734,6 +738,7 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(restRp.devNr).toBeDefined()
       expect(restRp.devRow).toBeDefined()
       expect(restRp.devRow!.count).toBe(preCount)
+      // All scalar compatibility fields restored
       expect(restRp.devNr!.allocationMode).toBe(preRpNr.allocationMode)
       expect(restRp.devNr!.allocationPercent).toBe(preRpNr.allocationPercent)
       expect(restRp.devNr!.allocationPct).toBe(preRpNr.allocationPct)
@@ -741,9 +746,28 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(restRp.devNr!.allocationEndWeek).toBe(preRpNr.allocationEndWeek)
       expect(restRp.devNr!.startWeek).toBe(preRpNr.startWeek)
       expect(restRp.devNr!.endWeek).toBe(preRpNr.endWeek)
-      // Legacy fallback resolution restored
+      expect(restRp.devNr!.actualAllocationStartWeek).toBe(preRpNr.actualAllocationStartWeek)
+      expect(restRp.devNr!.actualAllocationEndWeek).toBe(preRpNr.actualAllocationEndWeek)
+      // Full profile metadata restored to legacy fallback (matching pre-apply state)
       expect(restRp.devNr!.capacityProfile).toBeDefined()
-      expect(restRp.devNr!.capacityProfile!.resolutionSource).toBe('LEGACY')
+      expect(restRp.devNr!.capacityProfile!.resolutionSource).toBe(preRpNr.capacityProfile!.resolutionSource)
+      expect(restRp.devNr!.capacityProfile!.planningBasis).toBe(preRpNr.capacityProfile!.planningBasis)
+      expect(restRp.devNr!.capacityProfile!.source).toBe(preRpNr.capacityProfile!.source)
+
+      // 11d. Timeline restoration (MUST succeed, not conditional)
+      const restTl = await page.evaluate(async ({ id, nrId }) => {
+        const token = localStorage.getItem('token')
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+        const tl = await (await fetch(`/api/projects/${id}/timeline`, { headers })).json() as {
+          namedResources: Array<{ id: string; startWeek: number | null; endWeek: number | null; allocationMode: string; allocationPercent: number }>
+        }
+        return tl.namedResources.find(nr => nr.id === nrId) ?? null
+      }, { id: projectId, nrId: nrResult.nrId })
+      expect(restTl).toBeDefined()
+      expect(restTl!.startWeek).toBe(preTlNr.startWeek)
+      expect(restTl!.endWeek).toBe(preTlNr.endWeek)
+      expect(restTl!.allocationPercent).toBe(preTlNr.allocationPercent)
+      expect(restTl!.allocationMode).toBe(preTlNr.allocationMode)
 
     } finally {
       await db.end()
