@@ -108,7 +108,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (15 tests)
+### `timeline.spec.ts` — Timeline (16 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -125,14 +125,17 @@ API-level tests using the `request` fixture. No browser UI involved.
 |------|-------------|
 | open and close the drawer | Navigates to a Timeline page, clicks `🔧 Starting Team Finder`, asserts the drawer dialog with accessible name and heading "Starting Team Finder" is visible, clicks the Close (×) button, asserts drawer is removed from the DOM |
 
-#### `Starting Team Finder drawer — with resources` describe block (2 tests — Phase 4, issue #233)
+#### `Starting Team Finder drawer — with resources` describe block (5 tests — Phase 4, issue #233; profile-first ramp-up, issue #360)
 
-`beforeEach` seeds a project with Developer + Tech Lead tasks via CSV import, navigates to Timeline, and runs Quick schedule. Each test has a 90 s timeout.
+`beforeEach` seeds a project with Developer (264 h) and Tech Lead (8 h) tasks via CSV import, navigates to Timeline, and runs Quick schedule. The ramp-up test additionally creates a named resource via `POST /named-resources` (which normally creates an explicit CapacityProfile), then deletes that profile via raw SQL — leaving the named resource in **NO_PROFILE** state (eligible for ramp-up). The feature start week is manually overridden to week 5 and re-scheduled to push Developer first demand past week 0. Each test has a 90 s timeout.
 
 | Test | Description |
 |------|-------------|
 | run optimiser and see results | Opens drawer, clicks `Find starting teams`, waits up to 30 s for the search-stats footer (`Evaluated X team options in Ys`), asserts the baseline card ("Current starting point"), the exact `Starting team options` section label, and at least one candidate card with an `Apply directly` button are visible |
-| apply button is present on candidate cards, dialog is dismissed without mutation | Runs the finder, asserts the exact `Starting team options` section label and that candidate cards expose `Apply directly` buttons, clicks the first one, dismisses the browser `confirm()` dialog, and asserts the drawer remains open (no snapshot was created) |
+| apply candidate passes the validated optimiser scope from the response | Runs the finder, applies the first candidate, and asserts the `POST /optimise/apply` payload carries the complete `optimiserScopeResourceTypeIds` returned by the optimiser (including scoped IDs with zero suggestedStartWeek), not a filtered positive-only subset |
+| deterministic ramp-up apply creates optimiser-derived profile, cross-view parity and snapshot undo | Enables ramp-up checkbox, runs optimiser, finds a candidate with positive `suggestedStartWeek` for the Developer NO_PROFILE named resource, applies via UI. Verifies: the apply payload carries the complete scope; SQL confirms exactly one `CapacityProfile` with `ownerKind=NAMED_PERSON`, `planningBasis=AVAILABILITY_WINDOW`, `source=DERIVED`, `startWeek=selectedSuggestion`, `endWeek=null`, `defaultPercent=100`, `legacy=[version=1, writer=RESOURCE_OPTIMISER]`, and zero `CapacitySegment` rows; all seven NamedResource compatibility fields (`allocationMode`, `allocationPercent`, `allocationPct`, `allocationStartWeek`, `allocationEndWeek`, `startWeek`, `endWeek`) match the authoritative profile; Resource Profile reader shows `resolutionSource=PROFILE` with exact start/end/percentage/mode; Timeline reader shows exact start/end/percentage/mode matching the profile. After rollback, verifies via SQL that the profile is removed and orphan segments are absent using the created profile ID; NamedResource fields, Resource Profile (all compatible fields plus legacy `resolutionSource`), and Timeline values all restored to pre-apply state — no conditional bypass. |
+| apply candidate persists through the direct-apply workflow | Runs the finder, applies the first candidate, verifies the `POST /optimise/apply` response returns a snapshot ID, and asserts the drawer closes only after the profile-first direct apply succeeds |
+| direct apply fails closed for an explicit named-person profile | Adds a named person through Resource Profile, submits a direct ramp-up apply request, and asserts `409 OPTIMISER_APPLY_CONFLICT` with `EXPLICIT_SCALAR_PROTECTED`; user-configured capacity is never replaced |
 
 #### `Timeline — Resource-counts layout` describe block (3 tests — issue #369)
 

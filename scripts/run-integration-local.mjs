@@ -8,7 +8,13 @@ let cleanupErrors = []
 
 try {
   await withIsolatedTestDatabase({ root, signal: guard.abortSignal }, async environment => {
-    for (const script of ['test:snapshot-integration', 'test:clone-integration', 'test:squadplan-integration', 'test:named-resource-guard-integration']) {
+    for (const script of [
+      'test:snapshot-integration',
+      'test:clone-integration',
+      'test:squadplan-integration',
+      'test:named-resource-guard-integration',
+      'test:optimiser-apply-integration',
+    ]) {
       if (guard.triggered) break
       await runCommand('npm', ['run', script, '--workspace=server'], { cwd: root, env: environment, signal: guard.abortSignal })
     }

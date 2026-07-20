@@ -84,6 +84,8 @@ export interface OptimiserResponse {
   /** Count of scenarios filtered out due to parallel over-allocation warnings */
   infeasibleCount: number
   resourceTypes: Array<{ id: string; name: string }>
+  /** Resource-type IDs from the validated countRanges used by the optimiser. */
+  optimiserScopeResourceTypeIds: string[]
 }
 
 export interface OptimiserRequest {
@@ -105,11 +107,12 @@ export const runOptimiser = (projectId: string, body: OptimiserRequest): Promise
 export const applyOptimiserScenario = (
   projectId: string,
   resourceTypes: Array<{ resourceTypeId: string; count: number; suggestedStartWeek: number }>,
-  options?: { staggerEpics?: boolean },
+  options: { optimiserScopeResourceTypeIds: string[]; staggerEpics?: boolean },
 ): Promise<{ message: string; snapshotId: string }> =>
   api
     .post<{ message: string; snapshotId: string }>(`/projects/${projectId}/optimise/apply`, {
       resourceTypes,
-      staggerEpics: options?.staggerEpics,
+      optimiserScopeResourceTypeIds: options.optimiserScopeResourceTypeIds,
+      staggerEpics: options.staggerEpics,
     })
     .then(r => r.data)

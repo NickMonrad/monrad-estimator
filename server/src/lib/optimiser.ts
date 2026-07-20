@@ -84,22 +84,19 @@ export interface OptimiserCandidate {
 }
 
 export interface OptimiserResult {
-  candidates: OptimiserCandidate[] // top N, ranked best-first
-  baseline: OptimiserCandidate     // current config metrics for diff display
+  candidates: OptimiserCandidate[]
+  baseline: OptimiserCandidate
   searchStats: {
-    /** Total number of scheduler invocations (includes filtered-out scenarios) */
     scenariosEvaluated: number
-    /** Number of scenarios that passed all constraints (≤ scenariosEvaluated) */
     candidatesFound: number
     durationMs: number
-    /** true when search space exceeded MAX_SCENARIOS and random sampling was used */
     sampled: boolean
   }
-  /**
-   * Count of scenarios filtered out specifically because parallelWarningCount > 0.
-   * These are strictly infeasible: a parallel-mode epic exceeded RT capacity.
-   */
   infeasibleCount: number
+  /** Resource-type IDs from the validated countRanges. Every scoped resource type
+   *  may appear in candidate entries; those with suggestedStartWeek > 0 are a
+   *  subset of this set. */
+  optimiserScopeResourceTypeIds: string[]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -403,13 +400,14 @@ export function runOptimiser(
     }
   }
 
-  // When ramp-up is enabled, the apply route shifts namedResources[].startWeek
-  // to the first demand week (only when > 0). Mirror that in scoring so a
-  // candidate's metrics reflect the schedule that will actually be applied;
-  // otherwise a scenario can look feasible here but be infeasible after apply.
+  /** Resource types explicitly in countRanges — ramp-up applies only here. */
+  const optimiserScope = new Set(countRanges.map(r => r.resourceTypeId))
+
+  /** Scoped ramp-up: only overlays RTs the user asked about. */
   function applyRampUp(rts: SchedulerResourceType[]): SchedulerResourceType[] {
     if (!allowRampUp) return rts
     return rts.map(rt => {
+      if (!optimiserScope.has(rt.id)) return rt
       const sw = firstDemandWeekByRtId.get(rt.id)
       if (sw === undefined || sw <= 0) return rt
       return {
@@ -441,7 +439,7 @@ export function runOptimiser(
     resourceTypes: baseInput.resourceTypes.map(rt => ({
       resourceTypeId: rt.id,
       count: rt.count,
-      suggestedStartWeek: allowRampUp ? (firstDemandWeekByRtId.get(rt.id) ?? 0) : 0,
+      suggestedStartWeek: allowRampUp && optimiserScope.has(rt.id) ? (firstDemandWeekByRtId.get(rt.id) ?? 0) : 0,
     })),
     metrics: baselineMetrics,
     score: 0,
@@ -511,7 +509,7 @@ export function runOptimiser(
       resourceTypes: baseInput.resourceTypes.map(rt => ({
         resourceTypeId: rt.id,
         count: overrideMap.get(rt.id) ?? rt.count,
-        suggestedStartWeek: allowRampUp ? (firstDemandWeekByRtId.get(rt.id) ?? 0) : 0,
+        suggestedStartWeek: allowRampUp && optimiserScope.has(rt.id) ? (firstDemandWeekByRtId.get(rt.id) ?? 0) : 0,
       })),
       metrics,
     })
@@ -580,5 +578,6 @@ export function runOptimiser(
       sampled,
     },
     infeasibleCount,
+    optimiserScopeResourceTypeIds: Array.from(optimiserScope),
   }
 }

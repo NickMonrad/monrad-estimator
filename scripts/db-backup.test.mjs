@@ -476,6 +476,7 @@ test('fails when DATABASE_URL is not set', (t) => {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
 
   const result = runBackup({
+    MONRAD_ENV_FILE: path.join(directory, 'missing.env'),
     MONRAD_DB_MODE: 'host',
   })
 
