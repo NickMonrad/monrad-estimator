@@ -187,11 +187,11 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   // Validate the optimiser scope (review #360, finding 1)
-  if (!isValidOptimiserScopeForApply(candidateRTs, optimiserScopeResourceTypeIds ?? [])) {
+  if (!isValidOptimiserScopeForApply(candidateRTs, (optimiserScopeResourceTypeIds ?? []) as readonly string[])) {
     res.status(400).json({ error: 'Invalid optimiserScopeResourceTypeIds' }); return
   }
   // Every resource type in scope must belong to this project's candidate list
-  const scopeIds = (optimiserScopeResourceTypeIds as string[] | undefined) ?? []
+  const scopeIds: readonly string[] = (optimiserScopeResourceTypeIds as readonly string[] | undefined) ?? []
   const scopeForeign = scopeIds.find(id => !candidateIds.includes(id))
   if (scopeForeign) {
     res.status(400).json({ error: `Scope resource type ${scopeForeign} is not in the candidate list` }); return

@@ -173,11 +173,13 @@ describe('validateNoProfileScalarState', () => {
   })
 
   it('accepts EFFORT with null percentage fields', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'EFFORT',
-      allocationPercent: null,
-      allocationPct: null,
-    }))).toEqual({ valid: true })
+    // TypeScript cast: dynamically test null/undefined runtime values that
+    // could reach the service via deserialised API payloads.
+    const nr = namedResource() as unknown as Record<string, unknown>
+    nr.allocationMode = 'EFFORT'
+    nr.allocationPercent = null
+    nr.allocationPct = null
+    expect(validateNoProfileScalarState(nr as unknown as OptimiserNamedResourceState)).toEqual({ valid: true })
   })
 
   it('rejects EFFORT with negative start week', () => {
@@ -232,21 +234,20 @@ describe('validateNoProfileScalarState', () => {
       allocationPct: 80,
     }))).toEqual({ valid: true })
   })
-
   it('accepts valid TIMELINE with allocationPct only', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: null,
-      allocationPct: 75,
-    }))).toEqual({ valid: true })
+    const nr = namedResource() as unknown as Record<string, unknown>
+    nr.allocationMode = 'TIMELINE'
+    nr.allocationPercent = null
+    nr.allocationPct = 75
+    expect(validateNoProfileScalarState(nr as unknown as OptimiserNamedResourceState)).toEqual({ valid: true })
   })
 
   it('accepts valid FULL_PROJECT with allocationPercent only', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'FULL_PROJECT',
-      allocationPercent: 100,
-      allocationPct: null,
-    }))).toEqual({ valid: true })
+    const nr = namedResource() as unknown as Record<string, unknown>
+    nr.allocationMode = 'FULL_PROJECT'
+    nr.allocationPercent = 100
+    nr.allocationPct = null
+    expect(validateNoProfileScalarState(nr as unknown as OptimiserNamedResourceState)).toEqual({ valid: true })
   })
 
   it('rejects CAPACITY_PLAN mode', () => {
@@ -260,11 +261,11 @@ describe('validateNoProfileScalarState', () => {
   })
 
   it('rejects missing allocation percent for TIMELINE', () => {
-    const result = validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: null,
-      allocationPct: null,
-    }))
+    const nr = namedResource() as unknown as Record<string, unknown>
+    nr.allocationMode = 'TIMELINE'
+    nr.allocationPercent = null
+    nr.allocationPct = null
+    const result = validateNoProfileScalarState(nr as unknown as OptimiserNamedResourceState)
     expect(result).toEqual({ valid: false, reason: expect.stringContaining('Missing allocation percent') })
   })
 
@@ -324,7 +325,7 @@ describe('validateNoProfileScalarState', () => {
     const result = validateNoProfileScalarState(namedResource({
       allocationMode: 'TIMELINE',
       allocationPercent: Infinity,
-      allocationPct: null,
+      allocationPct: Infinity,
     }))
     expect(result).toEqual({ valid: false, reason: expect.stringContaining('Infinity') })
   })

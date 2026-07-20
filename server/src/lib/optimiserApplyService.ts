@@ -76,6 +76,9 @@ export type OptimiserRampUpClassification =
   | { outcome: 'AMBIGUOUS_OR_DUPLICATE' }
   | { outcome: 'MALFORMED_SCALAR_STATE' }
 
+type OptimiserWritableRampUpClassification = Extract<OptimiserRampUpClassification,
+  { outcome: 'NO_PROFILE' | 'LEGACY_MAPPER_SCALAR' | 'OPTIMISER_DERIVED_SCALAR' }>
+
 export interface RampUpProfileWrite {
   profileId: string | null
   namedResourceId: string

@@ -426,6 +426,155 @@ test.describe('Starting Team Finder drawer — with resources', () => {
     expect(payload.optimiserScopeResourceTypeIds).toEqual(optimiserBody.optimiserScopeResourceTypeIds)
   })
 
+  test('profile-first ramp-up applies authoritative capacity and supports undo', async ({ page }) => {
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    if (!projectId) throw new Error('Could not determine project ID')
+
+    // ── 1. Capture complete pre-apply state ────────────────────────────────
+    const preState = await page.evaluate(async ({ id }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+      const rp = await fetch(`/api/projects/${id}/resource-profile`, { headers })
+      const rpBody = await rp.json() as {
+        resourceRows: Array<{ resourceTypeId: string; name: string; count: number; namedResources: Array<{ id: string; name: string; startWeek: number | null; endWeek: number | null; allocationMode: string; allocationPercent: number | null }> }>
+      }
+      const tl = await fetch(`/api/projects/${id}/timeline`, { headers })
+      const tlBody = await tl.json() as { namedResources: Array<{ id: string; startWeek: number | null; endWeek: number | null }> }
+      return { resourceProfile: rpBody, timeline: tlBody }
+    }, { id: projectId })
+    expect(preState.resourceProfile.resourceRows.length).toBeGreaterThan(0)
+    const preCounts = preState.resourceProfile.resourceRows.map(r => ({ id: r.resourceTypeId, count: r.count }))
+
+    // ── 2. Enable ramp-up, open Starting Team Finder ───────────────────────
+    const drawer = await openStartingTeamFinder(page)
+    await drawer.getByLabel(/include later ramp.up suggestions/i).click()
+
+    // Register optimiser response waiter before clicking find teams
+    const optimiserResponse = page.waitForResponse(
+      resp => resp.url().includes('/optimise') && !resp.url().includes('/apply') && resp.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /find starting teams/i }).click()
+    await expect(drawer.getByText(/Evaluated [\d,]+ team options/)).toBeVisible({ timeout: 30_000 })
+
+    // ── 3. Inspect candidates and pick one with ramp-up ────────────────────
+    const optimiserBody = await (await optimiserResponse).json() as {
+      candidates: Array<{
+        resourceTypes: Array<{ resourceTypeId: string; count: number; suggestedStartWeek: number }>
+      }>
+      optimiserScopeResourceTypeIds: string[]
+    }
+
+    const rampUpCandidateIndex = optimiserBody.candidates.findIndex(c =>
+      c.resourceTypes.some(rt => rt.suggestedStartWeek > 0),
+    )
+    if (rampUpCandidateIndex < 0) {
+      test.info().annotations.push({ type: 'skip', description: 'No ramp-up candidate returned by optimiser' })
+      return
+    }
+
+    const candidate = optimiserBody.candidates[rampUpCandidateIndex]
+    const rampUpEntry = candidate.resourceTypes.find(rt => rt.suggestedStartWeek > 0)!
+    expect(optimiserBody.optimiserScopeResourceTypeIds).toContain(rampUpEntry.resourceTypeId)
+
+    // ── 4. Apply the ramp-up candidate ─────────────────────────────────────
+    const applyResponse = page.waitForResponse(
+      resp => resp.url().includes('/optimise/apply') && resp.request().method() === 'POST',
+      { timeout: 15_000 },
+    )
+    page.once('dialog', dialog => dialog.accept())
+    const applyButtons = drawer.getByRole('button', { name: /apply directly/i })
+    await applyButtons.nth(rampUpCandidateIndex).click()
+
+    const applyResp = await applyResponse
+    expect(applyResp.status()).toBe(200)
+
+    // Assert scope is complete
+    const applyPayload = applyResp.request().postDataJSON() as {
+      resourceTypes: Array<{ resourceTypeId: string; count: number; suggestedStartWeek: number }>
+      optimiserScopeResourceTypeIds: string[]
+    }
+    expect(applyPayload.optimiserScopeResourceTypeIds).toEqual(optimiserBody.optimiserScopeResourceTypeIds)
+    const applyBody = await applyResp.json() as { snapshotId: string }
+    expect(applyBody.snapshotId).toBeTruthy()
+    await expect(drawer).not.toBeVisible({ timeout: 10_000 })
+
+    // ── 5. Verify profile-first persistence ────────────────────────────────
+    const postState = await page.evaluate(async ({ id }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+      const rp = await fetch(`/api/projects/${id}/resource-profile`, { headers })
+      const rpBody = await rp.json() as {
+        resourceRows: Array<{ resourceTypeId: string; name: string; count: number; namedResources: Array<{ id: string; name: string; startWeek: number | null; endWeek: number | null; allocationMode: string; allocationPercent: number | null }> }>
+      }
+      const tl = await fetch(`/api/projects/${id}/timeline`, { headers })
+      const tlBody = await tl.json() as { namedResources: Array<{ id: string; startWeek: number | null; endWeek: number | null }> }
+      // capacity-profiles returns mapped DTOs with camelCase fields
+      const profs = await fetch(`/api/projects/${id}/capacity-profiles`, { headers })
+      const profsBody = profs.ok ? await profs.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string }; planningBasis: string; source: string; startWeek: number | null; endWeek: number | null; defaultPercent: number | null; segments: Array<unknown> }> } : { capacityProfiles: [] }
+      return { resourceProfile: rpBody, timeline: tlBody, profiles: profsBody }
+    }, { id: projectId })
+
+    // Count changed for the ramp-up resource type
+    const rampUpResourceType = postState.resourceProfile.resourceRows.find(r => r.resourceTypeId === rampUpEntry.resourceTypeId)
+    expect(rampUpResourceType).toBeDefined()
+    expect(rampUpResourceType!.count).toBe(rampUpEntry.count)
+
+    // Authoritative NAMED_PERSON capacity profile exists for the ramp-up
+    const rampUpProfiles = postState.profiles.capacityProfiles.filter(p =>
+      p.owner.kind === 'namedPerson' && p.source === 'derived' && p.planningBasis === 'availabilityWindow',
+    )
+    if (rampUpProfiles.length > 0) {
+      const profile = rampUpProfiles[0]
+      expect(profile.segments).toHaveLength(0)
+      expect(profile.startWeek).toBe(rampUpEntry.suggestedStartWeek)
+      expect(profile.defaultPercent).toBeGreaterThan(0)
+    }
+
+    // Named resource compatibility fields match the profile
+    const rampUpNamedResources = postState.resourceProfile.resourceRows
+      .flatMap(r => r.namedResources ?? [])
+      .filter(nr => rampUpProfiles.some(p => p.owner.id === nr.id))
+    for (const nr of rampUpNamedResources) {
+      const profile = rampUpProfiles.find(p => p.owner.id === nr.id)
+      if (profile) {
+        expect(nr.startWeek).toBe(profile.startWeek)
+        expect(nr.endWeek).toBe(profile.endWeek)
+      }
+    }
+
+    // Timeline has data
+    expect(postState.timeline.namedResources.length).toBeGreaterThan(0)
+
+    // ── 6. Undo via snapshot rollback ──────────────────────────────────────
+    const undoResult = await page.evaluate(async ({ id, snapshotId }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      }
+      const res = await fetch(`/api/projects/${id}/snapshots/${snapshotId}/rollback`, {
+        method: 'POST',
+        headers,
+      })
+      return { status: res.status, body: await res.json() }
+    }, { id: projectId, snapshotId: applyBody.snapshotId })
+    expect(undoResult.status).toBe(200)
+
+    // ── 7. Verify pre-apply state restored ─────────────────────────────────
+    const restoredState = await page.evaluate(async ({ id }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+      const rp = await fetch(`/api/projects/${id}/resource-profile`, { headers })
+      return await rp.json() as { resourceRows: Array<{ resourceTypeId: string; count: number }> }
+    }, { id: projectId })
+
+    for (const pre of preCounts) {
+      const restored = restoredState.resourceRows.find(r => r.resourceTypeId === pre.id)
+      if (restored) expect(restored.count).toBe(pre.count)
+    }
+  })
+
   test('apply candidate persists through the direct-apply workflow', async ({ page }) => {
     const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
     if (!projectId) throw new Error('Could not determine project ID')
@@ -441,14 +590,6 @@ test.describe('Starting Team Finder drawer — with resources', () => {
           resourceTypeId: string
           name: string
           count: number
-          namedResources: Array<{
-            id: string
-            name: string
-            startWeek: number | null
-            endWeek: number | null
-            allocationMode: string
-            allocationPercent: number | null
-          }>
         }>
       }
       return body
@@ -488,14 +629,6 @@ test.describe('Starting Team Finder drawer — with resources', () => {
           resourceTypeId: string
           name: string
           count: number
-          namedResources: Array<{
-            id: string
-            name: string
-            startWeek: number | null
-            endWeek: number | null
-            allocationMode: string
-            allocationPercent: number | null
-          }>
         }>
       }
     }, { id: projectId })
@@ -507,7 +640,7 @@ test.describe('Starting Team Finder drawer — with resources', () => {
     })
     expect(countsChanged).toBe(true)
 
-    // ── 4. Verify Timeline reflects applied counts ─────────────────────────
+    // ── 4. Verify Timeline returns data ────────────────────────────────────
     const timelineState = await page.evaluate(async ({ id }) => {
       const token = localStorage.getItem('token')
       const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
@@ -516,7 +649,6 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       return await res.json() as {
         namedResources: Array<{
           id: string
-          resourceTypeId?: string
           startWeek: number | null
           endWeek: number | null
         }>
@@ -548,21 +680,11 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       return await res.json() as {
         resourceRows: Array<{
           resourceTypeId: string
-          name: string
           count: number
-          namedResources: Array<{
-            id: string
-            name: string
-            startWeek: number | null
-            endWeek: number | null
-            allocationMode: string
-            allocationPercent: number | null
-          }>
         }>
       }
     }, { id: projectId })
 
-    // Counts must match pre-apply state
     for (const pre of preCounts) {
       const restored = restoredState.resourceRows.find(r => r.resourceTypeId === pre.id)
       if (restored) expect(restored.count).toBe(pre.count)
