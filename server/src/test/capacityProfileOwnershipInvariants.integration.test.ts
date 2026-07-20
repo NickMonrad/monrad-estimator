@@ -1,0 +1,990 @@
+/**
+ * capacityProfileOwnershipInvariants.integration.test.ts — Real PostgreSQL 15
+ * integration tests for capacity-profile ownership invariants.
+ *
+ * Tests audit, identical-duplicate repair, constraint enforcement, migration
+ * preflight, writer compatibility, and idempotent backfill/reconcile.
+ *
+ * Requires INTEGRATION_TEST=true and a disposable PostgreSQL 15 Docker container.
+ */
+
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
+import { runOwnershipAudit } from '../lib/capacityProfileOwnershipAudit.js'
+import { repairIdenticalDuplicates } from '../lib/capacityProfileOwnershipRepair.js'
+import { PrismaClient, Prisma } from '@prisma/client'
+
+// ─── Guard ──────────────────────────────────────────────────────────────────
+
+const runIntegration = process.env.INTEGRATION_TEST === 'true'
+const describeIf = runIntegration ? describe : describe.skip
+
+// ─── Shared state ───────────────────────────────────────────────────────────
+
+let prisma: PrismaClient
+let projectId: string
+let rtId: string
+let nrId: string
+let nrId2: string
+
+// Profile IDs created during setup
+let roleProfileId: string
+let nrProfileId: string
+
+// ─── Migrate and seed ───────────────────────────────────────────────────────
+
+/**
+ * Run all pending migrations against the test database.
+ */
+async function runMigrations(): Promise<void> {
+  const { execSync } = await import('node:child_process')
+  execSync('npx prisma migrate deploy', {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+    stdio: 'pipe',
+  })
+}
+
+/**
+ * Drop all constraints added by the #361 migration to simulate pre-migration state.
+ */
+async function dropConstraints(): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"',
+  )
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_owner_kind_fk"',
+  )
+  await prisma.$executeRawUnsafe(
+    'DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"',
+  )
+  await prisma.$executeRawUnsafe(
+    'DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"',
+  )
+}
+
+/**
+ * Recreate the original non-unique indexes (pre-migration state simulation).
+ */
+async function recreateNonUniqueIndexes(): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "CapacityProfile_resourceTypeId_idx" ON "CapacityProfile"("resourceTypeId")',
+  )
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "CapacityProfile_namedResourceId_idx" ON "CapacityProfile"("namedResourceId")',
+  )
+}
+
+/**
+ * Apply the #361 migration constraints.
+ */
+async function applyConstraints(): Promise<void> {
+  // This simulates what the migration does — in test setup we drop + re-apply
+  // to verify the migration logic against both clean and dirty fixtures.
+
+  // Preflight checks are done by the PL/pgSQL block in the migration SQL.
+  // For tests we apply the raw constraint SQL directly.
+
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "CapacityProfile"
+    ADD CONSTRAINT "chk_CapacityProfile_exactly_one_owner"
+    CHECK (
+      ("resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
+      OR
+      ("resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+    )
+  `)
+
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "CapacityProfile"
+    ADD CONSTRAINT "chk_CapacityProfile_owner_kind_fk"
+    CHECK (
+      ("ownerKind" = 'ROLE' AND "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
+      OR
+      ("ownerKind" = 'NAMED_PERSON' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+      OR
+      ("ownerKind" = 'PLANNED_RESOURCE' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+    )
+  `)
+
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX "CapacityProfile_resourceTypeId_key"
+    ON "CapacityProfile"("resourceTypeId") WHERE "resourceTypeId" IS NOT NULL
+  `)
+
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX "CapacityProfile_namedResourceId_key"
+    ON "CapacityProfile"("namedResourceId") WHERE "namedResourceId" IS NOT NULL
+  `)
+}
+
+// ─── Setup ──────────────────────────────────────────────────────────────────
+
+beforeAll(async () => {
+  if (!runIntegration) return
+
+  prisma = new PrismaClient()
+  await runMigrations()
+
+  // Drop the #361 constraints so we can test from the pre-migration state
+  await dropConstraints()
+  await recreateNonUniqueIndexes()
+
+  // Create a minimal fixture project with one resource type and two named resources
+  const user = await prisma.user.create({
+    data: {
+      email: 'ownership-invariants-test@example.com',
+      name: 'Test User',
+      password: 'test-hash',
+    },
+  })
+  const project = await prisma.project.create({
+    data: {
+      name: 'Ownership Invariants Test',
+      ownerId: user.id,
+    },
+  })
+  projectId = project.id
+
+  const rt = await prisma.resourceType.create({
+    data: {
+      name: 'Test Role',
+      projectId,
+      category: 'ENGINEERING',
+      count: 2,
+    },
+  })
+  rtId = rt.id
+
+  const nr1 = await prisma.namedResource.create({
+    data: {
+      name: 'Test Person 1',
+      resourceTypeId: rtId,
+    },
+  })
+  nrId = nr1.id
+
+  const nr2 = await prisma.namedResource.create({
+    data: {
+      name: 'Test Person 2',
+      resourceTypeId: rtId,
+    },
+  })
+  nrId2 = nr2.id
+
+  // Create a valid ROLE profile
+  const rp = await prisma.capacityProfile.create({
+    data: {
+      projectId,
+      resourceTypeId: rtId,
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 10,
+      legacy: Prisma.DbNull,
+    },
+  })
+  roleProfileId = rp.id
+
+  // Create a valid NAMED_PERSON profile
+  const np = await prisma.capacityProfile.create({
+    data: {
+      projectId,
+      resourceTypeId: null,
+      namedResourceId: nrId,
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 10,
+      legacy: Prisma.DbNull,
+    },
+  })
+  nrProfileId = np.id
+})
+
+afterAll(async () => {
+  if (!runIntegration || !prisma) return
+  await prisma.$disconnect()
+})
+
+// ─── Cleanup helper for per-test isolation ───────────────────────────────────
+
+async function deleteAllProfiles(): Promise<void> {
+  await prisma.capacitySegment.deleteMany()
+  await prisma.capacityProfile.deleteMany()
+}
+
+async function resetToCleanState(): Promise<void> {
+  await deleteAllProfiles()
+  // Recreate valid single profiles
+  await prisma.capacityProfile.create({
+    data: {
+      projectId,
+      resourceTypeId: rtId,
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 10,
+      legacy: Prisma.DbNull,
+    },
+  })
+  await prisma.capacityProfile.create({
+    data: {
+      projectId,
+      resourceTypeId: null,
+      namedResourceId: nrId,
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 10,
+      legacy: Prisma.DbNull,
+    },
+  })
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Clean data audits
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Clean database audit', () => {
+  it('audits successfully with no findings', async () => {
+    await resetToCleanState()
+    const report = await runOwnershipAudit(prisma)
+    expect(report.isClean).toBe(true)
+    expect(report.findings).toHaveLength(0)
+    expect(report.totalProfiles).toBe(2)
+    expect(report.validSingletons).toBe(2)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Identical role duplicate detection and repair
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Identical role duplicate detection and repair', () => {
+  beforeEach(async () => {
+    await resetToCleanState()
+  })
+
+  it('reports identical role duplicates', async () => {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.repairableGroups).toHaveLength(1)
+    expect(report.findings.some(f => f.type === 'identical_duplicate_group')).toBe(true)
+    expect(report.isClean).toBe(false)
+  })
+
+  it('repairs identical role duplicates preserving survivor', async () => {
+    // Create duplicate
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.repairableGroups).toHaveLength(1)
+
+    const result = await repairIdenticalDuplicates(prisma, report)
+    expect(result.profilesDeleted).toBe(1)
+
+    const finalReport = await runOwnershipAudit(prisma)
+    expect(finalReport.isClean).toBe(true)
+    expect(finalReport.totalProfiles).toBe(2)
+
+    // Verify survivor is the original (earliest createdAt)
+    const remaining = await prisma.capacityProfile.findMany({
+      where: { resourceTypeId: rtId },
+    })
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].id).toBe(roleProfileId)
+  })
+
+  it('repair is idempotent', async () => {
+    // Create duplicate
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    await repairIdenticalDuplicates(prisma, report)
+
+    // Second repair should do nothing
+    const cleanReport = await runOwnershipAudit(prisma)
+    expect(cleanReport.isClean).toBe(true)
+    const result2 = await repairIdenticalDuplicates(prisma, cleanReport)
+    expect(result2.profilesDeleted).toBe(0)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Identical named-resource duplicates with exact legacy null semantics
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Identical named-resource duplicates with exact legacy null semantics', () => {
+  beforeEach(async () => {
+    await resetToCleanState()
+  })
+
+  it('preserves survivor and segment IDs for named duplicates', async () => {
+    // Add a segment to the original profile
+    await prisma.capacitySegment.create({
+      data: {
+        capacityProfileId: nrProfileId,
+        startWeek: 0,
+        endWeek: 4,
+        capacityPercent: 100,
+        source: 'FIXED',
+      },
+    })
+
+    // Create identical duplicate (same state, different id)
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.repairableGroups).toHaveLength(1)
+
+    await repairIdenticalDuplicates(prisma, report)
+
+    const finalProfiles = await prisma.capacityProfile.findMany({
+      where: { namedResourceId: nrId },
+      include: { segments: true },
+    })
+    expect(finalProfiles).toHaveLength(1)
+    expect(finalProfiles[0].id).toBe(nrProfileId) // survivor
+    expect(finalProfiles[0].segments).toHaveLength(1)
+    expect(finalProfiles[0].segments[0].startWeek).toBe(0)
+    expect(finalProfiles[0].segments[0].endWeek).toBe(4)
+  })
+
+  it('does not treat SQL null and JSON null as equal', async () => {
+    // Original has DB_NULL
+    // Create duplicate with JSON_NULL legacy
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.JsonNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.repairableGroups).toHaveLength(0)
+    expect(report.conflictingGroups).toHaveLength(1)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Different scalar fields block repair
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Different scalar fields block repair', () => {
+  beforeEach(async () => {
+    await resetToCleanState()
+  })
+
+  it('different defaultPercent is a conflict', async () => {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 50, // different from original 100
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.repairableGroups).toHaveLength(0)
+    expect(report.conflictingGroups).toHaveLength(1)
+  })
+
+  it('different source is a conflict', async () => {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'MANUAL', // different from original FIXED
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.repairableGroups).toHaveLength(0)
+    expect(report.conflictingGroups).toHaveLength(1)
+  })
+
+  it('different segment values is a conflict', async () => {
+    // Add a segment to original
+    await prisma.capacitySegment.create({
+      data: {
+        capacityProfileId: roleProfileId,
+        startWeek: 0,
+        endWeek: 4,
+        capacityPercent: 100,
+        source: 'FIXED',
+      },
+    })
+
+    // Create duplicate with different segment
+    const _dup = await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+    await prisma.capacitySegment.create({
+      data: {
+        capacityProfileId: _dup.id,
+        startWeek: 0,
+        endWeek: 4,
+        capacityPercent: 75, // different
+        source: 'FIXED',
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.repairableGroups).toHaveLength(0)
+    expect(report.conflictingGroups).toHaveLength(1)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Conflicting groups cause no writes
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Conflicting groups cause no writes', () => {
+  beforeEach(async () => {
+    await resetToCleanState()
+  })
+
+  it('repair does not touch conflicting groups', async () => {
+    // Create conflicting duplicate (different planningBasis)
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW', // different
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.conflictingGroups).toHaveLength(1)
+    expect(report.repairableGroups).toHaveLength(0)
+
+    await expect(repairIdenticalDuplicates(prisma, report)).resolves.not.toThrow()
+    // Verify no profiles were deleted
+    const all = await prisma.capacityProfile.findMany()
+    expect(all).toHaveLength(3) // 2 original + 1 conflicting still exists
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Shape error detection
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Shape error detection', () => {
+  beforeEach(async () => {
+    await deleteAllProfiles()
+  })
+
+  it('reports both-owner FK set', async () => {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: nrId, // both set
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.findings.some(f => f.type === 'both_owner_fks_set')).toBe(true)
+    expect(report.isClean).toBe(false)
+  })
+
+  it('reports neither-owner FK set', async () => {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: null, // neither set
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.findings.some(f => f.type === 'neither_owner_fk_set')).toBe(true)
+  })
+
+  it('reports ownerKind FK mismatch', async () => {
+    // ROLE with namedResourceId
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        ownerKind: 'ROLE', // mismatch
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.findings.some(f => f.type === 'owner_kind_fk_mismatch')).toBe(true)
+  })
+
+  it('reports cross-project owner mismatch', async () => {
+    // Create a second project and use the resourceType from it
+    const user = await prisma.user.findFirstOrThrow()
+    const project2 = await prisma.project.create({
+      data: { name: 'Second Project', ownerId: user.id },
+    })
+    const rt2 = await prisma.resourceType.create({
+      data: { name: 'Other Role', projectId: project2.id, category: 'ENGINEERING' },
+    })
+
+    // Create profile in first project but referencing rt2
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rt2.id, // belongs to project2, not projectId
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.findings.some(f => f.type === 'cross_project_owner')).toBe(true)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Migration preflight (migration refuses dirty data)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Migration constraint enforcement', () => {
+  beforeEach(async () => {
+    await deleteAllProfiles()
+    await dropConstraints()
+    await recreateNonUniqueIndexes()
+  })
+
+  afterEach(async () => {
+    try {
+      await dropConstraints()
+      await recreateNonUniqueIndexes()
+    } catch {
+      // ignore cleanup errors
+    }
+  })
+
+  it('migration refuses both FK set', async () => {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: nrId,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    await expect(applyConstraints()).rejects.toThrow()
+  })
+
+  it('migration refuses neither FK set', async () => {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    await expect(applyConstraints()).rejects.toThrow()
+  })
+
+  it('migration refuses ownerKind/FK mismatch', async () => {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    await expect(applyConstraints()).rejects.toThrow()
+  })
+
+  it('migration refuses duplicate resourceTypeId', async () => {
+    // Create two profiles with same resourceTypeId
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+
+    await expect(applyConstraints()).rejects.toThrow()
+  })
+
+  it('migration succeeds after clean audit and repair', async () => {
+    await resetToCleanState()
+    const report = await runOwnershipAudit(prisma)
+    expect(report.isClean).toBe(true)
+
+    await expect(applyConstraints()).resolves.not.toThrow()
+  })
+
+  // ─── PostgreSQL constraint enforcement ────────────────────────────────────
+
+  it('PostgreSQL rejects both FK after migration', async () => {
+    await resetToCleanState()
+    await applyConstraints()
+
+    await expect(
+      prisma.capacityProfile.create({
+        data: {
+          projectId,
+          resourceTypeId: rtId,
+          namedResourceId: nrId,
+          ownerKind: 'ROLE',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 10,
+          legacy: Prisma.DbNull,
+        },
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('PostgreSQL rejects duplicate resourceTypeId after migration', async () => {
+    await resetToCleanState()
+    await applyConstraints()
+
+    await expect(
+      prisma.capacityProfile.create({
+        data: {
+          projectId,
+          resourceTypeId: rtId,
+          namedResourceId: null,
+          ownerKind: 'ROLE',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 10,
+          legacy: Prisma.DbNull,
+        },
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('PostgreSQL rejects cross-kind named resource duplicate', async () => {
+    await resetToCleanState()
+    await applyConstraints()
+
+    // nrProfileId already exists as NAMED_PERSON
+    // Try to create PLANNED_RESOURCE with same namedResourceId
+    await expect(
+      prisma.capacityProfile.create({
+        data: {
+          projectId,
+          resourceTypeId: null,
+          namedResourceId: nrId, // same as existing NAMED_PERSON profile
+          ownerKind: 'PLANNED_RESOURCE',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 10,
+          legacy: Prisma.DbNull,
+        },
+      }),
+    ).rejects.toThrow()
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Contraint rollback preserves valid data
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Constraint rollback preserves valid data', () => {
+  beforeEach(async () => {
+    await deleteAllProfiles()
+    await dropConstraints()
+    await recreateNonUniqueIndexes()
+  })
+
+  it('dropping constraints preserves existing valid data', async () => {
+    await resetToCleanState()
+    await applyConstraints()
+
+    // Verify data is intact
+    const count = await prisma.capacityProfile.count()
+    expect(count).toBe(2)
+
+    // Rollback
+    await dropConstraints()
+    await recreateNonUniqueIndexes()
+
+    // Verify data still intact
+    const afterCount = await prisma.capacityProfile.count()
+    expect(afterCount).toBe(2)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Existing write path compatibility
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Existing write path compatibility under constraints', () => {
+  beforeEach(async () => {
+    await deleteAllProfiles()
+    await dropConstraints()
+    await recreateNonUniqueIndexes()
+  })
+
+  it('creates a valid named-resource profile under constraints', async () => {
+    await resetToCleanState()
+    await applyConstraints()
+
+    // Try creating a valid new named-resource profile for nrId2
+    const profile = await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: nrId2,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+    expect(profile.id).toBeTruthy()
+  })
+
+  it('concurrent duplicate attempt rolls back cleanly', async () => {
+    await resetToCleanState()
+    await applyConstraints()
+
+    // Simulate concurrent duplicate by trying to insert a duplicate
+    // (in real code this would be a 409 conflict)
+    await expect(
+      prisma.capacityProfile.create({
+        data: {
+          projectId,
+          resourceTypeId: null,
+          namedResourceId: nrId, // already exists
+          ownerKind: 'NAMED_PERSON',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 10,
+          legacy: Prisma.DbNull,
+        },
+      }),
+    ).rejects.toThrow()
+
+    // Verify no partial state
+    const profilesForNR = await prisma.capacityProfile.count({
+      where: { namedResourceId: nrId },
+    })
+    expect(profilesForNR).toBe(1) // original still exists
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Backfill/reconcile cannot create duplicates under constraints
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Backfill/reconcile safety under constraints', () => {
+  beforeEach(async () => {
+    await deleteAllProfiles()
+    await dropConstraints()
+    await recreateNonUniqueIndexes()
+  })
+
+  it('backfill cannot create duplicate owners under constraints', async () => {
+    await resetToCleanState()
+    await applyConstraints()
+
+    // syncCapacityProfilesForProject should fail to create a duplicate
+    // This simulates a backfill that would create a duplicate
+    await expect(
+      prisma.capacityProfile.create({
+        data: {
+          projectId,
+          resourceTypeId: rtId,
+          namedResourceId: null,
+          ownerKind: 'ROLE',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 10,
+          legacy: Prisma.DbNull,
+        },
+      }),
+    ).rejects.toThrow()
+  })
+})

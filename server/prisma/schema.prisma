@@ -389,10 +389,17 @@ model NamedResource {
   @@index([resourceTypeId])
 }
 
-/// First-class capacity profile record, derived from legacy fields.
-/// Legacy fields on ResourceType and NamedResource remain authoritative.
-/// Exactly one owner per profile: resourceTypeId for role-owned, or namedResourceId for person/planned.
-/// DB-level uniqueness/constraint enforcement deferred (see backfill tests).
+/// First-class capacity profile record.
+///
+/// Exactly one owner per profile: resourceTypeId for role-owned,
+/// or namedResourceId for person/planned resources.
+///
+/// Constraint enforcement:
+///   - CHECK constraint (migration-managed) enforces exactly-one Fk and ownerKind/FK consistency.
+///   - Partial unique index on (resourceTypeId) WHERE resourceTypeId IS NOT NULL prevents role duplicates.
+///   - Partial unique index on (namedResourceId) WHERE namedResourceId IS NOT NULL prevents named/person duplicates.
+///
+/// See: server/prisma/migrations/<latest>/migration.sql for the exact CHECK and partial-index SQL.
 model CapacityProfile {
   id              String   @id @default(cuid())
   projectId       String
@@ -421,8 +428,11 @@ model CapacityProfile {
   segments        CapacitySegment[]
 
   @@index([projectId])
-  @@index([resourceTypeId])
-  @@index([namedResourceId])
+  /// Uniqueness enforced by partial unique indexes (migration-managed):
+  ///   - resourceTypeId unique when non-null
+  ///   - namedResourceId unique when non-null
+  /// The old non-unique indexes on resourceTypeId and namedResourceId are removed
+  /// as they are superseded by the partial unique indexes.
 }
 
 /// A segment within a capacity profile, representing variable capacity over a week range.

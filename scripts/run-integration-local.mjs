@@ -14,6 +14,7 @@ try {
       'test:squadplan-integration',
       'test:named-resource-guard-integration',
       'test:optimiser-apply-integration',
+      'test:ownership-invariants-integration',
     ]) {
       if (guard.triggered) break
       await runCommand('npm', ['run', script, '--workspace=server'], { cwd: root, env: environment, signal: guard.abortSignal })
