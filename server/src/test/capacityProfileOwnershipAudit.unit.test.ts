@@ -376,7 +376,8 @@ describe('formatAuditReport', () => {
     const output = formatAuditReport(report)
     expect(output).toContain('Repairable groups')
     expect(output).toContain('Survivor: p-1')
-    expect(output).toContain('Redundant: p-2')
+    expect(output).toContain('Project:')
+    expect(output).toContain('resourceTypeId=rt-1')
   })
 })
 

@@ -656,7 +656,8 @@ export function formatAuditReport(report: AuditReport): string {
     lines.push('═══ Conflicting groups (manual resolution required) ═══')
     for (const g of report.conflictingGroups) {
       lines.push('')
-      lines.push(`  ${g.note}`)
+      lines.push(`  Project: ${g.projectId} | ${g.ownerNamespace}=${g.ownerId}`)
+      lines.push(`  Profiles: ${g.profileIds.join(', ')}`)
       for (const p of g.profiles) {
         lines.push(`    Profile ${p.id}: ownerKind=${p.ownerKind}, planningBasis=${p.planningBasis}, source=${p.source}, defaultPercent=${p.defaultPercent}, weeks=[${p.startWeek}-${p.endWeek}], legacy=${p.legacyStatus}`)
         const segs = [...p.segments].sort(compareSegments).map(sg => `W${sg.startWeek}-W${sg.endWeek}@${sg.capacityPercent}%(${sg.source})`)
@@ -666,18 +667,16 @@ export function formatAuditReport(report: AuditReport): string {
       }
     }
   }
-
   if (report.repairableGroups.length > 0) {
     lines.push('')
     lines.push('═══ Repairable groups (identical duplicates) ═══')
     for (const g of report.repairableGroups) {
-      const survivor = selectSurvivor(g.profiles)
-      const redundant = g.profiles.filter(p => p.id !== survivor.id)
-      lines.push(`  ${g.note}`)
-      lines.push(`    Survivor: ${survivor.id} (created ${survivor.createdAt.toISOString()})`)
-      lines.push(`    Redundant: ${redundant.map(p => p.id).join(', ')}`)
+      lines.push(`  Project: ${g.projectId} | ${g.ownerNamespace}=${g.ownerId}`)
+      lines.push(`  Profiles: ${g.profileIds.join(', ')}`)
+      lines.push(`  Survivor: ${g.survivorId ?? 'unknown'}`)
     }
   }
+
 
   lines.push('')
   if (report.isClean) {
@@ -704,15 +703,21 @@ export function auditReportToJson(report: AuditReport): string {
       profileIds: f.profileIds,
     })),
     repairableGroups: report.repairableGroups.map(g => ({
+      projectId: g.projectId,
+      ownerNamespace: g.ownerNamespace,
+      ownerId: g.ownerId,
+      profileIds: g.profileIds,
       isIdentical: g.isIdentical,
+      survivorId: g.survivorId ?? '',
       note: g.note,
-      survivorId: g.profiles.length >= 2 ? selectSurvivor(g.profiles).id : g.profiles[0]?.id ?? '',
-      profileIds: g.profiles.map(p => p.id).sort(),
     })),
     conflictingGroups: report.conflictingGroups.map(g => ({
+      projectId: g.projectId,
+      ownerNamespace: g.ownerNamespace,
+      ownerId: g.ownerId,
+      profileIds: g.profileIds,
       isIdentical: g.isIdentical,
       note: g.note,
-      profileIds: g.profiles.map(p => p.id).sort(),
     })),
   }
   return JSON.stringify(obj, null, 2)
