@@ -18,11 +18,10 @@ import {
   formatAuditReport,
   auditReportToJson,
   deepEqual,
+  classifyDuplicateGroup,
   type AuditedProfile,
   type AuditReport,
-  type AuditFinding,
   type LegacyNullStatus,
-  type OwnerKeyClassification,
 } from '../lib/capacityProfileOwnershipAudit.js'
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
@@ -407,39 +406,22 @@ describe('auditReportToJson', () => {
     expect(parsed.repairableGroups).toHaveLength(0)
   })
 })
+// ─── Test helper: build owner project maps for test profiles ─────────────────
 
-// ─── Classification helper using exported functions ──────────────────────────
+function makeRtMap(profiles: AuditedProfile[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const p of profiles) {
+    if (p.resourceTypeId) map.set(p.resourceTypeId, p.projectId)
+  }
+  return map
+}
 
-function classifyGroupForTest(
-  profiles: AuditedProfile[],
-): { group: OwnerKeyClassification; finding: AuditFinding } {
-  const sortedProfiles = [...profiles].sort(compareProfiles)
-  const profileIds = sortedProfiles.map(p => p.id).sort()
-  const projectIds = [...new Set(sortedProfiles.map(p => p.projectId))].sort()
-  const isRt = sortedProfiles[0].resourceTypeId != null
-  const ownerNamespace = isRt ? 'resourceTypeId' : 'namedResourceId'
-  const ownerId = (isRt ? sortedProfiles[0].resourceTypeId : sortedProfiles[0].namedResourceId) ?? ''
-  const allValid = profiles.length > 0 // simplified: assume valid shape for unit tests
-  const isIdentical = allValid && sortedProfiles.every(p => profilesAreSemanticEqual(p, sortedProfiles[0]))
-  const survivor = isIdentical ? selectSurvivor(sortedProfiles) : undefined
-  const ownerDesc = `${ownerNamespace}="${ownerId}"`
-  const group: OwnerKeyClassification = {
-    profiles: sortedProfiles,
-    isIdentical,
-    note: isIdentical ? `Identical duplicates for ${ownerDesc}` : `Conflicting duplicates for ${ownerDesc}`,
-    projectIds,
-    ownerNamespace,
-    ownerId,
-    profileIds,
-    survivorId: survivor?.id,
+function makeNrMap(profiles: AuditedProfile[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const p of profiles) {
+    if (p.namedResourceId) map.set(p.namedResourceId, p.projectId)
   }
-  const finding: AuditFinding = {
-    type: 'duplicate_physical_owner',
-    severity: isIdentical ? 'warning' : 'error',
-    message: `Duplicate physical owner for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
-    profileIds,
-  }
-  return { group, finding }
+  return map
 }
 
 describe('Deterministic reporting', () => {
@@ -448,17 +430,22 @@ describe('Deterministic reporting', () => {
       makeProfile({ id: 'p-c', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
       makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
     ]
-    const { group: g1, finding: f1 } = classifyGroupForTest(profiles)
-    const { group: g2, finding: f2 } = classifyGroupForTest([...profiles].reverse())
+    const rtMap = makeRtMap(profiles)
+    const nrMap = makeNrMap(profiles)
+    const r1 = classifyDuplicateGroup(profiles, 'resourceTypeId', 'rt-1', rtMap, nrMap)
+    const r2 = classifyDuplicateGroup([...profiles].reverse(), 'resourceTypeId', 'rt-1', rtMap, nrMap)
+    expect(r1).not.toBeNull()
+    expect(r2).not.toBeNull()
+    if (!r1 || !r2) return
 
     const report1: AuditReport = {
-      totalProfiles: 2, findings: [f1],
-      repairableGroups: [g1], conflictingGroups: [],
+      totalProfiles: 2, findings: [r1.finding],
+      repairableGroups: [r1.group], conflictingGroups: [],
       validSingletons: 0, isClean: false,
     }
     const report2: AuditReport = {
-      totalProfiles: 2, findings: [f2],
-      repairableGroups: [g2], conflictingGroups: [],
+      totalProfiles: 2, findings: [r2.finding],
+      repairableGroups: [r2.group], conflictingGroups: [],
       validSingletons: 0, isClean: false,
     }
     expect(formatAuditReport(report1)).toBe(formatAuditReport(report2))
@@ -469,17 +456,22 @@ describe('Deterministic reporting', () => {
       makeProfile({ id: 'p-c', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
       makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
     ]
-    const { group: g1, finding: f1 } = classifyGroupForTest(profiles)
-    const { group: g2, finding: f2 } = classifyGroupForTest([...profiles].reverse())
+    const rtMap = makeRtMap(profiles)
+    const nrMap = makeNrMap(profiles)
+    const r1 = classifyDuplicateGroup(profiles, 'resourceTypeId', 'rt-1', rtMap, nrMap)
+    const r2 = classifyDuplicateGroup([...profiles].reverse(), 'resourceTypeId', 'rt-1', rtMap, nrMap)
+    expect(r1).not.toBeNull()
+    expect(r2).not.toBeNull()
+    if (!r1 || !r2) return
 
     const report1: AuditReport = {
-      totalProfiles: 2, findings: [f1],
-      repairableGroups: [g1], conflictingGroups: [],
+      totalProfiles: 2, findings: [r1.finding],
+      repairableGroups: [r1.group], conflictingGroups: [],
       validSingletons: 0, isClean: false,
     }
     const report2: AuditReport = {
-      totalProfiles: 2, findings: [f2],
-      repairableGroups: [g2], conflictingGroups: [],
+      totalProfiles: 2, findings: [r2.finding],
+      repairableGroups: [r2.group], conflictingGroups: [],
       validSingletons: 0, isClean: false,
     }
     expect(auditReportToJson(report1)).toBe(auditReportToJson(report2))
@@ -490,10 +482,13 @@ describe('Deterministic reporting', () => {
       makeProfile({ id: 'p-b', projectId: 'proj-x', resourceTypeId: 'rt-99', createdAt: new Date('2026-02-01') }),
       makeProfile({ id: 'p-a', projectId: 'proj-x', resourceTypeId: 'rt-99', createdAt: new Date('2026-01-01') }),
     ]
-    const { group, finding } = classifyGroupForTest(profiles)
+    const rtMap = makeRtMap(profiles)
+    const result = classifyDuplicateGroup(profiles, 'resourceTypeId', 'rt-99', rtMap, new Map())
+    expect(result).not.toBeNull()
+    if (!result) return
     const report: AuditReport = {
-      totalProfiles: 2, findings: [finding],
-      repairableGroups: [group], conflictingGroups: [],
+      totalProfiles: 2, findings: [result.finding],
+      repairableGroups: [result.group], conflictingGroups: [],
       validSingletons: 0, isClean: false,
     }
     const fmt = formatAuditReport(report)
@@ -512,23 +507,40 @@ describe('Deterministic reporting', () => {
     expect(rj.survivorId).toBe('p-a')
   })
 
-  it('cross-project groups expose all project IDs', () => {
+  it('cross-project groups classify as conflicting, not repairable', () => {
     const profiles = [
       makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
       makeProfile({ id: 'p-b', projectId: 'proj-b', resourceTypeId: 'rt-1' }),
     ]
-    const { group, finding } = classifyGroupForTest(profiles)
+    // Build map so both profiles reference valid owners but in different projects
+    const rtMap = new Map<string, string>([['rt-1', 'proj-a']]) // only proj-a owns rt-1
+    const result = classifyDuplicateGroup(profiles, 'resourceTypeId', 'rt-1', rtMap, new Map())
+    expect(result).not.toBeNull()
+    if (!result) return
+    expect(result.isRepairable).toBe(false)
+    expect(result.group.isIdentical).toBe(false)
+    expect(result.group.projectIds).toEqual(['proj-a', 'proj-b'])
+  })
+
+  it('cross-project group has all project IDs in output', () => {
+    const profiles = [
+      makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
+      makeProfile({ id: 'p-b', projectId: 'proj-b', resourceTypeId: 'rt-1' }),
+    ]
+    const rtMap = new Map<string, string>([['rt-1', 'proj-a']])
+    const result = classifyDuplicateGroup(profiles, 'resourceTypeId', 'rt-1', rtMap, new Map())
+    expect(result).not.toBeNull()
+    if (!result) return
     const report: AuditReport = {
-      totalProfiles: 2, findings: [finding],
-      repairableGroups: [group], conflictingGroups: [],
+      totalProfiles: 2, findings: [result.finding],
+      repairableGroups: [], conflictingGroups: [result.group],
       validSingletons: 0, isClean: false,
     }
     const fmt = formatAuditReport(report)
     const json = JSON.parse(auditReportToJson(report))
-
-    expect(group.projectIds).toEqual(['proj-a', 'proj-b'])
+    expect(result.group.projectIds).toEqual(['proj-a', 'proj-b'])
     expect(fmt).toContain('proj-a, proj-b')
-    expect(json.repairableGroups[0].projectIds).toEqual(['proj-a', 'proj-b'])
+    expect(json.conflictingGroups[0].projectIds).toEqual(['proj-a', 'proj-b'])
   })
 
   it('exactly one duplicate_physical_owner finding per owner namespace', () => {
@@ -536,10 +548,13 @@ describe('Deterministic reporting', () => {
       makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
       makeProfile({ id: 'p-b', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
     ]
-    const { group, finding } = classifyGroupForTest(profiles)
+    const rtMap = makeRtMap(profiles)
+    const result = classifyDuplicateGroup(profiles, 'resourceTypeId', 'rt-1', rtMap, new Map())
+    expect(result).not.toBeNull()
+    if (!result) return
     const report: AuditReport = {
-      totalProfiles: 2, findings: [finding],
-      repairableGroups: [group], conflictingGroups: [],
+      totalProfiles: 2, findings: [result.finding],
+      repairableGroups: [result.group], conflictingGroups: [],
       validSingletons: 0, isClean: false,
     }
     const json = JSON.parse(auditReportToJson(report))
@@ -547,13 +562,18 @@ describe('Deterministic reporting', () => {
     expect(dupFindings).toHaveLength(1)
   })
 
-  it('both-FK profile participates in both owner namespaces when sorted', () => {
-    const p1 = makeProfile({ id: 'p-both', projectId: 'proj-a', resourceTypeId: 'rt-1', namedResourceId: 'nr-1' })
-    const groups = [
-      classifyGroupForTest([p1, makeProfile({ id: 'p-rt', projectId: 'proj-a', resourceTypeId: 'rt-1' })]),
-      classifyGroupForTest([p1, makeProfile({ id: 'p-nr', projectId: 'proj-a', namedResourceId: 'nr-1', resourceTypeId: null })]),
-    ]
-    const namespaces = groups.map(g => g.group.ownerNamespace).sort()
+  it('both-FK profile participates in both owner namespaces', () => {
+    const pBoth = makeProfile({ id: 'p-both', projectId: 'proj-a', resourceTypeId: 'rt-1', namedResourceId: 'nr-1' })
+    const pRt = makeProfile({ id: 'p-rt', projectId: 'proj-a', resourceTypeId: 'rt-1' })
+    const pNr = makeProfile({ id: 'p-nr', projectId: 'proj-a', namedResourceId: 'nr-1', resourceTypeId: null })
+    const rtMap = new Map<string, string>([['rt-1', 'proj-a']])
+    const nrMap = new Map<string, string>([['nr-1', 'proj-a']])
+    const rRt = classifyDuplicateGroup([pBoth, pRt], 'resourceTypeId', 'rt-1', rtMap, nrMap)
+    const rNr = classifyDuplicateGroup([pBoth, pNr], 'namedResourceId', 'nr-1', rtMap, nrMap)
+    expect(rRt).not.toBeNull()
+    expect(rNr).not.toBeNull()
+    if (!rRt || !rNr) return
+    const namespaces = [rRt.group.ownerNamespace, rNr.group.ownerNamespace].sort()
     expect(namespaces).toEqual(['namedResourceId', 'resourceTypeId'])
   })
 
@@ -562,7 +582,25 @@ describe('Deterministic reporting', () => {
       makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1', planningBasis: 'DEMAND_FOLLOWING' }),
       makeProfile({ id: 'p-b', projectId: 'proj-a', resourceTypeId: 'rt-1', planningBasis: 'AVAILABILITY_WINDOW' }),
     ]
-    const { group } = classifyGroupForTest(profiles)
-    expect(group.isIdentical).toBe(false)
+    const rtMap = makeRtMap(profiles)
+    const result = classifyDuplicateGroup(profiles, 'resourceTypeId', 'rt-1', rtMap, new Map())
+    expect(result).not.toBeNull()
+    if (!result) return
+    expect(result.isRepairable).toBe(false)
+    expect(result.group.isIdentical).toBe(false)
+  })
+
+  it('malformed groups (both FK set) are not repairable', () => {
+    const profiles = [
+      makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1', namedResourceId: 'nr-1' }),
+      makeProfile({ id: 'p-b', projectId: 'proj-a', resourceTypeId: 'rt-1', namedResourceId: 'nr-1' }),
+    ]
+    const rtMap = new Map<string, string>([['rt-1', 'proj-a']])
+    const nrMap = new Map<string, string>([['nr-1', 'proj-a']])
+    const result = classifyDuplicateGroup(profiles, 'resourceTypeId', 'rt-1', rtMap, nrMap)
+    expect(result).not.toBeNull()
+    if (!result) return
+    expect(result.isRepairable).toBe(false)
+    expect(result.group.isIdentical).toBe(false)
   })
 })

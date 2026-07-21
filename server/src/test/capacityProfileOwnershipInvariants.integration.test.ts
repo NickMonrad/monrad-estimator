@@ -901,91 +901,86 @@ describeIf('Constraint rollback preserves valid data', () => {
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Existing write path compatibility
+// Post-migration: constraint enforcement under production #361 schema
 // ═════════════════════════════════════════════════════════════════════════════
+// The rollback test above may have dropped constraints. Restore a clean
+// post-#361 schema explicitly so these suites run against real constraints.
 
-describeIf('Existing write path compatibility under constraints', () => {
-  beforeEach(async () => {
-    await deleteAllProfiles()
-  })
-
-  it('creates a valid named-resource profile under constraints', async () => {
-    await resetToCleanState()
-
-    // Try creating a valid new named-resource profile for nrId2
-    const profile = await prisma.capacityProfile.create({
+describeIf('Post-migration constraint enforcement', () => {
+  beforeAll(async () => {
+    // Reset to pre-#361, create valid clean profiles, deploy the #361
+    // migration artifact, and verify constraints.
+    await resetToPre361()
+    await prisma.capacityProfile.create({
       data: {
-        projectId,
-        resourceTypeId: null,
-        namedResourceId: nrId2,
-        ownerKind: 'NAMED_PERSON',
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 100,
-        startWeek: 0,
-        endWeek: 10,
-        legacy: Prisma.DbNull,
+        projectId, resourceTypeId: rtId, namedResourceId: null,
+        ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+        defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    expect(profile.id).toBeTruthy()
-  })
-
-  it('concurrent duplicate attempt rolls back cleanly', async () => {
-    await resetToCleanState()
-
-    await expect(
-      prisma.capacityProfile.create({
-        data: {
-          projectId,
-          resourceTypeId: null,
-          namedResourceId: nrId, // already exists
-          ownerKind: 'NAMED_PERSON',
-          planningBasis: 'DEMAND_FOLLOWING',
-          source: 'FIXED',
-          defaultPercent: 100,
-          startWeek: 0,
-          endWeek: 10,
-          legacy: Prisma.DbNull,
-        },
-      }),
-    ).rejects.toThrow()
-
-    // Verify no partial state
-    const profilesForNR = await prisma.capacityProfile.count({
-      where: { namedResourceId: nrId },
+    await prisma.capacityProfile.create({
+      data: {
+        projectId, resourceTypeId: null, namedResourceId: nrId,
+        ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+        defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+      },
     })
-    expect(profilesForNR).toBe(1) // original still exists
-  })
-})
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Backfill/reconcile cannot create duplicates under constraints
-// ═════════════════════════════════════════════════════════════════════════════
-
-describeIf('Backfill/reconcile safety under constraints', () => {
-  beforeEach(async () => {
-    await deleteAllProfiles()
+    await deployFullMigrations()
+    await assert361ConstraintsInstalled()
   })
 
-  it('backfill cannot create duplicate owners under constraints', async () => {
-    await resetToCleanState()
+  describeIf('Existing write path compatibility under constraints', () => {
+    beforeEach(async () => {
+      await deleteAllProfiles()
+    })
 
-    await expect(
-      prisma.capacityProfile.create({
+    it('creates a valid named-resource profile under constraints', async () => {
+      await resetToCleanState()
+      const profile = await prisma.capacityProfile.create({
         data: {
-          projectId,
-          resourceTypeId: rtId,
-          namedResourceId: null,
-          ownerKind: 'ROLE',
-          planningBasis: 'DEMAND_FOLLOWING',
-          source: 'FIXED',
-          defaultPercent: 100,
-          startWeek: 0,
-          endWeek: 10,
-          legacy: Prisma.DbNull,
+          projectId, resourceTypeId: null, namedResourceId: nrId2,
+          ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
         },
-      }),
-    ).rejects.toThrow()
+      })
+      expect(profile.id).toBeTruthy()
+    })
+
+    it('concurrent duplicate attempt rolls back cleanly', async () => {
+      await resetToCleanState()
+      await expect(
+        prisma.capacityProfile.create({
+          data: {
+            projectId, resourceTypeId: null, namedResourceId: nrId,
+            ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          },
+        }),
+      ).rejects.toThrow()
+      const profilesForNR = await prisma.capacityProfile.count({
+        where: { namedResourceId: nrId },
+      })
+      expect(profilesForNR).toBe(1)
+    })
+  })
+
+  describeIf('Backfill/reconcile safety under constraints', () => {
+    beforeEach(async () => {
+      await deleteAllProfiles()
+    })
+
+    it('backfill cannot create duplicate owners under constraints', async () => {
+      await resetToCleanState()
+      await expect(
+        prisma.capacityProfile.create({
+          data: {
+            projectId, resourceTypeId: rtId, namedResourceId: null,
+            ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          },
+        }),
+      ).rejects.toThrow()
+    })
   })
 })
 })
