@@ -23,8 +23,9 @@ import {
   runOwnershipAudit,
   formatAuditReport,
   auditReportToJson,
+  type AuditReport,
 } from '../lib/capacityProfileOwnershipAudit.js'
-import { repairIdenticalDuplicates } from '../lib/capacityProfileOwnershipRepair.js'
+import { repairIdenticalDuplicates, type RepairResult } from '../lib/capacityProfileOwnershipRepair.js'
 
 // ─── CLI argument parsing ──────────────────────────────────────────────────
 
@@ -55,60 +56,72 @@ async function main() {
   try {
     // Phase 1: Audit
     log('Phase 1: Running ownership audit…')
-    const report = await runOwnershipAudit(prisma)
-    if (showJson) {
-      // JSON output to stdout only — one valid JSON document
-      process.stdout.write(auditReportToJson(report) + '\n')
-    } else {
-      log(formatAuditReport(report))
+    const initialAudit = await runOwnershipAudit(prisma)
+
+    if (showJson && !repairIdentical) {
+      // Audit-only mode: JSON is the single audit report
+      process.stdout.write(auditReportToJson(initialAudit) + '\n')
+    } else if (!showJson) {
+      log(formatAuditReport(initialAudit))
     }
+
+    let repairResult: RepairResult | null = null
+    let finalAudit: AuditReport | null = null
 
     // Phase 2: Repair (only with explicit flag)
     if (repairIdentical) {
-      if (report.repairableGroups.length === 0) {
+      if (initialAudit.repairableGroups.length === 0) {
         log('')
         log('No identical duplicate groups found. Nothing to repair.')
       } else {
         log('')
-        log(`Phase 2: Repairing ${report.repairableGroups.length} identical duplicate group(s)…`)
-        const repairResult = await repairIdenticalDuplicates(prisma, report)
+        log(`Phase 2: Repairing ${initialAudit.repairableGroups.length} identical duplicate group(s)…`)
+        repairResult = await repairIdenticalDuplicates(prisma, initialAudit)
         log(`  Profiles deleted: ${repairResult.profilesDeleted}`)
-        log(`  Segments cascade-deleted: auto (cascade)`)
 
         // Phase 3: Final audit
         log('')
         log('Phase 3: Running final audit after repair…')
-        const finalReport = await runOwnershipAudit(prisma)
+        finalAudit = await runOwnershipAudit(prisma)
 
-        if (showJson) {
-          process.stdout.write(auditReportToJson(finalReport) + '\n')
-        } else {
-          log(formatAuditReport(finalReport))
-        }
-
-        if (!finalReport.isClean) {
+        if (!finalAudit.isClean) {
           log('')
           log('❌ Database is NOT clean after repair. Manual resolution required.')
-          process.exit(1)
         }
         log('')
         log('✅ Repair complete. Database ready for migration.')
       }
-    }
 
-    // Exit non-zero when database is not clean (including repairable duplicates)
-    if (!report.isClean && !repairIdentical) {
-      log('')
-      log('❌ Audit FAILED — blocking issues detected.')
-      process.exit(1)
-    }
-
-    // After repair, verify final state
-    if (repairIdentical) {
-      const finalReport = await runOwnershipAudit(prisma)
-      if (!finalReport.isClean) {
-        process.exit(1)
+      // Repair mode JSON: one document with all phases
+      if (showJson) {
+        const output: Record<string, unknown> = {
+          initialAudit: JSON.parse(auditReportToJson(initialAudit)),
+        }
+        if (repairResult) {
+          output.repair = repairResult
+        }
+        if (finalAudit) {
+          output.finalAudit = JSON.parse(auditReportToJson(finalAudit))
+        }
+        if (!finalAudit?.isClean && finalAudit != null) {
+          output.clean = false
+        } else {
+          output.clean = initialAudit.repairableGroups.length === 0 ? initialAudit.isClean : (finalAudit?.isClean ?? false)
+        }
+        process.stdout.write(JSON.stringify(output, null, 2) + '\n')
+      } else if (finalAudit) {
+        log(formatAuditReport(finalAudit))
       }
+    }
+
+    // Exit non-zero when database is not clean
+    const isClean = repairIdentical && finalAudit ? finalAudit.isClean : initialAudit.isClean
+    if (!isClean) {
+      if (!showJson) {
+        log('')
+        log('❌ Audit FAILED — blocking issues detected.')
+      }
+      process.exit(1)
     }
 
     process.exit(0)

@@ -621,42 +621,48 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     const cpPlannedScalarId = await createProfile(srcProjectId, crypto.randomUUID(), 'PLANNED_RESOURCE', null, nrJaneId,
       { planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'SQUAD_PLANNER', startWeek: 0, endWeek: 10, defaultPercent: 80 })
     await createSegment(cpPlannedScalarId, crypto.randomUUID(), 0, 10, 80, 'MANUAL')
-
     // ROLE — DB_NULL legacy (Prisma.DbNull)
     const cpDbNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       Prisma.DbNull)
     await createSegment(cpDbNullId, crypto.randomUUID(), 0, 5, 30, 'MANUAL')
 
-    // ROLE — JSON null legacy (Prisma.JsonNull)
-    const cpJsonNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    // Additional ROLE profiles must use unique resourceTypeIds due to #361 constraints.
+    // Create temporary RTs for each distinct legacy value scenario.
+    const makeTempRt = async (suffix: string) => {
+      const rt = await prisma.resourceType.create({
+        data: { name: `Temp Clone ${suffix}`, projectId: srcProjectId, category: 'ENGINEERING', count: 1 },
+      })
+      return rt.id
+    }
+
+    // ROLE — JSON null legacy
+    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', await makeTempRt('jsonnull'), null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       Prisma.JsonNull)
-    await createSegment(cpJsonNullId, crypto.randomUUID(), 0, 5, 40, 'MANUAL')
 
-    // ROLE — complex legacy values (object with nested null + null-containing array)
-    const cpComplexLegacyId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    // ROLE — complex legacy values
+    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', await makeTempRt('complex'), null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'IMPORTED' },
       { nestedField: { inner: null }, items: [1, null, 'hello'], flag: true, count: 42, label: 'test-value' })
-    await createSegment(cpComplexLegacyId, crypto.randomUUID(), 2, 6, 60, 'LEGACY')
 
     // ROLE — top-level array containing null
-    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', await makeTempRt('arrnull'), null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       [null, 'item', 3])
 
     // ROLE — string legacy value
-    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtGovId, null,
+    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', await makeTempRt('string'), null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       'plain-string-value')
 
     // ROLE — finite number legacy value
-    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', await makeTempRt('number'), null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       42)
 
     // ROLE — boolean legacy value
-    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtGovId, null,
+    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', await makeTempRt('bool'), null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       true)
 

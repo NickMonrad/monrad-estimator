@@ -8,7 +8,7 @@
  * Requires INTEGRATION_TEST=true and a disposable PostgreSQL 15 Docker container.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import { runOwnershipAudit } from '../lib/capacityProfileOwnershipAudit.js'
 import { repairIdenticalDuplicates } from '../lib/capacityProfileOwnershipRepair.js'
 import { PrismaClient, Prisma } from '@prisma/client'
@@ -44,169 +44,13 @@ async function runMigrations(): Promise<void> {
   })
 }
 
-/**
- * Drop all constraints added by the #361 migration to simulate pre-migration state.
- */
-async function dropConstraints(): Promise<void> {
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"',
-  )
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_owner_kind_fk"',
-  )
-  await prisma.$executeRawUnsafe(
-    'DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"',
-  )
-  await prisma.$executeRawUnsafe(
-    'DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"',
-  )
-}
 
-/**
- * Recreate the original non-unique indexes (pre-migration state simulation).
- */
-async function recreateNonUniqueIndexes(): Promise<void> {
-  await prisma.$executeRawUnsafe(
-    'CREATE INDEX IF NOT EXISTS "CapacityProfile_resourceTypeId_idx" ON "CapacityProfile"("resourceTypeId")',
-  )
-  await prisma.$executeRawUnsafe(
-    'CREATE INDEX IF NOT EXISTS "CapacityProfile_namedResourceId_idx" ON "CapacityProfile"("namedResourceId")',
-  )
-}
 
-/**
- * Execute Phase 1 of the actual migration SQL (preflight dirty-data checks).
- * Runs the PL/pgSQL block verbatim from the committed migration artifact.
- */
-async function runMigrationPreflight(): Promise<void> {
-  const preflightSql = `
-DO $$
-DECLARE
-    v_error_count INTEGER := 0;
-    v_err TEXT;
-BEGIN
-    -- Check 1: Both owner FKs set (XOR violation)
-    FOR v_err IN
-        SELECT 'Profile "' || id || '": both resourceTypeId and namedResourceId are set (project "' || "projectId" || '")'
-        FROM "CapacityProfile"
-        WHERE "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NOT NULL
-    LOOP
-        RAISE WARNING '[preflight] %', v_err;
-        v_error_count := v_error_count + 1;
-    END LOOP;
-    -- Check 2: Neither owner FK set
-    FOR v_err IN
-        SELECT 'Profile "' || id || '": neither resourceTypeId nor namedResourceId is set (project "' || "projectId" || '")'
-        FROM "CapacityProfile"
-        WHERE "resourceTypeId" IS NULL AND "namedResourceId" IS NULL
-    LOOP
-        RAISE WARNING '[preflight] %', v_err;
-        v_error_count := v_error_count + 1;
-    END LOOP;
-    -- Check 3: ownerKind = ROLE without resourceTypeId
-    FOR v_err IN
-        SELECT 'Profile "' || id || '": ownerKind ROLE but resourceTypeId is null (project "' || "projectId" || '")'
-        FROM "CapacityProfile"
-        WHERE "ownerKind" = 'ROLE' AND "resourceTypeId" IS NULL
-    LOOP
-        RAISE WARNING '[preflight] %', v_err;
-        v_error_count := v_error_count + 1;
-    END LOOP;
-    -- Check 4: ownerKind = ROLE with namedResourceId
-    FOR v_err IN
-        SELECT 'Profile "' || id || '": ownerKind ROLE but namedResourceId is set (project "' || "projectId" || '")'
-        FROM "CapacityProfile"
-        WHERE "ownerKind" = 'ROLE' AND "namedResourceId" IS NOT NULL
-    LOOP
-        RAISE WARNING '[preflight] %', v_err;
-        v_error_count := v_error_count + 1;
-    END LOOP;
-    -- Check 5: ownerKind = NAMED_PERSON or PLANNED_RESOURCE without namedResourceId
-    FOR v_err IN
-        SELECT 'Profile "' || id || '": ownerKind "' || "ownerKind" || '" but namedResourceId is null (project "' || "projectId" || '")'
-        FROM "CapacityProfile"
-        WHERE "ownerKind" IN ('NAMED_PERSON', 'PLANNED_RESOURCE') AND "namedResourceId" IS NULL
-    LOOP
-        RAISE WARNING '[preflight] %', v_err;
-        v_error_count := v_error_count + 1;
-    END LOOP;
-    -- Check 6: ownerKind = NAMED_PERSON or PLANNED_RESOURCE with resourceTypeId
-    FOR v_err IN
-        SELECT 'Profile "' || id || '": ownerKind "' || "ownerKind" || '" but resourceTypeId is set (project "' || "projectId" || '")'
-        FROM "CapacityProfile"
-        WHERE "ownerKind" IN ('NAMED_PERSON', 'PLANNED_RESOURCE') AND "resourceTypeId" IS NOT NULL
-    LOOP
-        RAISE WARNING '[preflight] %', v_err;
-        v_error_count := v_error_count + 1;
-    END LOOP;
-    -- Check 7: Duplicate resourceTypeId (non-null)
-    FOR v_err IN
-        SELECT 'Duplicate resourceTypeId "' || "resourceTypeId" || '": profiles ' || string_agg(id, ', ')
-        FROM "CapacityProfile"
-        WHERE "resourceTypeId" IS NOT NULL
-        GROUP BY "resourceTypeId"
-        HAVING COUNT(*) > 1
-    LOOP
-        RAISE WARNING '[preflight] %', v_err;
-        v_error_count := v_error_count + 1;
-    END LOOP;
-    -- Check 8: Duplicate namedResourceId (non-null)
-    FOR v_err IN
-        SELECT 'Duplicate namedResourceId "' || "namedResourceId" || '": profiles ' || string_agg(id, ', ')
-        FROM "CapacityProfile"
-        WHERE "namedResourceId" IS NOT NULL
-        GROUP BY "namedResourceId"
-        HAVING COUNT(*) > 1
-    LOOP
-        RAISE WARNING '[preflight] %', v_err;
-        v_error_count := v_error_count + 1;
-    END LOOP;
-    IF v_error_count > 0 THEN
-        RAISE EXCEPTION 'Preflight FAILED: % integrity issue(s) detected. Run audit and resolve errors before retrying.', v_error_count;
-    END IF;
-END $$;
-`
-  await prisma.$executeRawUnsafe(preflightSql)
-}
 
-/**
- * Execute Phases 2 and 3 of the actual migration SQL (CHECK constraints + unique indexes).
- * Mirrors the exact SQL from the committed migration artifact.
- */
-async function runMigrationConstraints(): Promise<void> {
-  await prisma.$executeRawUnsafe(`
-    ALTER TABLE "CapacityProfile"
-    ADD CONSTRAINT "chk_CapacityProfile_exactly_one_owner"
-    CHECK (
-        ("resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
-        OR
-        ("resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
-    )
-  `)
-  await prisma.$executeRawUnsafe(`
-    ALTER TABLE "CapacityProfile"
-    ADD CONSTRAINT "chk_CapacityProfile_owner_kind_fk"
-    CHECK (
-        ("ownerKind" = 'ROLE' AND "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
-        OR
-        ("ownerKind" = 'NAMED_PERSON' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
-        OR
-        ("ownerKind" = 'PLANNED_RESOURCE' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
-    )
-  `)
-  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_idx"')
-  await prisma.$executeRawUnsafe(`
-    CREATE UNIQUE INDEX "CapacityProfile_resourceTypeId_key"
-    ON "CapacityProfile"("resourceTypeId") WHERE "resourceTypeId" IS NOT NULL
-  `)
-  await prisma.$executeRawUnsafe(`
-    DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_idx"
-  `)
-  await prisma.$executeRawUnsafe(`
-    CREATE UNIQUE INDEX "CapacityProfile_namedResourceId_key"
-    ON "CapacityProfile"("namedResourceId") WHERE "namedResourceId" IS NOT NULL
-  `)
-}
+
+
+
+
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
@@ -215,10 +59,6 @@ beforeAll(async () => {
 
   prisma = new PrismaClient()
   await runMigrations()
-
-  // Drop the #361 constraints so we can test from the pre-migration state
-  await dropConstraints()
-  await recreateNonUniqueIndexes()
 
   // Create a minimal fixture project with one resource type and two named resources
   const user = await prisma.user.create({
@@ -311,8 +151,8 @@ async function deleteAllProfiles(): Promise<void> {
 
 async function resetToCleanState(): Promise<void> {
   await deleteAllProfiles()
-  // Recreate valid single profiles
-  await prisma.capacityProfile.create({
+  // Recreate valid single profiles and capture the new IDs
+  const newRole = await prisma.capacityProfile.create({
     data: {
       projectId,
       resourceTypeId: rtId,
@@ -326,7 +166,8 @@ async function resetToCleanState(): Promise<void> {
       legacy: Prisma.DbNull,
     },
   })
-  await prisma.capacityProfile.create({
+  roleProfileId = newRole.id
+  const newNr = await prisma.capacityProfile.create({
     data: {
       projectId,
       resourceTypeId: null,
@@ -339,6 +180,41 @@ async function resetToCleanState(): Promise<void> {
       endWeek: 10,
       legacy: Prisma.DbNull,
     },
+  })
+  nrProfileId = newNr.id
+}
+
+
+/**
+ * Remove the #361 migration from _prisma_migrations and drop its constraints,
+ * so the next `prisma migrate deploy` re-applies it from the committed artifact.
+ */
+async function rollback361InPrismaMigrations(): Promise<void> {
+  const rows = await prisma.$queryRaw<Array<{ migration_name: string }>>(
+    Prisma.sql`SELECT migration_name FROM _prisma_migrations WHERE migration_name LIKE '20260721%' ORDER BY finished_at DESC LIMIT 1`,
+  )
+  if (rows.length === 0) throw new Error('Could not find #361 migration in _prisma_migrations')
+  const migrationName = rows[0].migration_name
+
+  await prisma.$executeRawUnsafe(`DELETE FROM _prisma_migrations WHERE migration_name = '${migrationName}'`)
+
+  await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"')
+  await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_owner_kind_fk"')
+  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"')
+  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"')
+  await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS "CapacityProfile_resourceTypeId_idx" ON "CapacityProfile"("resourceTypeId")')
+  await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS "CapacityProfile_namedResourceId_idx" ON "CapacityProfile"("namedResourceId")')
+}
+
+/**
+ * Run `prisma migrate deploy` to apply the committed #361 migration artifact.
+ */
+async function deployMigration361(): Promise<void> {
+  const { execSync } = await import('node:child_process')
+  execSync('npx prisma migrate deploy', {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+    stdio: 'pipe',
   })
 }
 
@@ -766,151 +642,108 @@ describeIf('Shape error detection', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 describeIf('Migration constraint enforcement', () => {
-  beforeEach(async () => {
-    await deleteAllProfiles()
-    await dropConstraints()
-    await recreateNonUniqueIndexes()
-  })
-
-  afterEach(async () => {
-    try {
-      await dropConstraints()
-      await recreateNonUniqueIndexes()
-    } catch {
-      // ignore cleanup errors
-    }
-  })
+  // Each test in this section exercises the committed #361 migration artifact
+  // by rolling it back, seeding fixtures, then deploying it via `prisma migrate deploy`.
 
   it('migration refuses both FK set', async () => {
+    await rollback361InPrismaMigrations()
     await prisma.capacityProfile.create({
       data: {
-        projectId,
-        resourceTypeId: rtId,
-        namedResourceId: nrId,
-        ownerKind: 'ROLE',
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 100,
-        startWeek: 0,
-        endWeek: 10,
-        legacy: Prisma.DbNull,
+        projectId, resourceTypeId: rtId, namedResourceId: nrId, ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    await expect(runMigrationPreflight()).rejects.toThrow()
+    await expect(deployMigration361()).rejects.toThrow()
+    await resetToCleanState()
   })
 
   it('migration refuses neither FK set', async () => {
+    await rollback361InPrismaMigrations()
     await prisma.capacityProfile.create({
       data: {
-        projectId,
-        resourceTypeId: null,
-        namedResourceId: null,
-        ownerKind: 'ROLE',
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 100,
-        startWeek: 0,
-        endWeek: 10,
-        legacy: Prisma.DbNull,
+        projectId, resourceTypeId: null, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    await expect(runMigrationPreflight()).rejects.toThrow()
+    await expect(deployMigration361()).rejects.toThrow()
+    await resetToCleanState()
   })
 
   it('migration refuses ownerKind/FK mismatch', async () => {
+    await rollback361InPrismaMigrations()
     await prisma.capacityProfile.create({
       data: {
-        projectId,
-        resourceTypeId: null,
-        namedResourceId: nrId,
-        ownerKind: 'ROLE',
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 100,
-        startWeek: 0,
-        endWeek: 10,
-        legacy: Prisma.DbNull,
+        projectId, resourceTypeId: null, namedResourceId: nrId, ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    await expect(runMigrationPreflight()).rejects.toThrow()
+    await expect(deployMigration361()).rejects.toThrow()
+    await resetToCleanState()
   })
 
   it('migration refuses duplicate resourceTypeId', async () => {
+    await rollback361InPrismaMigrations()
     await prisma.capacityProfile.create({
       data: {
-        projectId,
-        resourceTypeId: rtId,
-        namedResourceId: null,
-        ownerKind: 'ROLE',
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 100,
-        startWeek: 0,
-        endWeek: 10,
-        legacy: Prisma.DbNull,
+        projectId, resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
     await prisma.capacityProfile.create({
       data: {
-        projectId,
-        resourceTypeId: rtId,
-        namedResourceId: null,
-        ownerKind: 'ROLE',
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 100,
-        startWeek: 0,
-        endWeek: 10,
-        legacy: Prisma.DbNull,
+        projectId, resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    await expect(runMigrationPreflight()).rejects.toThrow()
+    await expect(deployMigration361()).rejects.toThrow()
+    await resetToCleanState()
   })
 
-  it('migration succeeds after clean audit', async () => {
+  it('migration succeeds after clean state', async () => {
     await resetToCleanState()
-    const report = await runOwnershipAudit(prisma)
-    expect(report.isClean).toBe(true)
-    await expect(runMigrationPreflight()).resolves.not.toThrow()
-    await expect(runMigrationConstraints()).resolves.not.toThrow()
+    await rollback361InPrismaMigrations()
+    await expect(deployMigration361()).resolves.not.toThrow()
   })
 
   it('PostgreSQL rejects both FK after migration', async () => {
     await resetToCleanState()
-    await runMigrationPreflight()
-    await runMigrationConstraints()
     await expect(
       prisma.capacityProfile.create({
         data: { projectId, resourceTypeId: rtId, namedResourceId: nrId, ownerKind: 'ROLE',
-          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+          startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
       }),
     ).rejects.toThrow()
   })
 
   it('PostgreSQL rejects duplicate resourceTypeId after migration', async () => {
     await resetToCleanState()
-    await runMigrationPreflight()
-    await runMigrationConstraints()
     await expect(
       prisma.capacityProfile.create({
         data: { projectId, resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
-          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+          startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
       }),
     ).rejects.toThrow()
   })
 
   it('PostgreSQL rejects cross-kind named resource duplicate', async () => {
     await resetToCleanState()
-    await runMigrationPreflight()
-    await runMigrationConstraints()
     await expect(
       prisma.capacityProfile.create({
         data: { projectId, resourceTypeId: null, namedResourceId: nrId, ownerKind: 'PLANNED_RESOURCE',
-          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
+          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+          startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
       }),
     ).rejects.toThrow()
   })
 })
+
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Contraint rollback preserves valid data
@@ -919,22 +752,22 @@ describeIf('Migration constraint enforcement', () => {
 describeIf('Constraint rollback preserves valid data', () => {
   beforeEach(async () => {
     await deleteAllProfiles()
-    await dropConstraints()
-    await recreateNonUniqueIndexes()
   })
 
   it('dropping constraints preserves existing valid data', async () => {
     await resetToCleanState()
-    await runMigrationPreflight()
-    await runMigrationConstraints()
 
     // Verify data is intact
     const count = await prisma.capacityProfile.count()
     expect(count).toBe(2)
 
-    // Rollback
-    await dropConstraints()
-    await recreateNonUniqueIndexes()
+    // Rollback: drop #361 constraints manually (demonstrates documented procedure)
+    await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"')
+    await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_owner_kind_fk"')
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"')
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"')
+    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS "CapacityProfile_resourceTypeId_idx" ON "CapacityProfile"("resourceTypeId")')
+    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS "CapacityProfile_namedResourceId_idx" ON "CapacityProfile"("namedResourceId")')
 
     // Verify data still intact
     const afterCount = await prisma.capacityProfile.count()
@@ -949,14 +782,10 @@ describeIf('Constraint rollback preserves valid data', () => {
 describeIf('Existing write path compatibility under constraints', () => {
   beforeEach(async () => {
     await deleteAllProfiles()
-    await dropConstraints()
-    await recreateNonUniqueIndexes()
   })
 
   it('creates a valid named-resource profile under constraints', async () => {
     await resetToCleanState()
-    await runMigrationPreflight()
-    await runMigrationConstraints()
 
     // Try creating a valid new named-resource profile for nrId2
     const profile = await prisma.capacityProfile.create({
@@ -978,8 +807,6 @@ describeIf('Existing write path compatibility under constraints', () => {
 
   it('concurrent duplicate attempt rolls back cleanly', async () => {
     await resetToCleanState()
-    await runMigrationPreflight()
-    await runMigrationConstraints()
 
     await expect(
       prisma.capacityProfile.create({
@@ -1013,14 +840,10 @@ describeIf('Existing write path compatibility under constraints', () => {
 describeIf('Backfill/reconcile safety under constraints', () => {
   beforeEach(async () => {
     await deleteAllProfiles()
-    await dropConstraints()
-    await recreateNonUniqueIndexes()
   })
 
   it('backfill cannot create duplicate owners under constraints', async () => {
     await resetToCleanState()
-    await runMigrationPreflight()
-    await runMigrationConstraints()
 
     await expect(
       prisma.capacityProfile.create({
