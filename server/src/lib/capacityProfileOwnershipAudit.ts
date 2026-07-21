@@ -85,6 +85,16 @@ export interface OwnerKeyClassification {
   isIdentical: boolean
   /** Human-readable explanation of the group. */
   note: string
+  /** Project the duplicate group belongs to. */
+  projectId: string
+  /** Owner namespace: 'resourceTypeId' or 'namedResourceId'. */
+  ownerNamespace: string
+  /** Owner ID value. */
+  ownerId: string
+  /** Sorted profile IDs in this group. */
+  profileIds: string[]
+  /** Survivor profile ID, set when isIdentical is true. */
+  survivorId?: string
 }
 
 export interface AuditReport {
@@ -470,56 +480,90 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
       })
     }
   }
-
-  // Check groups by owner key for duplicates
-  for (const [key, group] of byOwner) {
-    // Skip malformed profiles (already reported above)
-    if (key === '') continue
-
-    if (group.length > 1) {
-      // Check whether this group has any shape-level errors already reported
-      const groupHasErrors = group.some(p =>
-        findings.some(f => f.profileIds.includes(p.id)),
-      )
-
-      if (!groupHasErrors) {
-        // Classify as identical or conflicting
-        const isIdentical = group.length >= 2 && group.every(p =>
-          profilesAreSemanticEqual(p, group[0]),
-        )
-
-        const profileIds = group.map(p => p.id).sort()
-        const ownerDesc = group[0].resourceTypeId
-          ? `resourceTypeId="${group[0].resourceTypeId}"`
-          : `namedResourceId="${group[0].namedResourceId}"`
-
-        if (isIdentical) {
-          repairableGroups.push({
-            profiles: [...group].sort(compareProfiles),
-            isIdentical: true,
-            note: `Identical duplicates for ${ownerDesc}: ${profileIds.join(', ')}`,
-          })
-          findings.push({
-            type: 'identical_duplicate_group',
-            severity: 'warning',
-            message: `Identical duplicate group for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
-            profileIds,
-          })
-        } else {
-          conflictingGroups.push({
-            profiles: [...group].sort(compareProfiles),
-            isIdentical: false,
-            note: `Conflicting duplicates for ${ownerDesc}: ${profileIds.join(', ')}`,
-          })
-          findings.push({
-            type: 'conflicting_duplicate_group',
-            severity: 'error',
-            message: `Conflicting duplicate group for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
-            profileIds,
-          })
-        }
-      }
+  // Check groups by physical owner key for duplicates.
+  // Each non-null FK participates in its respective duplicate detection:
+  // - resourceTypeId (when non-null) participates in resourceType duplicate detection
+  // - namedResourceId (when non-null) participates in named-resource duplicate detection
+  // Profiles with both FKs set participate in BOTH groups.
+  // Duplicate findings are NOT suppressed by the presence of other errors.
+  const rtDupes = new Map<ProfileOwnerKey, AuditedProfile[]>()
+  const nrDupes = new Map<ProfileOwnerKey, AuditedProfile[]>()
+  for (const p of profiles) {
+    const rtKey = p.resourceTypeId ? `resourceTypeId::${p.resourceTypeId}` : ''
+    const nrKey = p.namedResourceId ? `namedResourceId::${p.namedResourceId}` : ''
+    if (rtKey) {
+      if (!rtDupes.has(rtKey)) rtDupes.set(rtKey, [])
+      rtDupes.get(rtKey)!.push(p)
     }
+    if (nrKey) {
+      if (!nrDupes.has(nrKey)) nrDupes.set(nrKey, [])
+      nrDupes.get(nrKey)!.push(p)
+    }
+  }
+
+  // Helper to classify a duplicate group
+  function classifyDuplicateGroup(
+    _key: ProfileOwnerKey,
+    group: AuditedProfile[],
+    ownerDesc: string,
+  ): void {
+    if (group.length < 2) return
+    const profileIds = group.map(p => p.id).sort()
+    const isIdentical = group.every(p => profilesAreSemanticEqual(p, group[0]))
+    const sortedProfiles = [...group].sort(compareProfiles)
+
+    if (isIdentical) {
+      const survivor = selectSurvivor(sortedProfiles)
+      repairableGroups.push({
+        profiles: sortedProfiles,
+        isIdentical: true,
+        note: `Identical duplicates for ${ownerDesc}: ${profileIds.join(', ')}`,
+        projectId: group[0].projectId,
+        ownerNamespace: ownerDesc.split('=')[0],
+        ownerId: ownerDesc.split('"')[1],
+        profileIds,
+        survivorId: survivor.id,
+      })
+      findings.push({
+        type: 'identical_duplicate_group',
+        severity: 'warning',
+        message: `Identical duplicate group for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
+        profileIds,
+      })
+    } else {
+      conflictingGroups.push({
+        profiles: sortedProfiles,
+        isIdentical: false,
+        note: `Conflicting duplicates for ${ownerDesc}: ${profileIds.join(', ')}`,
+        projectId: group[0].projectId,
+        ownerNamespace: ownerDesc.split('=')[0],
+        ownerId: ownerDesc.split('"')[1],
+        profileIds,
+      })
+      findings.push({
+        type: 'conflicting_duplicate_group',
+        severity: 'error',
+        message: `Conflicting duplicate group for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
+        profileIds,
+      })
+    }
+  }
+
+  for (const [_key, group] of rtDupes) {
+    const ownerDesc = `resourceTypeId="${group[0].resourceTypeId}"`
+    classifyDuplicateGroup(_key, group, ownerDesc)
+  }
+  for (const [_key, group] of nrDupes) {
+    const ownerDesc = `namedResourceId="${group[0].namedResourceId}"`
+    classifyDuplicateGroup(_key, group, ownerDesc)
+  }
+  for (const [_key, group] of rtDupes) {
+    const ownerDesc = `resourceTypeId="${group[0].resourceTypeId}"`
+    classifyDuplicateGroup(_key, group, ownerDesc)
+  }
+  for (const [_key, group] of nrDupes) {
+    const ownerDesc = `namedResourceId="${group[0].namedResourceId}"`
+    classifyDuplicateGroup(_key, group, ownerDesc)
   }
 
   const validSingletons = profiles.length -

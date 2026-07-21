@@ -59,52 +59,9 @@ async function runMigrations(): Promise<void> {
 
 beforeAll(async () => {
   if (!runIntegration) return
-
   prisma = new PrismaClient()
   await runMigrations()
-
-  // Create a minimal fixture project with one resource type and two named resources
-  const user = await prisma.user.create({
-    data: {
-      email: 'ownership-invariants-test@example.com',
-      name: 'Test User',
-      password: 'test-hash',
-    },
-  })
-  const project = await prisma.project.create({
-    data: {
-      name: 'Ownership Invariants Test',
-      ownerId: user.id,
-    },
-  })
-  projectId = project.id
-
-  const rt = await prisma.resourceType.create({
-    data: {
-      name: 'Test Role',
-      projectId,
-      category: 'ENGINEERING',
-      count: 2,
-    },
-  })
-  rtId = rt.id
-
-  const nr1 = await prisma.namedResource.create({
-    data: {
-      name: 'Test Person 1',
-      resourceTypeId: rtId,
-    },
-  })
-  nrId = nr1.id
-
-  const nr2 = await prisma.namedResource.create({
-    data: {
-      name: 'Test Person 2',
-      resourceTypeId: rtId,
-    },
-  })
-  nrId2 = nr2.id
-
+  await setupFixtures()
   // Create a valid ROLE profile
   const rp = await prisma.capacityProfile.create({
     data: {
@@ -121,7 +78,6 @@ beforeAll(async () => {
     },
   })
   roleProfileId = rp.id
-
   // Create a valid NAMED_PERSON profile
   const np = await prisma.capacityProfile.create({
     data: {
@@ -198,8 +154,9 @@ async function createPre361MigrationDir(): Promise<string> {
   const dir = path.join(tmpDir, 'monrad-migrations-pre361-' + crypto.randomUUID())
   const migDir = path.join(dir, 'migrations')
   await fs.promises.mkdir(migDir, { recursive: true })
-  const repoRoot = new URL('../../..', import.meta.url).pathname
-  const migrationsDir = path.join(repoRoot, 'prisma/migrations')
+  // URL: file is at server/src/test/file.ts, so ../.. goes up to server/
+  const serverDir = new URL('../..', import.meta.url).pathname
+  const migrationsDir = path.join(serverDir, 'prisma/migrations')
   const allMigrations = await fs.promises.readdir(migrationsDir)
   const pre361 = allMigrations.filter(m => !m.startsWith('20260721')).sort()
 
@@ -209,14 +166,11 @@ async function createPre361MigrationDir(): Promise<string> {
     await fs.promises.cp(src, dst, { recursive: true })
   }
 
-
-  // Create a temporary Prisma schema pointing at this migrations dir
-  const schemaContent = await fs.promises.readFile(path.join(repoRoot, 'prisma/schema.prisma'), 'utf-8')
+  // Create a temporary Prisma schema at the temp dir
+  const schemaContent = await fs.promises.readFile(path.join(serverDir, 'prisma/schema.prisma'), 'utf-8')
   const tmpSchema = path.join(dir, 'schema.prisma')
   await fs.promises.writeFile(tmpSchema, schemaContent, 'utf-8')
 
-  // Create a marker so we can clean up later
-  await fs.promises.writeFile(path.join(dir, '.cleanup'), '')
   return tmpSchema
 }
 
@@ -242,29 +196,44 @@ async function assert361ConstraintsInstalled(): Promise<void> {
   expect(idxNames).toEqual(['CapacityProfile_namedResourceId_key', 'CapacityProfile_resourceTypeId_key'])
 }
 
-/**
- * Run `prisma migrate deploy` using the normal (full) migrations directory.
- * This applies the committed #361 migration artifact.
- */
-async function deployFullMigrations(): Promise<void> {
-  const { execSync } = await import('node:child_process')
-  execSync('npx prisma migrate deploy', {
-    cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
-    stdio: 'pipe',
+async function setupFixtures(): Promise<void> {
+  const user = await prisma.user.create({
+    data: {
+      email: 'ownership-invariants-test-' + Date.now() + '@example.com',
+      name: 'Test User',
+      password: 'test-hash',
+    },
   })
+  const project = await prisma.project.create({
+    data: { name: 'Ownership Invariants Test', ownerId: user.id },
+  })
+  projectId = project.id
+
+  const rt = await prisma.resourceType.create({
+    data: { name: 'Test Role', projectId, category: 'ENGINEERING', count: 2 },
+  })
+  rtId = rt.id
+
+  const nr1 = await prisma.namedResource.create({
+    data: { name: 'Test Person 1', resourceTypeId: rtId },
+  })
+  nrId = nr1.id
+
+  const nr2 = await prisma.namedResource.create({
+    data: { name: 'Test Person 2', resourceTypeId: rtId },
+  })
+  nrId2 = nr2.id
 }
 
 /**
- * Reset the test database to a clean pre-#361 state by:
- * 1. Dropping all tables (via schema prisma)
- * 2. Deploying only pre-#361 migrations from a temp migration directory
+ * Reset the test database to a clean pre-#361 state.
+ * 1. Drop public schema and recreate
+ * 2. Deploy only pre-#361 migrations from a temp migration directory
+ * 3. Recreate all fixture state (user, project, RTs, NRs)
  */
 async function resetToPre361(): Promise<void> {
-  // Drop public schema and recreate, so prisma migrate deploy starts fresh
   await prisma.$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE')
   await prisma.$executeRawUnsafe('CREATE SCHEMA public')
-  // Prisma will auto-create _prisma_migrations on first deploy
   // Deploy pre-#361 migrations from a temp migration directory
   const tmpSchema = await createPre361MigrationDir()
   try {
@@ -277,9 +246,22 @@ async function resetToPre361(): Promise<void> {
   } finally {
     await cleanupPre361Dir(tmpSchema)
   }
+  // Recreate all fixture state (IDs would be stale after schema reset)
+  await setupFixtures()
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+/**
+ * Run `prisma migrate deploy` using the normal (full) migrations directory.
+ * This applies the committed #361 migration artifact.
+ */
+async function deployFullMigrations(): Promise<void> {
+  const { execSync } = await import('node:child_process')
+  execSync('npx prisma migrate deploy', {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+    stdio: 'pipe',
+  })
+}
 // Clean data audits
 // ═════════════════════════════════════════════════════════════════════════════
 
