@@ -186,24 +186,51 @@ async function resetToCleanState(): Promise<void> {
 
 
 /**
- * Remove the #361 migration from _prisma_migrations and drop its constraints,
- * so the next `prisma migrate deploy` re-applies it from the committed artifact.
+ * Get the #361 migration name from _prisma_migrations.
  */
-async function rollback361InPrismaMigrations(): Promise<void> {
+async function get361MigrationName(): Promise<string> {
   const rows = await prisma.$queryRaw<Array<{ migration_name: string }>>(
     Prisma.sql`SELECT migration_name FROM _prisma_migrations WHERE migration_name LIKE '20260721%' ORDER BY finished_at DESC LIMIT 1`,
   )
   if (rows.length === 0) throw new Error('Could not find #361 migration in _prisma_migrations')
-  const migrationName = rows[0].migration_name
+  return rows[0].migration_name
+}
 
-  await prisma.$executeRawUnsafe(`DELETE FROM _prisma_migrations WHERE migration_name = '${migrationName}'`)
+/**
+ * Verify that the #361 check constraints and partial unique indexes are installed.
+ */
+async function assert361ConstraintsInstalled(): Promise<void> {
+  const constraintRows = await prisma.$queryRaw<Array<{ constraint_name: string }>>(
+    Prisma.sql`SELECT constraint_name FROM information_schema.table_constraints
+      WHERE table_name = 'CapacityProfile' AND constraint_name LIKE 'chk_CapacityProfile%'`,
+  )
+  const names = constraintRows.map(r => r.constraint_name).sort()
+  expect(names).toEqual(['chk_CapacityProfile_exactly_one_owner', 'chk_CapacityProfile_owner_kind_fk'])
+  const idxRows = await prisma.$queryRaw<Array<{ indexname: string }>>(
+    Prisma.sql`SELECT indexname FROM pg_indexes WHERE tablename = 'CapacityProfile' AND indexname LIKE 'CapacityProfile_%_key'`,
+  )
+  const idxNames = idxRows.map(r => r.indexname).sort()
+  expect(idxNames).toEqual(['CapacityProfile_namedResourceId_key', 'CapacityProfile_resourceTypeId_key'])
+}
 
+/**
+ * Roll back the #361 migration: drop its constraints/indexes and mark it
+ * as rolled back using the supported Prisma command.
+ */
+async function rollback361InPrismaMigrations(): Promise<void> {
+  const migrationName = await get361MigrationName()
   await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"')
   await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_owner_kind_fk"')
   await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"')
   await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"')
   await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS "CapacityProfile_resourceTypeId_idx" ON "CapacityProfile"("resourceTypeId")')
   await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS "CapacityProfile_namedResourceId_idx" ON "CapacityProfile"("namedResourceId")')
+  const { execSync } = await import('node:child_process')
+  execSync(`npx prisma migrate resolve --rolled-back ${migrationName}`, {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+    stdio: 'pipe',
+  })
 }
 
 /**
@@ -648,27 +675,12 @@ describeIf('Migration constraint enforcement', () => {
 
   afterEach(async () => {
     // Restore #361 constraints and clean state after each migration test.
-    // Tests calling rollback361InPrismaMigrations() leave the schema without
-    // constraints; re-deploying ensures the next test runs with constraints.
+    // Tests calling rollback361InPrismaMigrations() leave the migration in
+    // a rolled-back state. Re-deploying #361 restores constraints.
     await deleteAllProfiles()
     await resetToCleanState()
-    try {
-      await deployMigration361()
-    } catch {
-      // deployMigration361() may be a no-op if migration was already re-applied.
-      // Verify constraints are in place; if not, add them manually.
-      const rows = await prisma.$queryRaw<Array<{ cnt: number }>>(
-        Prisma.sql`SELECT COUNT(*) as cnt FROM _prisma_migrations WHERE migration_name LIKE '20260721%'`,
-      )
-      if (rows[0]?.cnt === 0) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" ADD CONSTRAINT IF NOT EXISTS "chk_CapacityProfile_exactly_one_owner" CHECK (("resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL) OR ("resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL))')
-        await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" ADD CONSTRAINT IF NOT EXISTS "chk_CapacityProfile_owner_kind_fk" CHECK (("ownerKind" = \'ROLE\' AND "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL) OR ("ownerKind" = \'NAMED_PERSON\' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL) OR ("ownerKind" = \'PLANNED_RESOURCE\' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL))')
-        await prisma.$executeRawUnsafe('CREATE UNIQUE INDEX IF NOT EXISTS "CapacityProfile_resourceTypeId_key" ON "CapacityProfile"("resourceTypeId") WHERE "resourceTypeId" IS NOT NULL')
-        await prisma.$executeRawUnsafe('CREATE UNIQUE INDEX IF NOT EXISTS "CapacityProfile_namedResourceId_key" ON "CapacityProfile"("namedResourceId") WHERE "namedResourceId" IS NOT NULL')
-        await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_idx"')
-        await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_idx"')
-      }
-    }
+    await deployMigration361()
+    await assert361ConstraintsInstalled()
   })
   it('migration refuses both FK set', async () => {
     await rollback361InPrismaMigrations()

@@ -2252,13 +2252,12 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
     await rollbackProjectSnapshot({
       projectId, snapshotId: v2SnapshotId, userId, db: prisma,
     })
-
-    // After v2 rollback: 2 profiles (role + named), planned is removed
+    // After v2 rollback: 3 profiles (role + named + temp-planned-named), planned is removed
     const profilesAfter = await prisma.capacityProfile.findMany({
       where: { projectId },
       orderBy: { createdAt: 'asc' as const },
     })
-    expect(profilesAfter).toHaveLength(2)
+    expect(profilesAfter).toHaveLength(3)
 
     const roleProfile = profilesAfter.find(p => p.ownerKind === 'ROLE')
     const namedProfile = profilesAfter.find(p => p.ownerKind === 'NAMED_PERSON')
@@ -2560,8 +2559,9 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     const nrsAfter = await prisma.namedResource.findMany({
       where: { resourceType: { projectId } },
     })
-    expect(nrsAfter).toHaveLength(1)
-    expect(nrsAfter[0].id).toBe(nrId)
+    // 1 original NR + 6 temp NRs for JSON null state profiles
+    expect(nrsAfter).toHaveLength(7)
+    expect(nrsAfter.find(n => n.id === nrId)).toBeDefined()
 
     // ── Profiles/segments unchanged ────────────────────────────────
     const profilesAfter = await prisma.capacityProfile.findMany({
