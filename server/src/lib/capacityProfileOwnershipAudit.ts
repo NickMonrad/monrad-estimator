@@ -115,14 +115,20 @@ export interface AuditReport {
 // ─── Deterministic ordering helpers ──────────────────────────────────────────
 
 export function compareProfiles(a: AuditedProfile, b: AuditedProfile): number {
-  // Primary: ownerKind asc
+  // Primary: projectId asc
+  const projCmp = a.projectId.localeCompare(b.projectId)
+  if (projCmp !== 0) return projCmp
+  // Secondary: ownerKind asc
   const kindCmp = a.ownerKind.localeCompare(b.ownerKind)
   if (kindCmp !== 0) return kindCmp
-  // Secondary: resourceTypeId asc (nullable-aware)
+  // Tertiary: resourceTypeId asc (nullable-aware)
   const rtCmp = (a.resourceTypeId ?? '').localeCompare(b.resourceTypeId ?? '')
   if (rtCmp !== 0) return rtCmp
-  // Tertiary: namedResourceId asc
-  return (a.namedResourceId ?? '').localeCompare(b.namedResourceId ?? '')
+  // Quaternary: namedResourceId asc
+  const nrCmp = (a.namedResourceId ?? '').localeCompare(b.namedResourceId ?? '')
+  if (nrCmp !== 0) return nrCmp
+  // Final: profile id as deterministic tie-breaker
+  return a.id.localeCompare(b.id)
 }
 
 export function compareSegments(a: AuditedSegment, b: AuditedSegment): number {
@@ -500,6 +506,19 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
       nrDupes.get(nrKey)!.push(p)
     }
   }
+  // Helper to assess whether a profile has valid owner shape for repair eligibility
+  function profileHasValidOwnerShape(p: AuditedProfile, rtToProject: Map<string, string>, nrToProject: Map<string, string>): boolean {
+    const hasRt = p.resourceTypeId != null
+    const hasNr = p.namedResourceId != null
+    if (hasRt === hasNr) return false  // both or neither
+    if (p.ownerKind === 'ROLE' && (!hasRt || hasNr)) return false
+    if ((p.ownerKind === 'NAMED_PERSON' || p.ownerKind === 'PLANNED_RESOURCE') && (!hasNr || hasRt)) return false
+    if (hasRt && !rtToProject.has(p.resourceTypeId!)) return false
+    if (hasNr && !nrToProject.has(p.namedResourceId!)) return false
+    if (hasRt && rtToProject.get(p.resourceTypeId!) !== p.projectId) return false
+    if (hasNr && nrToProject.get(p.namedResourceId!) !== p.projectId) return false
+    return true
+  }
 
   // Helper to classify a duplicate group
   function classifyDuplicateGroup(
@@ -509,10 +528,20 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
   ): void {
     if (group.length < 2) return
     const profileIds = group.map(p => p.id).sort()
-    const isIdentical = group.every(p => profilesAreSemanticEqual(p, group[0]))
-    const sortedProfiles = [...group].sort(compareProfiles)
+    const allValid = group.every(p => profileHasValidOwnerShape(p, rtToProject, nrToProject))
+    const isIdentical = allValid && group.every(p => profilesAreSemanticEqual(p, group[0]))
 
+    // Always emit duplicate_physical_owner finding
+    findings.push({
+      type: 'duplicate_physical_owner',
+      severity: allValid && !isIdentical ? 'error' : 'warning',
+      message: `Duplicate physical owner for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
+      profileIds,
+    })
+
+    // Emit identical or conflicting classification
     if (isIdentical) {
+      const sortedProfiles = [...group].sort(compareProfiles)
       const survivor = selectSurvivor(sortedProfiles)
       repairableGroups.push({
         profiles: sortedProfiles,
@@ -532,9 +561,9 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
       })
     } else {
       conflictingGroups.push({
-        profiles: sortedProfiles,
+        profiles: [...group].sort(compareProfiles),
         isIdentical: false,
-        note: `Conflicting duplicates for ${ownerDesc}: ${profileIds.join(', ')}`,
+        note: allValid ? `Conflicting duplicates for ${ownerDesc}: ${profileIds.join(', ')}` : `Invalid duplicate group for ${ownerDesc}: ${profileIds.join(', ')}`,
         projectId: group[0].projectId,
         ownerNamespace: ownerDesc.split('=')[0],
         ownerId: ownerDesc.split('"')[1],
@@ -543,7 +572,7 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
       findings.push({
         type: 'conflicting_duplicate_group',
         severity: 'error',
-        message: `Conflicting duplicate group for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
+        message: allValid ? `Conflicting duplicate group for ${ownerDesc}: profiles ${profileIds.join(', ')}` : `Invalid duplicate group for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
         profileIds,
       })
     }
@@ -557,14 +586,22 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
     const ownerDesc = `namedResourceId="${group[0].namedResourceId}"`
     classifyDuplicateGroup(_key, group, ownerDesc)
   }
-  for (const [_key, group] of rtDupes) {
-    const ownerDesc = `resourceTypeId="${group[0].resourceTypeId}"`
-    classifyDuplicateGroup(_key, group, ownerDesc)
+  // Sort findings deterministically
+  findings.sort((a, b) => {
+    const typeCmp = a.type.localeCompare(b.type)
+    if (typeCmp !== 0) return typeCmp
+    return a.profileIds.join(',').localeCompare(b.profileIds.join(','))
+  })
+  // Sort groups deterministically by projectId, then ownerNamespace, then ownerId
+  function compareGroups(a: OwnerKeyClassification, b: OwnerKeyClassification): number {
+    const projCmp = a.projectId.localeCompare(b.projectId)
+    if (projCmp !== 0) return projCmp
+    const nsCmp = a.ownerNamespace.localeCompare(b.ownerNamespace)
+    if (nsCmp !== 0) return nsCmp
+    return a.ownerId.localeCompare(b.ownerId)
   }
-  for (const [_key, group] of nrDupes) {
-    const ownerDesc = `namedResourceId="${group[0].namedResourceId}"`
-    classifyDuplicateGroup(_key, group, ownerDesc)
-  }
+  repairableGroups.sort(compareGroups)
+  conflictingGroups.sort(compareGroups)
 
   const validSingletons = profiles.length -
     findings.filter(f => f.severity === 'error').reduce((s, f) => s + f.profileIds.length, 0) -

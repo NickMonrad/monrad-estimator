@@ -404,3 +404,68 @@ describe('auditReportToJson', () => {
     expect(parsed.repairableGroups).toHaveLength(0)
   })
 })
+
+describe('Deterministic reporting', () => {
+  it('shuffled profiles produce same human-readable output', () => {
+    const profiles = [
+      makeProfile({ id: 'p-c', resourceTypeId: 'rt-b', projectId: 'proj-a' }),
+      makeProfile({ id: 'p-a', resourceTypeId: 'rt-a', projectId: 'proj-a' }),
+      makeProfile({ id: 'p-b', projectId: 'proj-b', resourceTypeId: null, namedResourceId: 'nr-a' }),
+    ]
+    const sorted1 = [...profiles].sort(compareProfiles)
+    const sorted2 = [...profiles].reverse().sort(compareProfiles)
+    expect(sorted1.map(p => p.id)).toEqual(sorted2.map(p => p.id))
+  })
+
+  it('shuffled profiles produce same JSON output', () => {
+    const profiles = [
+      makeProfile({ id: 'p-c', resourceTypeId: 'rt-b', projectId: 'proj-a' }),
+      makeProfile({ id: 'p-a', resourceTypeId: 'rt-a', projectId: 'proj-a' }),
+      makeProfile({ id: 'p-b', projectId: 'proj-b', resourceTypeId: null, namedResourceId: 'nr-a' }),
+    ]
+    const sorted1 = [...profiles].sort(compareProfiles)
+    const sorted2 = [...profiles].reverse().sort(compareProfiles)
+    expect(sorted1.map(p => p.id)).toEqual(sorted2.map(p => p.id))
+  })
+
+  it('tie-breaker by profile id when all other fields match', () => {
+    const profiles = [
+      makeProfile({ id: 'p-z', createdAt: new Date('2026-01-01') }),
+      makeProfile({ id: 'p-a', createdAt: new Date('2026-01-01') }),
+      makeProfile({ id: 'p-m', createdAt: new Date('2026-01-01') }),
+    ]
+    const sorted = [...profiles].sort(compareProfiles)
+    expect(sorted[0].id).toBe('p-a')
+    expect(sorted[1].id).toBe('p-m')
+    expect(sorted[2].id).toBe('p-z')
+  })
+
+  it('duplicate findings appear exactly once per owner', () => {
+    const report: AuditReport = {
+      totalProfiles: 2,
+      findings: [
+        { type: 'duplicate_physical_owner', severity: 'warning', message: 'test', profileIds: ['p-1', 'p-2'] },
+      ],
+      repairableGroups: [{
+        profiles: [
+          makeProfile({ id: 'p-1', createdAt: new Date('2026-01-01') }),
+          makeProfile({ id: 'p-2', createdAt: new Date('2026-02-01') }),
+        ],
+        isIdentical: true,
+        note: 'test',
+        projectId: 'proj-1',
+        ownerNamespace: 'resourceTypeId',
+        ownerId: 'rt-1',
+        profileIds: ['p-1', 'p-2'],
+        survivorId: 'p-1',
+      }],
+      conflictingGroups: [],
+      validSingletons: 2,
+      isClean: false,
+    }
+    const json = auditReportToJson(report)
+    const parsed = JSON.parse(json)
+    const dupFindings = parsed.findings.filter((f: { type: string }) => f.type === 'duplicate_physical_owner')
+    expect(dupFindings).toHaveLength(1)
+  })
+})
