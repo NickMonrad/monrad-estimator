@@ -12,6 +12,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { runOwnershipAudit } from '../lib/capacityProfileOwnershipAudit.js'
 import { repairIdenticalDuplicates } from '../lib/capacityProfileOwnershipRepair.js'
 import { PrismaClient, Prisma } from '@prisma/client'
+import crypto from 'crypto'
+import fs from 'fs'
+import path from 'path'
 
 // ─── Guard ──────────────────────────────────────────────────────────────────
 
@@ -186,14 +189,40 @@ async function resetToCleanState(): Promise<void> {
 
 
 /**
- * Get the #361 migration name from _prisma_migrations.
+ * Create a temporary migrations directory containing all migrations up to
+ * (but not including) the #361 ownership-invariants migration.
+ * Returns the path to a temporary Prisma schema file pointing at that dir.
  */
-async function get361MigrationName(): Promise<string> {
-  const rows = await prisma.$queryRaw<Array<{ migration_name: string }>>(
-    Prisma.sql`SELECT migration_name FROM _prisma_migrations WHERE migration_name LIKE '20260721%' ORDER BY finished_at DESC LIMIT 1`,
-  )
-  if (rows.length === 0) throw new Error('Could not find #361 migration in _prisma_migrations')
-  return rows[0].migration_name
+async function createPre361MigrationDir(): Promise<string> {
+  const tmpDir = await import('node:os').then(m => m.tmpdir())
+  const dir = path.join(tmpDir, 'monrad-migrations-pre361-' + crypto.randomUUID())
+  const migDir = path.join(dir, 'migrations')
+  await fs.promises.mkdir(migDir, { recursive: true })
+  const repoRoot = new URL('../../..', import.meta.url).pathname
+  const migrationsDir = path.join(repoRoot, 'prisma/migrations')
+  const allMigrations = await fs.promises.readdir(migrationsDir)
+  const pre361 = allMigrations.filter(m => !m.startsWith('20260721')).sort()
+
+  for (const m of pre361) {
+    const src = path.join(migrationsDir, m)
+    const dst = path.join(migDir, m)
+    await fs.promises.cp(src, dst, { recursive: true })
+  }
+
+
+  // Create a temporary Prisma schema pointing at this migrations dir
+  const schemaContent = await fs.promises.readFile(path.join(repoRoot, 'prisma/schema.prisma'), 'utf-8')
+  const tmpSchema = path.join(dir, 'schema.prisma')
+  await fs.promises.writeFile(tmpSchema, schemaContent, 'utf-8')
+
+  // Create a marker so we can clean up later
+  await fs.promises.writeFile(path.join(dir, '.cleanup'), '')
+  return tmpSchema
+}
+
+async function cleanupPre361Dir(tmpSchema: string): Promise<void> {
+  const dir = path.dirname(tmpSchema)
+  try { await fs.promises.rm(dir, { recursive: true, force: true }) } catch { /* ok */ }
 }
 
 /**
@@ -214,19 +243,12 @@ async function assert361ConstraintsInstalled(): Promise<void> {
 }
 
 /**
- * Roll back the #361 migration: drop its constraints/indexes and mark it
- * as rolled back using the supported Prisma command.
+ * Run `prisma migrate deploy` using the normal (full) migrations directory.
+ * This applies the committed #361 migration artifact.
  */
-async function rollback361InPrismaMigrations(): Promise<void> {
-  const migrationName = await get361MigrationName()
-  await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"')
-  await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_owner_kind_fk"')
-  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"')
-  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"')
-  await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS "CapacityProfile_resourceTypeId_idx" ON "CapacityProfile"("resourceTypeId")')
-  await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS "CapacityProfile_namedResourceId_idx" ON "CapacityProfile"("namedResourceId")')
+async function deployFullMigrations(): Promise<void> {
   const { execSync } = await import('node:child_process')
-  execSync(`npx prisma migrate resolve --rolled-back ${migrationName}`, {
+  execSync('npx prisma migrate deploy', {
     cwd: new URL('..', import.meta.url).pathname,
     env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
     stdio: 'pipe',
@@ -234,15 +256,27 @@ async function rollback361InPrismaMigrations(): Promise<void> {
 }
 
 /**
- * Run `prisma migrate deploy` to apply the committed #361 migration artifact.
+ * Reset the test database to a clean pre-#361 state by:
+ * 1. Dropping all tables (via schema prisma)
+ * 2. Deploying only pre-#361 migrations from a temp migration directory
  */
-async function deployMigration361(): Promise<void> {
-  const { execSync } = await import('node:child_process')
-  execSync('npx prisma migrate deploy', {
-    cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
-    stdio: 'pipe',
-  })
+async function resetToPre361(): Promise<void> {
+  // Drop public schema and recreate, so prisma migrate deploy starts fresh
+  await prisma.$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE')
+  await prisma.$executeRawUnsafe('CREATE SCHEMA public')
+  // Prisma will auto-create _prisma_migrations on first deploy
+  // Deploy pre-#361 migrations from a temp migration directory
+  const tmpSchema = await createPre361MigrationDir()
+  try {
+    const { execSync } = await import('node:child_process')
+    execSync(`npx prisma migrate deploy --schema="${tmpSchema}"`, {
+      cwd: new URL('..', import.meta.url).pathname,
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+      stdio: 'pipe',
+    })
+  } finally {
+    await cleanupPre361Dir(tmpSchema)
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -674,16 +708,14 @@ describeIf('Migration constraint enforcement', () => {
 
 
   afterEach(async () => {
-    // Restore #361 constraints and clean state after each migration test.
-    // Tests calling rollback361InPrismaMigrations() leave the migration in
-    // a rolled-back state. Re-deploying #361 restores constraints.
+    // Restore clean post-#361 state after each migration test.
     await deleteAllProfiles()
     await resetToCleanState()
-    await deployMigration361()
+    await deployFullMigrations()
     await assert361ConstraintsInstalled()
   })
   it('migration refuses both FK set', async () => {
-    await rollback361InPrismaMigrations()
+    await resetToPre361()
     await prisma.capacityProfile.create({
       data: {
         projectId, resourceTypeId: rtId, namedResourceId: nrId, ownerKind: 'ROLE',
@@ -691,12 +723,12 @@ describeIf('Migration constraint enforcement', () => {
         startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    await expect(deployMigration361()).rejects.toThrow()
+    await expect(deployFullMigrations()).rejects.toThrow()
     await resetToCleanState()
   })
 
   it('migration refuses neither FK set', async () => {
-    await rollback361InPrismaMigrations()
+    await resetToPre361()
     await prisma.capacityProfile.create({
       data: {
         projectId, resourceTypeId: null, namedResourceId: null, ownerKind: 'ROLE',
@@ -704,12 +736,12 @@ describeIf('Migration constraint enforcement', () => {
         startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    await expect(deployMigration361()).rejects.toThrow()
+    await expect(deployFullMigrations()).rejects.toThrow()
     await resetToCleanState()
   })
 
   it('migration refuses ownerKind/FK mismatch', async () => {
-    await rollback361InPrismaMigrations()
+    await resetToPre361()
     await prisma.capacityProfile.create({
       data: {
         projectId, resourceTypeId: null, namedResourceId: nrId, ownerKind: 'ROLE',
@@ -717,12 +749,12 @@ describeIf('Migration constraint enforcement', () => {
         startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    await expect(deployMigration361()).rejects.toThrow()
+    await expect(deployFullMigrations()).rejects.toThrow()
     await resetToCleanState()
   })
 
   it('migration refuses duplicate resourceTypeId', async () => {
-    await rollback361InPrismaMigrations()
+    await resetToPre361()
     await prisma.capacityProfile.create({
       data: {
         projectId, resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
@@ -737,18 +769,18 @@ describeIf('Migration constraint enforcement', () => {
         startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
       },
     })
-    await expect(deployMigration361()).rejects.toThrow()
+    await expect(deployFullMigrations()).rejects.toThrow()
     await resetToCleanState()
   })
 
   it('migration succeeds after clean state', async () => {
     await resetToCleanState()
-    await rollback361InPrismaMigrations()
-    await expect(deployMigration361()).resolves.not.toThrow()
+    await resetToPre361()
+    await expect(deployFullMigrations()).resolves.not.toThrow()
   })
 
   it('migration refuses duplicate namedResourceId', async () => {
-    await rollback361InPrismaMigrations()
+    await resetToPre361()
     await prisma.capacityProfile.create({
       data: { projectId, resourceTypeId: null, namedResourceId: nrId, ownerKind: 'NAMED_PERSON',
         planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
@@ -759,12 +791,12 @@ describeIf('Migration constraint enforcement', () => {
         planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
         startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
     })
-    await expect(deployMigration361()).rejects.toThrow()
+    await expect(deployFullMigrations()).rejects.toThrow()
     // afterEach handles cleanup
   })
 
   it('migration refuses cross-project resourceTypeId', async () => {
-    await rollback361InPrismaMigrations()
+    await resetToPre361()
     // Create a second project and use its RT as the profile owner
     const user = await prisma.user.findFirstOrThrow()
     const project2 = await prisma.project.create({
@@ -778,11 +810,11 @@ describeIf('Migration constraint enforcement', () => {
         planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
         startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
     })
-    await expect(deployMigration361()).rejects.toThrow()
+    await expect(deployFullMigrations()).rejects.toThrow()
   })
 
   it('migration refuses cross-project namedResourceId', async () => {
-    await rollback361InPrismaMigrations()
+    await resetToPre361()
     // Create a second project, its RT and NR, then use that NR in original project's profile
     const user = await prisma.user.findFirstOrThrow()
     const project2 = await prisma.project.create({
@@ -799,7 +831,7 @@ describeIf('Migration constraint enforcement', () => {
         planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
         startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
     })
-    await expect(deployMigration361()).rejects.toThrow()
+    await expect(deployFullMigrations()).rejects.toThrow()
   })
 
   it('PostgreSQL rejects both FK after migration', async () => {
