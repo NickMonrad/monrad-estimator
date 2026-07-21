@@ -195,7 +195,7 @@ async function resetToPre361(): Promise<void> {
   try {
     const { execSync } = await import('node:child_process')
     execSync(`npx prisma migrate deploy --schema="${tmpSchema}"`, {
-      cwd: new URL('..', import.meta.url).pathname,
+      cwd: new URL('../..', import.meta.url).pathname,
       env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
       stdio: 'pipe',
     })
@@ -213,7 +213,7 @@ async function resetToPre361(): Promise<void> {
 async function deployFullMigrations(): Promise<void> {
   const { execSync } = await import('node:child_process')
   execSync('npx prisma migrate deploy', {
-    cwd: new URL('..', import.meta.url).pathname,
+    cwd: new URL('../..', import.meta.url).pathname,
     env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
     stdio: 'pipe',
   })
@@ -674,6 +674,51 @@ describeIf('Shape error detection', () => {
 
     const report = await runOwnershipAudit(prisma)
     expect(report.findings.some(f => f.type === 'cross_project_owner')).toBe(true)
+  })
+
+  it('malformed both-FK profile participates in both duplicate namespaces', async () => {
+    // Create a both-FK profile + one sharing its RT + one sharing its NR
+    await prisma.capacityProfile.createMany({
+      data: [
+        {
+          projectId, resourceTypeId: rtId, namedResourceId: nrId,
+          ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        },
+        {
+          projectId, resourceTypeId: rtId, namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        },
+        {
+          projectId, resourceTypeId: null, namedResourceId: nrId,
+          ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        },
+      ],
+    })
+
+    const report = await runOwnershipAudit(prisma)
+    expect(report.isClean).toBe(false)
+
+    // Two duplicate_physical_owner findings: one per namespace
+    const dupFindings = report.findings.filter(f => f.type === 'duplicate_physical_owner')
+    expect(dupFindings).toHaveLength(2)
+
+    const rtFinding = dupFindings.find(f => f.message.includes('resourceTypeId'))
+    const nrFinding = dupFindings.find(f => f.message.includes('namedResourceId'))
+    expect(rtFinding).toBeDefined()
+    expect(nrFinding).toBeDefined()
+
+    // Both groups are conflicting, not repairable
+    expect(report.conflictingGroups.length).toBeGreaterThanOrEqual(2)
+    expect(report.repairableGroups).toHaveLength(0)
+
+    // The both-FK profile appears in both groups
+    for (const g of report.conflictingGroups) {
+      expect(g.profileIds).toContain(g.profiles.find(p => p.resourceTypeId != null && p.namedResourceId != null)?.id ?? '')
+      expect(g.isIdentical).toBe(false)
+    }
   })
 })
 })
