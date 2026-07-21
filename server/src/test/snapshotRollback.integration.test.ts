@@ -992,16 +992,15 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       where: { capacityProfileId: profilePlannedId },
     })
     await prisma.capacityProfile.delete({ where: { id: profilePlannedId } })
-    // Create a temporary resource type and profile not in the snapshot
-    const tempRt = await prisma.resourceType.create({
-      data: { id: 'rt-temp-extra', name: 'Temp Extra', projectId, category: 'ENGINEERING', count: 1 },
-    })
+    // Create an extra profile not in the snapshot (use NAMED_PERSON with temp NR to avoid owner FK conflict)
+    const tempExtraNr = await createNamedResource(
+      projectId, rtDesId, 'nr-temp-extra', 'Temp Extra',
+    )
     await createProfile(
-      projectId, 'prof-extra', 'ROLE', tempRt.id, null,
+      projectId, 'prof-extra', 'NAMED_PERSON', null, tempExtraNr,
       { defaultPercent: 100 },
       Prisma.DbNull,
     )
-    // The rollback will delete this RT and profile since they are not in the snapshot
     // Mutate backlog: delete and create new epics
     await prisma.epic.deleteMany({ where: { projectId } })
     const newEpic = await prisma.epic.create({
@@ -2218,17 +2217,15 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
       { allocationMode: 'EFFORT' },
     )
     // Add a PLANNED_RESOURCE that should NOT survive v2 rollback
-    // Use a separate NR to avoid duplicate namedResourceId with prof-e-stale-nr
-    const tempPlannedNr = await prisma.namedResource.create({
-      data: { id: 'nr-temp-planned', name: 'Temp Planned', resourceTypeId: rtId },
-    })
+    // Use a separate NR to avoid owner FK conflict with prof-e-stale-nr
+    const tempPlannedNr = await createNamedResource(
+      projectId, rtId, 'nr-temp-planned', 'Temp Planned',
+    )
     await createProfile(
-      projectId, 'prof-e-planned', 'PLANNED_RESOURCE', null, tempPlannedNr.id,
+      projectId, 'prof-e-planned', 'PLANNED_RESOURCE', null, tempPlannedNr,
       { planningBasis: 'CAPACITY_PROFILE', source: 'DERIVED' },
       Prisma.DbNull,
     )
-
-    // Build v2 snapshot from current state, downgrade schemaVersion to 2
     const v3Data = await buildSnapshot(projectId, prisma)
     const v2Data: SnapshotV2 = { ...v3Data, schemaVersion: 2 }
     v2SnapshotId = (
@@ -2393,56 +2390,57 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
       },
       { allocationMode: 'EFFORT' },
     )
-    // ── 6 extra ROLE profiles covering all Prisma JSON null states ──
-    // Create unique resource types for each so they don't violate the partial unique index
-    const rtJsonNull = await prisma.resourceType.create({
-      data: { id: 'rt-f-jsonnull', name: 'F JSONNull', projectId, category: 'ENGINEERING', count: 1 },
-    })
-    const rtObjNull = await prisma.resourceType.create({
-      data: { id: 'rt-f-obj-null', name: 'F ObjNull', projectId, category: 'ENGINEERING', count: 1 },
-    })
-    const rtArrNull = await prisma.resourceType.create({
-      data: { id: 'rt-f-arr-null', name: 'F ArrNull', projectId, category: 'ENGINEERING', count: 1 },
-    })
-    const rtString = await prisma.resourceType.create({
-      data: { id: 'rt-f-string', name: 'F String', projectId, category: 'ENGINEERING', count: 1 },
-    })
-    const rtNumber = await prisma.resourceType.create({
-      data: { id: 'rt-f-number', name: 'F Number', projectId, category: 'ENGINEERING', count: 1 },
-    })
-    const rtBool = await prisma.resourceType.create({
-      data: { id: 'rt-f-bool', name: 'F Bool', projectId, category: 'ENGINEERING', count: 1 },
-    })
+    // ── 6 extra profiles covering all Prisma JSON null states ──
+    // Use NAMED_PERSON with unique NRs to avoid owner FK conflicts under #361 constraints
+    const nrJsonNull = await createNamedResource(
+      projectId, rtId, 'nr-f-jsonnull', 'F JsonNull',
+    )
+    const nrObjNull = await createNamedResource(
+      projectId, rtId, 'nr-f-obj-null', 'F ObjNull',
+    )
+    const nrArrNull = await createNamedResource(
+      projectId, rtId, 'nr-f-arr-null', 'F ArrNull',
+    )
+    const nrString = await createNamedResource(
+      projectId, rtId, 'nr-f-string', 'F String',
+    )
+    const nrNumber = await createNamedResource(
+      projectId, rtId, 'nr-f-number', 'F Number',
+    )
+    const nrBool = await createNamedResource(
+      projectId, rtId, 'nr-f-bool', 'F Bool',
+    )
     profileJsonNullId = await createProfile(
-      projectId, 'prof-f-jsonnull', 'ROLE', rtJsonNull.id, null,
+      projectId, 'prof-f-jsonnull', 'NAMED_PERSON', null, nrJsonNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       Prisma.JsonNull,
     )
     profileObjWithNullId = await createProfile(
-      projectId, 'prof-f-obj-null', 'ROLE', rtObjNull.id, null,
+      projectId, 'prof-f-obj-null', 'NAMED_PERSON', null, nrObjNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       { outer: 'value', inner: null, nested: { deep: null } },
     )
     profileArrayWithNullId = await createProfile(
-      projectId, 'prof-f-arr-null', 'ROLE', rtArrNull.id, null,
+      projectId, 'prof-f-arr-null', 'NAMED_PERSON', null, nrArrNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       ['a', null, 'c'],
     )
     profileStringId = await createProfile(
-      projectId, 'prof-f-string', 'ROLE', rtString.id, null,
+      projectId, 'prof-f-string', 'NAMED_PERSON', null, nrString,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       'hello-legacy',
     )
     profileNumberId = await createProfile(
-      projectId, 'prof-f-number', 'ROLE', rtNumber.id, null,
+      projectId, 'prof-f-number', 'NAMED_PERSON', null, nrNumber,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       12345,
     )
     profileBooleanId = await createProfile(
-      projectId, 'prof-f-bool', 'ROLE', rtBool.id, null,
+      projectId, 'prof-f-bool', 'NAMED_PERSON', null, nrBool,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       true,
     )
+
     // Backlog for v1 snapshot
     await createEpicBacklog(projectId, rtId, null)
 

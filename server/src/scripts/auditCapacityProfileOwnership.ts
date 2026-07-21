@@ -83,13 +83,13 @@ async function main() {
         log('')
         log('Phase 3: Running final audit after repair…')
         finalAudit = await runOwnershipAudit(prisma)
-
         if (!finalAudit.isClean) {
           log('')
           log('❌ Database is NOT clean after repair. Manual resolution required.')
+        } else {
+          log('')
+          log('✅ Repair complete. Database ready for migration.')
         }
-        log('')
-        log('✅ Repair complete. Database ready for migration.')
       }
 
       // Repair mode JSON: one document with all phases

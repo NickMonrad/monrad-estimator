@@ -36,12 +36,17 @@ export async function repairIdenticalDuplicates(
   }
 
   let profilesDeleted = 0
+  let finalAudit: AuditReport | null = null
 
-  // Use Serializable isolation to prevent concurrent inserts/updates from
-  // creating phantom duplicates while we re-read and verify.
   await prisma.$transaction(
     async (tx) => {
-      // Fresh audit inside the transaction
+      // Acquire table-level exclusive lock to prevent concurrent CapacityProfile
+      // and CapacitySegment mutations during the repair window. This is a bounded
+      // maintenance lock, not a production-lifetime lock.
+      await tx.$executeRawUnsafe('LOCK TABLE "CapacityProfile" IN EXCLUSIVE MODE')
+      await tx.$executeRawUnsafe('LOCK TABLE "CapacitySegment" IN EXCLUSIVE MODE')
+
+      // Re-read all profiles under the lock (same as fresh audit)
       const freshProfiles = await loadAllProfiles(tx as unknown as PrismaClient)
 
       for (const group of report.repairableGroups) {
@@ -94,12 +99,22 @@ export async function repairIdenticalDuplicates(
           profilesDeleted++
         }
       }
+
+      // Run a final ownership audit inside the same transaction, before commit.
+      // This ensures the resulting database is migration-ready before we release the lock.
+      const auditModule = await import('./capacityProfileOwnershipAudit.js')
+      finalAudit = await auditModule.runOwnershipAudit(tx as unknown as PrismaClient)
+      if (!finalAudit.isClean) {
+        throw new Error(
+          `Repair aborted: final audit is not clean after deleting ${profilesDeleted} duplicate profile(s). ` +
+          'Manual resolution required. The transaction has been rolled back; no changes were committed.',
+        )
+      }
     },
     {
       isolationLevel: 'Serializable',
-      // Max 5 retries on serialization conflicts
       maxWait: 5000,
-      timeout: 10000,
+      timeout: 15000,
     },
   )
 

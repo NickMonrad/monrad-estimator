@@ -8,7 +8,7 @@
  * Requires INTEGRATION_TEST=true and a disposable PostgreSQL 15 Docker container.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import { runOwnershipAudit } from '../lib/capacityProfileOwnershipAudit.js'
 import { repairIdenticalDuplicates } from '../lib/capacityProfileOwnershipRepair.js'
 import { PrismaClient, Prisma } from '@prisma/client'
@@ -645,6 +645,31 @@ describeIf('Migration constraint enforcement', () => {
   // Each test in this section exercises the committed #361 migration artifact
   // by rolling it back, seeding fixtures, then deploying it via `prisma migrate deploy`.
 
+
+  afterEach(async () => {
+    // Restore #361 constraints and clean state after each migration test.
+    // Tests calling rollback361InPrismaMigrations() leave the schema without
+    // constraints; re-deploying ensures the next test runs with constraints.
+    await deleteAllProfiles()
+    await resetToCleanState()
+    try {
+      await deployMigration361()
+    } catch {
+      // deployMigration361() may be a no-op if migration was already re-applied.
+      // Verify constraints are in place; if not, add them manually.
+      const rows = await prisma.$queryRaw<Array<{ cnt: number }>>(
+        Prisma.sql`SELECT COUNT(*) as cnt FROM _prisma_migrations WHERE migration_name LIKE '20260721%'`,
+      )
+      if (rows[0]?.cnt === 0) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" ADD CONSTRAINT IF NOT EXISTS "chk_CapacityProfile_exactly_one_owner" CHECK (("resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL) OR ("resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL))')
+        await prisma.$executeRawUnsafe('ALTER TABLE "CapacityProfile" ADD CONSTRAINT IF NOT EXISTS "chk_CapacityProfile_owner_kind_fk" CHECK (("ownerKind" = \'ROLE\' AND "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL) OR ("ownerKind" = \'NAMED_PERSON\' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL) OR ("ownerKind" = \'PLANNED_RESOURCE\' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL))')
+        await prisma.$executeRawUnsafe('CREATE UNIQUE INDEX IF NOT EXISTS "CapacityProfile_resourceTypeId_key" ON "CapacityProfile"("resourceTypeId") WHERE "resourceTypeId" IS NOT NULL')
+        await prisma.$executeRawUnsafe('CREATE UNIQUE INDEX IF NOT EXISTS "CapacityProfile_namedResourceId_key" ON "CapacityProfile"("namedResourceId") WHERE "namedResourceId" IS NOT NULL')
+        await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_idx"')
+        await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_idx"')
+      }
+    }
+  })
   it('migration refuses both FK set', async () => {
     await rollback361InPrismaMigrations()
     await prisma.capacityProfile.create({
@@ -708,6 +733,61 @@ describeIf('Migration constraint enforcement', () => {
     await resetToCleanState()
     await rollback361InPrismaMigrations()
     await expect(deployMigration361()).resolves.not.toThrow()
+  })
+
+  it('migration refuses duplicate namedResourceId', async () => {
+    await rollback361InPrismaMigrations()
+    await prisma.capacityProfile.create({
+      data: { projectId, resourceTypeId: null, namedResourceId: nrId, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
+    })
+    await prisma.capacityProfile.create({
+      data: { projectId, resourceTypeId: null, namedResourceId: nrId, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
+    })
+    await expect(deployMigration361()).rejects.toThrow()
+    // afterEach handles cleanup
+  })
+
+  it('migration refuses cross-project resourceTypeId', async () => {
+    await rollback361InPrismaMigrations()
+    // Create a second project and use its RT as the profile owner
+    const user = await prisma.user.findFirstOrThrow()
+    const project2 = await prisma.project.create({
+      data: { name: 'Cross-project test', ownerId: user.id },
+    })
+    const rt2 = await prisma.resourceType.create({
+      data: { name: 'Other role', projectId: project2.id, category: 'ENGINEERING', count: 1 },
+    })
+    await prisma.capacityProfile.create({
+      data: { projectId, resourceTypeId: rt2.id, namedResourceId: null, ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
+    })
+    await expect(deployMigration361()).rejects.toThrow()
+  })
+
+  it('migration refuses cross-project namedResourceId', async () => {
+    await rollback361InPrismaMigrations()
+    // Create a second project, its RT and NR, then use that NR in original project's profile
+    const user = await prisma.user.findFirstOrThrow()
+    const project2 = await prisma.project.create({
+      data: { name: 'Cross-project test 2', ownerId: user.id },
+    })
+    const rt2 = await prisma.resourceType.create({
+      data: { name: 'Other role 2', projectId: project2.id, category: 'ENGINEERING', count: 1 },
+    })
+    const nr2 = await prisma.namedResource.create({
+      data: { name: 'Other person', resourceTypeId: rt2.id },
+    })
+    await prisma.capacityProfile.create({
+      data: { projectId, resourceTypeId: null, namedResourceId: nr2.id, ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100,
+        startWeek: 0, endWeek: 10, legacy: Prisma.DbNull },
+    })
+    await expect(deployMigration361()).rejects.toThrow()
   })
 
   it('PostgreSQL rejects both FK after migration', async () => {
