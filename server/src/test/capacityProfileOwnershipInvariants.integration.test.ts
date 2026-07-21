@@ -35,17 +35,6 @@ let nrProfileId: string
 
 // ─── Migrate and seed ───────────────────────────────────────────────────────
 
-/**
- * Run all pending migrations against the test database.
- */
-async function runMigrations(): Promise<void> {
-  const { execSync } = await import('node:child_process')
-  execSync('npx prisma migrate deploy', {
-    cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
-    stdio: 'pipe',
-  })
-}
 
 
 
@@ -55,51 +44,18 @@ async function runMigrations(): Promise<void> {
 
 
 
-// ─── Setup ──────────────────────────────────────────────────────────────────
+// ─── File-level lifecycle ────────────────────────────────────────────────────
 
 beforeAll(async () => {
   if (!runIntegration) return
   prisma = new PrismaClient()
-  await runMigrations()
-  await setupFixtures()
-  // Create a valid ROLE profile
-  const rp = await prisma.capacityProfile.create({
-    data: {
-      projectId,
-      resourceTypeId: rtId,
-      namedResourceId: null,
-      ownerKind: 'ROLE',
-      planningBasis: 'DEMAND_FOLLOWING',
-      source: 'FIXED',
-      defaultPercent: 100,
-      startWeek: 0,
-      endWeek: 10,
-      legacy: Prisma.DbNull,
-    },
-  })
-  roleProfileId = rp.id
-  // Create a valid NAMED_PERSON profile
-  const np = await prisma.capacityProfile.create({
-    data: {
-      projectId,
-      resourceTypeId: null,
-      namedResourceId: nrId,
-      ownerKind: 'NAMED_PERSON',
-      planningBasis: 'DEMAND_FOLLOWING',
-      source: 'FIXED',
-      defaultPercent: 100,
-      startWeek: 0,
-      endWeek: 10,
-      legacy: Prisma.DbNull,
-    },
-  })
-  nrProfileId = np.id
 })
 
 afterAll(async () => {
   if (!runIntegration || !prisma) return
   await prisma.$disconnect()
 })
+
 
 // ─── Cleanup helper for per-test isolation ───────────────────────────────────
 
@@ -262,7 +218,48 @@ async function deployFullMigrations(): Promise<void> {
     stdio: 'pipe',
   })
 }
-// Clean data audits
+// ═════════════════════════════════════════════════════════════════════════════
+// Phase 1: Pre-#361 ownership integrity tests
+// ═════════════════════════════════════════════════════════════════════════════
+// All audit, repair, conflict, and shape error tests run against pre-#361
+// schema (no unique indexes or CHECK constraints).
+
+describeIf('Pre-#361 ownership integrity tests', () => {
+  beforeAll(async () => {
+    await resetToPre361()
+    // Create a valid ROLE profile
+    const rp = await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+    roleProfileId = rp.id
+    // Create a valid NAMED_PERSON profile
+    const np = await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: Prisma.DbNull,
+      },
+    })
+    nrProfileId = np.id
+  })
 // ═════════════════════════════════════════════════════════════════════════════
 
 describeIf('Clean database audit', () => {
@@ -679,23 +676,45 @@ describeIf('Shape error detection', () => {
     expect(report.findings.some(f => f.type === 'cross_project_owner')).toBe(true)
   })
 })
+})
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Migration preflight (migration refuses dirty data)
+// Phase 2: Migration and constraint enforcement
 // ═════════════════════════════════════════════════════════════════════════════
+// Migration preflight tests reset to pre-#361, seed dirty data, then verify
+// the committed #361 migration artifact refuses it. After each dirty test the
+// afterEach restores a clean post-#361 state. Subsequent post-migration tests
+// verify constraint enforcement, rollback, writer compatibility and
+// backfill/reconcile safety under the production constraints.
 
-describeIf('Migration constraint enforcement', () => {
+describeIf('Migration and constraint enforcement', () => {
   // Each test in this section exercises the committed #361 migration artifact
   // by rolling it back, seeding fixtures, then deploying it via `prisma migrate deploy`.
 
+  describe('Migration preflight (dirty data refusal)', () => {
+    afterEach(async () => {
+      // Full reset: drop schema, deploy pre-#361 migrations, recreate fixtures,
+      // create valid clean profiles, then deploy the #361 migration artifact.
+      await resetToPre361()
+      // Create a valid ROLE profile (no constraints before #361)
+      await prisma.capacityProfile.create({
+        data: {
+          projectId, resourceTypeId: rtId, namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        },
+      })
+      await prisma.capacityProfile.create({
+        data: {
+          projectId, resourceTypeId: null, namedResourceId: nrId,
+          ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        },
+      })
+      await deployFullMigrations()
+      await assert361ConstraintsInstalled()
+    })
 
-  afterEach(async () => {
-    // Restore clean post-#361 state after each migration test.
-    await deleteAllProfiles()
-    await resetToCleanState()
-    await deployFullMigrations()
-    await assert361ConstraintsInstalled()
-  })
   it('migration refuses both FK set', async () => {
     await resetToPre361()
     await prisma.capacityProfile.create({
@@ -815,6 +834,7 @@ describeIf('Migration constraint enforcement', () => {
     })
     await expect(deployFullMigrations()).rejects.toThrow()
   })
+  })
 
   it('PostgreSQL rejects both FK after migration', async () => {
     await resetToCleanState()
@@ -848,7 +868,6 @@ describeIf('Migration constraint enforcement', () => {
       }),
     ).rejects.toThrow()
   })
-})
 
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -968,4 +987,5 @@ describeIf('Backfill/reconcile safety under constraints', () => {
       }),
     ).rejects.toThrow()
   })
+})
 })

@@ -85,8 +85,8 @@ export interface OwnerKeyClassification {
   isIdentical: boolean
   /** Human-readable explanation of the group. */
   note: string
-  /** Project the duplicate group belongs to. */
-  projectId: string
+  /** Sorted deduplicated project IDs for profiles in this group. */
+  projectIds: string[]
   /** Owner namespace: 'resourceTypeId' or 'namedResourceId'. */
   ownerNamespace: string
   /** Owner ID value. */
@@ -524,13 +524,15 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
   function classifyDuplicateGroup(
     _key: ProfileOwnerKey,
     group: AuditedProfile[],
-    ownerDesc: string,
+    ownerNamespace: string,
+    ownerId: string,
   ): void {
     if (group.length < 2) return
     const profileIds = group.map(p => p.id).sort()
     const allValid = group.every(p => profileHasValidOwnerShape(p, rtToProject, nrToProject))
     const isIdentical = allValid && group.every(p => profilesAreSemanticEqual(p, group[0]))
-
+    const ownerDesc = `${ownerNamespace}="${ownerId}"`
+    const projectIds = [...new Set(group.map(p => p.projectId))].sort()
     // Always emit duplicate_physical_owner finding
     findings.push({
       type: 'duplicate_physical_owner',
@@ -547,9 +549,9 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
         profiles: sortedProfiles,
         isIdentical: true,
         note: `Identical duplicates for ${ownerDesc}: ${profileIds.join(', ')}`,
-        projectId: group[0].projectId,
-        ownerNamespace: ownerDesc.split('=')[0],
-        ownerId: ownerDesc.split('"')[1],
+        projectIds,
+        ownerNamespace,
+        ownerId,
         profileIds,
         survivorId: survivor.id,
       })
@@ -564,9 +566,9 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
         profiles: [...group].sort(compareProfiles),
         isIdentical: false,
         note: allValid ? `Conflicting duplicates for ${ownerDesc}: ${profileIds.join(', ')}` : `Invalid duplicate group for ${ownerDesc}: ${profileIds.join(', ')}`,
-        projectId: group[0].projectId,
-        ownerNamespace: ownerDesc.split('=')[0],
-        ownerId: ownerDesc.split('"')[1],
+        projectIds,
+        ownerNamespace,
+        ownerId,
         profileIds,
       })
       findings.push({
@@ -578,13 +580,12 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
     }
   }
 
+
   for (const [_key, group] of rtDupes) {
-    const ownerDesc = `resourceTypeId="${group[0].resourceTypeId}"`
-    classifyDuplicateGroup(_key, group, ownerDesc)
+    classifyDuplicateGroup(_key, group, 'resourceTypeId', group[0].resourceTypeId ?? '')
   }
   for (const [_key, group] of nrDupes) {
-    const ownerDesc = `namedResourceId="${group[0].namedResourceId}"`
-    classifyDuplicateGroup(_key, group, ownerDesc)
+    classifyDuplicateGroup(_key, group, 'namedResourceId', group[0].namedResourceId ?? '')
   }
   // Sort findings deterministically
   findings.sort((a, b) => {
@@ -592,9 +593,9 @@ export async function runOwnershipAudit(prisma: PrismaClient): Promise<AuditRepo
     if (typeCmp !== 0) return typeCmp
     return a.profileIds.join(',').localeCompare(b.profileIds.join(','))
   })
-  // Sort groups deterministically by projectId, then ownerNamespace, then ownerId
+  // Sort groups deterministically by projectIds, then ownerNamespace, then ownerId
   function compareGroups(a: OwnerKeyClassification, b: OwnerKeyClassification): number {
-    const projCmp = a.projectId.localeCompare(b.projectId)
+    const projCmp = (a.projectIds[0] ?? '').localeCompare(b.projectIds[0] ?? '')
     if (projCmp !== 0) return projCmp
     const nsCmp = a.ownerNamespace.localeCompare(b.ownerNamespace)
     if (nsCmp !== 0) return nsCmp
@@ -656,7 +657,7 @@ export function formatAuditReport(report: AuditReport): string {
     lines.push('═══ Conflicting groups (manual resolution required) ═══')
     for (const g of report.conflictingGroups) {
       lines.push('')
-      lines.push(`  Project: ${g.projectId} | ${g.ownerNamespace}=${g.ownerId}`)
+      lines.push(`  Projects: ${g.projectIds.join(', ')} | ${g.ownerNamespace}=${g.ownerId}`)
       lines.push(`  Profiles: ${g.profileIds.join(', ')}`)
       for (const p of g.profiles) {
         lines.push(`    Profile ${p.id}: ownerKind=${p.ownerKind}, planningBasis=${p.planningBasis}, source=${p.source}, defaultPercent=${p.defaultPercent}, weeks=[${p.startWeek}-${p.endWeek}], legacy=${p.legacyStatus}`)
@@ -671,7 +672,7 @@ export function formatAuditReport(report: AuditReport): string {
     lines.push('')
     lines.push('═══ Repairable groups (identical duplicates) ═══')
     for (const g of report.repairableGroups) {
-      lines.push(`  Project: ${g.projectId} | ${g.ownerNamespace}=${g.ownerId}`)
+      lines.push(`  Projects: ${g.projectIds.join(', ')} | ${g.ownerNamespace}=${g.ownerId}`)
       lines.push(`  Profiles: ${g.profileIds.join(', ')}`)
       lines.push(`  Survivor: ${g.survivorId ?? 'unknown'}`)
     }
@@ -703,7 +704,7 @@ export function auditReportToJson(report: AuditReport): string {
       profileIds: f.profileIds,
     })),
     repairableGroups: report.repairableGroups.map(g => ({
-      projectId: g.projectId,
+      projectIds: g.projectIds,
       ownerNamespace: g.ownerNamespace,
       ownerId: g.ownerId,
       profileIds: g.profileIds,
@@ -712,7 +713,7 @@ export function auditReportToJson(report: AuditReport): string {
       note: g.note,
     })),
     conflictingGroups: report.conflictingGroups.map(g => ({
-      projectId: g.projectId,
+      projectIds: g.projectIds,
       ownerNamespace: g.ownerNamespace,
       ownerId: g.ownerId,
       profileIds: g.profileIds,

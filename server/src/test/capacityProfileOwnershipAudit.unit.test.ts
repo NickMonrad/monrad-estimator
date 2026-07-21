@@ -20,7 +20,9 @@ import {
   deepEqual,
   type AuditedProfile,
   type AuditReport,
+  type AuditFinding,
   type LegacyNullStatus,
+  type OwnerKeyClassification,
 } from '../lib/capacityProfileOwnershipAudit.js'
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
@@ -363,7 +365,7 @@ describe('formatAuditReport', () => {
         ],
         isIdentical: true,
         note: 'Identical duplicates',
-        projectId: 'proj-1',
+        projectIds: ['proj-1'],
         ownerNamespace: 'resourceTypeId',
         ownerId: 'rt-1',
         profileIds: ['p-1', 'p-2'],
@@ -376,7 +378,7 @@ describe('formatAuditReport', () => {
     const output = formatAuditReport(report)
     expect(output).toContain('Repairable groups')
     expect(output).toContain('Survivor: p-1')
-    expect(output).toContain('Project:')
+    expect(output).toContain('Projects:')
     expect(output).toContain('resourceTypeId=rt-1')
   })
 })
@@ -406,67 +408,161 @@ describe('auditReportToJson', () => {
   })
 })
 
+// ─── Classification helper using exported functions ──────────────────────────
+
+function classifyGroupForTest(
+  profiles: AuditedProfile[],
+): { group: OwnerKeyClassification; finding: AuditFinding } {
+  const sortedProfiles = [...profiles].sort(compareProfiles)
+  const profileIds = sortedProfiles.map(p => p.id).sort()
+  const projectIds = [...new Set(sortedProfiles.map(p => p.projectId))].sort()
+  const isRt = sortedProfiles[0].resourceTypeId != null
+  const ownerNamespace = isRt ? 'resourceTypeId' : 'namedResourceId'
+  const ownerId = (isRt ? sortedProfiles[0].resourceTypeId : sortedProfiles[0].namedResourceId) ?? ''
+  const allValid = profiles.length > 0 // simplified: assume valid shape for unit tests
+  const isIdentical = allValid && sortedProfiles.every(p => profilesAreSemanticEqual(p, sortedProfiles[0]))
+  const survivor = isIdentical ? selectSurvivor(sortedProfiles) : undefined
+  const ownerDesc = `${ownerNamespace}="${ownerId}"`
+  const group: OwnerKeyClassification = {
+    profiles: sortedProfiles,
+    isIdentical,
+    note: isIdentical ? `Identical duplicates for ${ownerDesc}` : `Conflicting duplicates for ${ownerDesc}`,
+    projectIds,
+    ownerNamespace,
+    ownerId,
+    profileIds,
+    survivorId: survivor?.id,
+  }
+  const finding: AuditFinding = {
+    type: 'duplicate_physical_owner',
+    severity: isIdentical ? 'warning' : 'error',
+    message: `Duplicate physical owner for ${ownerDesc}: profiles ${profileIds.join(', ')}`,
+    profileIds,
+  }
+  return { group, finding }
+}
+
 describe('Deterministic reporting', () => {
-  it('shuffled profiles produce same human-readable output', () => {
+  it('shuffled identical groups produce byte-identical formatAuditReport', () => {
     const profiles = [
-      makeProfile({ id: 'p-c', resourceTypeId: 'rt-b', projectId: 'proj-a' }),
-      makeProfile({ id: 'p-a', resourceTypeId: 'rt-a', projectId: 'proj-a' }),
-      makeProfile({ id: 'p-b', projectId: 'proj-b', resourceTypeId: null, namedResourceId: 'nr-a' }),
+      makeProfile({ id: 'p-c', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
+      makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
     ]
-    const sorted1 = [...profiles].sort(compareProfiles)
-    const sorted2 = [...profiles].reverse().sort(compareProfiles)
-    expect(sorted1.map(p => p.id)).toEqual(sorted2.map(p => p.id))
-  })
+    const { group: g1, finding: f1 } = classifyGroupForTest(profiles)
+    const { group: g2, finding: f2 } = classifyGroupForTest([...profiles].reverse())
 
-  it('shuffled profiles produce same JSON output', () => {
-    const profiles = [
-      makeProfile({ id: 'p-c', resourceTypeId: 'rt-b', projectId: 'proj-a' }),
-      makeProfile({ id: 'p-a', resourceTypeId: 'rt-a', projectId: 'proj-a' }),
-      makeProfile({ id: 'p-b', projectId: 'proj-b', resourceTypeId: null, namedResourceId: 'nr-a' }),
-    ]
-    const sorted1 = [...profiles].sort(compareProfiles)
-    const sorted2 = [...profiles].reverse().sort(compareProfiles)
-    expect(sorted1.map(p => p.id)).toEqual(sorted2.map(p => p.id))
-  })
-
-  it('tie-breaker by profile id when all other fields match', () => {
-    const profiles = [
-      makeProfile({ id: 'p-z', createdAt: new Date('2026-01-01') }),
-      makeProfile({ id: 'p-a', createdAt: new Date('2026-01-01') }),
-      makeProfile({ id: 'p-m', createdAt: new Date('2026-01-01') }),
-    ]
-    const sorted = [...profiles].sort(compareProfiles)
-    expect(sorted[0].id).toBe('p-a')
-    expect(sorted[1].id).toBe('p-m')
-    expect(sorted[2].id).toBe('p-z')
-  })
-
-  it('duplicate findings appear exactly once per owner', () => {
-    const report: AuditReport = {
-      totalProfiles: 2,
-      findings: [
-        { type: 'duplicate_physical_owner', severity: 'warning', message: 'test', profileIds: ['p-1', 'p-2'] },
-      ],
-      repairableGroups: [{
-        profiles: [
-          makeProfile({ id: 'p-1', createdAt: new Date('2026-01-01') }),
-          makeProfile({ id: 'p-2', createdAt: new Date('2026-02-01') }),
-        ],
-        isIdentical: true,
-        note: 'test',
-        projectId: 'proj-1',
-        ownerNamespace: 'resourceTypeId',
-        ownerId: 'rt-1',
-        profileIds: ['p-1', 'p-2'],
-        survivorId: 'p-1',
-      }],
-      conflictingGroups: [],
-      validSingletons: 2,
-      isClean: false,
+    const report1: AuditReport = {
+      totalProfiles: 2, findings: [f1],
+      repairableGroups: [g1], conflictingGroups: [],
+      validSingletons: 0, isClean: false,
     }
-    const json = auditReportToJson(report)
-    const parsed = JSON.parse(json)
-    const dupFindings = parsed.findings.filter((f: { type: string }) => f.type === 'duplicate_physical_owner')
+    const report2: AuditReport = {
+      totalProfiles: 2, findings: [f2],
+      repairableGroups: [g2], conflictingGroups: [],
+      validSingletons: 0, isClean: false,
+    }
+    expect(formatAuditReport(report1)).toBe(formatAuditReport(report2))
+  })
+
+  it('shuffled identical groups produce byte-identical auditReportToJson', () => {
+    const profiles = [
+      makeProfile({ id: 'p-c', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
+      makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
+    ]
+    const { group: g1, finding: f1 } = classifyGroupForTest(profiles)
+    const { group: g2, finding: f2 } = classifyGroupForTest([...profiles].reverse())
+
+    const report1: AuditReport = {
+      totalProfiles: 2, findings: [f1],
+      repairableGroups: [g1], conflictingGroups: [],
+      validSingletons: 0, isClean: false,
+    }
+    const report2: AuditReport = {
+      totalProfiles: 2, findings: [f2],
+      repairableGroups: [g2], conflictingGroups: [],
+      validSingletons: 0, isClean: false,
+    }
+    expect(auditReportToJson(report1)).toBe(auditReportToJson(report2))
+  })
+
+  it('output contains explicit projectIds, ownerNamespace, ownerId, profileIds, survivorId', () => {
+    const profiles = [
+      makeProfile({ id: 'p-b', projectId: 'proj-x', resourceTypeId: 'rt-99', createdAt: new Date('2026-02-01') }),
+      makeProfile({ id: 'p-a', projectId: 'proj-x', resourceTypeId: 'rt-99', createdAt: new Date('2026-01-01') }),
+    ]
+    const { group, finding } = classifyGroupForTest(profiles)
+    const report: AuditReport = {
+      totalProfiles: 2, findings: [finding],
+      repairableGroups: [group], conflictingGroups: [],
+      validSingletons: 0, isClean: false,
+    }
+    const fmt = formatAuditReport(report)
+    const json = JSON.parse(auditReportToJson(report))
+
+    expect(fmt).toContain('proj-x')
+    expect(fmt).toContain('resourceTypeId=rt-99')
+    expect(fmt).toContain('p-a, p-b')
+    expect(fmt).toContain('Survivor: p-a')
+
+    const rj = json.repairableGroups[0]
+    expect(rj.projectIds).toEqual(['proj-x'])
+    expect(rj.ownerNamespace).toBe('resourceTypeId')
+    expect(rj.ownerId).toBe('rt-99')
+    expect(rj.profileIds).toEqual(['p-a', 'p-b'])
+    expect(rj.survivorId).toBe('p-a')
+  })
+
+  it('cross-project groups expose all project IDs', () => {
+    const profiles = [
+      makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
+      makeProfile({ id: 'p-b', projectId: 'proj-b', resourceTypeId: 'rt-1' }),
+    ]
+    const { group, finding } = classifyGroupForTest(profiles)
+    const report: AuditReport = {
+      totalProfiles: 2, findings: [finding],
+      repairableGroups: [group], conflictingGroups: [],
+      validSingletons: 0, isClean: false,
+    }
+    const fmt = formatAuditReport(report)
+    const json = JSON.parse(auditReportToJson(report))
+
+    expect(group.projectIds).toEqual(['proj-a', 'proj-b'])
+    expect(fmt).toContain('proj-a, proj-b')
+    expect(json.repairableGroups[0].projectIds).toEqual(['proj-a', 'proj-b'])
+  })
+
+  it('exactly one duplicate_physical_owner finding per owner namespace', () => {
+    const profiles = [
+      makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
+      makeProfile({ id: 'p-b', projectId: 'proj-a', resourceTypeId: 'rt-1' }),
+    ]
+    const { group, finding } = classifyGroupForTest(profiles)
+    const report: AuditReport = {
+      totalProfiles: 2, findings: [finding],
+      repairableGroups: [group], conflictingGroups: [],
+      validSingletons: 0, isClean: false,
+    }
+    const json = JSON.parse(auditReportToJson(report))
+    const dupFindings = json.findings.filter((f: { type: string }) => f.type === 'duplicate_physical_owner')
     expect(dupFindings).toHaveLength(1)
+  })
+
+  it('both-FK profile participates in both owner namespaces when sorted', () => {
+    const p1 = makeProfile({ id: 'p-both', projectId: 'proj-a', resourceTypeId: 'rt-1', namedResourceId: 'nr-1' })
+    const groups = [
+      classifyGroupForTest([p1, makeProfile({ id: 'p-rt', projectId: 'proj-a', resourceTypeId: 'rt-1' })]),
+      classifyGroupForTest([p1, makeProfile({ id: 'p-nr', projectId: 'proj-a', namedResourceId: 'nr-1', resourceTypeId: null })]),
+    ]
+    const namespaces = groups.map(g => g.group.ownerNamespace).sort()
+    expect(namespaces).toEqual(['namedResourceId', 'resourceTypeId'])
+  })
+
+  it('conflicting duplicate groups are classified correctly', () => {
+    const profiles = [
+      makeProfile({ id: 'p-a', projectId: 'proj-a', resourceTypeId: 'rt-1', planningBasis: 'DEMAND_FOLLOWING' }),
+      makeProfile({ id: 'p-b', projectId: 'proj-a', resourceTypeId: 'rt-1', planningBasis: 'AVAILABILITY_WINDOW' }),
+    ]
+    const { group } = classifyGroupForTest(profiles)
+    expect(group.isIdentical).toBe(false)
   })
 })

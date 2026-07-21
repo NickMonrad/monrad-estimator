@@ -1,1 +1,12 @@
-node_modules
+node_modules/
+dist/
+.env
+*.env.local
+.DS_Store
+logs/
+server/uploads/templates/*
+!server/uploads/templates/.gitkeep
+server/uploads/generated/*
+!server/uploads/generated/.gitkeep
+backups/
+test-results/
