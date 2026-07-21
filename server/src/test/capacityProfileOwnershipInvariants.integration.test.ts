@@ -101,9 +101,15 @@ async function resetToCleanState(): Promise<void> {
 
 
 /**
- * Create a temporary migrations directory containing all migrations up to
- * (but not including) the #361 ownership-invariants migration.
- * Returns the path to a temporary Prisma schema file pointing at that dir.
+ * Create a temporary Prisma config and filtered migrations directory containing
+ * all migrations up to (but not including) the #361 ownership-invariants migration.
+ * Returns the path to a temporary Prisma config file that references:
+ *   - a temporary schema file (copy of the repository schema)
+ *   - the temporary filtered migrations directory
+ *   - process.env.DATABASE_URL
+ *
+ * This prevents Prisma from discovering server/prisma.config.ts and its
+ * full migrations/path setting.
  */
 async function createPre361MigrationDir(): Promise<string> {
   const tmpDir = await import('node:os').then(m => m.tmpdir())
@@ -122,21 +128,34 @@ async function createPre361MigrationDir(): Promise<string> {
     await fs.promises.cp(src, dst, { recursive: true })
   }
 
-  // Create a temporary Prisma schema at the temp dir
+  // Create a temporary Prisma schema
   const schemaContent = await fs.promises.readFile(path.join(serverDir, 'prisma/schema.prisma'), 'utf-8')
   const tmpSchema = path.join(dir, 'schema.prisma')
   await fs.promises.writeFile(tmpSchema, schemaContent, 'utf-8')
 
-  return tmpSchema
+  // Create a temporary Prisma config that overrides both schema and migrations path.
+  // Used via --config so the repository prisma.config.ts is never discovered.
+  const tmpConfig = path.join(dir, 'prisma.config.ts')
+  const configContent = [
+    'import { defineConfig } from "prisma/config"',
+    'export default defineConfig({',
+    '  schema: "' + tmpSchema.replace(/\\/g, '\\\\') + '",',
+    '  migrations: { path: "' + migDir.replace(/\\/g, '\\\\') + '" },',
+    '  datasource: { url: process.env["DATABASE_URL"] },',
+    '})',
+  ].join('\n')
+  await fs.promises.writeFile(tmpConfig, configContent, 'utf-8')
+
+  return tmpConfig
 }
 
-async function cleanupPre361Dir(tmpSchema: string): Promise<void> {
-  const dir = path.dirname(tmpSchema)
+async function cleanupPre361Dir(tmpConfig: string): Promise<void> {
+  const dir = path.dirname(tmpConfig)
   try { await fs.promises.rm(dir, { recursive: true, force: true }) } catch { /* ok */ }
 }
 
 /**
- * Verify that the #361 check constraints and partial unique indexes are installed.
+ * Assert that the #361 CHECK constraints and partial unique indexes are installed.
  */
 async function assert361ConstraintsInstalled(): Promise<void> {
   const constraintRows = await prisma.$queryRaw<Array<{ constraint_name: string }>>(
@@ -150,6 +169,25 @@ async function assert361ConstraintsInstalled(): Promise<void> {
   )
   const idxNames = idxRows.map(r => r.indexname).sort()
   expect(idxNames).toEqual(['CapacityProfile_namedResourceId_key', 'CapacityProfile_resourceTypeId_key'])
+}
+
+/**
+ * Assert that the #361 database objects are absent.
+ * This is a fail-closed check run after resetToPre361() to confirm that the
+ * full migration set was NOT applied accidentally.
+ */
+async function assert361ConstraintsAbsent(): Promise<void> {
+  const constraintRows = await prisma.$queryRaw<Array<{ constraint_name: string }>>(
+    Prisma.sql`SELECT constraint_name FROM information_schema.table_constraints
+      WHERE table_name = 'CapacityProfile' AND constraint_name LIKE 'chk_CapacityProfile%'`,
+  )
+  expect(constraintRows).toHaveLength(0)
+  const idxRows = await prisma.$queryRaw<Array<{ indexname: string }>>(
+    Prisma.sql`SELECT indexname FROM pg_indexes WHERE tablename = 'CapacityProfile' AND indexname LIKE 'CapacityProfile_%_key'`,
+  )
+  const idx361 = idxRows.filter((r: { indexname: string }) =>
+    r.indexname === 'CapacityProfile_resourceTypeId_key' || r.indexname === 'CapacityProfile_namedResourceId_key')
+  expect(idx361).toHaveLength(0)
 }
 
 async function setupFixtures(): Promise<void> {
@@ -184,27 +222,30 @@ async function setupFixtures(): Promise<void> {
 /**
  * Reset the test database to a clean pre-#361 state.
  * 1. Drop public schema and recreate
- * 2. Deploy only pre-#361 migrations from a temp migration directory
- * 3. Recreate all fixture state (user, project, RTs, NRs)
+ * 2. Deploy only pre-#361 migrations using a temporary Prisma config
+ * 3. Assert that #361 constraints are absent
+ * 4. Recreate all fixture state (user, project, RTs, NRs)
  */
 async function resetToPre361(): Promise<void> {
   await prisma.$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE')
   await prisma.$executeRawUnsafe('CREATE SCHEMA public')
-  // Deploy pre-#361 migrations from a temp migration directory
-  const tmpSchema = await createPre361MigrationDir()
+  const tmpConfig = await createPre361MigrationDir()
   try {
     const { execSync } = await import('node:child_process')
-    execSync(`npx prisma migrate deploy --schema="${tmpSchema}"`, {
+    execSync(`npx prisma migrate deploy --config="${tmpConfig}"`, {
       cwd: new URL('../..', import.meta.url).pathname,
       env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
       stdio: 'pipe',
     })
   } finally {
-    await cleanupPre361Dir(tmpSchema)
+    await cleanupPre361Dir(tmpConfig)
   }
+  // Fail-closed: confirm #361 constraints were NOT applied
+  await assert361ConstraintsAbsent()
   // Recreate all fixture state (IDs would be stale after schema reset)
   await setupFixtures()
 }
+
 
 /**
  * Run `prisma migrate deploy` using the normal (full) migrations directory.
