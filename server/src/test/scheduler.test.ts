@@ -804,6 +804,88 @@ describe('sequential story phases', () => {
     expect(s2Bar.isManual).toBe(false)
   })
 
+  it('pinned story demand appears in weeklyConsumptionMap (non-levelled)', () => {
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const qa = makeRt('rt-qa', 'QA', 1, 8)
+    const s1 = makeStory('s1', [makeTask(40, 'rt-dev', 'Dev')], 0) // manual
+    const s2 = makeStory('s2', [makeTask(40, 'rt-qa', 'QA')], 1)  // auto
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev, qa],
+      manualStoryEntries: [{ storyId: 's1', startWeek: 0 }],
+    }))
+    // Non-levelled: weeklyConsumptionMap contains pinned demand (Dev) only.
+    // Automatic story (QA) demand is not in the map without the simulation.
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(5.0, 1)
+    // QA (automatic) is absent from the non-levelled map
+    const qaTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-qa|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(qaTotal).toBe(0)
+  })
+
+  it('pinned story demand appears in weeklyConsumptionMap (resource-levelled)', () => {
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const qa = makeRt('rt-qa', 'QA', 1, 8)
+    const s1 = makeStory('s1', [makeTask(40, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [makeTask(40, 'rt-qa', 'QA')], 1)
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev, qa],
+      manualStoryEntries: [{ storyId: 's1', startWeek: 0 }],
+      resourceLevel: true,
+    }))
+
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(5.0, 1)
+
+    const qaTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-qa|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(qaTotal).toBeCloseTo(5.0, 1)
+  })
+
+  it('pinned demand reserves capacity; auto story does not consume pinned slot', () => {
+    // One Dev (count=1), one feature: s1 manual (80h), s2 auto (80h), same RT
+    // Pinned s1 at week 0 consumes all Dev capacity for ~2 weeks.
+    // Auto s2 must wait until pinned story completes.
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const s1 = makeStory('s1', [makeTask(80, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [makeTask(80, 'rt-dev', 'Dev')], 1)
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      manualStoryEntries: [{ storyId: 's1', startWeek: 0 }],
+      resourceLevel: true,
+    }))
+
+    // Total Dev demand = 160h / 8 = 20 person-days (pinned 10pd + auto 10pd)
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(20.0, 1)
+
+    // Pinned story bar is at week 0
+    const s1Bar = result.storySchedule.find(s => s.storyId === 's1')!
+    expect(s1Bar.startWeek).toBe(0)
+    expect(s1Bar.isManual).toBe(true)
+
+    // Auto story placement is not distorted by the manual story
+    const s2Bar = result.storySchedule.find(s => s.storyId === 's2')!
+    expect(s2Bar.isManual).toBe(false)
+  })
+
   // ── Issue #394 acceptance fixture ──────────────────────────────────────────
   it('acceptance: 17.5d Security + 5.0d Principal Engineer (non-levelled)', () => {
     const hpd = 7.6
