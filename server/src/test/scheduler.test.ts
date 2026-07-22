@@ -619,6 +619,130 @@ describe('runScheduler', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Sequential story-phase scheduling (#394)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('sequential story phases', () => {
+  it('stories with different resource types do not overlap within a feature', () => {
+    // Story 1: 40 Dev hours (5 days → 1 week)
+    // Story 2: 40 QA hours (5 days → 1 week)
+    // Sequential phases → feature = 2 weeks, story 1 starts week 0, story 2 starts week 1
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const qa = makeRt('rt-qa', 'QA', 1, 8)
+    const s1 = makeStory('s1', [makeTask(40, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [makeTask(40, 'rt-qa', 'QA')], 1)
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [dev, qa] }))
+
+    const featureEntry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    expect(featureEntry.durationWeeks).toBeCloseTo(2, 1)
+    expect(featureEntry.startWeek).toBe(0)
+
+    const bar1 = result.storySchedule.find(s => s.storyId === 's1')!
+    const bar2 = result.storySchedule.find(s => s.storyId === 's2')!
+    expect(bar1.startWeek).toBe(0)
+    expect(bar1.durationWeeks).toBeCloseTo(1, 1)
+    expect(bar2.startWeek).toBeGreaterThanOrEqual(bar1.startWeek + bar1.durationWeeks - 0.01)
+    expect(bar2.durationWeeks).toBeCloseTo(1, 1)
+  })
+
+  it('within-story tasks with different RTs overlap (same story start)', () => {
+    // Single story with both Dev (40h) and QA (40h) tasks
+    // Both run concurrently within the same story phase
+    // Bottleneck: 5 days → 1 week
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const qa = makeRt('rt-qa', 'QA', 1, 8)
+    const s1 = makeStory('s1', [
+      makeTask(40, 'rt-dev', 'Dev'),
+      makeTask(40, 'rt-qa', 'QA'),
+    ], 0)
+    const f1 = makeFeature('f1', [s1])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [dev, qa] }))
+
+    const bar = result.storySchedule.find(s => s.storyId === 's1')!
+    expect(bar.durationWeeks).toBeCloseTo(1, 1)
+    expect(bar.startWeek).toBe(0)
+  })
+
+  it('feature duration equals sum of story-phase bottleneck weeks', () => {
+    // Story 1: 80 Dev hours (10 days → 2 weeks bottleneck)
+    // Story 2: 40 QA hours (5 days → 1 week bottleneck)
+    // Sequential phases → feature = 3 weeks
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const qa = makeRt('rt-qa', 'QA', 1, 8)
+    const s1 = makeStory('s1', [makeTask(80, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [makeTask(40, 'rt-qa', 'QA')], 1)
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [dev, qa] }))
+
+    const featureEntry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    expect(featureEntry.durationWeeks).toBeCloseTo(3, 1)
+  })
+
+  it('parallel epic features are unaffected by story-phase ordering', () => {
+    // Two features in a parallel epic, each with 2 stories
+    // Parallel epic means features run simultaneously
+    // Story phasing only affects intra-feature ordering
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const f1 = makeFeature('f1', [
+      makeStory('s1a', [makeTask(40, 'rt-dev', 'Dev')], 0),
+      makeStory('s1b', [makeTask(40, 'rt-dev', 'Dev')], 1),
+    ])
+    const f2 = makeFeature('f2', [
+      makeStory('s2a', [makeTask(40, 'rt-dev', 'Dev')], 0),
+      makeStory('s2b', [makeTask(40, 'rt-dev', 'Dev')], 1),
+    ])
+    const epic = makeEpic('ep1', [f1, f2], { featureMode: 'parallel' })
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [dev] }))
+
+    // Both features start at week 0 (parallel)
+    const entry1 = result.featureSchedule.find(e => e.featureId === 'f1')!
+    const entry2 = result.featureSchedule.find(e => e.featureId === 'f2')!
+    expect(entry1.startWeek).toBe(0)
+    expect(entry2.startWeek).toBe(0)
+    // Parallel demand floor: total demand = 160h = 20 person-days over 1 Dev (5d/wk)
+    // MinSpan = 20/5 = 4 weeks. Feature duration = max(2, 4) = 4 weeks.
+    expect(entry1.durationWeeks).toBeCloseTo(4, 1)
+    expect(entry2.durationWeeks).toBeCloseTo(4, 1)
+  })
+
+  it('resource levelling preserves story-phase ordering with capacity contention', () => {
+    // Two features sharing one Dev (count=1), each with story phases
+    // Feature 1: story1 (80 Dev hours = 2 weeks), story2 (80 Dev hours = 2 weeks)
+    // Feature 2: story1 (40 Dev hours = 1 week), story2 (40 Dev hours = 1 week)
+    // With resourceLevel=true, features compete for capacity
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+
+    const f1 = makeFeature('f1', [
+      makeStory('f1s1', [makeTask(80, 'rt-dev', 'Dev')], 0),
+      makeStory('f1s2', [makeTask(80, 'rt-dev', 'Dev')], 1),
+    ])
+    const f2 = makeFeature('f2', [
+      makeStory('f2s1', [makeTask(40, 'rt-dev', 'Dev')], 0),
+      makeStory('f2s2', [makeTask(40, 'rt-dev', 'Dev')], 1),
+    ])
+    const epic = makeEpic('ep1', [f1, f2])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      resourceLevel: true,
+    }))
+
+    const f1s1 = result.storySchedule.find(s => s.storyId === 'f1s1')!
+    const f1s2 = result.storySchedule.find(s => s.storyId === 'f1s2')!
+    const f2s1 = result.storySchedule.find(s => s.storyId === 'f2s1')!
+    const f2s2 = result.storySchedule.find(s => s.storyId === 'f2s2')!
+
+    // Each feature's stories are sequential (start week increases)
+    expect(f1s2.startWeek).toBeGreaterThanOrEqual(f1s1.startWeek + f1s1.durationWeeks - 0.01)
+    expect(f2s2.startWeek).toBeGreaterThanOrEqual(f2s1.startWeek + f2s1.durationWeeks - 0.01)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Parallel demand floor tests
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -404,20 +404,21 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
   }
 
   // ── Helper: duration in weeks for a feature ───────────────────────────────
-  function featureDurationWeeks(feature: typeof allFeatures[0]): number {
-    const allTasks = feature.userStories.filter(s => s.isActive !== false).flatMap(s => s.tasks)
-    if (allTasks.length === 0) return 1
+  // ── Helper: story-phase bottleneck duration ─────────────────────────────
+  function storyBottleneckWeeks(story: SchedulerStory): number {
+    const tasks = story.tasks
+    if (tasks.length === 0) return 0.2
 
-    const byRt = new Map<string | null, typeof allTasks>()
-    for (const task of allTasks) {
+    const byRt = new Map<string | null, typeof tasks>()
+    for (const task of tasks) {
       const group = byRt.get(task.resourceTypeId) ?? []
       group.push(task)
       byRt.set(task.resourceTypeId, group)
     }
 
     let maxDays = 0
-    for (const [rtId, tasks] of byRt) {
-      const personDays = tasks.reduce((sum, t) => {
+    for (const [rtId, rtTasks] of byRt) {
+      const personDays = rtTasks.reduce((sum, t) => {
         const hpd = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
         return sum + effectiveDays(t.durationDays, t.hoursEffort, hpd)
       }, 0)
@@ -425,14 +426,26 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       const days = personDays / count
       if (days > maxDays) maxDays = days
     }
-    const individualResult = Math.max(0.2, maxDays / 5)
+    return Math.max(0.2, maxDays / 5)
+  }
 
+  function storyPhaseSchedule(feature: typeof allFeatures[0]): Array<{ storyId: string; weeks: number }> {
+    const activeStories = feature.userStories.filter(s => s.isActive !== false)
+    const sorted = [...activeStories].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    return sorted.map(s => ({ storyId: s.id, weeks: storyBottleneckWeeks(s) }))
+  }
+
+  // ── Helper: duration in weeks for a feature (sequential story phases) ──
+  function featureDurationWeeks(feature: typeof allFeatures[0]): number {
+    const phases = storyPhaseSchedule(feature)
+    if (phases.length === 0) return 1
+    const total = phases.reduce((sum, p) => sum + p.weeks, 0)
     // Apply parallel demand floor if this feature belongs to a parallel epic
     const floor = parallelEpicMinSpan.get(feature.epic.id)
     if (floor !== undefined) {
-      return Math.max(individualResult, floor)
+      return Math.max(total, floor)
     }
-    return individualResult
+    return total
   }
 
   // ── Kahn's topological sort over features ─────────────────────────────────
@@ -613,10 +626,40 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
     const allRtIds = [...resourceTypes.map(rt => rt.id), '_unassigned']
 
+    // Story-phase tracking for per-story sequential demand exposure within
+    // each feature.  Only the current story's resource demand is eligible
+    // for capacity allocation; when all demand for the current story is
+    // consumed, the next story phase begins.
+    const storyPhases = new Map<string, Array<{ storyId: string; byRt: Map<string, number> }>>()
+    const currentStoryIdx = new Map<string, number>()
+
+    function advanceToNextStory(fId: string): boolean {
+      const phases = storyPhases.get(fId)!
+      const idx = (currentStoryIdx.get(fId) ?? -1) + 1
+      if (idx >= phases.length) return false
+      currentStoryIdx.set(fId, idx)
+      remainingHours.set(fId, new Map(phases[idx].byRt))
+      return true
+    }
+
     const remainingHours = new Map<string, Map<string, number>>()
     for (const fId of processed) {
       if (manualStartWeeks.has(fId)) continue
-      remainingHours.set(fId, new Map(featureResourceHoursCache.get(fId)!))
+      const f = featureMap.get(fId)!
+      const activeStories = f.userStories.filter(s => s.isActive !== false)
+      const sorted = [...activeStories].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      const phases = sorted.map(s => {
+        const byRt = new Map<string, number>()
+        for (const task of s.tasks) {
+          const rtId = task.resourceTypeId ?? '_unassigned'
+          const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+          const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
+          byRt.set(rtId, (byRt.get(rtId) ?? 0) + hours)
+        }
+        return { storyId: s.id, byRt }
+      })
+      storyPhases.set(fId, phases)
+      advanceToNextStory(fId)
     }
 
     const simStart = new Map<string, number>()
@@ -658,7 +701,6 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
           simStart.set(fId, t)
         }
       }
-
       const active = [...unfinished].filter(fId => simStart.has(fId))
 
       const currentWeek = Math.floor(t)
@@ -682,14 +724,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
 
       if (active.length === 0) { t += STEP; continue }
 
-      for (const fId of active) {
-        if (remainingHours.get(fId)?.size === 0) {
-          if (!simDone.has(fId)) {
-            simDone.set(fId, t + STEP)
-            unfinished.delete(fId)
-          }
-        }
-      }
+      // (size-zero handled by the all-values-zero check below with story advance)
 
       for (const rtId of allRtIds) {
         const rt = rtById.get(rtId)
@@ -741,8 +776,11 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       for (const fId of active) {
         const allDone = [...(remainingHours.get(fId)?.values() ?? [])].every(h => h <= 0.001)
         if (allDone) {
-          simDone.set(fId, t + STEP)
-          unfinished.delete(fId)
+          // Current story phase consumed — advance to next, or mark feature done
+          if (!advanceToNextStory(fId)) {
+            simDone.set(fId, t + STEP)
+            unfinished.delete(fId)
+          }
         }
       }
 
@@ -796,7 +834,11 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     }
   }
 
-  // Pass 2: proportional sequential scheduling per feature
+  // Pass 2: story-phase sequential scheduling per feature.
+  // Uses bottleneck-phase durations (not total hours) so story bars reflect
+  // the actual sequential task-phases rather than a proportional split.
+  // For levelled schedules the phase durations scale to fill the levelled
+  // feature span; for non-levelled schedules the phases stack directly.
   const storiesByFeature = new Map<string, typeof allStories>()
   for (const story of allStories) {
     const fId = story.feature.id
@@ -809,20 +851,21 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
 
   for (const [fId, stories] of storiesByFeature) {
     const featureStart = startWeeks.get(fId) ?? 0
-    const featureDone = finishWeeks.get(fId) ?? (featureStart + 1)
-    const featureDuration = Math.max(0.2, featureDone - featureStart)
+    const featureDuration = Math.max(0.2, (finishWeeks.get(fId) ?? featureStart + 1) - featureStart)
+
+    const f = featureMap.get(fId)!
+    const phases = storyPhaseSchedule(f)
+    const totalPhaseWeeks = phases.reduce((sum, p) => sum + p.weeks, 0)
+    const scale = totalPhaseWeeks > 0 ? featureDuration / totalPhaseWeeks : 1
 
     const siblings = stories.filter(s => !manualStoryWeeks.has(s.id))
     if (siblings.length === 0) continue
 
-    const totalFeatureHours = siblings.reduce((sum, s) => sum + storyTotalHours(s), 0)
-
     let cursor = featureStart
     for (const sibling of siblings) {
-      const hrs = storyTotalHours(sibling)
-      const dur = totalFeatureHours > 0
-        ? (hrs / totalFeatureHours) * featureDuration
-        : featureDuration / Math.max(1, siblings.length)
+      const phase = phases.find(p => p.storyId === sibling.id)
+      const phaseWeeks = phase?.weeks ?? 0.2
+      const dur = phaseWeeks * scale
       const safeDur = Math.max(0.2, dur)
       storyScheduled.set(sibling.id, { startWeek: cursor, durationWeeks: safeDur, isManual: false })
       cursor += safeDur

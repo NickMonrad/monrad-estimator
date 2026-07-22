@@ -397,9 +397,8 @@ describe('buildFallbackWeeklyDemand', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // mergeWeeklyDemand
 // ─────────────────────────────────────────────────────────────────────────────
-
 describe('mergeWeeklyDemand', () => {
-  it('uses simulated demand for cached RT within horizon, fallback beyond', () => {
+  it('suppresses all fallback when resource type has any cached demand', () => {
     const fallback = [
       { week: 0, resourceTypeName: 'Dev', demandDays: 2, capacityDays: 10 },
       { week: 1, resourceTypeName: 'Dev', demandDays: 2, capacityDays: 10 },
@@ -407,17 +406,15 @@ describe('mergeWeeklyDemand', () => {
       { week: 3, resourceTypeName: 'Dev', demandDays: 2, capacityDays: 10 },
     ]
     const simulated = new Map<string, number>([
-      ['Dev|0', 5],
-      ['Dev|1', 5],
+      ['Dev|0', 4],
+      ['Dev|1', 4],
     ])
+    // Cached RT → all fallback suppressed, even weeks past the cached horizon
     const result = mergeWeeklyDemand(fallback, simulated)
-    // Cache covers weeks 0-1 (max week 1), so fallback for those weeks is suppressed
-    // Week 0,1 use simulated (5 each), weeks 2,3 use fallback (2 each)
-    expect(result).toHaveLength(4)
-    expect(result.find(r => r.week === 0)?.demandDays).toBe(5)
-    expect(result.find(r => r.week === 1)?.demandDays).toBe(5)
-    expect(result.find(r => r.week === 2)?.demandDays).toBe(2)
-    expect(result.find(r => r.week === 3)?.demandDays).toBe(2)
+    expect(result.find(r => r.week === 0)?.demandDays).toBe(4)
+    expect(result.find(r => r.week === 1)?.demandDays).toBe(4)
+    expect(result.find(r => r.week === 2)).toBeUndefined()
+    expect(result.find(r => r.week === 3)).toBeUndefined()
   })
 
   it('suppresses fallback for cached RT weeks even when simulated has gaps', () => {
@@ -457,20 +454,18 @@ describe('mergeWeeklyDemand', () => {
     // Only Dev has cached demand
     const simulated = new Map<string, number>([['Dev|0', 5]])
     const result = mergeWeeklyDemand(fallback, simulated)
-    // Dev week 0 uses simulated (5), Dev week 1 uses fallback (2), QA week 0 uses fallback (1)
+    // Dev has cached demand → all Dev fallback suppressed, even week 1 (past cached horizon)
+    // QA has no cached demand → QA fallback week 0 is retained
     expect(result.find(r => r.week === 0 && r.resourceTypeName === 'Dev')?.demandDays).toBe(5)
-    expect(result.find(r => r.week === 1 && r.resourceTypeName === 'Dev')?.demandDays).toBe(2)
+    expect(result.find(r => r.week === 1 && r.resourceTypeName === 'Dev')).toBeUndefined()
     expect(result.find(r => r.week === 0 && r.resourceTypeName === 'QA')?.demandDays).toBe(1)
   })
-
   it('filters out zero-demand rows', () => {
     const fallback: Array<{ week: number; resourceTypeName: string; demandDays: number; capacityDays: number }> = []
     const simulated = new Map<string, number>([
-      ['Dev|0', -1], // negative should be filtered... actually checked as demandDays <= 0 after rounding
+      ['Dev|0', -1],
     ])
     const result = mergeWeeklyDemand(fallback, simulated)
-    // -1 rounds to -1, so it passes the demandDays > 0 filter...
-    // Actually Math.round(-1*100)/100 = -1, which is not > 0, so it's filtered
     expect(result).toHaveLength(0)
   })
 })
@@ -558,15 +553,16 @@ describe('weekly demand integration', () => {
     expect(fallback).toHaveLength(4)
     expect(fallback[0].demandDays).toBe(2)
 
-    // Merge with cached demand (simulated replaces weeks 0-1)
+    // Merge with cached demand (simulated replaces ALL Dev demand)
     const simulated = new Map<string, number>([
       ['Developer|0', 4],
       ['Developer|1', 4],
     ])
     const merged = mergeWeeklyDemand(fallback, simulated)
-    expect(merged).toHaveLength(4)
+    // Only the 2 cached weeks survive; fallback weeks 2-3 are suppressed
+    expect(merged).toHaveLength(2)
     expect(merged.find(r => r.week === 0)?.demandDays).toBe(4)
-    expect(merged.find(r => r.week === 2)?.demandDays).toBe(2)
+    expect(merged.find(r => r.week === 2)).toBeUndefined()
   })
 })
 
