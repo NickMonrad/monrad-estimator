@@ -710,10 +710,12 @@ describeIf('Pre-#361 ownership integrity tests', () => {
       const controlClient = await pool.connect()
       const writerClient = await pool.connect()
       try {
-        // Phase 1: Control connection acquires the advisory lock.
-        // Repair will hit the trigger and block waiting for this lock.
-        await controlClient.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_ID])
-
+        // Phase 1: Control connection acquires a session-scoped advisory lock.
+        // Repair's DELETE trigger calls pg_advisory_xact_lock() which blocks
+        // on the same advisory ID until we explicitly release it.
+        // Using session-scoped pg_advisory_lock() ensures the lock persists
+        // across individual query() calls on controlClient.
+        await controlClient.query('SELECT pg_advisory_lock($1)', [ADVISORY_LOCK_ID])
         // Phase 2: Start repair — it acquires EXCLUSIVE table locks,
         // then when it tries to DELETE a duplicate, the trigger fires and blocks.
         const repairPromise = repairIdenticalDuplicates(prisma, report)

@@ -621,8 +621,12 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     const cpPlannedScalarId = await createProfile(srcProjectId, crypto.randomUUID(), 'PLANNED_RESOURCE', null, nrJaneId,
       { planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'SQUAD_PLANNER', startWeek: 0, endWeek: 10, defaultPercent: 80 })
     await createSegment(cpPlannedScalarId, crypto.randomUUID(), 0, 10, 80, 'MANUAL')
-    // ROLE — DB_NULL legacy (Prisma.DbNull)
-    const cpDbNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    // DB_NULL legacy — must use a unique owner FK due to #361 constraints
+    const cpDbNullNrId = crypto.randomUUID()
+    await prisma.namedResource.create({
+      data: { id: cpDbNullNrId, name: 'Temp Clone dbnull', resourceTypeId: rtEngId },
+    })
+    const cpDbNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, cpDbNullNrId,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       Prisma.DbNull)
     await createSegment(cpDbNullId, crypto.randomUUID(), 0, 5, 30, 'MANUAL')
@@ -1644,6 +1648,16 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
     // resourceTypeId AND namedResourceId (both FK-references exist, so SQL FK
     // constraints pass, but production clone handler rejects ROLE profiles with
     // non-null namedResourceId — this triggers a mid-transaction throw).
+    // The #361 CHECK constraints and partial unique indexes prevent this
+    // mutation — drop them temporarily for the deliberate corruption.
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"',
+    )
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_owner_kind_fk"',
+    )
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"')
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"')
     await prisma.$executeRaw(Prisma.sql`
       UPDATE "CapacityProfile"
       SET "namedResourceId" = ${nrBobId}
