@@ -614,6 +614,39 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
 
   // ── Resource-levelling simulation ─────────────────────────────────────────
   const weeklyConsumptionMap = new Map<string, number>()
+  const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
+
+  // Pre-compute pinned story resource demand for inclusion in weeklyConsumptionMap
+  // and capacity reservation during levelling. Pinned stories are excluded from
+  // automatic story phases but their demand must be represented.
+  const pinnedStoryDemand = new Map<string, number>()  // key: `${rtId}|${week}` → hours/week
+  for (const f of allFeatures) {
+    for (const story of f.userStories) {
+      if (!manualStoryWeeks.has(story.id)) continue
+      if (story.isActive === false) continue
+      const sw = manualStoryWeeks.get(story.id)!
+      const totalHours = story.tasks.reduce((sum, t) => {
+        const hpd = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+        return sum + effectiveDays(t.durationDays, t.hoursEffort, hpd) * hpd
+      }, 0)
+      const dur = Math.max(0.2, totalHours / fallbackHoursPerDay / 5)
+
+      for (const task of story.tasks) {
+        const rtId = task.resourceTypeId ?? '_unassigned'
+        const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+        const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
+        const startW = Math.floor(sw)
+        const endWk = Math.ceil(sw + dur)
+        for (let w = startW; w < endWk; w++) {
+          const overlap = Math.min(w + 1, sw + dur) - Math.max(w, sw)
+          if (overlap <= 0) continue
+          const weeklyHours = hours * (overlap / dur)
+          const key = `${rtId}|${w}`
+          pinnedStoryDemand.set(key, (pinnedStoryDemand.get(key) ?? 0) + weeklyHours)
+        }
+      }
+    }
+  }
 
   if (resourceLevel) {
     function featureResourceHours(feature: typeof allFeatures[0]): Map<string, number> {
@@ -635,7 +668,6 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       featureResourceHoursCache.set(fId, featureResourceHours(featureMap.get(fId)!))
     }
 
-    const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
     const allRtIds = [...resourceTypes.map(rt => rt.id), '_unassigned']
 
     // Story-phase tracking for per-story sequential demand exposure within
@@ -766,6 +798,17 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
             }
           }
         }
+        // Subtract pinned story demand from available capacity and record it.
+        // Pinned demand is spread uniformly across all steps in each week.
+        const pinnedWeeklyHours = pinnedStoryDemand.get(`${rtId}|${currentWeek}`) ?? 0
+        if (pinnedWeeklyHours > 0) {
+          const pinnedStepHours = pinnedWeeklyHours * STEP
+          capPerStep = Math.max(0, capPerStep - pinnedStepHours)
+          weeklyConsumptionMap.set(
+            `${rtId}|${currentWeek}`,
+            (weeklyConsumptionMap.get(`${rtId}|${currentWeek}`) ?? 0) + pinnedStepHours / hpd,
+          )
+        }
         const competing = active.filter(fId => (remainingHours.get(fId)?.get(rtId) ?? 0) > 0.001)
         if (competing.length === 0) continue
 
@@ -801,7 +844,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
           if (phases) {
             const prevIdx = currentStoryIdx.get(fId) ?? 0
             if (prevIdx < phases.length) {
-              storyPhaseDone.set(phases[prevIdx].storyId, t)
+              storyPhaseDone.set(phases[prevIdx].storyId, t + STEP)
             }
           }
           // Advance to next story phase or mark feature done
@@ -813,7 +856,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
             const phases = storyPhases.get(fId)!
             const nextIdx = currentStoryIdx.get(fId) ?? 0
             if (nextIdx < phases.length) {
-              storyPhaseStart.set(phases[nextIdx].storyId, t)
+              storyPhaseStart.set(phases[nextIdx].storyId, t + STEP)
             }
           }
         }
@@ -841,6 +884,16 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       const dur = doneW !== undefined ? doneW - sw : featureDurationWeeks(featureMap.get(fId)!)
       startWeeks.set(fId, sw)
       finishWeeks.set(fId, sw + dur)
+    }
+  }
+
+  // Add pinned story demand to weeklyConsumptionMap for weeks not already
+  // represented (the simulation loop already adds these for the levelled path).
+  for (const [key, weeklyHours] of pinnedStoryDemand) {
+    if (!weeklyConsumptionMap.has(key)) {
+      const [rtId] = key.split('|')
+      const hpd = rtById.get(rtId)?.hoursPerDay ?? fallbackHoursPerDay
+      weeklyConsumptionMap.set(key, Math.round(weeklyHours / hpd * 100) / 100)
     }
   }
 
