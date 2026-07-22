@@ -390,10 +390,51 @@ export function redactError(error, prefix = 'Database operation failed') {
   return new Error(`${prefix}: ${redacted}`)
 }
 
+// Exact #361 migration folder name — excluded from pre-#361 deployment so that
+// suites written before the #361 constraints can still create their test data.
+const MIGRATION_361_NAME = '20260721000001_enforce_capacity_profile_ownership_invariants'
+
 export async function preparePrisma({ root, env, run = runCommand, signal }) {
   const serverDir = path.join(root, 'server')
-  await run('npx', ['prisma', 'migrate', 'deploy'], { cwd: serverDir, env, signal })
-  await run('npx', ['prisma', 'generate'], { cwd: serverDir, env, signal })
+  const tmpDir = path.join(serverDir, '.tmp-prepare-prisma-' + crypto.randomUUID())
+  const migDir = path.join(tmpDir, 'migrations')
+  await fs.promises.mkdir(migDir, { recursive: true })
+  const migrationsDir = path.join(serverDir, 'prisma/migrations')
+  const allMigrations = await fs.promises.readdir(migrationsDir)
+  const isMeta = new Set(['migration_lock.toml'])
+  for (const m of allMigrations) {
+    if (m === MIGRATION_361_NAME) continue
+    if (isMeta.has(m)) continue
+    const src = path.join(migrationsDir, m)
+    const dst = path.join(migDir, m)
+    const stat = await fs.promises.stat(src).catch(() => null)
+    if (stat?.isDirectory()) {
+      await fs.promises.cp(src, dst, { recursive: true })
+    }
+  }
+  const schemaContent = await fs.promises.readFile(
+    path.join(serverDir, 'prisma/schema.prisma'), 'utf-8',
+  )
+  const tmpSchema = path.join(tmpDir, 'schema.prisma')
+  await fs.promises.writeFile(tmpSchema, schemaContent, 'utf-8')
+
+  const tmpConfig = path.join(tmpDir, 'prisma.config.ts')
+  const configContent = [
+    'import { defineConfig } from "prisma/config"',
+    'export default defineConfig({',
+    '  schema: "' + tmpSchema.replace(/\\/g, '\\\\') + '",',
+    '  migrations: { path: "' + migDir.replace(/\\/g, '\\\\') + '" },',
+    '  datasource: { url: process.env["DATABASE_URL"] },',
+    '})',
+  ].join('\n')
+  await fs.promises.writeFile(tmpConfig, configContent, 'utf-8')
+
+  try {
+    await run('npx', ['prisma', 'migrate', 'deploy', '--config', tmpConfig], { cwd: serverDir, env, signal })
+    await run('npx', ['prisma', 'generate'], { cwd: serverDir, env, signal })
+  } finally {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  }
 }
 
 export async function startDockerPostgres({ run = dockerCommand, random = crypto.randomUUID(), waitForPort, environment = process.env, signal } = {}) {
