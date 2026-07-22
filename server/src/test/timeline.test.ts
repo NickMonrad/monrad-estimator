@@ -408,7 +408,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
     ]))
   })
 
-  it('backfills weeklyDemand beyond cached horizon from scheduled entries', async () => {
+  it('suppresses all fallback when resource type has any cached data, regardless of horizon', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,
       weeklyDemandCache: {
@@ -463,16 +463,15 @@ describe('GET /api/projects/:projectId/timeline', () => {
 
     expect(res.status).toBe(200)
 
+    // Developer has cached data (week 0) → all Developer fallback suppressed,
+    // including weeks 60-70 from the long-tail entry
     const developerDemand = res.body.weeklyDemand.filter((row: any) => row.resourceTypeName === 'Developer')
-    const weeks = developerDemand.map((row: any) => row.week)
-    const uniqueKeys = new Set(developerDemand.map((row: any) => `${row.week}|${row.resourceTypeName}`))
-
-    expect(weeks).toContain(65)
-    expect(weeks).toContain(69)
-    expect(uniqueKeys.size).toBe(developerDemand.length)
+    expect(developerDemand).toHaveLength(1)
+    expect(developerDemand[0].week).toBe(0)
+    expect(developerDemand[0].demandDays).toBe(1.25)
   })
 
-  it('does not backfill a missing interior cached week, but still backfills beyond the cached horizon', async () => {
+  it('suppresses all fallback when resource type has cached data, including weeks beyond cached horizon', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,
       weeklyDemandCache: {
@@ -532,14 +531,14 @@ describe('GET /api/projects/:projectId/timeline', () => {
       .filter((row: any) => row.resourceTypeName === 'Developer')
       .reduce((acc: Record<number, number>, row: any) => ({ ...acc, [row.week]: row.demandDays }), {})
 
+    // Developer has cache → all fallback suppressed. Only cached weeks survive.
     expect(developerDemand[55]).toBe(2.5)
     expect(developerDemand[56]).toBeUndefined()
     expect(developerDemand[57]).toBe(2.5)
-    expect(developerDemand[58]).toBe(5)
-    expect(developerDemand[59]).toBe(5)
+    expect(developerDemand[58]).toBeUndefined()
+    expect(developerDemand[59]).toBeUndefined()
   })
-
-  it('uses per-resource-type cached horizon: cached demand suppresses fallback only for the same RT within its own cache range', async () => {
+  it('suppresses all fallback when resource type has any cached data: Security only in cache weeks', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...mockProject,
       weeklyDemandCache: {
@@ -647,14 +646,15 @@ describe('GET /api/projects/:projectId/timeline', () => {
       .filter((row: any) => row.resourceTypeName === 'Principal Consultant - Security')
       .reduce((acc: Record<number, number>, row: any) => ({ ...acc, [row.week]: row.demandDays }), {})
 
-    // Security is only cached for weeks 10-11, so fallback re-emerges at week 12
+    // Security has cached data (weeks 10-11) → all Security fallback suppressed.
+    // Only cached weeks survive; weeks 12-16 are absent (no fallback re-emergence).
     expect(securityDemand[10]).toBe(2.5)
     expect(securityDemand[11]).toBe(2.5)
-    expect(securityDemand[12]).toBe(5)
-    expect(securityDemand[13]).toBe(5)
-    expect(securityDemand[14]).toBe(5)
-    expect(securityDemand[15]).toBe(5)
-    expect(securityDemand[16]).toBe(5)
+    expect(securityDemand[12]).toBeUndefined()
+    expect(securityDemand[13]).toBeUndefined()
+    expect(securityDemand[14]).toBeUndefined()
+    expect(securityDemand[15]).toBeUndefined()
+    expect(securityDemand[16]).toBeUndefined()
   })
 
   it('uses materialized CAPACITY_PLAN split capacity for parallel warnings', async () => {

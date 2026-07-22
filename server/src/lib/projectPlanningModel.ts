@@ -427,10 +427,11 @@ export function mergeWeeklyDemand(
 
   for (const row of fallbackDemand) {
     const hasCached = cachedResourceTypes.has(row.resourceTypeName)
-    if (hasCached) {
-      const rtMaxWeek = cachedMaxWeekByRt.get(row.resourceTypeName)
-      if (rtMaxWeek != null && row.week <= rtMaxWeek) continue
-    }
+    // If a resource type has any cached scheduler demand, suppress every
+    // fallback row for that resource type across the entire horizon.
+    // This prevents duplicated demand from fallback rows after the final
+    // cached week.
+    if (hasCached) continue
     mergedDemand.set(weeklyDemandKey(row.week, row.resourceTypeName), row)
   }
 

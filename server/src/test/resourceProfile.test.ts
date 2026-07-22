@@ -741,7 +741,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     ])
   })
 
-  it('uses per-resource-type cached horizon: fallback re-emerges for an RT after its own cache max week, even when another RT has a longer horizon', async () => {
+  it('suppresses all fallback when resource type has any cached data, regardless of horizon', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       id: 'proj-1',
       ownerId: userId,
@@ -861,13 +861,11 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
 
     const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
     const qaRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-qa')
-
-    // Developer is cached for weeks 0-1, so fallback at week 0-1 is suppressed
+    // Developer is cached for weeks 0-1, so all Dev fallback suppressed
     expect(devRow.namedResources[0].actualAllocatedWeeks.map((w: any) => w.week)).toEqual([0, 1])
 
-    // QA is only cached for week 0, so fallback at week 1 is NOT suppressed
-    // (per-RT max is 0, so week 1 > 0 and fallback re-emerges)
-    expect(qaRow.namedResources[0].actualAllocatedWeeks.map((w: any) => w.week)).toEqual([0, 1])
+    // QA is only cached for week 0 — all QA fallback suppressed, so QA only appears for week 0
+    expect(qaRow.namedResources[0].actualAllocatedWeeks.map((w: any) => w.week)).toEqual([0])
   })
 
   it('does not cross-bind actual allocations when named resources share the same name', async () => {
