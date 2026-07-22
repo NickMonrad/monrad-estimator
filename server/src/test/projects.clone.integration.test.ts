@@ -621,42 +621,53 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     const cpPlannedScalarId = await createProfile(srcProjectId, crypto.randomUUID(), 'PLANNED_RESOURCE', null, nrJaneId,
       { planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'SQUAD_PLANNER', startWeek: 0, endWeek: 10, defaultPercent: 80 })
     await createSegment(cpPlannedScalarId, crypto.randomUUID(), 0, 10, 80, 'MANUAL')
-
-    // ROLE — DB_NULL legacy (Prisma.DbNull)
-    const cpDbNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    // DB_NULL legacy — must use a unique owner FK due to #361 constraints
+    const cpDbNullNrId = crypto.randomUUID()
+    await prisma.namedResource.create({
+      data: { id: cpDbNullNrId, name: 'Temp Clone dbnull', resourceTypeId: rtEngId },
+    })
+    const cpDbNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, cpDbNullNrId,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       Prisma.DbNull)
     await createSegment(cpDbNullId, crypto.randomUUID(), 0, 5, 30, 'MANUAL')
 
-    // ROLE — JSON null legacy (Prisma.JsonNull)
-    const cpJsonNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    // Additional JSON legacy profiles must use unique owner FKs due to #361 constraints.
+    // Create unique named resources under rtEngId for NAMED_PERSON profiles.
+    const makeTempNr = async (suffix: string) => {
+      const id = crypto.randomUUID()
+      await prisma.namedResource.create({
+        data: { id, name: `Temp Clone ${suffix}`, resourceTypeId: rtEngId },
+      })
+      return id
+    }
+
+    // ROLE — JSON null legacy
+    await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('jsonnull'),
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       Prisma.JsonNull)
-    await createSegment(cpJsonNullId, crypto.randomUUID(), 0, 5, 40, 'MANUAL')
 
-    // ROLE — complex legacy values (object with nested null + null-containing array)
-    const cpComplexLegacyId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    // ROLE — complex legacy values
+    await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('complex'),
       { planningBasis: 'DEMAND_FOLLOWING', source: 'IMPORTED' },
       { nestedField: { inner: null }, items: [1, null, 'hello'], flag: true, count: 42, label: 'test-value' })
-    await createSegment(cpComplexLegacyId, crypto.randomUUID(), 2, 6, 60, 'LEGACY')
 
     // ROLE — top-level array containing null
-    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('arrnull'),
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       [null, 'item', 3])
 
     // ROLE — string legacy value
-    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtGovId, null,
+    await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('string'),
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       'plain-string-value')
 
     // ROLE — finite number legacy value
-    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('number'),
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       42)
 
     // ROLE — boolean legacy value
-    await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtGovId, null,
+    await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('bool'),
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
       true)
 
@@ -1608,7 +1619,7 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
   let srcProjectId: string
   let rtEngId: string
   let nrBobId: string
-
+  let cpRoleId: string
   beforeAll(async () => {
     if (!runIntegration) return
 
@@ -1619,7 +1630,7 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
       { pricingModel: 'ACTUAL_DAYS', allocationPct: 100 })
 
     // Create a valid ROLE capacity profile (FK-safe: has resourceTypeId, no namedResourceId)
-    const cpRoleId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    cpRoleId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', startWeek: 0, endWeek: 10, defaultPercent: 100 })
     await createSegment(cpRoleId, crypto.randomUUID(), 0, 10, 100, 'MANUAL')
 
@@ -1637,6 +1648,16 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
     // resourceTypeId AND namedResourceId (both FK-references exist, so SQL FK
     // constraints pass, but production clone handler rejects ROLE profiles with
     // non-null namedResourceId — this triggers a mid-transaction throw).
+    // The #361 CHECK constraints and partial unique indexes prevent this
+    // mutation — drop them temporarily for the deliberate corruption.
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"',
+    )
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_owner_kind_fk"',
+    )
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"')
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"')
     await prisma.$executeRaw(Prisma.sql`
       UPDATE "CapacityProfile"
       SET "namedResourceId" = ${nrBobId}
@@ -1644,6 +1665,41 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
     `)
   })
 
+
+  afterAll(async () => {
+    if (!runIntegration) return
+    await prisma.$executeRaw(Prisma.sql`
+      UPDATE "CapacityProfile"
+      SET "namedResourceId" = NULL
+      WHERE id = ${cpRoleId}
+    `)
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "_prisma_migrations"
+       WHERE migration_name = '20260721000001_enforce_capacity_profile_ownership_invariants'`,
+    )
+    const { execSync } = await import('node:child_process')
+    execSync('npx prisma migrate deploy', {
+      cwd: new URL('../..', import.meta.url).pathname,
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+      stdio: 'pipe',
+    })
+    const chkRows = await prisma.$queryRaw<Array<{ name: string }>>(
+      Prisma.sql`SELECT constraint_name AS name FROM information_schema.table_constraints
+        WHERE table_name = 'CapacityProfile'
+        AND constraint_name IN ('chk_CapacityProfile_exactly_one_owner', 'chk_CapacityProfile_owner_kind_fk')`,
+    )
+    const chkNames = new Set(chkRows.map(r => r.name))
+    expect(chkNames.has('chk_CapacityProfile_exactly_one_owner')).toBe(true)
+    expect(chkNames.has('chk_CapacityProfile_owner_kind_fk')).toBe(true)
+    const idxRows = await prisma.$queryRaw<Array<{ name: string }>>(
+      Prisma.sql`SELECT indexname AS name FROM pg_indexes
+        WHERE tablename = 'CapacityProfile'
+        AND indexname IN ('CapacityProfile_resourceTypeId_key', 'CapacityProfile_namedResourceId_key')`,
+    )
+    const idxNames = new Set(idxRows.map(r => r.name))
+    expect(idxNames.has('CapacityProfile_resourceTypeId_key')).toBe(true)
+    expect(idxNames.has('CapacityProfile_namedResourceId_key')).toBe(true)
+  })
   it('C1 — clone returns 500 when profile owner shape is invalid', async () => {
     const res = await request(app)
       .post(`/api/projects/${srcProjectId}/clone`)

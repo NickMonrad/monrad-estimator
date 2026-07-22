@@ -389,7 +389,6 @@ export function redactError(error, prefix = 'Database operation failed') {
   redacted = redacted.replace(/([?&])password=([^&\s]*)/gi, '$1password=***')
   return new Error(`${prefix}: ${redacted}`)
 }
-
 export async function preparePrisma({ root, env, run = runCommand, signal }) {
   const serverDir = path.join(root, 'server')
   await run('npx', ['prisma', 'migrate', 'deploy'], { cwd: serverDir, env, signal })

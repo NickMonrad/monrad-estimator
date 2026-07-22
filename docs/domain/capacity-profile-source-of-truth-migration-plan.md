@@ -965,3 +965,117 @@ are already done from PR #356 — focus on `scheduler.ts`, `timeline.ts`,
 The `assertCapacityNotProtected` guard runs before any write in named-resource PUT and PATCH routes. This ensures that segmented and `capacityProfile`-type profiles cannot be flattened through scalar capacity updates even before the migration to full profile-first writes is complete.
 
 Rejected requests return HTTP 409 with `code: PROFILE_MANAGED_CAPACITY` and an actionable error. The rejection is consistent between PUT and PATCH, and the transaction rolls back completely.
+
+## Upgrade and rollback (#361 — Ownership invariants)
+
+### Upgrade sequence
+
+The following sequence must be followed exactly when upgrading to the schema
+that enforces capacity-profile ownership invariants:
+
+1. **Back up the configured database:**
+   ```bash
+   npm run db:backup
+   ```
+   Confirm the command produced a non-empty timestamped dump in `backups/`.
+   Record the exact backup path.
+
+2. **Run the ownership audit (read-only):**
+   ```bash
+   npm run capacity-profiles:audit
+   ```
+   This examines every `CapacityProfile` row and reports all:
+   - invalid owner shapes (both/neither FK, ownerKind/FK mismatch)
+   - missing or cross-project owners
+   - duplicate physical owner keys
+   - identical duplicate groups eligible for automatic repair
+   - conflicting duplicate groups requiring manual resolution
+
+3. **Manually resolve invalid/conflicting groups:**
+   - Invalid owner shapes (both/neither FK, ownerKind mismatch): delete or
+     correct the malformed profile rows.
+   - Missing owners: reassign or create the referenced ResourceType or
+     NamedResource.
+   - Cross-project ownership: move the profile or its owner to the correct
+     project.
+   - Conflicting duplicates: review the authoritative state and keep the
+     correct profile; delete the outdated one.
+
+4. **Repair identical duplicates (explicit flag):**
+   ```bash
+   npm run capacity-profiles:audit:repair
+   ```
+   This deletes only redundant profiles from groups that are provably
+   semantically identical. The earliest-created profile is kept as the
+   survivor. No conflicting or invalid groups are touched.
+
+5. **Confirm a clean audit:**
+   ```bash
+   npm run capacity-profiles:audit
+   ```
+   The report must end with `Database is clean. Migration may proceed.`
+   If it does not, return to step 3.
+
+6. **Run the migration:**
+   ```bash
+   cd server && npx prisma migrate deploy
+   ```
+   (Or use the repository-supported command). The migration runs fail-closed
+   PL/pgSQL preflight checks before applying CHECK constraints and partial
+   unique indexes. If dirty data remains, the migration aborts with an
+   actionable error listing every issue.
+
+7. **Run focused validation:**
+   ```bash
+   npm run capacity-profiles:audit
+   ```
+   Confirm the report shows 0 findings and a clean database. Then run:
+   ```bash
+   npm run test:integration:local
+   ```
+   to verify all existing profile write paths remain functional.
+
+### Rollback
+
+**Schema rollback:**
+
+Roll back the constraints/indexes by dropping them manually. A follow-up
+migration (or the next schema change PR) will naturally pick up the schema
+state from the altered table. To drop only the #361 constraints while
+preserving valid data:
+```sql
+ALTER TABLE "CapacityProfile" DROP CONSTRAINT "chk_CapacityProfile_exactly_one_owner";
+ALTER TABLE "CapacityProfile" DROP CONSTRAINT "chk_CapacityProfile_owner_kind_fk";
+DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key";
+DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key";
+CREATE INDEX "CapacityProfile_resourceTypeId_idx" ON "CapacityProfile"("resourceTypeId");
+CREATE INDEX "CapacityProfile_namedResourceId_idx" ON "CapacityProfile"("namedResourceId");
+```
+
+**Data rollback:**
+
+Deleting duplicate profiles during repair is irreversible through schema
+operations. Dropping the constraints does NOT recreate deleted rows.
+
+To restore data after repair:
+1. Locate the backup path recorded in step 1.
+2. Restore the full database from that backup.
+
+> **Never run `prisma migrate reset` without explicit approval.** It destroys
+> all data and cannot recover repaired duplicates.
+
+### Important caveats
+
+- The repair operation only deletes proven identical duplicates. It never
+  merges fields, copies segments, rewrites the survivor, or touches
+  conflicting/invalid groups.
+- Identical duplicate repair is not reversible by dropping constraints.
+  Always retain the step-1 backup until the next full database backup
+  confirms the new state.
+- Cross-project owner mismatches block the migration preflight. They must
+  be resolved manually before the migration can proceed. The audit reports
+  them as errors (#361), and the migration preflight counts them toward the
+  failure threshold so they halt deployment until resolved.
+- Existing runtime duplicate and malformed-state validation in
+  `persistedCapacityProfileValidation.ts` and `syncCapacityProfiles.ts`
+  remains as defence in depth. It is not removed by this migration.

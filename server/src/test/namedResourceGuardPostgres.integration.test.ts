@@ -139,7 +139,7 @@ beforeAll(async () => {
   const segProfile = await prisma.capacityProfile.create({
     data: {
       projectId,
-      resourceTypeId: rtId,
+      resourceTypeId: null,
       namedResourceId: segNr.id,
       ownerKind: 'NAMED_PERSON',
       planningBasis: 'AVAILABILITY_WINDOW',
@@ -189,7 +189,7 @@ beforeAll(async () => {
   const capProfile = await prisma.capacityProfile.create({
     data: {
       projectId,
-      resourceTypeId: defaultRtId,
+      resourceTypeId: null,
       namedResourceId: capNr.id,
       ownerKind: 'NAMED_PERSON',
       planningBasis: 'CAPACITY_PROFILE',
@@ -221,7 +221,7 @@ beforeAll(async () => {
   const scalarProfile = await prisma.capacityProfile.create({
     data: {
       projectId,
-      resourceTypeId: rtId,
+      resourceTypeId: null,
       namedResourceId: scalarNr.id,
       ownerKind: 'NAMED_PERSON',
       planningBasis: 'AVAILABILITY_WINDOW',

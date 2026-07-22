@@ -20,6 +20,11 @@
     "capacity-profiles:backfill": "tsx src/scripts/backfillCapacityProfiles.ts",
     "capacity-profiles:backfill:dry-run": "tsx src/scripts/backfillCapacityProfiles.ts --dry-run",
     "capacity-profiles:reconcile": "tsx src/scripts/backfillCapacityProfiles.ts --reconcile-only",
+    "capacity-profiles:audit": "tsx src/scripts/auditCapacityProfileOwnership.ts",
+    "capacity-profiles:audit:json": "tsx src/scripts/auditCapacityProfileOwnership.ts --json",
+    "capacity-profiles:audit:repair": "tsx src/scripts/auditCapacityProfileOwnership.ts --repair-identical",
+    "capacity-profiles:audit:repair:json": "tsx src/scripts/auditCapacityProfileOwnership.ts --repair-identical --json",
+    "test:ownership-invariants-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileOwnershipInvariants.integration.test.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {

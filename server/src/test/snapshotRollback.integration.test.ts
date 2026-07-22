@@ -992,14 +992,15 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       where: { capacityProfileId: profilePlannedId },
     })
     await prisma.capacityProfile.delete({ where: { id: profilePlannedId } })
-
-    // Create an extra profile not in the snapshot
+    // Create an extra profile not in the snapshot (use NAMED_PERSON with temp NR to avoid owner FK conflict)
+    const tempExtraNr = await createNamedResource(
+      projectId, rtDesId, 'nr-temp-extra', 'Temp Extra',
+    )
     await createProfile(
-      projectId, 'prof-extra', 'ROLE', rtDesId, null,
+      projectId, 'prof-extra', 'NAMED_PERSON', null, tempExtraNr,
       { defaultPercent: 100 },
       Prisma.DbNull,
     )
-
     // Mutate backlog: delete and create new epics
     await prisma.epic.deleteMany({ where: { projectId } })
     const newEpic = await prisma.epic.create({
@@ -2215,15 +2216,16 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
       },
       { allocationMode: 'EFFORT' },
     )
-
     // Add a PLANNED_RESOURCE that should NOT survive v2 rollback
+    // Use a separate NR to avoid owner FK conflict with prof-e-stale-nr
+    const tempPlannedNr = await createNamedResource(
+      projectId, rtId, 'nr-temp-planned', 'Temp Planned',
+    )
     await createProfile(
-      projectId, 'prof-e-planned', 'PLANNED_RESOURCE', null, nrId,
+      projectId, 'prof-e-planned', 'PLANNED_RESOURCE', null, tempPlannedNr,
       { planningBasis: 'CAPACITY_PROFILE', source: 'DERIVED' },
       Prisma.DbNull,
     )
-
-    // Build v2 snapshot from current state, downgrade schemaVersion to 2
     const v3Data = await buildSnapshot(projectId, prisma)
     const v2Data: SnapshotV2 = { ...v3Data, schemaVersion: 2 }
     v2SnapshotId = (
@@ -2250,13 +2252,12 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
     await rollbackProjectSnapshot({
       projectId, snapshotId: v2SnapshotId, userId, db: prisma,
     })
-
-    // After v2 rollback: 2 profiles (role + named), planned is removed
+    // After v2 rollback: 3 profiles (role + named + temp-planned-named), planned is removed
     const profilesAfter = await prisma.capacityProfile.findMany({
       where: { projectId },
       orderBy: { createdAt: 'asc' as const },
     })
-    expect(profilesAfter).toHaveLength(2)
+    expect(profilesAfter).toHaveLength(3)
 
     const roleProfile = profilesAfter.find(p => p.ownerKind === 'ROLE')
     const namedProfile = profilesAfter.find(p => p.ownerKind === 'NAMED_PERSON')
@@ -2388,35 +2389,53 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
       },
       { allocationMode: 'EFFORT' },
     )
-
-    // ── 6 extra ROLE profiles covering all Prisma JSON null states ──
+    // ── 6 extra profiles covering all Prisma JSON null states ──
+    // Use NAMED_PERSON with unique NRs to avoid owner FK conflicts under #361 constraints
+    const nrJsonNull = await createNamedResource(
+      projectId, rtId, 'nr-f-jsonnull', 'F JsonNull',
+    )
+    const nrObjNull = await createNamedResource(
+      projectId, rtId, 'nr-f-obj-null', 'F ObjNull',
+    )
+    const nrArrNull = await createNamedResource(
+      projectId, rtId, 'nr-f-arr-null', 'F ArrNull',
+    )
+    const nrString = await createNamedResource(
+      projectId, rtId, 'nr-f-string', 'F String',
+    )
+    const nrNumber = await createNamedResource(
+      projectId, rtId, 'nr-f-number', 'F Number',
+    )
+    const nrBool = await createNamedResource(
+      projectId, rtId, 'nr-f-bool', 'F Bool',
+    )
     profileJsonNullId = await createProfile(
-      projectId, 'prof-f-jsonnull', 'ROLE', rtId, null,
+      projectId, 'prof-f-jsonnull', 'NAMED_PERSON', null, nrJsonNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       Prisma.JsonNull,
     )
     profileObjWithNullId = await createProfile(
-      projectId, 'prof-f-obj-null', 'ROLE', rtId, null,
+      projectId, 'prof-f-obj-null', 'NAMED_PERSON', null, nrObjNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       { outer: 'value', inner: null, nested: { deep: null } },
     )
     profileArrayWithNullId = await createProfile(
-      projectId, 'prof-f-arr-null', 'ROLE', rtId, null,
+      projectId, 'prof-f-arr-null', 'NAMED_PERSON', null, nrArrNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       ['a', null, 'c'],
     )
     profileStringId = await createProfile(
-      projectId, 'prof-f-string', 'ROLE', rtId, null,
+      projectId, 'prof-f-string', 'NAMED_PERSON', null, nrString,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       'hello-legacy',
     )
     profileNumberId = await createProfile(
-      projectId, 'prof-f-number', 'ROLE', rtId, null,
+      projectId, 'prof-f-number', 'NAMED_PERSON', null, nrNumber,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       12345,
     )
     profileBooleanId = await createProfile(
-      projectId, 'prof-f-bool', 'ROLE', rtId, null,
+      projectId, 'prof-f-bool', 'NAMED_PERSON', null, nrBool,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       true,
     )
@@ -2540,8 +2559,9 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     const nrsAfter = await prisma.namedResource.findMany({
       where: { resourceType: { projectId } },
     })
-    expect(nrsAfter).toHaveLength(1)
-    expect(nrsAfter[0].id).toBe(nrId)
+    // 1 original NR + 6 temp NRs for JSON null state profiles
+    expect(nrsAfter).toHaveLength(7)
+    expect(nrsAfter.find(n => n.id === nrId)).toBeDefined()
 
     // ── Profiles/segments unchanged ────────────────────────────────
     const profilesAfter = await prisma.capacityProfile.findMany({
