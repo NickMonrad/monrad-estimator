@@ -9,6 +9,7 @@ export default defineConfig({
     env: {
       ...baseConfig.test?.env,
       INTEGRATION_TEST: 'true',
+      DATABASE_URL: process.env.DATABASE_URL ?? '',
     },
   },
 })
