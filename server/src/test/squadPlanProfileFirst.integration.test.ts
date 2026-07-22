@@ -1400,8 +1400,19 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
 
   it('detects a committed concurrent explicit owner before transaction revalidation', async () => {
     if (!runIntegration) return
+
+    // Assert the #361 named-owner unique index is installed (fail-closed).
+    const idxCheck = await prisma.$queryRaw<Array<{ exists: boolean }>>(
+      Prisma.sql`SELECT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE tablename = 'CapacityProfile' AND indexname = 'CapacityProfile_namedResourceId_key'
+      ) AS exists`,
+    )
+    expect(idxCheck[0].exists).toBe(true)
+
     // Seed one existing planner-owned profile. The seam then creates a second
-    // physical owner on the same NamedResource, which must fail closed.
+    // physical owner on the same NamedResource, which fails at the database
+    // unique constraint under #361.
     await createProfile(
       projectId,
       'cp-race-existing-planner',
@@ -1435,24 +1446,19 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
       __setPreValidationConflictSeam(null)
     }
 
-    // The conflict is the committed explicit profile, which must remain intact.
-    // Under #361 the database unique index catches the conflict before the
-    // profile insert completes; the transaction rolls back, so the profile
-    // should not exist. Pre-#361 the profile commits and the application
-    // detects it at pre-validation. Accept both outcomes.
+    // Under #361 the unique index rejects the duplicate BEFORE the profile
+    // is created; the transaction rolls back, so cp-concurrent-explicit is
+    // absent. The original planner-owned profile survives.
     const explicitProfile = await prisma.capacityProfile.findUnique({
       where: { id: 'cp-concurrent-explicit' },
     })
-    if (explicitProfile) {
-      expect(explicitProfile).toMatchObject({
-        id: 'cp-concurrent-explicit',
-        ownerKind: 'NAMED_PERSON',
-        resourceTypeId: null,
-        namedResourceId: concurrentNamedResourceId,
-        planningBasis: 'CAPACITY_PROFILE',
-        source: 'MANUAL',
-      })
-    }
+    expect(explicitProfile).toBeNull()
+    const plannerProfile = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-race-existing-planner' },
+    })
+    expect(plannerProfile).not.toBeNull()
+
+    // Only the newly created pre-apply snapshot is removed; older survives.
     const allSnapshots = await prisma.backlogSnapshot.findMany({
       where: { projectId },
       orderBy: { createdAt: 'asc' },
@@ -1460,7 +1466,7 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
     expect(allSnapshots).toHaveLength(1)
     expect(allSnapshots[0].id).toBe(olderSnapshotId)
 
-    // No partial apply writes or compatibility mutations are allowed.
+    // No partial apply writes, profiles, segments, or compatibility mutations.
     expect(await fetchActivePlanId(projectId)).toBeNull()
     expect(await prisma.capacitySegment.count({
       where: { capacityProfile: { projectId } },

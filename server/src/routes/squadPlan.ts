@@ -94,6 +94,31 @@ function isSerializationConflict(err: unknown): boolean {
     && (cause as { originalCode?: unknown }).originalCode === '40001'
 }
 
+/**
+ * Check whether a Prisma P2002 error matches one of the #361 physical-owner
+ * unique constraints on CapacityProfile (namedResourceId or resourceTypeId).
+ * Only these two targets are expected planner-race violations under #361.
+ * Unrelated P2002 errors (primary key, other model) propagate as 500.
+ *
+ * With adapter-pg (Prisma 7), P2002 meta has no `target` field. Instead the
+ * constraint identity is in `driverAdapterError.cause.originalMessage` which
+ * contains the PostgreSQL constraint name.
+ */
+function isCapacityProfileOwnerUniquenessConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false
+  if (err.code !== 'P2002') return false
+  const meta = err.meta as Record<string, unknown> | null | undefined
+  if (!meta) return false
+  if (meta.modelName !== 'CapacityProfile') return false
+  // With adapter-pg the constraint name is in driverAdapterError.cause.originalMessage.
+  const adapterErr = meta.driverAdapterError as Record<string, unknown> | undefined
+  const cause = adapterErr?.cause as Record<string, unknown> | undefined
+  if (cause && typeof cause.originalMessage === 'string') {
+    if (cause.originalMessage.includes('CapacityProfile_namedResourceId_key')) return true
+    if (cause.originalMessage.includes('CapacityProfile_resourceTypeId_key')) return true
+  }
+  return false
+}
 export function deriveFeatureSpanFromWeeklyAllocations(
   weeklyAllocations: Map<number, Map<string, number>> | undefined,
   fallbackStartWeek: number,
@@ -878,23 +903,19 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       return
     }
     if (isSerializationConflict(err)) {
-      // PostgreSQL Serializable transactions can abort on a concurrent write.
-      // The new snapshot is outside the transaction and must be cleaned up explicitly.
       if (newSnapshotId) {
         await prisma.backlogSnapshot.delete({ where: { id: newSnapshotId } }).catch(() => {
           // Snapshot may already be deleted by another path; ignore deletion failure
         })
       }
       res.status(409).json({ error: 'Concurrent planner apply detected; retry the operation.' })
+      return
     }
     // Under #361 constraints, a concurrent insert for the same physical owner
     // (resourceTypeId or namedResourceId) raises a unique-constraint violation.
-    // Treat this as a planner conflict: return 409 and clean up the snapshot.
-    if (err instanceof Prisma.PrismaClientKnownRequestError
-        && err.code === 'P2002'
-        && typeof err.meta === 'object'
-        && err.meta !== null
-        && (err.meta as Record<string, unknown>).modelName === 'CapacityProfile') {
+    // Treat ONLY the two #361 owner-uniqueness targets as planner conflicts.
+    // Unrelated P2002 errors (primary key, other model) must propagate as 500.
+    if (isCapacityProfileOwnerUniquenessConflict(err)) {
       if (newSnapshotId) {
         await prisma.backlogSnapshot.delete({ where: { id: newSnapshotId } }).catch(() => {})
       }
