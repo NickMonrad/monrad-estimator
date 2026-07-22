@@ -886,6 +886,19 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         })
       }
       res.status(409).json({ error: 'Concurrent planner apply detected; retry the operation.' })
+    }
+    // Under #361 constraints, a concurrent insert for the same physical owner
+    // (resourceTypeId or namedResourceId) raises a unique-constraint violation.
+    // Treat this as a planner conflict: return 409 and clean up the snapshot.
+    if (err instanceof Prisma.PrismaClientKnownRequestError
+        && err.code === 'P2002'
+        && typeof err.meta === 'object'
+        && err.meta !== null
+        && (err.meta as Record<string, unknown>).modelName === 'CapacityProfile') {
+      if (newSnapshotId) {
+        await prisma.backlogSnapshot.delete({ where: { id: newSnapshotId } }).catch(() => {})
+      }
+      res.status(409).json({ error: 'Concurrent planner apply detected; retry the operation.' })
       return
     }
     throw err // Unexpected errors propagate as 500

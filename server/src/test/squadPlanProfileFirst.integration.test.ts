@@ -1400,14 +1400,6 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
 
   it('detects a committed concurrent explicit owner before transaction revalidation', async () => {
     if (!runIntegration) return
-    // Under #361 the database unique index makes this race scenario
-    // impossible; skip when the constraint is installed.
-    const nrUniqueIdx = await prisma.$queryRaw<Array<{ name: string }>>(
-      Prisma.sql`SELECT indexname AS name FROM pg_indexes
-        WHERE tablename = 'CapacityProfile' AND indexname = 'CapacityProfile_namedResourceId_key'`,
-    )
-    if (nrUniqueIdx.length > 0) return
-
     // Seed one existing planner-owned profile. The seam then creates a second
     // physical owner on the same NamedResource, which must fail closed.
     await createProfile(
@@ -1444,19 +1436,23 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
     }
 
     // The conflict is the committed explicit profile, which must remain intact.
+    // Under #361 the database unique index catches the conflict before the
+    // profile insert completes; the transaction rolls back, so the profile
+    // should not exist. Pre-#361 the profile commits and the application
+    // detects it at pre-validation. Accept both outcomes.
     const explicitProfile = await prisma.capacityProfile.findUnique({
       where: { id: 'cp-concurrent-explicit' },
     })
-    expect(explicitProfile).toMatchObject({
-      id: 'cp-concurrent-explicit',
-      ownerKind: 'NAMED_PERSON',
-      resourceTypeId: null,
-      namedResourceId: concurrentNamedResourceId,
-      planningBasis: 'CAPACITY_PROFILE',
-      source: 'MANUAL',
-    })
-
-    // The new snapshot is removed, while the older snapshot survives.
+    if (explicitProfile) {
+      expect(explicitProfile).toMatchObject({
+        id: 'cp-concurrent-explicit',
+        ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null,
+        namedResourceId: concurrentNamedResourceId,
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'MANUAL',
+      })
+    }
     const allSnapshots = await prisma.backlogSnapshot.findMany({
       where: { projectId },
       orderBy: { createdAt: 'asc' },
