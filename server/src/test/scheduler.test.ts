@@ -709,11 +709,12 @@ describe('sequential story phases', () => {
     expect(entry2.durationWeeks).toBeCloseTo(4, 1)
   })
 
-  it('resource levelling preserves story-phase ordering with capacity contention', () => {
-    // Two features sharing one Dev (count=1), each with story phases
-    // Feature 1: story1 (80 Dev hours = 2 weeks), story2 (80 Dev hours = 2 weeks)
-    // Feature 2: story1 (40 Dev hours = 1 week), story2 (40 Dev hours = 1 week)
-    // With resourceLevel=true, features compete for capacity
+  it('resource levelling preserves story-phase ordering under genuine capacity contention', () => {
+    // Two features in a PARALLEL epic share one Dev (count=1).
+    // Feature 1: f1s1 (80 Dev hours = ~2 wk), f1s2 (80 Dev hours = ~2 wk)
+    // Feature 2: f2s1 (40 Dev hours = ~1 wk), f2s2 (40 Dev hours = ~1 wk)
+    // With resourceLevel=true and parallel epic, both features are eligible
+    // concurrently and compete for the same Dev capacity.
     const dev = makeRt('rt-dev', 'Dev', 1, 8)
 
     const f1 = makeFeature('f1', [
@@ -724,7 +725,7 @@ describe('sequential story phases', () => {
       makeStory('f2s1', [makeTask(40, 'rt-dev', 'Dev')], 0),
       makeStory('f2s2', [makeTask(40, 'rt-dev', 'Dev')], 1),
     ])
-    const epic = makeEpic('ep1', [f1, f2])
+    const epic = makeEpic('ep1', [f1, f2], { featureMode: 'parallel' })
     const result = runScheduler(baseInput({
       epics: [epic],
       resourceTypes: [dev],
@@ -736,9 +737,164 @@ describe('sequential story phases', () => {
     const f2s1 = result.storySchedule.find(s => s.storyId === 'f2s1')!
     const f2s2 = result.storySchedule.find(s => s.storyId === 'f2s2')!
 
+    // Both features in a parallel epic start concurrently (week 0)
+    const f1Entry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    const f2Entry = result.featureSchedule.find(e => e.featureId === 'f2')!
+    expect(f1Entry.startWeek).toBe(0)
+    expect(f2Entry.startWeek).toBe(0)
+
     // Each feature's stories are sequential (start week increases)
     expect(f1s2.startWeek).toBeGreaterThanOrEqual(f1s1.startWeek + f1s1.durationWeeks - 0.01)
     expect(f2s2.startWeek).toBeGreaterThanOrEqual(f2s1.startWeek + f2s1.durationWeeks - 0.01)
+
+    // No story from feature 2 precedes the previous phase within feature 2
+    // (intra-feature ordering is preserved regardless of inter-feature contention)
+  })
+
+  it('empty feature with one taskless story retains 1-week default', () => {
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const s1 = makeStory('s1', [], 0)
+    const f1 = makeFeature('f1', [s1])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [dev] }))
+    const entry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    expect(entry.durationWeeks).toBeCloseTo(1, 1)
+  })
+
+  it('empty feature with multiple taskless stories retains 1-week default', () => {
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const s1 = makeStory('s1', [], 0)
+    const s2 = makeStory('s2', [], 1)
+    const s3 = makeStory('s3', [], 2)
+    const f1 = makeFeature('f1', [s1, s2, s3])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [dev] }))
+    const entry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    // Number of empty stories does not stretch feature duration
+    expect(entry.durationWeeks).toBeCloseTo(1, 1)
+  })
+
+  it('manually pinned story is not consumed as an automatic phase', () => {
+    // Story 1 is manual (pinned at week 0), story 2 is automatic
+    // The automatic phase should only include story 2's duration.
+    // Feature duration should be story 2's bottleneck (1 week), plus the
+    // manual story's existence should not affect automatic duration.
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const s1 = makeStory('s1', [makeTask(80, 'rt-dev', 'Dev')], 0)  // manual
+    const s2 = makeStory('s2', [makeTask(40, 'rt-dev', 'Dev')], 1)  // auto
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      manualStoryEntries: [{ storyId: 's1', startWeek: 0 }],
+    }))
+
+    const featureEntry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    // Automatic phase is only story 2 (1 week bottleneck), so feature = ~1 week
+    // Manual story does not extend or shrink automatic duration
+    expect(featureEntry.durationWeeks).toBeCloseTo(1, 1)
+
+    const s1Bar = result.storySchedule.find(s => s.storyId === 's1')!
+    expect(s1Bar.startWeek).toBe(0)
+    expect(s1Bar.isManual).toBe(true)
+
+    const s2Bar = result.storySchedule.find(s => s.storyId === 's2')!
+    expect(s2Bar.startWeek).toBe(0)
+    expect(s2Bar.isManual).toBe(false)
+  })
+
+  // ── Issue #394 acceptance fixture ──────────────────────────────────────────
+  it('acceptance: 17.5d Security + 5.0d Principal Engineer (non-levelled)', () => {
+    const hpd = 7.6
+    const security = makeRt('rt-sec', 'Principal Consultant - Security', 1, hpd)
+    const engineer = makeRt('rt-pe', 'Principal Engineer - Cloud & DevOps', 1, hpd)
+
+    // 17.5 days of Security effort → 17.5 * 7.6 = 133 hours
+    const s1 = makeStory('s1', [makeTask(133, 'rt-sec', 'Principal Consultant - Security', hpd)], 0)
+    // 38 hours / 5.0 days of Principal Engineer effort → 38 hours
+    const s2 = makeStory('s2', [makeTask(38, 'rt-pe', 'Principal Engineer - Cloud & DevOps', hpd)], 1)
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+
+    const result = runScheduler(baseInput({ epics: [epic], resourceTypes: [security, engineer] }))
+
+    const fEntry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    // Feature duration >= 4.5 weeks (17.5d + 5.0d = 22.5 working days / 5 = 4.5 weeks)
+    expect(fEntry.durationWeeks).toBeGreaterThanOrEqual(4.5)
+
+    const s1Bar = result.storySchedule.find(s => s.storyId === 's1')!
+    const s2Bar = result.storySchedule.find(s => s.storyId === 's2')!
+
+    // Stories follow story order
+    expect(s1Bar.startWeek).toBe(0)
+    expect(s2Bar.startWeek).toBeGreaterThanOrEqual(s1Bar.startWeek + s1Bar.durationWeeks - 0.01)
+
+    // (weeklyConsumptionMap is only populated with resourceLevel=true,
+    //  so total-demand assertions are in the levelled variant below)
+    expect(fEntry.durationWeeks).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('acceptance: 17.5d Security + 5.0d Principal Engineer (resource-levelled)', () => {
+    const hpd = 7.6
+    const security = makeRt('rt-sec', 'Principal Consultant - Security', 1, hpd)
+    const engineer = makeRt('rt-pe', 'Principal Engineer - Cloud & DevOps', 1, hpd)
+
+    const s1 = makeStory('s1', [makeTask(133, 'rt-sec', 'Principal Consultant - Security', hpd)], 0)
+    const s2 = makeStory('s2', [makeTask(38, 'rt-pe', 'Principal Engineer - Cloud & DevOps', hpd)], 1)
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [security, engineer],
+      resourceLevel: true,
+    }))
+
+    const fEntry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    // Feature duration >= 4.5 weeks
+    expect(fEntry.durationWeeks).toBeGreaterThanOrEqual(4.5)
+
+    const s1Bar = result.storySchedule.find(s => s.storyId === 's1')!
+    const s2Bar = result.storySchedule.find(s => s.storyId === 's2')!
+
+    // Stories follow story order and do not overlap
+    expect(s1Bar.startWeek).toBe(0)
+    expect(s2Bar.startWeek).toBeGreaterThanOrEqual(s1Bar.startWeek + s1Bar.durationWeeks - 0.01)
+
+    // Principal Engineer total = exactly 5.0 days
+    const peTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([key]) => key.startsWith('rt-pe|'))
+      .reduce((sum, [, days]) => sum + days, 0)
+    expect(peTotal).toBeCloseTo(5.0, 1)
+
+    // PE consumption starts only after Security phase completes
+    const peWeeks = [...result.weeklyConsumptionMap.entries()]
+      .filter(([key]) => key.startsWith('rt-pe|'))
+      .map(([key]) => parseInt(key.split('|')[1], 10))
+    const minPeWeek = Math.min(...peWeeks)
+    const secDoneWeek = Math.floor(s1Bar.startWeek + s1Bar.durationWeeks)
+    expect(minPeWeek).toBeGreaterThanOrEqual(secDoneWeek - 1) // within scheduler precision
+
+    // Security total = exactly 17.5 days
+    const secTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([key]) => key.startsWith('rt-sec|'))
+      .reduce((sum, [, days]) => sum + days, 0)
+    expect(secTotal).toBeCloseTo(17.5, 1)
+
+    // Idempotency: re-running produces the same totals
+    const result2 = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [security, engineer],
+      resourceLevel: true,
+    }))
+    const peTotal2 = [...result2.weeklyConsumptionMap.entries()]
+      .filter(([key]) => key.startsWith('rt-pe|'))
+      .reduce((sum, [, days]) => sum + days, 0)
+    expect(peTotal2).toBeCloseTo(5.0, 1)
+
+    const fEntry2 = result2.featureSchedule.find(e => e.featureId === 'f1')!
+    expect(fEntry2.durationWeeks).toBe(fEntry.durationWeeks)
   })
 })
 
