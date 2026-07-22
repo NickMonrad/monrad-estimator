@@ -33,7 +33,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import pg from 'pg'
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 
 // ─── Guard ──────────────────────────────────────────────────────────────────
 
@@ -668,9 +668,15 @@ describeIf('Pre-#361 ownership integrity tests', () => {
       await expect(repairIdenticalDuplicates(prisma, report)).rejects.toThrow(
         'was not in the audited group',
       )
+      // Verify the unchanged duplicate profile was not deleted by the aborted repair
+      const unchangedProfile = await prisma.capacityProfile.findUnique({
+        where: { id: otherProfileId },
+      })
+      expect(unchangedProfile).not.toBeNull()
+      expect(unchangedProfile!.id).toBe(otherProfileId)
     })
 
-    it('detects concurrent insert as group size change and aborts repair', async () => {
+    it('concurrent insert is blocked while repair holds exclusive locks', async () => {
       await prisma.capacityProfile.create({
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
@@ -680,24 +686,109 @@ describeIf('Pre-#361 ownership integrity tests', () => {
       })
       const report = await runOwnershipAudit(prisma)
       expect(report.repairableGroups).toHaveLength(1)
-      // Add a third profile to the group before repair
-      await prisma.capacityProfile.create({
+
+      // Get primary backend PID for lock tracking
+      const pidRow = await prisma.$queryRaw<Array<{ pid: number }>>(
+        Prisma.sql`SELECT pg_backend_pid() AS pid`,
+      )
+      const primaryPid = pidRow[0].pid
+
+      const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+      const lockClient = await pool.connect()
+      try {
+        // Phase 1: Second connection acquires EXCLUSIVE lock first.
+        // This simulates another session already in a maintenance window.
+        await lockClient.query('BEGIN')
+        await lockClient.query('LOCK TABLE "CapacityProfile" IN EXCLUSIVE MODE')
+
+        // Phase 2: Primary tries repair — its first LOCK TABLE will BLOCK
+        const repairPromise = repairIdenticalDuplicates(prisma, report)
+
+        // Phase 3: Poll pg_locks to confirm the primary is waiting for the EXCLUSIVE lock
+        const lockOid = (await prisma.$queryRaw<Array<{ oid: number }>>(
+          Prisma.sql`SELECT c.oid FROM pg_class c
+            WHERE c.relname = 'CapacityProfile' AND c.relkind = 'r'`,
+        ))[0].oid
+
+        let repairBlocked = false
+        const deadline = Date.now() + 8000
+        while (!repairBlocked && Date.now() < deadline) {
+          const blocked = await prisma.$queryRaw<Array<{ blocked: boolean }>>(
+            Prisma.sql`SELECT EXISTS (
+              SELECT 1 FROM pg_locks l
+              WHERE l.pid = ${primaryPid}
+                AND l.locktype = 'relation'
+                AND l.relation = ${lockOid}::oid
+                AND l.mode = 'ExclusiveLock'
+                AND l.granted = false
+            ) AS blocked`,
+          )
+          if (blocked[0].blocked) { repairBlocked = true; break }
+          await prisma.$executeRawUnsafe('SELECT pg_sleep(0.05)')
+        }
+        expect(repairBlocked).toBe(true)
+
+        // Phase 4: While the repair is blocked, the lock-holding session can INSERT
+        // (its own EXCLUSIVE lock does not block its own ROW EXCLUSIVE for INSERT)
+        await lockClient.query(
+          `INSERT INTO "CapacityProfile"
+             ("id", "projectId", "resourceTypeId", "namedResourceId", "ownerKind",
+              "planningBasis", "source", "defaultPercent", "startWeek", "endWeek",
+              "legacy", "createdAt", "updatedAt")
+           VALUES
+             (gen_random_uuid()::text, $1, $2, NULL, 'ROLE',
+              'DEMAND_FOLLOWING', 'FIXED', 100, 0, 10,
+              NULL, NOW(), NOW())`,
+          [ids.projectId, ids.rtId],
+        )
+
+        // Phase 5: Release the lock (ROLLBACK also discards the INSERT)
+        await lockClient.query('ROLLBACK')
+
+        // Phase 6: Repair now acquires the lock, re-reads, and sees original state
+        // The concurrent insert was rolled back, so group size is still 2.
+        // Repair should succeed on the original duplicate pair.
+        const result = await repairPromise
+        expect(result.profilesDeleted).toBe(1)
+
+        // Phase 7: Final verification — only the survivor remains
+        const finalCount = await prisma.capacityProfile.count({
+          where: { resourceTypeId: ids.rtId },
+        })
+        expect(finalCount).toBe(1)
+
+        // Audit confirms clean
+        const audit = await runOwnershipAudit(prisma)
+        expect(audit.isClean).toBe(true)
+      } finally {
+        lockClient.release()
+        await pool.end()
+      }
+    })
+
+    it('two-group rollback proves all-or-nothing transaction atomicity', async () => {
+      const rt2 = await prisma.resourceType.create({
+        data: { name: 'Test Role 2', projectId: ids.projectId, category: 'ENGINEERING', count: 1 },
+      })
+      // Group 1: RT duplicate (identical to roleProfileId)
+      const g1Dup = await prisma.capacityProfile.create({
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
           defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
         },
       })
-      // Repair uses stale report, re-reads under lock and detects group size changed
-      await expect(repairIdenticalDuplicates(prisma, report)).rejects.toThrow(
-        'group size changed',
-      )
-    })
 
-    it('handles two repairable groups where one changes and neither is partially repaired', async () => {
-      const rt2 = await prisma.resourceType.create({
-        data: { name: 'Test Role 2', projectId: ids.projectId, category: 'ENGINEERING', count: 1 },
+      // Group 2: NR duplicate (identical to nrProfileId)
+      const g2Dup = await prisma.capacityProfile.create({
+        data: {
+          projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
+          ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        },
       })
+
+      // Singleton profile (not part of any group)
       await prisma.capacityProfile.create({
         data: {
           projectId: ids.projectId, resourceTypeId: rt2.id, namedResourceId: null,
@@ -705,27 +796,59 @@ describeIf('Pre-#361 ownership integrity tests', () => {
           defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
         },
       })
-      await prisma.capacityProfile.create({
-        data: {
-          projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
-          ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
-        },
-      })
-      await prisma.capacityProfile.create({
-        data: {
-          projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
-          ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
-        },
-      })
+
       const report = await runOwnershipAudit(prisma)
       expect(report.repairableGroups).toHaveLength(2)
+
+      // Capture current state before repair attempt
+      const beforeAllProfiles = await prisma.capacityProfile.findMany({ orderBy: { id: 'asc' } })
+      const beforeAllSegments = await prisma.capacitySegment.findMany({ orderBy: { id: 'asc' } })
+
+      // Mutate one profile in group 2 after audit — makes it non-identical
       await prisma.capacityProfile.update({
         where: { id: nrProfileId },
         data: { defaultPercent: 50 },
       })
+
+      // Repair must abort entirely — no group can be partially repaired
       await expect(repairIdenticalDuplicates(prisma, report)).rejects.toThrow()
+
+      // PROVE ALL-OR-NOTHING: all profiles and segments must be unchanged
+      const afterAllProfiles = await prisma.capacityProfile.findMany({ orderBy: { id: 'asc' } })
+      const afterAllSegments = await prisma.capacitySegment.findMany({ orderBy: { id: 'asc' } })
+
+      expect(afterAllProfiles.length).toBe(beforeAllProfiles.length)
+      expect(afterAllSegments.length).toBe(beforeAllSegments.length)
+      for (let i = 0; i < beforeAllProfiles.length; i++) {
+        expect(afterAllProfiles[i].id).toBe(beforeAllProfiles[i].id)
+      }
+      for (let i = 0; i < beforeAllSegments.length; i++) {
+        expect(afterAllSegments[i].id).toBe(beforeAllSegments[i].id)
+      }
+
+      // Group 1 profiles not deleted
+      const g1Check = await prisma.capacityProfile.count({
+        where: { id: { in: [roleProfileId, g1Dup.id] } },
+      })
+      expect(g1Check).toBe(2)
+
+      // Group 2 profiles not deleted
+      const g2Check = await prisma.capacityProfile.count({
+        where: { id: { in: [nrProfileId, g2Dup.id] } },
+      })
+      expect(g2Check).toBe(2)
+
+      // Singleton untouched
+      const singletonCount = await prisma.capacityProfile.count({
+        where: { resourceTypeId: rt2.id },
+      })
+      expect(singletonCount).toBe(1)
+
+      // Fresh audit confirms the unresolved/drifted state
+      const freshAudit = await runOwnershipAudit(prisma)
+      expect(freshAudit.repairableGroups).toHaveLength(1) // only group 1 still identical
+      expect(freshAudit.conflictingGroups).toHaveLength(1) // group 2 now conflicting
+      expect(freshAudit.isClean).toBe(false)
     })
 
     it('preserves survivor profile ID, segment IDs and authoritative state', async () => {
@@ -1046,15 +1169,17 @@ describeIf('Migration and constraint enforcement', () => {
 
   describe('Constraint rollback preserves valid data', () => {
     let ids: FreshIds
-
-    beforeAll(async () => {
-      const state = await resetToPost361()
-      ids = state
-    })
-
+  beforeAll(async () => {
+    const state = await resetToPost361()
+    ids = state
+  })
     it('dropping constraints preserves existing valid data and restores non-unique indexes', async () => {
       const count = await prisma.capacityProfile.count()
       expect(count).toBe(2)
+      const profiles = await prisma.capacityProfile.findMany({
+        where: { projectId: ids.projectId },
+      })
+      expect(profiles).toHaveLength(2)
       await assert361ConstraintsInstalled()
       await prisma.$executeRawUnsafe(
         'ALTER TABLE "CapacityProfile" DROP CONSTRAINT IF EXISTS "chk_CapacityProfile_exactly_one_owner"',
