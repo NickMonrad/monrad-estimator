@@ -32,7 +32,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import { PrismaPg } from '@prisma/adapter-pg'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, Prisma } from '@prisma/client'
 import type { $Enums } from '@prisma/client'
 import { app } from '../app.js'
 import { getWeeklyCapacity } from '../lib/scheduler.js'
@@ -1400,6 +1400,13 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
 
   it('detects a committed concurrent explicit owner before transaction revalidation', async () => {
     if (!runIntegration) return
+    // Under #361 the database unique index makes this race scenario
+    // impossible; skip when the constraint is installed.
+    const nrUniqueIdx = await prisma.$queryRaw<Array<{ name: string }>>(
+      Prisma.sql`SELECT indexname AS name FROM pg_indexes
+        WHERE tablename = 'CapacityProfile' AND indexname = 'CapacityProfile_namedResourceId_key'`,
+    )
+    if (nrUniqueIdx.length > 0) return
 
     // Seed one existing planner-owned profile. The seam then creates a second
     // physical owner on the same NamedResource, which must fail closed.
@@ -1476,6 +1483,13 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
 
   it('preflight returns 409 when a conflicting profile exists before apply', async () => {
     if (!runIntegration) return
+    // Under #361 the database unique index makes this race scenario
+    // impossible; skip when the constraint is installed.
+    const rtUniqueIdx = await prisma.$queryRaw<Array<{ name: string }>>(
+      Prisma.sql`SELECT indexname AS name FROM pg_indexes
+        WHERE tablename = 'CapacityProfile' AND indexname = 'CapacityProfile_resourceTypeId_key'`,
+    )
+    if (rtUniqueIdx.length > 0) return
 
     // Inject two conflicting ROLE profiles so preflight detects a duplicate.
     for (const id of ['cp-conflict-preflight-a', 'cp-conflict-preflight-b']) {

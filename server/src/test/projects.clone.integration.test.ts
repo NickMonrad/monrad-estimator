@@ -1619,7 +1619,7 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
   let srcProjectId: string
   let rtEngId: string
   let nrBobId: string
-
+  let cpRoleId: string
   beforeAll(async () => {
     if (!runIntegration) return
 
@@ -1630,7 +1630,7 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
       { pricingModel: 'ACTUAL_DAYS', allocationPct: 100 })
 
     // Create a valid ROLE capacity profile (FK-safe: has resourceTypeId, no namedResourceId)
-    const cpRoleId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
+    cpRoleId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', startWeek: 0, endWeek: 10, defaultPercent: 100 })
     await createSegment(cpRoleId, crypto.randomUUID(), 0, 10, 100, 'MANUAL')
 
@@ -1665,6 +1665,41 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
     `)
   })
 
+
+  afterAll(async () => {
+    if (!runIntegration) return
+    await prisma.$executeRaw(Prisma.sql`
+      UPDATE "CapacityProfile"
+      SET "namedResourceId" = NULL
+      WHERE id = ${cpRoleId}
+    `)
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "_prisma_migrations"
+       WHERE migration_name = '20260721000001_enforce_capacity_profile_ownership_invariants'`,
+    )
+    const { execSync } = await import('node:child_process')
+    execSync('npx prisma migrate deploy', {
+      cwd: new URL('../..', import.meta.url).pathname,
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+      stdio: 'pipe',
+    })
+    const chkRows = await prisma.$queryRaw<Array<{ name: string }>>(
+      Prisma.sql`SELECT constraint_name AS name FROM information_schema.table_constraints
+        WHERE table_name = 'CapacityProfile'
+        AND constraint_name IN ('chk_CapacityProfile_exactly_one_owner', 'chk_CapacityProfile_owner_kind_fk')`,
+    )
+    const chkNames = new Set(chkRows.map(r => r.name))
+    expect(chkNames.has('chk_CapacityProfile_exactly_one_owner')).toBe(true)
+    expect(chkNames.has('chk_CapacityProfile_owner_kind_fk')).toBe(true)
+    const idxRows = await prisma.$queryRaw<Array<{ name: string }>>(
+      Prisma.sql`SELECT indexname AS name FROM pg_indexes
+        WHERE tablename = 'CapacityProfile'
+        AND indexname IN ('CapacityProfile_resourceTypeId_key', 'CapacityProfile_namedResourceId_key')`,
+    )
+    const idxNames = new Set(idxRows.map(r => r.name))
+    expect(idxNames.has('CapacityProfile_resourceTypeId_key')).toBe(true)
+    expect(idxNames.has('CapacityProfile_namedResourceId_key')).toBe(true)
+  })
   it('C1 — clone returns 500 when profile owner shape is invalid', async () => {
     const res = await request(app)
       .post(`/api/projects/${srcProjectId}/clone`)
