@@ -75,11 +75,11 @@ function buildWarningResourceTypes(
   return resourceTypes.map(rt => {
     if ((rt.allocationMode as AllocationMode | null) !== 'CAPACITY_PLAN') return rt
 
-    // Profile-backed named resources are already authoritative - skip fallback
-    const hasAnyProfileSegments = (rt.namedResources ?? []).some(
+    // Profile-backed named resources or role segments are already authoritative - skip fallback
+    const hasAnyProfileAuthority = (rt.namedResources ?? []).some(
       nr => nr.capacitySegments && nr.capacitySegments.length > 0,
-    )
-    if (hasAnyProfileSegments) return rt
+    ) || (rt.roleSegments && rt.roleSegments.length > 0)
+    if (hasAnyProfileAuthority) return rt
 
     const materialized = capacityPlanByRt.get(rt.id)
     const useCapacityPlanFallback =
@@ -144,6 +144,15 @@ function buildResponse(
   const rtIdToName = new Map(resourceTypes.map(rt => [rt.id, rt.name]))
 
   const capacityDaysForWeek = (rt: ResourceTypeWithNamed, week: number) => {
+    // Profile-authoritative: capacitySegments or roleSegments override legacy/allocation-mode fallback
+    const hasProfileSegments = (rt.namedResources ?? []).some(
+      nr => nr.capacitySegments && nr.capacitySegments.length > 0,
+    )
+    if (hasProfileSegments || (rt.roleSegments && rt.roleSegments.length > 0)) {
+      const hpd = rt.hoursPerDay ?? project.hoursPerDay
+      return getWeeklyCapacity(rt, week, project.hoursPerDay) / hpd
+    }
+    // Legacy CAPACITY_PLAN fallback: use materialised plan when no profile is authoritative
     if ((rt.allocationMode as AllocationMode | null) === 'CAPACITY_PLAN') {
       const materialized = capacityPlanByRt.get(rt.id)
       if (materialized) return (materialized.weeklyHeadcount.get(week) ?? 0) * 5
