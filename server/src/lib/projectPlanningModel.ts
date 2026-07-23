@@ -21,6 +21,8 @@ import {
   computeParallelWarnings,
   type ParallelWarning,
   type SchedulerNamedResource,
+  type SchedulerCapacitySegment,
+  type SchedulerResourceType,
 } from './scheduler.js'
 import {
   type MaterializedCapacityPlanResource,
@@ -464,6 +466,7 @@ export function computeWeeklyCapacity(
     allocationMode: string | null
     count: number
     namedResources: SchedulerNamedResource[]
+    roleSegments?: SchedulerCapacitySegment[]
   }>,
   hoursPerDay: number,
   endWeek: number,
@@ -475,13 +478,23 @@ export function computeWeeklyCapacity(
   for (const rt of resourceTypes) {
     for (let w = 0; w < endWeek; w++) {
       let capDays: number
-      if ((rt.allocationMode as string | null) === 'CAPACITY_PLAN') {
+
+      // Profile-authoritative: capacitySegments or roleSegments override legacy fallback
+      const hasProfileAuthority = (rt.namedResources ?? []).some(
+        nr => nr.capacitySegments && nr.capacitySegments.length > 0,
+      ) || (rt.roleSegments && rt.roleSegments.length > 0)
+
+      if (hasProfileAuthority) {
+        const hpd = rt.hoursPerDay ?? hoursPerDay
+        capDays = getWeeklyCapacity(rt as SchedulerResourceType, w, hoursPerDay) / hpd
+      } else if ((rt.allocationMode as string | null) === 'CAPACITY_PLAN') {
         const materialized = capacityPlanByRt.get(rt.id)
         capDays = materialized ? (materialized.weeklyHeadcount.get(w) ?? 0) * 5 : 0
       } else {
         const hpd = rt.hoursPerDay ?? hoursPerDay
-        capDays = getWeeklyCapacity(rt, w, hoursPerDay) / hpd
+        capDays = getWeeklyCapacity(rt as SchedulerResourceType, w, hoursPerDay) / hpd
       }
+
       result.push({
         week: w,
         resourceTypeName: rt.name,
@@ -725,11 +738,11 @@ export async function buildProjectPlanningModel(
   const warningResourceTypes = capacityResourceTypes.map(rt => {
     if (rt.allocationMode !== 'CAPACITY_PLAN') return rt
 
-    // Profile-backed NRs are already authoritative - skip fallback
-    const hasAnyProfileSegments = (rt.namedResources ?? []).some(
+    // Profile-backed NRs or role segments are already authoritative — skip fallback
+    const hasAnyProfileAuthority = (rt.namedResources ?? []).some(
       nr => nr.capacitySegments && nr.capacitySegments.length > 0,
-    )
-    if (hasAnyProfileSegments) return rt
+    ) || (rt.roleSegments && rt.roleSegments.length > 0)
+    if (hasAnyProfileAuthority) return rt
 
     const materialized = capacityPlanByRt.get(rt.id)
     if (!materialized) return rt
