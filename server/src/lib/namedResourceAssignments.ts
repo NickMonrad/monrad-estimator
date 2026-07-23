@@ -199,21 +199,21 @@ function weeklyCapacityForNamedResource(
   namedResource: DerivedNamedResourceAssignment,
   week: number,
 ): number {
-  const startWeek = namedResource.startWeek ?? 0
-  const endWeek = namedResource.endWeek ?? Infinity
-
-  if (week < startWeek || week > endWeek) return 0
-
-  const mode = toAllocationMode(namedResource.allocationMode)
-
-  // Segment-aware capacity for CAPACITY_PLAN resources with trajectory segments
-  if (mode === 'CAPACITY_PLAN' && namedResource.capacitySegments && namedResource.capacitySegments.length > 0) {
+  // Profile/segment-first: if capacity segments are present, use them
+  // regardless of legacy start/end week or allocation mode
+  if (namedResource.capacitySegments && namedResource.capacitySegments.length > 0) {
     const segment = namedResource.capacitySegments.find(
       s => week >= s.startWeek && week <= s.endWeek,
     )
     return segment ? 5 * (segment.allocationPercent / 100) : 0
   }
 
+  const startWeek = namedResource.startWeek ?? 0
+  const endWeek = namedResource.endWeek ?? Infinity
+
+  if (week < startWeek || week > endWeek) return 0
+
+  const mode = toAllocationMode(namedResource.allocationMode)
   const allocationPercent = namedResource.allocationPercent ?? 100
 
   if (mode === 'EFFORT') return 5
