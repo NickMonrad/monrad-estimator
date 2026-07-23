@@ -1,3 +1,5 @@
+import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+
 /**
  * squadPlan.ts — Express routes for the Capacity Planner (squad sizing).
  *
@@ -202,14 +204,13 @@ function buildReplayPlannerResourceTypes(
     }
   })
 }
-
 async function loadSchedulerInput(
   projectId: string,
   hoursPerDay: number,
   options: PlannerInputLoadOptions = {},
 ): Promise<SchedulerInput> {
   const { includeCapacityPlanMaterialization = true } = options
-  const [allEpics, resourceTypes, manualFeatures, manualStories, epicDeps] = await Promise.all([
+  const [allEpics, resolved, manualFeatures, manualStories, epicDeps] = await Promise.all([
     prisma.epic.findMany({
       where: { projectId },
       orderBy: { order: 'asc' },
@@ -229,10 +230,7 @@ async function loadSchedulerInput(
         },
       },
     }),
-    prisma.resourceType.findMany({
-      where: { projectId },
-      include: { namedResources: true },
-    }),
+    resolveSchedulerCapacity(prisma, projectId, hoursPerDay),
     prisma.timelineEntry.findMany({
       where: { projectId, isManual: true },
     }),
@@ -245,10 +243,13 @@ async function loadSchedulerInput(
     }),
   ])
 
+  const resourceTypes = resolved.resourceTypes
+
   const epics = allEpics
     .filter(e => e.isActive !== false)
     .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
 
+  // When capacity plan materialization is excluded, strip plan-based allocationMode
   const plannerResourceTypes = includeCapacityPlanMaterialization
     ? resourceTypes as SchedulerResourceType[]
     : stripCapacityPlanMaterialization(resourceTypes as PlannerInputResourceType[])

@@ -64,6 +64,20 @@ export interface SchedulerNamedResource {
   allocationStartWeek: number | null
   allocationEndWeek: number | null
   pricingModel?: string | null
+  /** Profile-backed capacity segments. When present, authoritative over legacy allocation fields. */
+  capacitySegments?: SchedulerCapacitySegment[]
+}
+
+/**
+ * A capacity segment for a scheduler named resource.
+ * When present, it is the authoritative source for the resource's allocation
+ * in the covered weeks — overriding legacy allocation fields.
+ * Gaps between segments produce zero capacity.
+ */
+export interface SchedulerCapacitySegment {
+  startWeek: number
+  endWeek: number
+  capacityPercent: number
 }
 
 export interface SchedulerResourceType {
@@ -71,6 +85,7 @@ export interface SchedulerResourceType {
   name: string
   count: number
   hoursPerDay: number | null
+  allocationMode?: string | null
   namedResources: SchedulerNamedResource[]
 }
 
@@ -136,6 +151,18 @@ export function effectiveAllocationPct(
   nr: SchedulerNamedResource,
   week: number,
 ): number {
+  // Profile-first: named resource with capacity segments
+  if (nr.capacitySegments && nr.capacitySegments.length > 0) {
+    for (const seg of nr.capacitySegments) {
+      if (week >= seg.startWeek && week <= seg.endWeek) {
+        return seg.capacityPercent
+      }
+    }
+    // Week not covered by any segment → gap or out-of-range → zero capacity
+    return 0
+  }
+
+  // Legacy fallback
   if (nr.allocationMode === 'FULL_PROJECT') return nr.allocationPercent
   if (nr.allocationMode === 'TIMELINE') {
     const wStart = nr.allocationStartWeek ?? nr.startWeek ?? 0
@@ -146,7 +173,6 @@ export function effectiveAllocationPct(
   // EFFORT (T&M) — no fixed allocation; full capacity available
   return 100
 }
-
 /**
  * Compute weekly capacity (hours) for a resource type.
  *
