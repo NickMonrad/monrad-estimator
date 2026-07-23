@@ -90,6 +90,12 @@ export interface SchedulerResourceType {
   hoursPerDay: number | null
   allocationMode?: string | null
   namedResources: SchedulerNamedResource[]
+  /**
+   * Resolved aggregate role-level capacity segments.
+   * When present, these segments replace the phantom-slot calculation
+   * (max(0, count - namedResources.length)) for this resource type.
+   */
+  roleSegments?: SchedulerCapacitySegment[]
 }
 
 export interface SchedulerInput {
@@ -178,10 +184,10 @@ export function effectiveAllocationPct(
  *
  * `count` is treated as the true effective headcount. Named resources are
  * allocation/availability overlays for known team members; any slots beyond
- * `namedResources.length` are treated as full-availability phantom (T&M) staff.
+ * `namedResources.length` (or the resolved `roleSegments`) affect aggregate capacity.
  *
- * weeklyHours = Σ namedResource(active this week, allocation %) +
- *               max(0, count - namedResources.length) × hpd × 5
+ * weeklyHours = Σ namedResource(active this week via segment or legacy allocation, %) +
+ *               resolved role capacity OR max(0, count - namedResources.length) × hpd × 5
  */
 export function getWeeklyCapacity(
   rt: SchedulerResourceType,
@@ -189,22 +195,48 @@ export function getWeeklyCapacity(
   defaultHoursPerDay: number,
 ): number {
   const hoursPerDay = rt.hoursPerDay ?? defaultHoursPerDay
-  // Defensive: real Prisma queries always return [] (include: { namedResources: true }),
-  // but some test mocks omit the field entirely. Treat undefined as empty.
+
+  // ── Profile-backed named resources ──────────────────────────────────────
+  // Named resources with capacitySegments ignore legacy startWeek/endWeek.
+  // Their capacity is determined solely by segment matching.
   const namedResources = rt.namedResources ?? []
   let totalHours = 0
-  // Named resources contribute their allocation-respecting capacity for this week
   for (const nr of namedResources) {
-    const start = nr.startWeek ?? 0       // null = project start (week 0)
-    const end = nr.endWeek ?? Infinity     // null = project end
+    if (nr.capacitySegments && nr.capacitySegments.length > 0) {
+      // Segment-authoritative: legacy bounds are not consulted
+      const pct = effectiveAllocationPct(nr, week)
+      totalHours += (pct / 100) * hoursPerDay * 5
+      continue
+    }
+
+    // Legacy named resources: consult legacy start/end window
+    const start = nr.startWeek ?? 0
+    const end = nr.endWeek ?? Infinity
     if (week >= start && week <= end) {
       const pct = effectiveAllocationPct(nr, week)
       totalHours += (pct / 100) * hoursPerDay * 5
     }
   }
-  // Phantom slots: any count slots beyond namedResources are full-time T&M staff
-  const phantomSlots = Math.max(0, rt.count - namedResources.length)
-  totalHours += phantomSlots * hoursPerDay * 5
+
+  // ── Aggregate role capacity ─────────────────────────────────────────────
+  // When a valid role profile exists (roleSegments), it replaces the
+  // phantom-slot calculation. Named resources are NOT double-counted.
+  if (rt.roleSegments && rt.roleSegments.length > 0) {
+    // Role profile is authoritative for aggregate role capacity
+    let roleCapacity = 0
+    for (const seg of rt.roleSegments) {
+      if (week >= seg.startWeek && week <= seg.endWeek) {
+        roleCapacity = (seg.allocationPercent / 100) * hoursPerDay * 5
+        break
+      }
+    }
+    totalHours += roleCapacity
+  } else {
+    // Phantom slots: any count slots beyond namedResources are full-time T&M staff
+    const phantomSlots = Math.max(0, rt.count - namedResources.length)
+    totalHours += phantomSlots * hoursPerDay * 5
+  }
+
   return totalHours
 }
 

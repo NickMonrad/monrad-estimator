@@ -337,7 +337,7 @@ describe('resolveSchedulerCapacity', () => {
     expect(nr.capacitySegments![0].allocationPercent).toBe(100)
   })
 
-  it('role profile is tracked in roleProfileRTIds metadata', async () => {
+  it('role profile populates roleSegments and drives scheduler capacity', async () => {
     const client = mockClient({
       resourceTypes: [
         {
@@ -355,7 +355,7 @@ describe('resolveSchedulerCapacity', () => {
           source: 'MANUAL', defaultPercent: null,
           startWeek: null, endWeek: null, legacy: null,
           segments: [
-            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
+            { startWeek: 0, endWeek: 10, capacityPercent: 50, source: 'MANUAL' },
           ],
         },
       ],
@@ -364,8 +364,57 @@ describe('resolveSchedulerCapacity', () => {
     const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
     expect(result.meta.roleProfileRTIds).toContain('rt-1')
     expect(result.resourceTypes[0].namedResources).toHaveLength(0)
-    // Phantom slots still apply when no named resources exist
-    expect(result.meta.legacyCount).toBe(0)
+    // roleSegments should be populated from the role profile
+    const rt = result.resourceTypes[0]
+    expect(rt.roleSegments).toBeDefined()
+    expect(rt.roleSegments!.length).toBe(1)
+    expect(rt.roleSegments![0]).toEqual({ startWeek: 0, endWeek: 10, allocationPercent: 50 })
+    // The role profile capacity replaces phantom slots:
+    // getWeeklyCapacity should return 50% × 8 × 5 = 20, not 2 × 40 = 80
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    expect(getWeeklyCapacity(rt as any, 0, 8)).toBe(20)
+  })
+
+  it('valid role profile suppresses active capacity plan fallback', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-1', name: 'Developer', count: 2, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [],
+        },
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-role', projectId: 'proj-1',
+          resourceTypeId: 'rt-1', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: null,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+      ],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 4,
+            entries: [{ resourceTypeId: 'rt-1', headcount: 10 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+    // Role profile should suppress capacity plan fallback
+    // No synthetic NRs from capacity plan
+    expect(rt.namedResources).toHaveLength(0)
+    // roleSegments from the valid role profile
+    expect(rt.roleSegments).toBeDefined()
   })
 
   it('capacity plan fallback creates synthetic named resources in scheduler DTO', async () => {
@@ -406,6 +455,38 @@ describe('resolveSchedulerCapacity', () => {
     expect(firstSlot.allocationMode).toBe('CAPACITY_PLAN')
   })
 
+
+  it('role profile segmented zero-capacity gap is preserved', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-1', name: 'Developer', count: 3, hoursPerDay: 8,
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [],
+        },
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-role', projectId: 'proj-1',
+          resourceTypeId: 'rt-1', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: null,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 2, capacityPercent: 100, source: 'MANUAL' },
+            { startWeek: 5, endWeek: 7, capacityPercent: 50, source: 'MANUAL' },
+          ],
+        },
+      ],
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+    expect(rt.roleSegments).toBeDefined()
+    expect(rt.roleSegments).toHaveLength(2)
+    // Gap between segments produces zero capacity (tested in getWeeklyCapacity)
+  })
   it('legacy-only project produces deterministic repeated results', async () => {
     const client = mockClient({
       resourceTypes: [

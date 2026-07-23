@@ -240,7 +240,12 @@ export async function resolveSchedulerCapacity(
     const allocationMode: string = rt.allocationMode ?? 'EFFORT'
     const materialized = capacityPlanByRt.get(rt.id)
 
+    // A valid role profile or profile-backed NRs suppress capacity plan fallback
+    const hasProfileAuthority = roleProfileValid ||
+      namedResources.some(nr => nr.capacitySegments && nr.capacitySegments.length > 0)
+
     if (
+      !hasProfileAuthority &&
       allocationMode === 'CAPACITY_PLAN' &&
       materialized &&
       shouldFallbackToActiveCapacityPlan(namedResources, materialized)
@@ -280,6 +285,7 @@ export async function resolveSchedulerCapacity(
       hoursPerDay: rt.hoursPerDay ?? null,
       allocationMode,
       namedResources,
+      roleSegments: roleProfileValid ? profileDataToSchedulerSegments(roleProfile) : undefined,
     }
   })
 
