@@ -982,8 +982,10 @@ describe('sequential story phases', () => {
     const autoBar = result.storySchedule.find(s => s.storyId === 's-auto')!
     expect(autoBar.startWeek).toBeLessThan(0.8)
   })
-
-  it('story phase start aligns with first allocation, not eligibility', () => {
+  it('story phase start aligns with first allocation, not eligibility (strengthened)', () => {
+    // Parallel epic: f1 (80 Dev) and f2 (40 Dev) share one Dev.
+    // Greedy scheduler allocates to f2 first (smaller). f1's story
+    // must not start before it receives positive Dev allocation.
     const dev = makeRt('rt-dev', 'Dev', 1, 8)
     const f1s1 = makeStory('f1s1', [makeTask(80, 'rt-dev', 'Dev')], 0)
     const f1 = makeFeature('f1', [f1s1])
@@ -999,14 +1001,80 @@ describe('sequential story phases', () => {
     const f2Bar = result.storySchedule.find(s => s.storyId === 'f2s1')!
     const f1Entry = result.featureSchedule.find(e => e.featureId === 'f1')!
     const f2Entry = result.featureSchedule.find(e => e.featureId === 'f2')!
+    // Both features eligible concurrently in parallel epic
     expect(f1Entry.startWeek).toBe(0)
     expect(f2Entry.startWeek).toBe(0)
-    expect(f1Bar.startWeek).toBeGreaterThanOrEqual(0)
-    expect(f2Bar.startWeek).toBeGreaterThanOrEqual(0)
+    // f2 (40h) gets allocation first (greedy by remaining ascending)
+    expect(f2Bar.startWeek).toBe(0)
+    // f1 (80h) must start LATER, after f2 has received some allocation
+    expect(f1Bar.startWeek).toBeGreaterThan(0)
+    // Bars are sequential and non-overlapping
+    expect(f1Bar.startWeek).toBeGreaterThanOrEqual(f2Bar.startWeek + f2Bar.durationWeeks - 0.01)
+    // Total Dev = 120h/8hpd = 15pd
     const devTotal = [...result.weeklyConsumptionMap.entries()]
       .filter(([k]) => k.startsWith('rt-dev|'))
       .reduce((sum, [, v]) => sum + v, 0)
     expect(devTotal).toBeCloseTo(15.0, 1)
+  })
+
+  it('sequential story 2 delayed by pinned reservation starts at first allocation', () => {
+    // Feature: story1 (80 Dev hours) → story2 (80 QA hours).
+    // A pinned QA story at week 2.0 (8h, dur=0.2w) blocks QA capacity
+    // at the transition. story2 must not start until it receives
+    // allocation after the pin interval ends.
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const qa = makeRt('rt-qa', 'QA', 1, 8)
+    const s1 = makeStory('s1', [makeTask(80, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [makeTask(80, 'rt-qa', 'QA')], 1)
+    const sPin = makeStory('s-pin', [makeTask(8, 'rt-qa', 'QA')], 2)
+    const f1 = makeFeature('f1', [s1, s2, sPin])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev, qa],
+      manualStoryEntries: [{ storyId: 's-pin', startWeek: 2.0 }],
+      resourceLevel: true,
+    }))
+    // Test with exact scheduler STEP (0.2) precision where possible
+    const s1Bar = result.storySchedule.find(s => s.storyId === 's1')!
+    const s2Bar = result.storySchedule.find(s => s.storyId === 's2')!
+    // Story 1 completes at t+STEP from its last allocation step
+    // story2 must NOT start at the story1 completion timestamp
+    expect(s2Bar.startWeek).toBeGreaterThan(s1Bar.startWeek + s1Bar.durationWeeks - 0.01)
+    // story2's first allocation is at or after the pinned interval (2.0-2.2)
+    // With STEP=0.2, story2 starts no earlier than 2.0+STEP=2.2
+    const minAlloc = s1Bar.startWeek + s1Bar.durationWeeks
+    expect(s2Bar.startWeek).toBeGreaterThanOrEqual(minAlloc)
+    // No story2 consumption before its bar starts
+    const s2Before = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-qa|'))
+      .filter(([k]) => parseInt(k.split('|')[1], 10) < Math.floor(s2Bar.startWeek))
+    expect(s2Before.length).toBe(0)
+    // Bars are sequential
+    expect(s2Bar.startWeek).toBeGreaterThanOrEqual(s1Bar.startWeek + s1Bar.durationWeeks - 0.01)
+    // story2 total QA demand = 80h/8hpd = 10pd
+    const s2Total = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-qa|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(s2Total).toBeCloseTo(11.0, 1) // 10 auto + 1 pinned
+    // Total Dev = 80h/8hpd = 10pd
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(10.0, 1)
+    // Idempotent rerun
+    const result2 = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev, qa],
+      manualStoryEntries: [{ storyId: 's-pin', startWeek: 2.0 }],
+      resourceLevel: true,
+    }))
+    const s2Bar2 = result2.storySchedule.find(s => s.storyId === 's2')!
+    expect(s2Bar2.startWeek).toBe(s2Bar.startWeek)
+    const s2Total2 = [...result2.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-qa|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(s2Total2).toBeCloseTo(11.0, 1)
   })
   it('acceptance: 17.5d Security + 5.0d Principal Engineer (non-levelled)', () => {
     const hpd = 7.6
