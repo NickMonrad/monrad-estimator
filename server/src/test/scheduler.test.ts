@@ -943,6 +943,71 @@ describe('sequential story phases', () => {
       .reduce((sum, [, v]) => sum + v, 0)
     expect(devWk5).toBeCloseTo(5.0, 1)
   })
+
+  it('manual feature with no auto features reports complete demand', () => {
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const s1 = makeStory('s1', [makeTask(40, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [makeTask(40, 'rt-dev', 'Dev')], 1)
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      manualFeatureEntries: [{ featureId: 'f1', startWeek: 0, durationWeeks: 4 }],
+      manualStoryEntries: [{ storyId: 's1', startWeek: 0 }],
+      resourceLevel: true,
+    }))
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(10.0, 1)
+  })
+
+  it('fractional pinned position reserves capacity at exact step overlap', () => {
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const sPin = makeStory('s-pin', [makeTask(8, 'rt-dev', 'Dev')], 0)
+    const sAuto = makeStory('s-auto', [makeTask(40, 'rt-dev', 'Dev')], 1)
+    const f1 = makeFeature('f1', [sPin, sAuto])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      manualStoryEntries: [{ storyId: 's-pin', startWeek: 0.8 }],
+      resourceLevel: true,
+    }))
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(6.0, 1)
+    const autoBar = result.storySchedule.find(s => s.storyId === 's-auto')!
+    expect(autoBar.startWeek).toBeLessThan(0.8)
+  })
+
+  it('story phase start aligns with first allocation, not eligibility', () => {
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const f1s1 = makeStory('f1s1', [makeTask(80, 'rt-dev', 'Dev')], 0)
+    const f1 = makeFeature('f1', [f1s1])
+    const f2s1 = makeStory('f2s1', [makeTask(40, 'rt-dev', 'Dev')], 0)
+    const f2 = makeFeature('f2', [f2s1])
+    const epic = makeEpic('ep1', [f1, f2], { featureMode: 'parallel' })
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      resourceLevel: true,
+    }))
+    const f1Bar = result.storySchedule.find(s => s.storyId === 'f1s1')!
+    const f2Bar = result.storySchedule.find(s => s.storyId === 'f2s1')!
+    const f1Entry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    const f2Entry = result.featureSchedule.find(e => e.featureId === 'f2')!
+    expect(f1Entry.startWeek).toBe(0)
+    expect(f2Entry.startWeek).toBe(0)
+    expect(f1Bar.startWeek).toBeGreaterThanOrEqual(0)
+    expect(f2Bar.startWeek).toBeGreaterThanOrEqual(0)
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(15.0, 1)
+  })
   it('acceptance: 17.5d Security + 5.0d Principal Engineer (non-levelled)', () => {
     const hpd = 7.6
     const security = makeRt('rt-sec', 'Principal Consultant - Security', 1, hpd)
