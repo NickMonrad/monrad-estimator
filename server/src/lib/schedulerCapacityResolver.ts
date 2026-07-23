@@ -4,15 +4,24 @@
  * Centralises loading and resolution of project capacity into scheduler-facing DTOs.
  * Profile-first precedence: persisted CapacityProfile > active Capacity Plan fallback > legacy.
  *
+ * Resolution per named resource:
+ * 1. Valid persisted profile (segmented, fixed, or availability-window) → capacitySegments
+ * 2. Active Capacity Plan trajectory → per-resource segments
+ * 3. Legacy allocation fields preserved unchanged
+ *
+ * Role-level profiles are applied to phantom slot capacity.
+ *
  * Keeps scheduler.ts pure (no Prisma dependency).
  */
 
 import {
   buildResourceCapacityProfileMap,
   type CapacityProfileAdapterInput,
+  type CapacityProfileResourceData,
 } from './capacityProfileResourceAdapter.js'
 import {
   materializeCapacityPlanResources,
+  shouldFallbackToActiveCapacityPlan,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
 import type {
@@ -34,6 +43,8 @@ export interface CapacityResolutionMeta {
   legacyCount: number
   /** IDs of named resources resolved from a valid persisted profile. */
   profileBackedNamedResourceIds: string[]
+  /** Resource type IDs where a valid role-level profile was applied to phantom slots. */
+  roleProfileRTIds: string[]
 }
 
 /**
@@ -49,14 +60,88 @@ export interface ResolvedSchedulerCapacity {
 }
 
 /**
+ * Convert a CapacityProfileResourceData (from the adapter) to scheduler segments.
+ * Handles both segment-based profiles and scalar (fixed/avail-window) profiles.
+ */
+function profileDataToSchedulerSegments(
+  data: CapacityProfileResourceData,
+): SchedulerCapacitySegment[] {
+  // Segment-based profile: use segments directly
+  if (data.segments.length > 0) {
+    return data.segments.map(s => ({
+      startWeek: s.startWeek,
+      endWeek: s.endWeek,
+      allocationPercent: s.capacityPercent,
+    }))
+  }
+
+  // Scalar profile (fixed or availability-window): derive a single segment from defaultPercent/startWeek/endWeek
+  const pct = data.defaultPercent != null ? data.defaultPercent : 100
+  const start = data.startWeek ?? 0
+  const end = data.endWeek ?? Infinity
+
+  if (start === 0 && !Number.isFinite(end)) {
+    // Whole-project fixed profile → single segment covering everything
+    return [{ startWeek: 0, endWeek: Infinity, allocationPercent: pct }]
+  }
+
+  // Availability window without segments → single window segment
+  return [{ startWeek: start, endWeek: end, allocationPercent: pct }]
+}
+
+/**
+ * Build a single SchedulerNamedResource with profile segments from a
+ * CapacityProfileResourceData.
+ */
+function buildProfileBackedNR(
+  nr: any,
+  segments: SchedulerCapacitySegment[],
+): SchedulerNamedResource {
+  return {
+    id: nr.id,
+    name: nr.name,
+    // Profile-backed: legacy startWeek/endWeek fields are no longer authoritative
+    // for capacity calculation, but we preserve them for display/diagnostics
+    startWeek: nr.startWeek ?? null,
+    endWeek: nr.endWeek ?? null,
+    allocationPct: nr.allocationPct,
+    allocationMode: nr.allocationMode ?? 'EFFORT',
+    allocationPercent: nr.allocationPercent ?? 100,
+    allocationStartWeek: nr.allocationStartWeek ?? null,
+    allocationEndWeek: nr.allocationEndWeek ?? null,
+    pricingModel: nr.pricingModel ?? undefined,
+    capacitySegments: segments,
+  }
+}
+
+/**
+ * Build legacy-fallback SchedulerNamedResource (no profile).
+ */
+function buildLegacyNR(nr: any): SchedulerNamedResource {
+  return {
+    id: nr.id,
+    name: nr.name,
+    startWeek: nr.startWeek ?? null,
+    endWeek: nr.endWeek ?? null,
+    allocationPct: nr.allocationPct,
+    allocationMode: nr.allocationMode ?? 'EFFORT',
+    allocationPercent: nr.allocationPercent ?? 100,
+    allocationStartWeek: nr.allocationStartWeek ?? null,
+    allocationEndWeek: nr.allocationEndWeek ?? null,
+    pricingModel: nr.pricingModel ?? undefined,
+    capacitySegments: undefined,
+  }
+}
+
+/**
  * Resolve profile-first capacity for scheduler consumers.
  *
- * Accepts PrismaClient or Prisma TransactionClient via structurally-typed `client`.
+ * Accepts PrismaClient or Prisma TransactionClient.
  *
- * Resolution order per named resource:
- * 1. Valid persisted CapacityProfile → capacitySegments populated from profile
- * 2. Active Capacity Plan trajectory → per-resource segments
- * 3. Legacy allocation fields preserved unchanged
+ * @param client   Prisma client or transaction client
+ * @param projectId  Project to resolve capacity for
+ * @param hoursPerDay Project default hours per day
+ * @returns Resolved scheduler capacity
  */
 export async function resolveSchedulerCapacity(
   client: any,
@@ -116,84 +201,84 @@ export async function resolveSchedulerCapacity(
   let profileBackedCount = 0
   let legacyCount = 0
   const profileBackedNamedResourceIds: string[] = []
+  const roleProfileRTIds: string[] = []
 
   const resultRTs: SchedulerResourceType[] = resourceTypes.map((rt: any) => {
     const rtNamedResources: any[] = (rt.namedResources ?? []).filter(Boolean)
+    const roleProfile = profileMap.roleProfiles.get(rt.id)
+    const roleProfileValid = roleProfile && roleProfile.resolutionSource === 'PROFILE'
+
+    if (roleProfileValid) {
+      roleProfileRTIds.push(rt.id)
+    }
 
     const namedResources: SchedulerNamedResource[] = rtNamedResources.map((nr: any) => {
-      const nameResourceProfiles = profileMap.namedResourceProfiles.get(nr.id)
+      const nrProfile = profileMap.namedResourceProfiles.get(nr.id)
 
-      // Profile-first: valid persisted profile with segments
-      if (nameResourceProfiles && nameResourceProfiles.resolutionSource === 'PROFILE' && nameResourceProfiles.segments.length > 0) {
+      // Profile-first: valid persisted profile
+      if (nrProfile && nrProfile.resolutionSource === 'PROFILE') {
+        const segments = profileDataToSchedulerSegments(nrProfile)
         profileBackedCount++
         profileBackedNamedResourceIds.push(nr.id)
-        const segments: SchedulerCapacitySegment[] = nameResourceProfiles.segments.map((s: any) => ({
-          startWeek: s.startWeek,
-          endWeek: s.endWeek,
-          capacityPercent: s.capacityPercent,
-        }))
-
-        return {
-          id: nr.id,
-          name: nr.name,
-          startWeek: nr.startWeek ?? null,
-          endWeek: nr.endWeek ?? null,
-          allocationPct: nr.allocationPct,
-          allocationMode: nr.allocationMode ?? 'EFFORT',
-          allocationPercent: nr.allocationPercent ?? 100,
-          allocationStartWeek: nr.allocationStartWeek ?? null,
-          allocationEndWeek: nr.allocationEndWeek ?? null,
-          pricingModel: nr.pricingModel ?? undefined,
-          capacitySegments: segments,
-        }
+        return buildProfileBackedNR(nr, segments)
       }
 
-      // Capacity plan trajectory → segments for individual named resources
-      if (nameResourceProfiles && nameResourceProfiles.resolutionSource === 'ACTIVE_CAPACITY_PLAN' && nameResourceProfiles.segments.length > 0) {
-        const segments: SchedulerCapacitySegment[] = nameResourceProfiles.segments.map((s: any) => ({
-          startWeek: s.startWeek,
-          endWeek: s.endWeek,
-          capacityPercent: s.capacityPercent,
-        }))
-
-        return {
-          id: nr.id,
-          name: nr.name,
-          startWeek: nr.startWeek ?? null,
-          endWeek: nr.endWeek ?? null,
-          allocationPct: nr.allocationPct,
-          allocationMode: nr.allocationMode ?? 'EFFORT',
-          allocationPercent: nr.allocationPercent ?? 100,
-          allocationStartWeek: nr.allocationStartWeek ?? null,
-          allocationEndWeek: nr.allocationEndWeek ?? null,
-          pricingModel: nr.pricingModel ?? undefined,
-          capacitySegments: segments,
-        }
+      // Capacity plan trajectory → per-resource segments
+      if (nrProfile && nrProfile.resolutionSource === 'ACTIVE_CAPACITY_PLAN') {
+        const segments = profileDataToSchedulerSegments(nrProfile)
+        profileBackedCount++
+        profileBackedNamedResourceIds.push(nr.id)
+        return buildProfileBackedNR(nr, segments)
       }
 
-      // Legacy fallback — no valid profile or capacity plan trajectory
+      // Legacy fallback — no valid profile
       legacyCount++
-      return {
-        id: nr.id,
-        name: nr.name,
-        startWeek: nr.startWeek ?? null,
-        endWeek: nr.endWeek ?? null,
-        allocationPct: nr.allocationPct,
-        allocationMode: nr.allocationMode ?? 'EFFORT',
-        allocationPercent: nr.allocationPercent ?? 100,
-        allocationStartWeek: nr.allocationStartWeek ?? null,
-        allocationEndWeek: nr.allocationEndWeek ?? null,
-        pricingModel: nr.pricingModel ?? undefined,
-        capacitySegments: undefined,
-      }
+      return buildLegacyNR(nr)
     })
+
+    // ── 5b. Capacity plan fallback: create synthetic NRs where appropriate ──
+    const allocationMode: string = rt.allocationMode ?? 'EFFORT'
+    const materialized = capacityPlanByRt.get(rt.id)
+
+    if (
+      allocationMode === 'CAPACITY_PLAN' &&
+      materialized &&
+      shouldFallbackToActiveCapacityPlan(namedResources, materialized)
+    ) {
+      // Create synthetic named resources from capacity plan slot windows
+      const planSlots: SchedulerNamedResource[] = (materialized.slotWindows ?? []).map((window, idx) => ({
+        id: `${rt.id}-capacity-plan-${idx + 1}`,
+        name: `${rt.name} ${idx + 1}`,
+        startWeek: window.startWeek,
+        endWeek: window.endWeek,
+        allocationPct: window.allocationPercent,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: window.allocationPercent,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        capacitySegments: [{
+          startWeek: window.startWeek,
+          endWeek: window.endWeek,
+          allocationPercent: window.allocationPercent,
+        }],
+      }))
+
+      return {
+        id: rt.id,
+        name: rt.name,
+        count: rt.count,
+        hoursPerDay: rt.hoursPerDay ?? null,
+        allocationMode: 'CAPACITY_PLAN',
+        namedResources: planSlots,
+      }
+    }
 
     return {
       id: rt.id,
       name: rt.name,
       count: rt.count,
       hoursPerDay: rt.hoursPerDay ?? null,
-      allocationMode: rt.allocationMode ?? 'EFFORT',
+      allocationMode,
       namedResources,
     }
   })
@@ -204,6 +289,7 @@ export async function resolveSchedulerCapacity(
       profileBackedCount,
       legacyCount,
       profileBackedNamedResourceIds,
+      roleProfileRTIds,
     },
     capacityPlanByRt,
   }

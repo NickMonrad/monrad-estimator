@@ -501,6 +501,7 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
   }
   const epics = allEpics
     .filter(e => e.isActive !== false)
+    .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
   // Use shared profile-first capacity resolver
   const resolved = await resolveSchedulerCapacity(prisma, project.id, project.hoursPerDay)
   const resourceTypes = resolved.resourceTypes

@@ -73,11 +73,14 @@ export interface SchedulerNamedResource {
  * When present, it is the authoritative source for the resource's allocation
  * in the covered weeks — overriding legacy allocation fields.
  * Gaps between segments produce zero capacity.
+ *
+ * Compatible with CapacityPlanSlotWindow (uses allocationPercent).
  */
 export interface SchedulerCapacitySegment {
   startWeek: number
   endWeek: number
-  capacityPercent: number
+  /** Effective allocation percent for this segment (0-100). */
+  allocationPercent: number
 }
 
 export interface SchedulerResourceType {
@@ -143,9 +146,6 @@ export interface SchedulerOutput {
 const PARALLEL_WARNING_EPSILON_DAYS = 1e-9
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pure helpers (previously in routes/timeline.ts)
-// ─────────────────────────────────────────────────────────────────────────────
-
 /** Compute the effective allocation percentage for a named resource in a given week. */
 export function effectiveAllocationPct(
   nr: SchedulerNamedResource,
@@ -155,7 +155,7 @@ export function effectiveAllocationPct(
   if (nr.capacitySegments && nr.capacitySegments.length > 0) {
     for (const seg of nr.capacitySegments) {
       if (week >= seg.startWeek && week <= seg.endWeek) {
-        return seg.capacityPercent
+        return seg.allocationPercent
       }
     }
     // Week not covered by any segment → gap or out-of-range → zero capacity

@@ -177,7 +177,7 @@ describe('effectiveAllocationPct with segments', () => {
       startWeek: 0, endWeek: null,
       allocationPct: 100, allocationMode: 'FULL_PROJECT',
       allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
-      capacitySegments: [{ startWeek: 0, endWeek: 3, capacityPercent: 50 }],
+      capacitySegments: [{ startWeek: 0, endWeek: 3, allocationPercent: 50 }],
     }
     // Profile says 50% in weeks 0-3; legacy says 100% FULL_PROJECT
     expect(effectiveAllocationPct(nr, 0)).toBe(50)
@@ -192,8 +192,8 @@ describe('effectiveAllocationPct with segments', () => {
       allocationPct: 100, allocationMode: 'FULL_PROJECT',
       allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
       capacitySegments: [
-        { startWeek: 0, endWeek: 2, capacityPercent: 100 },
-        { startWeek: 5, endWeek: 7, capacityPercent: 100 },
+        { startWeek: 0, endWeek: 2, allocationPercent: 100 },
+        { startWeek: 5, endWeek: 7, allocationPercent: 100 },
       ],
     }
     expect(effectiveAllocationPct(nr, 1)).toBe(100)
@@ -233,9 +233,9 @@ describe('effectiveAllocationPct with segments', () => {
       allocationPct: 100, allocationMode: 'FULL_PROJECT',
       allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
       capacitySegments: [
-        { startWeek: 0, endWeek: 1, capacityPercent: 100 },
-        { startWeek: 2, endWeek: 4, capacityPercent: 75 },
-        { startWeek: 5, endWeek: 10, capacityPercent: 50 },
+        { startWeek: 0, endWeek: 1, allocationPercent: 100 },
+        { startWeek: 2, endWeek: 4, allocationPercent: 75 },
+        { startWeek: 5, endWeek: 10, allocationPercent: 50 },
       ],
     }
     expect(effectiveAllocationPct(nr, 0)).toBe(100)
@@ -257,7 +257,7 @@ describe('getWeeklyCapacity with profile-backed named resources', () => {
         startWeek: 0, endWeek: null,
         allocationPct: 100, allocationMode: 'FULL_PROJECT',
         allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
-        capacitySegments: [{ startWeek: 0, endWeek: 50, capacityPercent: 100 }],
+        capacitySegments: [{ startWeek: 0, endWeek: 50, allocationPercent: 100 }],
       }],
     }
     // 1 NR × 1.0 × 8 × 5 = 40, phantom: max(0, 1-1) × 40 = 0
@@ -273,7 +273,7 @@ describe('getWeeklyCapacity with profile-backed named resources', () => {
         startWeek: 0, endWeek: null,
         allocationPct: 100, allocationMode: 'FULL_PROJECT',
         allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
-        capacitySegments: [{ startWeek: 0, endWeek: 10, capacityPercent: 50 }],
+        capacitySegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 50 }],
       }],
     }
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(0.5 * 8 * 5)  // 20h
@@ -289,8 +289,8 @@ describe('getWeeklyCapacity with profile-backed named resources', () => {
         allocationPct: 100, allocationMode: 'FULL_PROJECT',
         allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
         capacitySegments: [
-          { startWeek: 0, endWeek: 2, capacityPercent: 100 },
-          { startWeek: 5, endWeek: 7, capacityPercent: 100 },
+          { startWeek: 0, endWeek: 2, allocationPercent: 100 },
+          { startWeek: 5, endWeek: 7, allocationPercent: 100 },
         ],
       }],
     }
@@ -308,14 +308,14 @@ describe('getWeeklyCapacity with profile-backed named resources', () => {
           startWeek: 0, endWeek: null,
           allocationPct: 100, allocationMode: 'FULL_PROJECT',
           allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
-          capacitySegments: [{ startWeek: 0, endWeek: 10, capacityPercent: 50 }],
+          capacitySegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 50 }],
         },
         {
           id: 'nr2', name: 'Bob',
           startWeek: 0, endWeek: null,
           allocationPct: 100, allocationMode: 'FULL_PROJECT',
           allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
-          capacitySegments: [{ startWeek: 0, endWeek: 10, capacityPercent: 100 }],
+          capacitySegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 100 }],
         },
       ],
     }
@@ -331,7 +331,7 @@ describe('getWeeklyCapacity with profile-backed named resources', () => {
         startWeek: 0, endWeek: null,
         allocationPct: 100, allocationMode: 'FULL_PROJECT',
         allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
-        capacitySegments: [{ startWeek: 0, endWeek: 10, capacityPercent: 50 }],
+        capacitySegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 50 }],
       }],
     }
     // NR1: 0.5×8×5=20, phantom: max(0,4-1)×8×5=120 → total=140
