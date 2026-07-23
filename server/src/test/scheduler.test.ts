@@ -1076,6 +1076,60 @@ describe('sequential story phases', () => {
       .reduce((sum, [, v]) => sum + v, 0)
     expect(s2Total2).toBeCloseTo(11.0, 1)
   })
+
+  it('work → zero-effort → work: levelled story bars are contiguous', () => {
+    // Three ordered automatic stories: story1 (80 Dev hours), story2 (no tasks),
+    // story3 (80 QA hours). Zero-effort story2 must have real STEP-width bar
+    // without overlapping story1 or story3.
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const qa = makeRt('rt-qa', 'QA', 1, 8)
+    const s1 = makeStory('s1', [makeTask(80, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [], 1)
+    const s3 = makeStory('s3', [makeTask(80, 'rt-qa', 'QA')], 2)
+    const f1 = makeFeature('f1', [s1, s2, s3])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev, qa],
+      resourceLevel: true,
+    }))
+    const STEP = 0.2
+    const s1Bar = result.storySchedule.find(s => s.storyId === 's1')!
+    const s2Bar = result.storySchedule.find(s => s.storyId === 's2')!
+    const s3Bar = result.storySchedule.find(s => s.storyId === 's3')!
+    // Story 1 completes at t+STEP
+    const s1End = s1Bar.startWeek + s1Bar.durationWeeks
+    // Story 2 starts exactly when story 1 completes
+    expect(s2Bar.startWeek).toBe(s1End)
+    // Story 2 duration is exactly one scheduler step
+    expect(s2Bar.durationWeeks).toBeCloseTo(STEP, 3)
+    // Story 3 starts exactly when story 2 completes
+    expect(s3Bar.startWeek).toBe(s2Bar.startWeek + s2Bar.durationWeeks)
+    // Bars are contiguous and non-overlapping
+    expect(s3Bar.startWeek).toBeGreaterThanOrEqual(s2Bar.startWeek + s2Bar.durationWeeks - 0.001)
+    // Story 2 adds no rows to weeklyConsumptionMap
+    // Dev total = 80h/8hpd = 10pd, QA total = 80h/8hpd = 10pd
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(10.0, 1)
+    const qaTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-qa|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(qaTotal).toBeCloseTo(10.0, 1)
+    // Feature finish aligns with story 3's completion
+    const fEntry = result.featureSchedule.find(e => e.featureId === 'f1')!
+    expect(fEntry.startWeek + fEntry.durationWeeks).toBeGreaterThanOrEqual(s3Bar.startWeek + s3Bar.durationWeeks - 0.01)
+    // Idempotent rerun
+    const result2 = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev, qa],
+      resourceLevel: true,
+    }))
+    const s2Bar2 = result2.storySchedule.find(s => s.storyId === 's2')!
+    expect(s2Bar2.startWeek).toBe(s2Bar.startWeek)
+    expect(s2Bar2.durationWeeks).toBeCloseTo(STEP, 3)
+  })
   it('acceptance: 17.5d Security + 5.0d Principal Engineer (non-levelled)', () => {
     const hpd = 7.6
     const security = makeRt('rt-sec', 'Principal Consultant - Security', 1, hpd)
