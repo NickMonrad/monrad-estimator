@@ -1,3 +1,5 @@
+import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+
 import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
@@ -12,7 +14,6 @@ import {
   type ParallelWarning,
 } from '../lib/scheduler.js'
 import {
-  materializeCapacityPlanResources,
   shouldFallbackToActiveCapacityPlan,
   type MaterializedCapacityPlanResource,
 } from '../lib/capacityPlanMaterialisation.js'
@@ -73,6 +74,12 @@ function buildWarningResourceTypes(
 ): ResourceTypeWithNamed[] {
   return resourceTypes.map(rt => {
     if ((rt.allocationMode as AllocationMode | null) !== 'CAPACITY_PLAN') return rt
+
+    // Profile-backed named resources are already authoritative - skip fallback
+    const hasAnyProfileSegments = (rt.namedResources ?? []).some(
+      nr => nr.capacitySegments && nr.capacitySegments.length > 0,
+    )
+    if (hasAnyProfileSegments) return rt
 
     const materialized = capacityPlanByRt.get(rt.id)
     const useCapacityPlanFallback =
@@ -494,15 +501,11 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
   }
   const epics = allEpics
     .filter(e => e.isActive !== false)
-    .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
-
-  const resourceTypes = await prisma.resourceType.findMany({ where: { projectId: project.id }, include: { namedResources: true } })
-  const activeCapacityPlan = await prisma.capacityPlan.findFirst({
-    where: { projectId: project.id, isActive: true },
-    include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
-  })
-  const capacityPlanByRt = materializeCapacityPlanResources(activeCapacityPlan?.periods ?? [])
-  const warningResourceTypes = buildWarningResourceTypes(resourceTypes, capacityPlanByRt)
+  // Use shared profile-first capacity resolver
+  const resolved = await resolveSchedulerCapacity(prisma, project.id, project.hoursPerDay)
+  const resourceTypes = resolved.resourceTypes
+  const capacityPlanByRt = resolved.capacityPlanByRt
+  const warningResourceTypes = buildWarningResourceTypes(resourceTypes as ResourceTypeWithNamed[], capacityPlanByRt)
 
   const existingEntries = await prisma.timelineEntry.findMany({
     where: { projectId: project.id, isManual: true },
@@ -604,7 +607,7 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     warningResourceTypes,
   )
 
-  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDeps, resourceTypes, weeklyConsumptionMap, capacityPlanByRt))
+  res.json(buildResponse(project, entries, parallelWarnings, mappedStoryEntries, featureDependencies, storyDependencies, epicDeps, resourceTypes as ResourceTypeWithNamed[], weeklyConsumptionMap, capacityPlanByRt))
 }))
 
 // PUT /api/projects/:projectId/timeline/stories/:storyId — manual story timeline override
