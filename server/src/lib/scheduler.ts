@@ -842,20 +842,21 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
           if (phases) {
             const prevIdx = currentStoryIdx.get(fId) ?? 0
             if (prevIdx < phases.length) {
-              storyPhaseDone.set(phases[prevIdx].storyId, t + STEP)
+              const prevStoryId = phases[prevIdx].storyId
+              // Zero-effort phases never receive positive allocation,
+              // so their start is set here at the transition boundary.
+              if (!storyPhaseStart.has(prevStoryId)) {
+                storyPhaseStart.set(prevStoryId, t + STEP)
+              }
+              storyPhaseDone.set(prevStoryId, t + STEP)
             }
           }
-          // Advance to next story phase or mark feature done
+          // Advance to next story phase or mark feature done.
+          // The next phase's start is NOT recorded here — the
+          // allocation path sets it at first positive allocation.
           if (!advanceToNextStory(fId)) {
             simDone.set(fId, t + STEP)
             unfinished.delete(fId)
-          } else {
-            // Record the next story phase's start time
-            const phases = storyPhases.get(fId)!
-            const nextIdx = currentStoryIdx.get(fId) ?? 0
-            if (nextIdx < phases.length) {
-              storyPhaseStart.set(phases[nextIdx].storyId, t + STEP)
-            }
           }
         }
       }
@@ -895,6 +896,10 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       const lastStoryId = phases[idx].storyId
       if (!storyPhaseDone.has(lastStoryId) && simDone.has(fId)) {
         storyPhaseDone.set(lastStoryId, simDone.get(fId)!)
+        // Zero-effort last story: ensure start time is also recorded
+        if (!storyPhaseStart.has(lastStoryId)) {
+          storyPhaseStart.set(lastStoryId, simDone.get(fId)!)
+        }
       }
     }
 
