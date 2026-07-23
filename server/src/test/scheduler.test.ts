@@ -804,29 +804,21 @@ describe('sequential story phases', () => {
     expect(s2Bar.isManual).toBe(false)
   })
 
-  it('pinned story demand appears in weeklyConsumptionMap (non-levelled)', () => {
+  it('non-levelled does not emit partial pinned-only cache', () => {
+    // Pinned and automatic stories share the same resource type (Dev).
+    // Non-levelled must NOT produce a partial scheduler cache that would
+    // suppress fallback demand for the automatic portion downstream.
     const dev = makeRt('rt-dev', 'Dev', 1, 8)
-    const qa = makeRt('rt-qa', 'QA', 1, 8)
-    const s1 = makeStory('s1', [makeTask(40, 'rt-dev', 'Dev')], 0) // manual
-    const s2 = makeStory('s2', [makeTask(40, 'rt-qa', 'QA')], 1)  // auto
+    const s1 = makeStory('s1', [makeTask(40, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [makeTask(40, 'rt-dev', 'Dev')], 1)
     const f1 = makeFeature('f1', [s1, s2])
     const epic = makeEpic('ep1', [f1])
     const result = runScheduler(baseInput({
       epics: [epic],
-      resourceTypes: [dev, qa],
+      resourceTypes: [dev],
       manualStoryEntries: [{ storyId: 's1', startWeek: 0 }],
     }))
-    // Non-levelled: weeklyConsumptionMap contains pinned demand (Dev) only.
-    // Automatic story (QA) demand is not in the map without the simulation.
-    const devTotal = [...result.weeklyConsumptionMap.entries()]
-      .filter(([k]) => k.startsWith('rt-dev|'))
-      .reduce((sum, [, v]) => sum + v, 0)
-    expect(devTotal).toBeCloseTo(5.0, 1)
-    // QA (automatic) is absent from the non-levelled map
-    const qaTotal = [...result.weeklyConsumptionMap.entries()]
-      .filter(([k]) => k.startsWith('rt-qa|'))
-      .reduce((sum, [, v]) => sum + v, 0)
-    expect(qaTotal).toBe(0)
+    expect(result.weeklyConsumptionMap.size).toBe(0)
   })
 
   it('pinned story demand appears in weeklyConsumptionMap (resource-levelled)', () => {
@@ -886,12 +878,75 @@ describe('sequential story phases', () => {
     expect(s2Bar.isManual).toBe(false)
   })
 
-  // ── Issue #394 acceptance fixture ──────────────────────────────────────────
+  it('manual feature + manual story: pinned demand is not double-counted', () => {
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const s1 = makeStory('s1', [makeTask(40, 'rt-dev', 'Dev')], 0)
+    const f1 = makeFeature('f1', [s1])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      manualFeatureEntries: [{ featureId: 'f1', startWeek: 0, durationWeeks: 4 }],
+      manualStoryEntries: [{ storyId: 's1', startWeek: 0 }],
+      resourceLevel: true,
+    }))
+    const devTotal = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devTotal).toBeCloseTo(5.0, 1)
+  })
+
+  it('pinned story spans week where auto work is only partially active', () => {
+    // Pinned s1 at week 0 with 80 Dev hours → spans weeks 0-1.
+    // Auto feature f1 finishes in week 0.1 (< 1 step → still within week 0).
+    // Pinned weekly demand for Dev must be the full 5pd, not just the fraction
+    // coincident with the auto feature's active simulation steps.
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const s1 = makeStory('s1', [makeTask(80, 'rt-dev', 'Dev')], 0)
+    const s2 = makeStory('s2', [makeTask(8, 'rt-dev', 'Dev')], 1)
+    const f1 = makeFeature('f1', [s1, s2])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      manualStoryEntries: [{ storyId: 's1', startWeek: 0 }],
+      resourceLevel: true,
+    }))
+
+    // Pinned Dev: 80h/8hpd = 10 person-days over dur = 80/8/5 = 2 weeks → 5pd/week
+    const pinnedDevWeeks = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k.startsWith('rt-dev|'))
+      .map(([k, v]) => ({ week: parseInt(k.split('|')[1], 10), days: v }))
+      .filter(({ days }) => days > 0)
+    // Week 0 should have exactly the pinned share (~5pd) plus any auto share
+    const wk0 = pinnedDevWeeks.find(w => w.week === 0)
+    expect(wk0).toBeDefined()
+    expect(wk0!.days).toBeGreaterThan(4)
+  })
+
+  it('pinned-only week with no active automatic features', () => {
+    // Single feature with a single pinned story at week 5.
+    // No automatic features or stories — pinned demand must still appear.
+    const dev = makeRt('rt-dev', 'Dev', 1, 8)
+    const s1 = makeStory('s1', [makeTask(40, 'rt-dev', 'Dev')], 0)
+    const f1 = makeFeature('f1', [s1])
+    const epic = makeEpic('ep1', [f1])
+    const result = runScheduler(baseInput({
+      epics: [epic],
+      resourceTypes: [dev],
+      manualStoryEntries: [{ storyId: 's1', startWeek: 5 }],
+      resourceLevel: true,
+    }))
+    // Pinned: 40h/8hpd = 5pd, all in week 5 (pinned story duration = 1 week)
+    const devWk5 = [...result.weeklyConsumptionMap.entries()]
+      .filter(([k]) => k === 'rt-dev|5')
+      .reduce((sum, [, v]) => sum + v, 0)
+    expect(devWk5).toBeCloseTo(5.0, 1)
+  })
   it('acceptance: 17.5d Security + 5.0d Principal Engineer (non-levelled)', () => {
     const hpd = 7.6
     const security = makeRt('rt-sec', 'Principal Consultant - Security', 1, hpd)
     const engineer = makeRt('rt-pe', 'Principal Engineer - Cloud & DevOps', 1, hpd)
-
     // 17.5 days of Security effort → 17.5 * 7.6 = 133 hours
     const s1 = makeStory('s1', [makeTask(133, 'rt-sec', 'Principal Consultant - Security', hpd)], 0)
     // 38 hours / 5.0 days of Principal Engineer effort → 38 hours

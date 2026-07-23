@@ -653,6 +653,9 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       const result = new Map<string, number>()
       for (const story of feature.userStories) {
         if (story.isActive === false) continue
+        // Pinned stories have independent demand accounting; exclude them from
+        // the manual-feature aggregate to prevent double-counting.
+        if (manualStoryWeeks.has(story.id)) continue
         for (const task of story.tasks) {
           const rtId = task.resourceTypeId ?? '_unassigned'
           const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
@@ -798,16 +801,13 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
             }
           }
         }
-        // Subtract pinned story demand from available capacity and record it.
-        // Pinned demand is spread uniformly across all steps in each week.
+        // Subtract pinned story demand from available capacity per step.
+        // Output accounting for pinned demand is handled separately below
+        // (outside the step-by-step loop) to ensure complete weekly totals.
         const pinnedWeeklyHours = pinnedStoryDemand.get(`${rtId}|${currentWeek}`) ?? 0
         if (pinnedWeeklyHours > 0) {
           const pinnedStepHours = pinnedWeeklyHours * STEP
           capPerStep = Math.max(0, capPerStep - pinnedStepHours)
-          weeklyConsumptionMap.set(
-            `${rtId}|${currentWeek}`,
-            (weeklyConsumptionMap.get(`${rtId}|${currentWeek}`) ?? 0) + pinnedStepHours / hpd,
-          )
         }
         const competing = active.filter(fId => (remainingHours.get(fId)?.get(rtId) ?? 0) > 0.001)
         if (competing.length === 0) continue
@@ -887,13 +887,17 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     }
   }
 
-  // Add pinned story demand to weeklyConsumptionMap for weeks not already
-  // represented (the simulation loop already adds these for the levelled path).
-  for (const [key, weeklyHours] of pinnedStoryDemand) {
-    if (!weeklyConsumptionMap.has(key)) {
+  // Add complete pinned story demand to weeklyConsumptionMap for the levelled
+  // path (outside the step loop so weeks with partial automatic coverage still
+  // record the full pinned total).  The non-levelled path does NOT emit a
+  // partial scheduler cache — fallback demand already covers all resource types.
+  if (resourceLevel) {
+    for (const [key, weeklyHours] of pinnedStoryDemand) {
       const [rtId] = key.split('|')
       const hpd = rtById.get(rtId)?.hoursPerDay ?? fallbackHoursPerDay
-      weeklyConsumptionMap.set(key, Math.round(weeklyHours / hpd * 100) / 100)
+      // Add the complete pinned weekly total; the simulation loop only used
+      // pinned demand for capacity reservation, not output accounting.
+      weeklyConsumptionMap.set(key, (weeklyConsumptionMap.get(key) ?? 0) + Math.round(weeklyHours / hpd * 100) / 100)
     }
   }
 
