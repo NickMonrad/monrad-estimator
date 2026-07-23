@@ -843,10 +843,12 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
             const prevIdx = currentStoryIdx.get(fId) ?? 0
             if (prevIdx < phases.length) {
               const prevStoryId = phases[prevIdx].storyId
-              // Zero-effort phases never receive positive allocation,
-              // so their start is set here at the transition boundary.
+              // Zero-effort phases never receive positive allocation.
+              // Record start at the beginning of this step (t) and completion
+              // at the end (t+STEP) so story bars are contiguous — the next
+              // phase begins allocation at t+STEP in the following iteration.
               if (!storyPhaseStart.has(prevStoryId)) {
-                storyPhaseStart.set(prevStoryId, t + STEP)
+                storyPhaseStart.set(prevStoryId, t)
               }
               storyPhaseDone.set(prevStoryId, t + STEP)
             }
@@ -888,17 +890,17 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       }
     }
 
-    // Record completion times for story phases whose completion coincides
-    // with the feature's simDone (last story done at the feature boundary).
     for (const [fId, idx] of currentStoryIdx) {
       const phases = storyPhases.get(fId)
       if (!phases || idx < 0 || idx >= phases.length) continue
       const lastStoryId = phases[idx].storyId
       if (!storyPhaseDone.has(lastStoryId) && simDone.has(fId)) {
-        storyPhaseDone.set(lastStoryId, simDone.get(fId)!)
-        // Zero-effort last story: ensure start time is also recorded
+        const simDoneVal = simDone.get(fId)!
+        storyPhaseDone.set(lastStoryId, simDoneVal)
+        // Zero-effort last story: set start one scheduler step before
+        // simDone so the bar has a real STEP-width interval.
         if (!storyPhaseStart.has(lastStoryId)) {
-          storyPhaseStart.set(lastStoryId, simDone.get(fId)!)
+          storyPhaseStart.set(lastStoryId, Math.max(simDoneVal - STEP, 0))
         }
       }
     }
