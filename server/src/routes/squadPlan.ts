@@ -176,7 +176,7 @@ function buildWeeklyDemandCacheFromPlannerResult(
   return weeklyDemandCache
 }
 
-function buildReplayPlannerResourceTypes(
+export function buildReplayPlannerResourceTypes(
   resourceTypes: SchedulerResourceType[],
   slotWindowsByRt: Map<string, CapacityPlanSlotWindow[]>,
   maxHeadcountByRt: Map<string, number>,
@@ -190,6 +190,10 @@ function buildReplayPlannerResourceTypes(
     return {
       ...resourceType,
       count: maxHeadcount,
+      // Clear stale roleSegments: the proposed plan IS the authoritative
+      // capacity for affected resource types. Retaining old roleSegments
+      // would cause getWeeklyCapacity() to double-count (defect #362 fix 3).
+      roleSegments: undefined,
       namedResources: slotWindows.map((slotWindow, idx) => ({
         id: `capacity-plan-${resourceType.id}-${idx}`,
         name: `${resourceType.name} ${idx + 1}`,

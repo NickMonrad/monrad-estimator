@@ -31,6 +31,12 @@ type ResourceTypeLike = {
    * resources over the persisted profile-backed resources.
    */
   capacityProfileBacked?: boolean
+  /**
+   * Resolved aggregate role-level capacity segments.
+   * When present, constrains the phantom/unnamed-slot capacity instead of
+   * using count-based synthetic resources at 100%.
+   */
+  roleSegments?: { startWeek: number; endWeek: number; allocationPercent: number }[]
   namedResources?: NamedResourceLike[]
 }
 
@@ -108,9 +114,15 @@ function buildEffectiveNamedResources(
   const persistedNamedResources = resourceType.namedResources ?? []
   const mode = toAllocationMode(resourceType.allocationMode)
   const capacityPlanMaterialized = capacityPlanByRt.get(resourceType.id)
+  const hasRoleSegments = resourceType.roleSegments && resourceType.roleSegments.length > 0
+
+  // When a valid role profile is authoritative, suppress capacity plan fallback.
+  // The role segments provide aggregate unnamed-staff capacity instead of
+  // both the plan's trajectory set AND count-based phantom slots (defect #362).
   const useCapacityPlanFallback =
     mode === 'CAPACITY_PLAN' &&
     !resourceType.capacityProfileBacked &&
+    !hasRoleSegments &&
     shouldFallbackToActiveCapacityPlan(persistedNamedResources, capacityPlanMaterialized)
 
   const baseNamedResources = useCapacityPlanFallback && capacityPlanMaterialized
@@ -152,6 +164,54 @@ function buildEffectiveNamedResources(
         synthetic: false,
       }))
 
+  // ── Role-segment authority: provide aggregate role capacity ────────────
+  // When a valid role profile is authoritative, generate a synthetic NR
+  // carrying the role segments. This replaces count-based phantom slots
+  // and provides the aggregate unnamed-staff capacity. Named resources
+  // contribute their own capacity independently; the role synthetic adds
+  // the capacity that count would have provided for phantom slots.
+  // Keeps assignment capacity consistent with getWeeklyCapacity().
+  if (hasRoleSegments && hasDemand) {
+    const roleNR = {
+      id: `${resourceType.id}-role`,
+      name: `${resourceType.name} (Role)`,
+      startWeek: null,
+      endWeek: null,
+      allocationPct: 100,
+      allocationMode: 'EFFORT' as const,
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      pricingModel: 'ACTUAL_DAYS' as const,
+      synthetic: true,
+      capacitySegments: resourceType.roleSegments,
+    }
+
+    return [roleNR, ...baseNamedResources].map((namedResource, order) => ({
+      id: namedResource.id,
+      resourceTypeId: resourceType.id,
+      resourceTypeName: resourceType.name,
+      name: namedResource.name,
+      allocationMode: namedResource.allocationMode ?? 'EFFORT',
+      allocationPercent: namedResource.allocationPercent ?? namedResource.allocationPct ?? 100,
+      allocationStartWeek: namedResource.allocationStartWeek ?? null,
+      allocationEndWeek: namedResource.allocationEndWeek ?? null,
+      pricingModel: namedResource.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
+      startWeek: namedResource.startWeek ?? null,
+      endWeek: namedResource.endWeek ?? null,
+      synthetic: namedResource.synthetic,
+      actualAllocatedDays: 0,
+      actualAllocationStartWeek: null,
+      actualAllocationEndWeek: null,
+      actualAllocatedWeeks: [],
+      actualAllocationSegments: [],
+      capacitySegments: (namedResource as { capacitySegments?: CapacityPlanSlotWindow[] }).capacitySegments,
+      order,
+      lastAssignedWeek: null,
+    }))
+  }
+
+  // ── Legacy fallback: count-based phantom slots ──────────────────────────
   const effectiveCount = Math.max(resourceType.count ?? 0, baseNamedResources.length)
   const namedResources = hasDemand && effectiveCount > baseNamedResources.length
     ? [
@@ -162,11 +222,11 @@ function buildEffectiveNamedResources(
           startWeek: null,
           endWeek: null,
           allocationPct: 100,
-          allocationMode: 'EFFORT',
+          allocationMode: 'EFFORT' as const,
           allocationPercent: 100,
           allocationStartWeek: null,
           allocationEndWeek: null,
-          pricingModel: 'ACTUAL_DAYS',
+          pricingModel: 'ACTUAL_DAYS' as const,
           synthetic: true,
         })),
       ]

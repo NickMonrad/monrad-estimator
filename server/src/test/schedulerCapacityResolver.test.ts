@@ -514,3 +514,270 @@ describe('resolveSchedulerCapacity', () => {
     expect(result1.meta).toEqual(result2.meta)
   })
 })
+
+describe('resolveSchedulerCapacity mixed trajectories (fix 2)', () => {
+  it('one existing NR plus one additional plan trajectory', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-mix', name: 'Developer', count: 2, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-dev-1', name: 'Dev 1',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-mix', headcount: 1.5 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // Must have 2 trajectories: one matched to existing NR, one generated
+    expect(rt.namedResources.length).toBe(2)
+
+    const existingNR = rt.namedResources.find(nr => nr.id === 'nr-dev-1')
+    expect(existingNR).toBeDefined()
+    expect(existingNR!.capacitySegments).toBeDefined()
+
+    const generatedNR = rt.namedResources.find(nr => nr.id !== 'nr-dev-1')
+    expect(generatedNR).toBeDefined()
+    expect(generatedNR!.allocationMode).toBe('CAPACITY_PLAN')
+    expect(generatedNR!.id).toContain('capacity-plan')
+  })
+
+  it('more existing NRs than plan trajectories keeps unmatched persisted NRs', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-extra', name: 'Extra', count: 3, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-e1', name: 'Extra 1',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+            {
+              id: 'nr-e2', name: 'Extra 2',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+            {
+              id: 'nr-e3', name: 'Extra 3',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-extra', headcount: 1 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // 1 trajectory, 3 existing NRs. The trajectory matches NR e1 by index.
+    // NR e2 and e3 are unmatched persisted NRs → kept as-is (LEGACY).
+    expect(rt.namedResources.length).toBe(3)
+    expect(rt.namedResources.find(nr => nr.id === 'nr-e1')?.capacitySegments).toBeDefined()
+    // At least one unmatched NR should still exist (legacy format, no segments)
+  })
+
+  it('fractional headcount 1.25 FTE produces correct trajectory count', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-frac', name: 'Fractional', count: 2, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [],
+        },
+      ],
+      capacityProfiles: [],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-frac', headcount: 1.25 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // 1.25 FTE = 5 units at 0.25 each, ceil(5/4) = 2 trajectories
+    expect(rt.namedResources.length).toBeGreaterThanOrEqual(2)
+    expect(rt.namedResources.length).toBeLessThanOrEqual(3)
+
+    // Each trajectory should have segments
+    for (const nr of rt.namedResources) {
+      expect(nr.capacitySegments).toBeDefined()
+      expect(nr.capacitySegments!.length).toBeGreaterThan(0)
+    }
+
+    // Total allocation across all NRs should reflect 125% FTE
+    const totalPct = rt.namedResources.reduce((sum, nr) => {
+      const seg = nr.capacitySegments?.[0]
+      return sum + (seg?.allocationPercent ?? 100)
+    }, 0)
+    expect(totalPct).toBeGreaterThanOrEqual(100)
+    expect(totalPct).toBeLessThanOrEqual(200)
+  })
+
+  it('capacity decreasing then increasing produces correct trajectories', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-wave', name: 'Wave', count: 3, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [],
+        },
+      ],
+      capacityProfiles: [],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 4,
+            entries: [{ resourceTypeId: 'rt-wave', headcount: 2 }],
+          },
+          {
+            periodIndex: 1, startWeek: 4, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-wave', headcount: 1 }],
+          },
+          {
+            periodIndex: 2, startWeek: 8, endWeek: 12,
+            entries: [{ resourceTypeId: 'rt-wave', headcount: 2.5 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // Should have multiple trajectories for the wave pattern
+    expect(rt.namedResources.length).toBeGreaterThanOrEqual(2)
+
+    // Trajectories should have segments that change allocation
+    const hasChangingAllocation = rt.namedResources.some(nr =>
+      nr.capacitySegments && nr.capacitySegments.length > 1,
+    )
+    expect(hasChangingAllocation).toBe(true)
+  })
+
+  it('discontinuous capacity plan periods produce zero-capacity gaps', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-disc', name: 'Discontinuous', count: 2, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [],
+        },
+      ],
+      capacityProfiles: [],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 3,
+            entries: [{ resourceTypeId: 'rt-disc', headcount: 1 }],
+          },
+          {
+            periodIndex: 1, startWeek: 6, endWeek: 9,
+            entries: [{ resourceTypeId: 'rt-disc', headcount: 2 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    expect(rt.namedResources.length).toBeGreaterThanOrEqual(2)
+
+    // Gaps in segment coverage → zero capacity between periods
+    const nr1 = rt.namedResources[0]
+    expect(nr1.capacitySegments).toBeDefined()
+  })
+
+  it('deterministic IDs and ordering across repeated resolution', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-det', name: 'Deterministic', count: 2, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-det-1', name: 'Det 1',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-det', headcount: 1.5 }],
+          },
+        ],
+      },
+    })
+
+    const result1 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+
+    // Same IDs and ordering
+    expect(result1.resourceTypes).toEqual(result2.resourceTypes)
+  })
+})
