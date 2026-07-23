@@ -616,10 +616,11 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
   const weeklyConsumptionMap = new Map<string, number>()
   const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
 
-  // Pre-compute pinned story resource demand for inclusion in weeklyConsumptionMap
-  // and capacity reservation during levelling. Pinned stories are excluded from
-  // automatic story phases but their demand must be represented.
-  const pinnedStoryDemand = new Map<string, number>()  // key: `${rtId}|${week}` → hours/week
+  // Pre-compute pinned story resource demand for both weekly output accounting
+  // and precise step-overlap capacity reservation. Pinned stories are excluded
+  // from automatic story phases but their demand must be represented.
+  const pinnedStoryDemand = new Map<string, number>()  // key: `${rtId}|${week}` → hours/week (output)
+  const pinnedIntervals: Array<{ rtId: string; hpd: number; totalHours: number; dur: number; startWeek: number; endWeek: number }> = []
   for (const f of allFeatures) {
     for (const story of f.userStories) {
       if (!manualStoryWeeks.has(story.id)) continue
@@ -630,15 +631,18 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
         return sum + effectiveDays(t.durationDays, t.hoursEffort, hpd) * hpd
       }, 0)
       const dur = Math.max(0.2, totalHours / fallbackHoursPerDay / 5)
+      const endWeek = sw + dur
 
       for (const task of story.tasks) {
         const rtId = task.resourceTypeId ?? '_unassigned'
         const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
         const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
+        pinnedIntervals.push({ rtId, hpd, totalHours: hours, dur, startWeek: sw, endWeek })
+        // Weekly totals for output accounting
         const startW = Math.floor(sw)
-        const endWk = Math.ceil(sw + dur)
+        const endWk = Math.ceil(endWeek)
         for (let w = startW; w < endWk; w++) {
-          const overlap = Math.min(w + 1, sw + dur) - Math.max(w, sw)
+          const overlap = Math.min(w + 1, endWeek) - Math.max(w, sw)
           if (overlap <= 0) continue
           const weeklyHours = hours * (overlap / dur)
           const key = `${rtId}|${w}`
@@ -746,36 +750,13 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
             if (!hasCapacity) continue
           }
           simStart.set(fId, t)
-          // Record the first story phase's start time for levelled bar derivation
-          const startPhases = storyPhases.get(fId)
-          if (startPhases && startPhases.length > 0) {
-            const firstIdx = currentStoryIdx.get(fId) ?? 0
-            if (firstIdx < startPhases.length) {
-              storyPhaseStart.set(startPhases[firstIdx].storyId, t)
-            }
-          }
+          // (story phase start is recorded at first allocation, not at simStart)
         }
       }
       const active = [...unfinished].filter(fId => simStart.has(fId))
 
       const currentWeek = Math.floor(t)
-      for (const rtId of allRtIds) {
-        const rt = rtById.get(rtId)
-        const hpd = rt?.hoursPerDay ?? fallbackHoursPerDay
-        for (const [fId] of manualStartWeeks) {
-          const fStart = simStart.get(fId)
-          const fDone = simDone.get(fId)
-          if (fStart === undefined || fDone === undefined || fDone <= fStart) continue
-          if (t >= fStart && t < fDone) {
-            const rtHours = featureResourceHoursCache.get(fId)!.get(rtId) ?? 0
-            if (rtHours > 0) {
-              const perStep = (rtHours / (fDone - fStart)) * STEP
-              const consumptionKey = `${rtId}|${currentWeek}`
-              weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + perStep / hpd)
-            }
-          }
-        }
-      }
+      // (manual-feature consumption output is handled post-loop)
 
       if (active.length === 0) { t += STEP; continue }
 
@@ -801,13 +782,15 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
             }
           }
         }
-        // Subtract pinned story demand from available capacity per step.
-        // Output accounting for pinned demand is handled separately below
-        // (outside the step-by-step loop) to ensure complete weekly totals.
-        const pinnedWeeklyHours = pinnedStoryDemand.get(`${rtId}|${currentWeek}`) ?? 0
-        if (pinnedWeeklyHours > 0) {
-          const pinnedStepHours = pinnedWeeklyHours * STEP
-          capPerStep = Math.max(0, capPerStep - pinnedStepHours)
+        // Subtract pinned story demand from available capacity using exact
+        // step-overlap with each pinned interval, not a uniform weekly spread.
+        // A pinned story at week 0.8 should only reserve capacity from 0.8 onward.
+        for (const pin of pinnedIntervals) {
+          if (pin.rtId !== rtId) continue
+          if (t + STEP <= pin.startWeek || t >= pin.endWeek) continue
+          const overlap = Math.min(t + STEP, pin.endWeek) - Math.max(t, pin.startWeek)
+          if (overlap <= 0) continue
+          capPerStep = Math.max(0, capPerStep - pin.totalHours * (overlap / pin.dur))
         }
         const competing = active.filter(fId => (remainingHours.get(fId)?.get(rtId) ?? 0) > 0.001)
         if (competing.length === 0) continue
@@ -833,6 +816,21 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
           const consumptionKey = `${rtId}|${currentWeek}`
           weeklyConsumptionMap.set(consumptionKey, (weeklyConsumptionMap.get(consumptionKey) ?? 0) + actualAllocated / hpd)
           remainingHours.get(fId)!.set(rtId, Math.max(0, rem - actualAllocated))
+          // Record the current story phase's start time at first positive allocation,
+          // not when the feature became eligible. This aligns story bars with actual
+          // consumption rather than eligibility.
+          if (actualAllocated > 0) {
+            const phases = storyPhases.get(fId)
+            if (phases) {
+              const idx = currentStoryIdx.get(fId) ?? 0
+              if (idx < phases.length) {
+                const storyId = phases[idx].storyId
+                if (!storyPhaseStart.has(storyId)) {
+                  storyPhaseStart.set(storyId, t)
+                }
+              }
+            }
+          }
         }
       }
 
@@ -864,6 +862,29 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
 
       t += STEP
       t = Math.round(t * 5) / 5
+    }
+
+    // Add complete manual-feature consumption to weeklyConsumptionMap.
+    // This runs outside the while loop so it is independent of whether any
+    // automatic features exist.
+    for (const [fId, sw] of manualStartWeeks) {
+      const fEnd = simDone.get(fId) ?? (sw + 1)
+      if (sw >= fEnd) continue
+      const fHours = featureResourceHoursCache.get(fId)
+      if (!fHours) continue
+      const fDur = fEnd - sw
+      for (const [rtId, rtHours] of fHours) {
+        const hpd = rtById.get(rtId)?.hoursPerDay ?? fallbackHoursPerDay
+        const startW = Math.floor(sw)
+        const endWk = Math.ceil(fEnd)
+        for (let w = startW; w < endWk; w++) {
+          const overlap = Math.min(w + 1, fEnd) - Math.max(w, sw)
+          if (overlap <= 0) continue
+          const weeklyDays = rtHours * (overlap / fDur)
+          const key = `${rtId}|${w}`
+          weeklyConsumptionMap.set(key, (weeklyConsumptionMap.get(key) ?? 0) + Math.round(weeklyDays / hpd * 100) / 100)
+        }
+      }
     }
 
     // Record completion times for story phases whose completion coincides
