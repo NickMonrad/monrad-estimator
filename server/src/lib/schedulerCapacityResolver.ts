@@ -21,6 +21,7 @@ import {
 } from './capacityProfileResourceAdapter.js'
 import {
   materializeCapacityPlanResources,
+  matchTrajectoriesToResources,
   shouldFallbackToActiveCapacityPlan,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
@@ -212,6 +213,9 @@ export async function resolveSchedulerCapacity(
       roleProfileRTIds.push(rt.id)
     }
 
+    // Track per-NR resolution source to distinguish PROFILE from ACTIVE_CAPACITY_PLAN
+    const nrSources = new Map<string, 'PROFILE' | 'ACTIVE_CAPACITY_PLAN' | 'LEGACY'>()
+
     const namedResources: SchedulerNamedResource[] = rtNamedResources.map((nr: any) => {
       const nrProfile = profileMap.namedResourceProfiles.get(nr.id)
 
@@ -220,6 +224,7 @@ export async function resolveSchedulerCapacity(
         const segments = profileDataToSchedulerSegments(nrProfile)
         profileBackedCount++
         profileBackedNamedResourceIds.push(nr.id)
+        nrSources.set(nr.id, 'PROFILE')
         return buildProfileBackedNR(nr, segments)
       }
 
@@ -228,11 +233,13 @@ export async function resolveSchedulerCapacity(
         const segments = profileDataToSchedulerSegments(nrProfile)
         profileBackedCount++
         profileBackedNamedResourceIds.push(nr.id)
+        nrSources.set(nr.id, 'ACTIVE_CAPACITY_PLAN')
         return buildProfileBackedNR(nr, segments)
       }
 
       // Legacy fallback — no valid profile
       legacyCount++
+      nrSources.set(nr.id, 'LEGACY')
       return buildLegacyNR(nr)
     })
 
@@ -240,9 +247,11 @@ export async function resolveSchedulerCapacity(
     const allocationMode: string = rt.allocationMode ?? 'EFFORT'
     const materialized = capacityPlanByRt.get(rt.id)
 
-    // A valid role profile or profile-backed NRs suppress capacity plan fallback
-    const hasProfileAuthority = roleProfileValid ||
-      namedResources.some(nr => nr.capacitySegments && nr.capacitySegments.length > 0)
+    // Only a VALID role-level profile suppresses plan fallback (defect #362 fix 2).
+    // Named resources with ACTIVE_CAPACITY_PLAN segments must NOT suppress
+    // plan fallback — additional trajectories beyond matched resources must
+    // still be generated with deterministic IDs.
+    const hasProfileAuthority = roleProfileValid
 
     if (
       !hasProfileAuthority &&
@@ -250,31 +259,82 @@ export async function resolveSchedulerCapacity(
       materialized &&
       shouldFallbackToActiveCapacityPlan(namedResources, materialized)
     ) {
-      // Create synthetic named resources from capacity plan slot windows
-      const planSlots: SchedulerNamedResource[] = (materialized.slotWindows ?? []).map((window, idx) => ({
-        id: `${rt.id}-capacity-plan-${idx + 1}`,
-        name: `${rt.name} ${idx + 1}`,
-        startWeek: window.startWeek,
-        endWeek: window.endWeek,
-        allocationPct: window.allocationPercent,
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: window.allocationPercent,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        capacitySegments: [{
-          startWeek: window.startWeek,
-          endWeek: window.endWeek,
-          allocationPercent: window.allocationPercent,
-        }],
-      }))
+      // Check if any NR has a VALID persisted profile (real profile, not plan)
+      const hasPersistedProfile = Array.from(nrSources.values()).some(s => s === 'PROFILE')
 
-      return {
-        id: rt.id,
-        name: rt.name,
-        count: rt.count,
-        hoursPerDay: rt.hoursPerDay ?? null,
-        allocationMode: 'CAPACITY_PLAN',
-        namedResources: planSlots,
+      if (hasPersistedProfile) {
+        // Keep profile-backed NRs as-is; generate trajectories only for gaps
+        const profileNRs = namedResources.filter(nr => nrSources.get(nr.id) === 'PROFILE')
+        const profileCount = profileNRs.length
+        const extraTrajectories = materialized.resourceTrajectories.slice(profileCount)
+        const extraNRs: SchedulerNamedResource[] = extraTrajectories.map((t, idx) => {
+          const firstSeg = t.segments[0]
+          const lastSeg = t.segments.length > 0 ? t.segments[t.segments.length - 1] : null
+          return {
+            id: `${rt.id}-capacity-plan-${profileCount + idx + 1}`,
+            name: `${rt.name} ${profileCount + idx + 1}`,
+            startWeek: firstSeg?.startWeek ?? null,
+            endWeek: lastSeg?.endWeek ?? null,
+            allocationPct: firstSeg?.allocationPercent ?? 100,
+            allocationMode: 'CAPACITY_PLAN',
+            allocationPercent: firstSeg?.allocationPercent ?? 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            capacitySegments: t.segments,
+          }
+        })
+
+        return {
+          id: rt.id,
+          name: rt.name,
+          count: rt.count,
+          hoursPerDay: rt.hoursPerDay ?? null,
+          allocationMode: 'CAPACITY_PLAN',
+          namedResources: [...profileNRs, ...extraNRs],
+        }
+      } else {
+        // No profile authority: use matchTrajectoriesToResources for the
+        // complete trajectory set — matches existing NRs by index, creates
+        // deterministic generated IDs for unmatched trajectories.
+        const trajectories = materialized.resourceTrajectories
+        const matched = matchTrajectoriesToResources(
+          trajectories,
+          rt.id,
+          rt.name,
+          rtNamedResources.map((nr: any) => ({ id: nr.id, name: nr.name })),
+        )
+
+        const planSlots: SchedulerNamedResource[] = matched.map(m => {
+          const firstSeg = m.slotWindows[0]
+          const lastSeg = m.slotWindows.length > 0 ? m.slotWindows[m.slotWindows.length - 1] : null
+          return {
+            id: m.id,
+            name: m.name,
+            startWeek: firstSeg?.startWeek ?? null,
+            endWeek: lastSeg?.endWeek ?? null,
+            allocationPct: firstSeg?.allocationPercent ?? 100,
+            allocationMode: 'CAPACITY_PLAN',
+            allocationPercent: firstSeg?.allocationPercent ?? 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            capacitySegments: m.slotWindows,
+          }
+        })
+
+        // Preserve unmatched persisted NRs (those not covered by any trajectory)
+        const matchedExistingIds = new Set(
+          matched.filter(m => m.existingNamedResourceId).map(m => m.existingNamedResourceId!),
+        )
+        const unmatchedPersisted = namedResources.filter(nr => !matchedExistingIds.has(nr.id))
+
+        return {
+          id: rt.id,
+          name: rt.name,
+          count: rt.count,
+          hoursPerDay: rt.hoursPerDay ?? null,
+          allocationMode: 'CAPACITY_PLAN',
+          namedResources: [...planSlots, ...unmatchedPersisted],
+        }
       }
     }
 
