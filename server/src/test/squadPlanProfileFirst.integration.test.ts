@@ -516,6 +516,76 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(roleProfile!.startWeek).not.toBeNull()
     expect(roleProfile!.endWeek).not.toBeNull()
   })
+
+  it('resolved scheduler capacity matches plan: 60h at week 0, 20h at week 8, no double-count', async () => {
+    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const { deriveNamedResourceAssignments } = await import('../lib/namedResourceAssignments.js')
+    const { materializeCapacityPlanResources } = await import('../lib/capacityPlanMaterialisation.js')
+
+    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const rt = resolved.resourceTypes.find(r => r.id === rtId)!
+
+    // Overlap suppression: aggregate ROLE profile from Squad Planner must
+    // not be exposed as additional scheduler capacity when PLANNED_RESOURCE
+    // profiles exist for the same plan.
+    expect(rt.roleSegments).toEqual([])
+
+    // Named resources: 2 planned-resource trajectories
+    expect(rt.namedResources).toHaveLength(2)
+
+    // Week 0: 1.5 FTE = 60h (100% + 50%), not 120h (no role double-count)
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(60)
+
+    // Week 8: 0.5 FTE = 20h (trajectory 1 ends, trajectory 0 at 50%)
+    expect(getWeeklyCapacity(rt, 8, 8)).toBe(20)
+
+    // No count-based phantom capacity (count=2, 2 NRs → 0 phantom)
+    // Already validated by exact hourly totals above.
+
+    // Named-resource assignment parity
+    const capacityPlanByRt = materializeCapacityPlanResources([])
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [rt],
+      weeklyDemand: [
+        { week: 0, resourceTypeName: 'Engineer', demandDays: 10 },
+        { week: 8, resourceTypeName: 'Engineer', demandDays: 10 },
+      ],
+      capacityPlanByRt,
+    })
+    const rtAssign = assignments.get(rtId)!
+    // Week 0: capacity 7.5d, demand 10d → 7.5d allocated, 2.5d unallocated
+    // Week 8: capacity 2.5d, demand 10d → 2.5d allocated, 7.5d unallocated
+    expect(rtAssign.actualAllocatedDays).toBeCloseTo(10, 5) // 7.5 + 2.5
+
+    // Timeline GET exposes same weekly capacity
+    const timelineRes = await request(app)
+      .get(`/api/projects/${projectId}/timeline`)
+      .set('Authorization', authHeader)
+    expect(timelineRes.status).toBe(200)
+
+    const engCap = timelineRes.body.weeklyCapacity.find(
+      (c: any) => c.resourceTypeName === 'Engineer',
+    )
+    expect(engCap).toBeDefined()
+
+    const engCapW0 = timelineRes.body.weeklyCapacity.find(
+      (c: any) => c.resourceTypeName === 'Engineer' && c.week === 0,
+    )
+    const engCapW8 = timelineRes.body.weeklyCapacity.find(
+      (c: any) => c.resourceTypeName === 'Engineer' && c.week === 8,
+    )
+    expect(engCapW0).toBeDefined()
+    expect(engCapW0.capacityDays).toBe(7.5) // 60h / 8h
+    if (engCapW8) {
+      // Plan drops to 0.5 FTE at week 8 → 20h / 8h = 2.5 days
+      expect(engCapW8.capacityDays).toBe(2.5)
+    }
+
+    // Deterministic
+    const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
+    expect(resolved.resourceTypes).toEqual(resolved2.resourceTypes)
+  })
 })
 
 // ═════════════════════════════════════════════════════════════════════════════

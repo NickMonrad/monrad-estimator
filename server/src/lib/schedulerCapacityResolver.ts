@@ -358,6 +358,11 @@ export async function resolveSchedulerCapacity(
         hoursPerDay: rt.hoursPerDay ?? null,
         allocationMode: 'CAPACITY_PLAN',
         namedResources: [...planSlots, ...unmatchedPersisted],
+        // Explicit empty roleSegments: the plan fallback replaces the ROLE
+        // profile as authoritative capacity. Undefined would cause
+        // getWeeklyCapacity to fall through to phantom slots (count-based).
+        // Empty array signals 'no role capacity, no phantom slots'.
+        roleSegments: [],
         capacityPlanResolved: true,
       }
     }
