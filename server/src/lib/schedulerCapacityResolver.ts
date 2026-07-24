@@ -275,10 +275,9 @@ export async function resolveSchedulerCapacity(
     const allocationMode: string = rt.allocationMode ?? 'EFFORT'
     const materialized = capacityPlanByRt.get(rt.id)
 
-    // Only a VALID role-level profile suppresses plan fallback (defect #362 fix 2).
-    // Named resources with ACTIVE_CAPACITY_PLAN segments must NOT suppress
-    // plan fallback — additional trajectories beyond matched resources must
-    // still be generated with deterministic IDs.
+    // Only a VALID role-level profile suppresses plan fallback. NR profile
+    // segments do NOT — the plan fallback code already handles PROFILE NRs
+    // by keeping their segments via matchTrajectoriesToResources.
     const hasProfileAuthority = useRoleSegments
 
     if (
