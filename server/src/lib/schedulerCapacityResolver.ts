@@ -223,7 +223,7 @@ export async function resolveSchedulerCapacity(
     // represent the same active plan capacity. Use only the planned-resource
     // trajectories for scheduler capacity — don't expose roleSegments to
     // avoid double-counting aggregate capacity on top of individual capacity.
-    const roleProfileIsSquadPlanner = roleProfile?.source === 'squadplanner'
+    const roleProfileIsSquadPlanner = roleProfile?.source === 'squadPlanner'
     const hasSquadPlannerPlannedResources = roleProfileIsSquadPlanner &&
       rtNamedResources.some((nr: any) => {
         const nrProfile = profileMap.namedResourceProfiles.get(nr.id)

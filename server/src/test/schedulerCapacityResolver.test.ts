@@ -1058,32 +1058,32 @@ describe('Squad Planner composition and ordering (remediation)', () => {
         },
       ],
       capacityProfiles: [
-        // Aggregate ROLE profile (source: squadPlanner, 150%)
+        // Aggregate ROLE profile (source: SQUAD_PLANNER is the real DB value)
         {
           id: 'cp-role', projectId: 'proj-1',
           resourceTypeId: 'rt-squad', namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
-          source: 'squadPlanner', defaultPercent: 150,
+          source: 'SQUAD_PLANNER', defaultPercent: 150,
           startWeek: null, endWeek: null, legacy: null,
           segments: [],
         },
-        // Planned-resource profile 1 (100%)
+        // Planned-resource profile 1 (100%) — SQUAD_PLANNER is real DB value
         {
           id: 'cp-pr1', projectId: 'proj-1',
           resourceTypeId: 'rt-squad', namedResourceId: 'nr-planned-1',
           ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
-          source: 'squadPlanner', defaultPercent: 100,
+          source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
           segments: [
             { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'squadPlanner' },
           ],
         },
-        // Planned-resource profile 2 (50%)
+        // Planned-resource profile 2 (50%) — SQUAD_PLANNER is real DB value
         {
           id: 'cp-pr2', projectId: 'proj-1',
           resourceTypeId: 'rt-squad', namedResourceId: 'nr-planned-2',
           ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
-          source: 'squadPlanner', defaultPercent: 50,
+          source: 'SQUAD_PLANNER', defaultPercent: 50,
           startWeek: null, endWeek: null, legacy: null,
           segments: [
             { startWeek: 0, endWeek: 10, capacityPercent: 50, source: 'squadPlanner' },
@@ -1217,5 +1217,61 @@ describe('Squad Planner composition and ordering (remediation)', () => {
 
     // Repeated resolution produces identical output
     expect(result1.resourceTypes).toEqual(result2.resourceTypes)
+  })
+})
+
+describe('SQUAD_PLANNER to squadPlanner normalisation (remediation)', () => {
+  it('mapPersistedProfilesToDTOs converts SQUAD_PLANNER to squadPlanner', async () => {
+    // Regression: the adapter's toCamel normalises the persisted DB value
+    // SQUAD_PLANNER to squadPlanner. The resolver previously compared
+    // against 'squadplanner' (all lowercase), never matching real data.
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-src', name: 'SourceTest', count: 1, hoursPerDay: 8,
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-pr1', name: 'PR 1',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'EFFORT',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        // Use real DB persisted values
+        {
+          id: 'cp-role-src', projectId: 'proj-1',
+          resourceTypeId: 'rt-src', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [],
+        },
+        {
+          id: 'cp-nr-src', projectId: 'proj-1',
+          resourceTypeId: 'rt-src', namedResourceId: 'nr-pr1',
+          ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'squadPlanner' },
+          ],
+        },
+      ],
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // The overlap must be detected: ROLE profile suppressed, empty array
+    expect(rt.roleSegments).toEqual([])
+    expect(rt.namedResources).toHaveLength(1)
+    expect(rt.namedResources[0].capacitySegments).toBeDefined()
   })
 })
