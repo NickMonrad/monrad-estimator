@@ -222,9 +222,16 @@ function buildEffectiveNamedResources(
       lastAssignedWeek: null,
     }))
   }
-
   // ── Legacy fallback: count-based phantom slots ──────────────────────────
-  const effectiveCount = Math.max(resourceType.count ?? 0, baseNamedResources.length)
+  // When roleSegments is an empty array (explicit Squad Planner overlap
+  // suppression), the resolver has already cleared aggregate capacity.
+  // Do NOT add phantom slots — they would double-count capacity that the
+  // persisted planned-resource profiles already provide.  (Matches the
+  // getWeeklyCapacity contract at scheduler.ts lines 228-246.)
+  const hasExplicitEmptyRoleSegments = Array.isArray(resourceType.roleSegments) && resourceType.roleSegments.length === 0
+  const effectiveCount = hasExplicitEmptyRoleSegments
+    ? baseNamedResources.length
+    : Math.max(resourceType.count ?? 0, baseNamedResources.length)
   const namedResources = hasDemand && effectiveCount > baseNamedResources.length
     ? [
         ...baseNamedResources,

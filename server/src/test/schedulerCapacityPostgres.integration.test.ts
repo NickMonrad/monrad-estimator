@@ -148,7 +148,25 @@ beforeAll(async () => {
   // ── Timeline fixture ──────────────────────────────────────────────────
   const epic = await prisma.epic.create({ data: { name: 'Test Epic', projectId, order: 0 } })
   const feature = await prisma.feature.create({ data: { name: 'Test Feature', epicId: epic.id, order: 0 } })
-  await prisma.timelineEntry.create({ data: { projectId, featureId: feature.id, startWeek: 0, durationWeeks: 1, isManual: false } })
+  const story = await prisma.userStory.create({
+    data: { name: 'Test Story', featureId: feature.id, order: 0 },
+  })
+  // Tasks for all resource types tested in the timeline schedule/GET parity test
+  await prisma.task.create({
+    data: { name: 'Fixed Task', userStoryId: story.id, order: 0, hoursEffort: 40, resourceTypeId: rtProfileFixedId },
+  })
+  await prisma.task.create({
+    data: { name: 'Role Task', userStoryId: story.id, order: 1, hoursEffort: 20, resourceTypeId: rtRoleId },
+  })
+  await prisma.task.create({
+    data: { name: 'Squad Task', userStoryId: story.id, order: 2, hoursEffort: 60, resourceTypeId: rtSquadPlannerId },
+  })
+  // Heavy task on ProfileFixed (count=1) to force the scheduler's floorWeeks
+  // to span at least 4 weeks, so capacityEndWeek covers week 3.
+  await prisma.task.create({
+    data: { name: 'Heavy Fixed Task', userStoryId: story.id, order: 3, hoursEffort: 200, resourceTypeId: rtProfileFixedId },
+  })
+  await prisma.timelineEntry.create({ data: { projectId, featureId: feature.id, startWeek: 0, durationWeeks: 5, isManual: false } })
 })
 afterAll(async () => {
   if (!runIntegration) return
@@ -271,6 +289,10 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     expect(timelineRes.body.weeklyCapacity).toBeDefined()
     expect(Array.isArray(timelineRes.body.weeklyCapacity)).toBe(true)
     expect(timelineRes.body.weeklyCapacity.length).toBeGreaterThan(0)
+    const sNames = [...new Set((scheduleRes.body.weeklyCapacity ?? []).map((c: any) => c.resourceTypeName))].sort()
+    const tNames = [...new Set((timelineRes.body.weeklyCapacity ?? []).map((c: any) => c.resourceTypeName))].sort()
+    expect(sNames).toEqual(['ProfileFixed', 'RoleProfile', 'SquadPlannerRole'])
+    expect(tNames).toEqual(['ProfileFixed', 'RoleProfile', 'SquadPlannerRole'])
 
     // ProfileFixed RT: must be present with exact capacity (required assertion)
     const profileFixedCap = timelineRes.body.weeklyCapacity.find(
@@ -325,7 +347,6 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     for (const p of nrProfiles) {
       expect(p.source).toBe('SQUAD_PLANNER')
     }
-
     // Resolve
     const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
     const rt = resolved.resourceTypes.find(r => r.id === rtSquadPlannerId)!
@@ -353,6 +374,9 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
       capacityPlanByRt,
     })
     const rtAssign = assignments.get(rtSquadPlannerId)!
+    // Per-NR actualAllocatedDays: debug for 80 vs 60 issue
+    expect(rtAssign.namedResources[0].actualAllocatedDays).toBeCloseTo(40, 5)
+    expect(rtAssign.namedResources[1].actualAllocatedDays).toBeCloseTo(20, 5)
     // PR1: 100% → 5d/wk, PR2: 50% → 2.5d/wk, total 7.5d/wk × 8 = 60d
     expect(rtAssign.actualAllocatedDays).toBeCloseTo(60, 5)
     expect(rtAssign.unallocatedDays).toBeCloseTo(20, 5) // 10d demand - 7.5d capacity = 2.5d/wk × 8

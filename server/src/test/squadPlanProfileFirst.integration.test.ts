@@ -547,6 +547,10 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
 
     // Overlap suppression: aggregate ROLE profile from Squad Planner must
     // not be exposed as additional scheduler capacity when PLANNED_RESOURCE
+    // profiles provide the trajectories.
+    expect(rt.roleSegments).toEqual([])
+    expect(rt.namedResources).toHaveLength(2)
+
     // Named-resource assignment parity
     const capacityPlanByRt2 = materializeCapacityPlanResources([])
     const assignments2 = deriveNamedResourceAssignments({
@@ -559,9 +563,10 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     })
     const rtAssign = assignments2.get(rtId)!
     expect(rtAssign.actualAllocatedDays).toBeCloseTo(10, 5)
-
     // Timeline schedule creates entries based on post-apply state.
-    // The backlog has enough effort (560h) to span the full plan duration.
+    // The backlog has enough effort (720h) to span the full plan duration
+    // through the scheduler's natural scheduling, so weeklyCapacity covers
+    // weeks 0 through 11 without manual cache extension.
     const scheduleRes = await request(app)
       .post(`/api/projects/${projectId}/timeline/schedule`)
       .set('Authorization', authHeader)
@@ -574,30 +579,26 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(getWeeklyCapacity(rt, 8, 8)).toBe(20)
     expect(scheduleRes.status).toBe(200)
 
-    // ── Schedule response week 0 ───────────────────────────────────────────
+    // ── Schedule response: weeks 0 and 8 ──────────────────────────────────
     const scheduleW0 = scheduleRes.body.weeklyCapacity?.find(
       (c: any) => c.resourceTypeName === 'Engineer' && c.week === 0,
     )
     expect(scheduleW0).toBeDefined()
     expect(scheduleW0.capacityDays).toBe(7.5)
 
-    // The schedule's weeklyCapacity only spans weeks with scheduled work.
-    // Extend the project cache after the schedule so GET sees full plan horizon.
-    const projectMid = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
-    const cacheMid = (projectMid.weeklyDemandCache ?? {}) as Record<string, number>
-    for (const w of [8, 9, 10, 11]) cacheMid[`${rtId}|${w}`] = 2.5
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { weeklyDemandCache: cacheMid },
-    })
+    const scheduleW8 = scheduleRes.body.weeklyCapacity?.find(
+      (c: any) => c.resourceTypeName === 'Engineer' && c.week === 8,
+    )
+    expect(scheduleW8).toBeDefined()
+    expect(scheduleW8.capacityDays).toBe(2.5)
 
-    // Timeline GET re-reads the project and uses the extended cache
+    // No database writes between schedule and GET — same persisted state
     const timelineRes = await request(app)
       .get(`/api/projects/${projectId}/timeline`)
       .set('Authorization', authHeader)
     expect(timelineRes.status).toBe(200)
 
-    // ── GET response weeks 0 and 8 ─────────────────────────────────────────
+    // ── GET response: weeks 0 and 8 ───────────────────────────────────────
     const getW0 = timelineRes.body.weeklyCapacity.find(
       (c: any) => c.resourceTypeName === 'Engineer' && c.week === 0,
     )
@@ -610,8 +611,9 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(getW8).toBeDefined()
     expect(getW8.capacityDays).toBe(2.5)
 
-    // ── Schedule/GET parity (week 0 only) ──────────────────────────────────
+    // ── Schedule/GET parity (weeks 0 and 8) ───────────────────────────────
     expect(getW0.capacityDays).toBe(scheduleW0.capacityDays)
+    expect(getW8.capacityDays).toBe(scheduleW8.capacityDays)
 
     // Deterministic
     const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
