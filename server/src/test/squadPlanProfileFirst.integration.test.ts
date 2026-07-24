@@ -540,17 +540,26 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(getWeeklyCapacity(rt, 8, 8)).toBe(20)
 
     // Named-resource assignment parity
-    const capacityPlanByRt = materializeCapacityPlanResources([])
-    const assignments = deriveNamedResourceAssignments({
+    const capacityPlanByRt2 = materializeCapacityPlanResources([])
+    const assignments2 = deriveNamedResourceAssignments({
       resourceTypes: [rt],
       weeklyDemand: [
         { week: 0, resourceTypeName: 'Engineer', demandDays: 10 },
         { week: 8, resourceTypeName: 'Engineer', demandDays: 10 },
       ],
-      capacityPlanByRt,
+      capacityPlanByRt: capacityPlanByRt2,
     })
-    const rtAssign = assignments.get(rtId)!
+    const rtAssign = assignments2.get(rtId)!
     expect(rtAssign.actualAllocatedDays).toBeCloseTo(10, 5)
+
+    // ── Extend cache before schedule so its planning model sees week 8 ────
+    const projectPre = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
+    const cachePre = (projectPre.weeklyDemandCache ?? {}) as Record<string, number>
+    for (const w of [8, 9, 10, 11]) cachePre[`${rtId}|${w}`] = 2.5
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: cachePre },
+    })
 
     // Timeline schedule creates entries based on post-apply state
     const scheduleRes = await request(app)
@@ -559,19 +568,7 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
       .send({ resourceLevel: false })
     expect(scheduleRes.status).toBe(200)
 
-    // The schedule POST writes its own weeklyDemandCache, overwriting any
-    // previous cache (including the apply's). Schedule cache only covers
-    // scheduled entries (week 0). Extend the cache after the schedule to
-    // ensure the planning model computes capacity for the full plan duration.
-    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
-    const cache = (project.weeklyDemandCache ?? {}) as Record<string, number>
-    for (const w of [8, 9, 10, 11]) cache[`${rtId}|${w}`] = 2.5
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { weeklyDemandCache: cache },
-    })
-
-    // ── Schedule response parity ──────────────────────────────────────────
+    // ── Schedule response parity ───────────────────────────────────────────
     const scheduleW0 = scheduleRes.body.weeklyCapacity?.find(
       (c: any) => c.resourceTypeName === 'Engineer' && c.week === 0,
     )
@@ -584,13 +581,23 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(scheduleW8).toBeDefined()
     expect(scheduleW8.capacityDays).toBe(2.5)
 
-    // Timeline GET
+    // The schedule POST writes its own weeklyDemandCache, overwriting the
+    // extended cache. Re-extend after schedule for the GET.
+    const projectMid = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
+    const cacheMid = (projectMid.weeklyDemandCache ?? {}) as Record<string, number>
+    for (const w of [8, 9, 10, 11]) cacheMid[`${rtId}|${w}`] = 2.5
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: cacheMid },
+    })
+
+    // Timeline GET re-reads the project and uses the re-extended cache
     const timelineRes = await request(app)
       .get(`/api/projects/${projectId}/timeline`)
       .set('Authorization', authHeader)
     expect(timelineRes.status).toBe(200)
 
-    // ── GET response parity ───────────────────────────────────────────────
+    // ── GET response ───────────────────────────────────────────────────────
     const getW0 = timelineRes.body.weeklyCapacity.find(
       (c: any) => c.resourceTypeName === 'Engineer' && c.week === 0,
     )
@@ -603,26 +610,19 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(getW8).toBeDefined()
     expect(getW8.capacityDays).toBe(2.5)
 
-    // ── Schedule/GET parity ───────────────────────────────────────────────
+    // ── Schedule/GET parity (compare only overlapping weeks) ───────────────
     expect(getW0.capacityDays).toBe(scheduleW0.capacityDays)
-    expect(getW8.capacityDays).toBe(scheduleW8.capacityDays)
 
     // Deterministic
     const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
     expect(resolved.resourceTypes).toEqual(resolved2.resourceTypes)
   })
 })
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Scenario 2 — Equivalent reapply is idempotent (stable IDs, no duplicates)
-// ═════════════════════════════════════════════════════════════════════════════
-
 describeIf('Scenario 2 — Equivalent reapply is idempotent', () => {
   let projectId: string
   let rtId: string
   let firstNrs: string[]
   let firstSegmentCount: number
-
   beforeAll(async () => {
     if (!runIntegration) return
     projectId = await createProject()
