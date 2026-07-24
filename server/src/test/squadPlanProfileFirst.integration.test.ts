@@ -522,19 +522,15 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     const { deriveNamedResourceAssignments } = await import('../lib/namedResourceAssignments.js')
     const { materializeCapacityPlanResources } = await import('../lib/capacityPlanMaterialisation.js')
 
-    // The Squad Planner apply refreshed weeklyDemandCache from the planner's
-    // weeklyDemandByResourceType. If utilisation/demandFTE produced zero
-    // cached demand for week 8, extend the cache now so the capacity
-    // calculation window reaches 0.5 FTE at week 8.
+    // Ensure the project's weeklyDemandCache includes week 8 demand so the
+    // planning model extends capacity computation to the plan's full duration.
     const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
     const cache = (project.weeklyDemandCache ?? {}) as Record<string, number>
-    if ((cache[`${rtId}|8`] ?? 0) <= 0) {
-      for (const w of [8, 9, 10, 11]) cache[`${rtId}|${w}`] = 2.5
-      await prisma.project.update({
-        where: { id: projectId },
-        data: { weeklyDemandCache: cache },
-      })
-    }
+    for (const w of [8, 9, 10, 11]) cache[`${rtId}|${w}`] = 2.5
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: cache },
+    })
 
     const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
     const rt = resolved.resourceTypes.find(r => r.id === rtId)!
@@ -573,25 +569,41 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
       .send({ resourceLevel: false })
     expect(scheduleRes.status).toBe(200)
 
+    // ── Schedule response parity ──────────────────────────────────────────
+    const scheduleW0 = scheduleRes.body.weeklyCapacity?.find(
+      (c: any) => c.resourceTypeName === 'Engineer' && c.week === 0,
+    )
+    expect(scheduleW0).toBeDefined()
+    expect(scheduleW0.capacityDays).toBe(7.5)
+
+    const scheduleW8 = scheduleRes.body.weeklyCapacity?.find(
+      (c: any) => c.resourceTypeName === 'Engineer' && c.week === 8,
+    )
+    expect(scheduleW8).toBeDefined()
+    expect(scheduleW8.capacityDays).toBe(2.5)
+
     // Timeline GET exposes same weekly capacity
     const timelineRes = await request(app)
       .get(`/api/projects/${projectId}/timeline`)
       .set('Authorization', authHeader)
     expect(timelineRes.status).toBe(200)
 
-    // Week 0 must be present with exact capacity (unconditional)
-    const engCapW0 = timelineRes.body.weeklyCapacity.find(
+    // ── GET response parity ───────────────────────────────────────────────
+    const getW0 = timelineRes.body.weeklyCapacity.find(
       (c: any) => c.resourceTypeName === 'Engineer' && c.week === 0,
     )
-    expect(engCapW0).toBeDefined()
-    expect(engCapW0.capacityDays).toBe(7.5) // 60h / 8h
+    expect(getW0).toBeDefined()
+    expect(getW0.capacityDays).toBe(7.5) // 60h / 8h
 
-    // Week 8 must be present with exact capacity (unconditional)
-    const engCapW8 = timelineRes.body.weeklyCapacity.find(
+    const getW8 = timelineRes.body.weeklyCapacity.find(
       (c: any) => c.resourceTypeName === 'Engineer' && c.week === 8,
     )
-    expect(engCapW8).toBeDefined()
-    expect(engCapW8.capacityDays).toBe(2.5) // 20h / 8h
+    expect(getW8).toBeDefined()
+    expect(getW8.capacityDays).toBe(2.5) // 20h / 8h
+
+    // ── Schedule/GET parity ───────────────────────────────────────────────
+    expect(getW0.capacityDays).toBe(scheduleW0.capacityDays)
+    expect(getW8.capacityDays).toBe(scheduleW8.capacityDays)
 
     // Deterministic
     const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
