@@ -999,6 +999,14 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     includeCapacityPlanMaterialization: false,
   })
   const projectRtIds = new Set(schedulerInput.resourceTypes.map(rt => rt.id))
+  // Clear roleSegments on every resource type so the SA planner uses
+  // count-based capacity rather than profile-suppressed capacity.
+  // The planner's feasibility computation relies on legacy phantom-slot
+  // headroom (defect #362 — profile-first resolver sets roleSegments=[]
+  // when Squad Planner profiles exist, collapsing phantom capacity).
+  for (const rt of schedulerInput.resourceTypes) {
+    rt.roleSegments = undefined
+  }
 
   // ── Build minFloor map ──────────────────────────────────────────────────
   const minFloor = new Map<string, number>()
