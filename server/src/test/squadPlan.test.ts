@@ -874,3 +874,61 @@ describe('buildReplayPlannerResourceTypes (fix 3)', () => {
     expect(result1).toEqual(result2)
   })
 })
+
+describe('generation roleSegments empty-array conversion (fix #362 regression)', () => {
+  it('converts empty roleSegments to undefined (count-based capacity)', () => {
+    // Simulates a resource type after a Squad Planner apply:
+    // the resolver returns roleSegments=[] to suppress aggregate ROLE
+    // capacity overlap. The generation boundary must convert this to
+    // undefined so the SA planner uses count-based phantom-slot capacity.
+    const rts: SchedulerResourceType[] = [
+      {
+        id: 'rt-dev', name: 'Developer', count: 3, hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        namedResources: [],
+        roleSegments: [] as SchedulerResourceType['roleSegments'],
+      },
+    ]
+
+    // Apply the same conversion the generation endpoint uses
+    for (const rt of rts) {
+      if (Array.isArray(rt.roleSegments) && rt.roleSegments.length === 0) {
+        rt.roleSegments = undefined
+      }
+    }
+
+    expect(rts[0].roleSegments).toBeUndefined()
+    // count=3, no named resources → 3 × 40 = 120h (phantom slots, not 0)
+    expect(getWeeklyCapacity(rts[0], 0, 8)).toBe(120)
+  })
+
+  it('preserves non-empty ROLE profile segments (profile-first authority)', () => {
+    // A valid persisted ROLE profile with allocationPercent=50 must
+    // survive the generation boundary unchanged — planner capacity stays
+    // constrained to the profile, not replaced by count-based phantoms.
+    const rts: SchedulerResourceType[] = [
+      {
+        id: 'rt-dev', name: 'Developer', count: 3, hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        namedResources: [],
+        roleSegments: [
+          { startWeek: 0, endWeek: 8, allocationPercent: 50 },
+        ],
+      },
+    ]
+
+    // Apply the same conversion the generation endpoint uses
+    for (const rt of rts) {
+      if (Array.isArray(rt.roleSegments) && rt.roleSegments.length === 0) {
+        rt.roleSegments = undefined
+      }
+    }
+
+    // Non-empty profile is preserved — segments unchanged
+    expect(rts[0].roleSegments).toEqual([
+      { startWeek: 0, endWeek: 8, allocationPercent: 50 },
+    ])
+    // 50% × 40h = 20h (NOT 3 × 40h = 120h count-based phantom)
+    expect(getWeeklyCapacity(rts[0], 0, 8)).toBe(20)
+  })
+})
