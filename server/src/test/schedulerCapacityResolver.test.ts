@@ -781,3 +781,248 @@ describe('resolveSchedulerCapacity mixed trajectories (fix 2)', () => {
     expect(result1.resourceTypes).toEqual(result2.resourceTypes)
   })
 })
+
+describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
+  it('mixed: A(legacy) + B(profile) with 2 plan trajectories — each maps correctly', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-mix', name: 'Mixed', count: 2, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-a', name: 'Resource A',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+            {
+              id: 'nr-b', name: 'Resource B',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-b', projectId: 'proj-1',
+          resourceTypeId: 'rt-mix', namedResourceId: 'nr-b',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 50,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 50, source: 'MANUAL' },
+          ],
+        },
+      ],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-mix', headcount: 2 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // Must have 2 named resources (A and B), not dropped or duplicated
+    expect(rt.namedResources).toHaveLength(2)
+
+    const nrA = rt.namedResources.find(nr => nr.id === 'nr-a')
+    const nrB = rt.namedResources.find(nr => nr.id === 'nr-b')
+
+    // A has no profile → uses trajectory A's segments
+    expect(nrA).toBeDefined()
+    expect(nrA!.capacitySegments).toBeDefined()
+    expect(nrA!.capacitySegments!.length).toBeGreaterThan(0)
+
+    // B has a valid profile → retains its profile segments
+    expect(nrB).toBeDefined()
+    expect(nrB!.capacitySegments).toBeDefined()
+    // Profile says 50%, trajectory would be about 100%
+    expect(nrB!.capacitySegments![0].allocationPercent).toBe(50)
+
+    // No generated synthetic NR with trajectory B's segments
+    const synthetics = rt.namedResources.filter(nr => nr.id.startsWith('rt-mix-capacity-plan'))
+    expect(synthetics).toHaveLength(0)
+
+    // RT is marked as capacity-plan-resolved
+    expect(rt.capacityPlanResolved).toBe(true)
+  })
+
+  it('unmatched persisted NR preserved when plan has fewer trajectories', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-extra', name: 'Extra', count: 3, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-a', name: 'Resource A',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+            {
+              id: 'nr-b', name: 'Resource B',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+            {
+              id: 'nr-c', name: 'Resource C (legacy)',
+              startWeek: 0, endWeek: 10,
+              allocationPct: 100, allocationMode: 'EFFORT',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-b', projectId: 'proj-1',
+          resourceTypeId: 'rt-extra', namedResourceId: 'nr-b',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 75,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 75, source: 'MANUAL' },
+          ],
+        },
+      ],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-extra', headcount: 2 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // 3 NRs total: 2 matched to trajectories + 1 unmatched persisted (nr-c)
+    expect(rt.namedResources.length).toBe(3)
+
+    const nrA = rt.namedResources.find(nr => nr.id === 'nr-a')
+    const nrB = rt.namedResources.find(nr => nr.id === 'nr-b')
+    const nrC = rt.namedResources.find(nr => nr.id === 'nr-c')
+
+    expect(nrA).toBeDefined()
+    expect(nrA!.capacitySegments).toBeDefined()   // trajectory A
+
+    expect(nrB).toBeDefined()
+    expect(nrB!.capacitySegments).toBeDefined()    // profile B
+    expect(nrB!.capacitySegments![0].allocationPercent).toBe(75)
+
+    // NR C has no matching trajectory → preserved as-is (LEGACY)
+    expect(nrC).toBeDefined()
+
+    expect(rt.capacityPlanResolved).toBe(true)
+  })
+
+  it('fractional and discontinuous plan with mixed profiles', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-disc', name: 'Discontinuous', count: 3, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-a', name: 'Resource A',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+            {
+              id: 'nr-b', name: 'Resource B',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-b', projectId: 'proj-1',
+          resourceTypeId: 'rt-disc', namedResourceId: 'nr-b',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 50,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 4, capacityPercent: 75, source: 'MANUAL' },
+            { startWeek: 8, endWeek: 12, capacityPercent: 50, source: 'MANUAL' },
+          ],
+        },
+      ],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 3,
+            entries: [{ resourceTypeId: 'rt-disc', headcount: 2 }],
+          },
+          {
+            periodIndex: 1, startWeek: 3, endWeek: 6,
+            entries: [{ resourceTypeId: 'rt-disc', headcount: 1.25 }],
+          },
+          {
+            periodIndex: 2, startWeek: 8, endWeek: 11,
+            entries: [{ resourceTypeId: 'rt-disc', headcount: 2 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // Both NRs present
+    expect(rt.namedResources.length).toBe(2)
+
+    const nrA = rt.namedResources.find(nr => nr.id === 'nr-a')
+    const nrB = rt.namedResources.find(nr => nr.id === 'nr-b')
+
+    expect(nrA).toBeDefined()
+    expect(nrA!.capacitySegments).toBeDefined()
+
+    expect(nrB).toBeDefined()
+    expect(nrB!.capacitySegments).toBeDefined()
+    // B's profile has 75% in weeks 0-4
+    expect(nrB!.capacitySegments![0].allocationPercent).toBe(75)
+
+    // Plan's week 6-7 gap → zero capacity in trajectory (A's segments)
+    expect(rt.capacityPlanResolved).toBe(true)
+
+    // Deterministic
+    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    expect(result.resourceTypes).toEqual(result2.resourceTypes)
+  })
+})

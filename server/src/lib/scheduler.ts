@@ -96,6 +96,12 @@ export interface SchedulerResourceType {
    * (max(0, count - namedResources.length)) for this resource type.
    */
   roleSegments?: SchedulerCapacitySegment[]
+  /**
+   * True when the resolver has fully resolved this RT's capacity from an
+   * active Capacity Plan. Consumers (e.g. deriveNamedResourceAssignments)
+   * must not rematerialize the plan over already-authoritative output.
+   */
+  capacityPlanResolved?: boolean
 }
 
 export interface SchedulerInput {
