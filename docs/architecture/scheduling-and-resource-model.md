@@ -631,3 +631,84 @@ When changing scheduling/resource code, verify the following path explicitly:
 | Resource profile/commercial calculations | `server/src/routes/resourceProfile.ts` |
 | Timeline UI rendering | `client/src/pages/TimelinePage.tsx`, `client/src/components/timeline/*` |
 | Database schema | `server/prisma/schema.prisma` |
+
+## Profile-first scheduler-capacity resolution
+
+Issue #362 introduced `server/src/lib/schedulerCapacityResolver.ts` — the single shared
+boundary for loading and resolving project capacity into scheduler-facing DTOs.
+All scheduler consumers (Timeline schedule/GET, Optimiser, Squad Planner,
+named-resource assignments) use the same resolved capacity through this adapter.
+
+### Precedence order
+
+For each physical capacity owner (role-level or named/planned resource):
+
+1. **Persisted owner-specific `CapacityProfile`** (`resolutionSource: 'PROFILE'`) — authoritative.
+2. **Active Capacity Plan materialisation** (`resolutionSource: 'ACTIVE_CAPACITY_PLAN`) —
+   fallback when no valid persisted profile applies.
+3. **Legacy compatibility fields** (`resolutionSource: 'LEGACY'`) — final fallback
+   from `ResourceType`/`NamedResource` columns.
+
+A valid persisted profile wins even when legacy compatibility fields disagree.
+
+### Segments and gaps
+
+Capacity segments are ordered and preserve:
+- exact percentage boundaries per week;
+- zero-capacity gaps between segments;
+- fractional discontinuous periods.
+
+Capacity is never flattened into a scalar start/end/percentage window.
+Legacy allocation fields (`startWeek`, `endWeek`, `allocationPercent`) are consulted
+only for `LEGACY`-source resources.
+
+### Squad Planner composition rule
+
+Squad Planner apply persists two representations of the same active plan capacity:
+
+- **Aggregate `ROLE` profile** with `source: 'squadPlanner'` — total headcount.
+- **`PLANNED_RESOURCE` profiles** with `source: 'squadPlanner'` — individual
+  trajectories (one per planned-resource slot).
+
+The resolver treats both as `PROFILE` source. To avoid double-counting
+(adding aggregate role capacity on top of the same planned-resource trajectories),
+when an aggregate Squad Planner ROLE profile AND Squad Planner planned-resource
+profiles coexist for the same resource type, the aggregate ROLE profile is
+**not** exposed as `roleSegments` for scheduler capacity computations.
+The planned-resource trajectories remain the schedulable representation.
+
+This affects only scheduler-facing capacity (`schedulerCapacityResolver.ts`).
+The aggregate persistred ROLE profile is preserved for Resource Profile,
+export, compatibility and other non-scheduler consumers.
+
+A standalone role profile (manual source, no overlapping planned-resource profiles)
+continues to contribute `roleSegments` normally.
+
+### Trajectory-to-resource ordering
+
+Persistenced named resources are ordered by `[{ createdAt: 'asc' }, { id: 'asc' }]` to
+match the Squad Planner writer ordering. Resources with identical `createdAt`
+timestamps (created in the same batch) are tiedbroken by stable ID, ensuring
+deterministic trajectory-to-resource mapping and consistent results across
+repeated resolution.
+
+### Ownership and composition
+
+| Concern | Behaviour |
+|---|---|
+| `ResourceType.count` | Remains independent role/headcount metadata. Unchanged by profile resolution. |
+| Phantom slots | `max(0, count − namedResources.length)` full-time slots. Used only when no `roleSegments` are present. |
+| Role profile | When authoritative, replaces phantom-slot calculation with segment capacity. |
+| Named-resource profiles | Per-resource capacity independent of count or phantom slots. |
+| Planned-resource profiles | Treated as named resources with `resourceIdentity: 'PLANNED_RESOURCE'`. Individual trajectory capacity. |
+| Fractional `Capacity Plan` | Headcount is quantised (0.25 FTE units) and distributed into trajectories. |
+| Discontinuous periods | Zero-capacity periods between plan periods are preserved as gaps. |
+
+### Follow-up issues
+
+- **#363** owns first-class profile editing in the UI/API.
+- **#364** owns retirement of legacy allocation compatibility fields.
+- **#387** owns broader planning-model and transactional scheduling consolidation.
+
+The profile-first resolver does not implement these work items. It only
+centralises capacity loading so migrated consumers resolve the same facts.

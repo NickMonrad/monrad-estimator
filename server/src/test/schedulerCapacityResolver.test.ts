@@ -1026,3 +1026,196 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
     expect(result.resourceTypes).toEqual(result2.resourceTypes)
   })
 })
+
+describe('Squad Planner composition and ordering (remediation)', () => {
+  it('1.5 FTE plan: aggregate ROLE + planned-resource profiles do not double-count', async () => {
+    // Simulate a Squad Planner apply result: aggregate ROLE at 150% AND
+    // two planned-resource profiles at 100% and 50%.
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-squad', name: 'SquadRole', count: 3, hoursPerDay: 8,
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-planned-1', name: 'Planned 1',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'EFFORT',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+            {
+              id: 'nr-planned-2', name: 'Planned 2',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'EFFORT',
+              allocationPercent: 50, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        // Aggregate ROLE profile (source: squadPlanner, 150%)
+        {
+          id: 'cp-role', projectId: 'proj-1',
+          resourceTypeId: 'rt-squad', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'squadPlanner', defaultPercent: 150,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [],
+        },
+        // Planned-resource profile 1 (100%)
+        {
+          id: 'cp-pr1', projectId: 'proj-1',
+          resourceTypeId: 'rt-squad', namedResourceId: 'nr-planned-1',
+          ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'squadPlanner', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'squadPlanner' },
+          ],
+        },
+        // Planned-resource profile 2 (50%)
+        {
+          id: 'cp-pr2', projectId: 'proj-1',
+          resourceTypeId: 'rt-squad', namedResourceId: 'nr-planned-2',
+          ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'squadPlanner', defaultPercent: 50,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 50, source: 'squadPlanner' },
+          ],
+        },
+      ],
+    })
+
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // The aggregate ROLE profile should NOT produce roleSegments when
+    // planned-resource profiles exist for the same Squad Planner plan.
+    // Empty array signals "explicitly no role capacity" to getWeeklyCapacity.
+    expect(rt.roleSegments).toEqual([])
+    expect(rt.roleSegments!.length).toBe(0)
+
+    // Named resources (planned-resource profiles) must both be present
+    expect(rt.namedResources).toHaveLength(2)
+
+    const nr1 = rt.namedResources.find(nr => nr.id === 'nr-planned-1')
+    const nr2 = rt.namedResources.find(nr => nr.id === 'nr-planned-2')
+    expect(nr1).toBeDefined()
+    expect(nr2).toBeDefined()
+
+    // NR1: 100% → 40h, NR2: 50% → 20h, total: 60h = 1.5 FTE
+    // NOT 150% role (40h) + 100% (40h) + 50% (20h) = 100h = 2.5 FTE
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(60)
+
+    // Meta reporting: roleSegments is empty because overlap was detected
+    expect(result.meta.roleProfileRTIds).not.toContain('rt-squad')
+  })
+
+  it('standalone manual ROLE profile (no planned resources) still contributes roleSegments', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-manual', name: 'ManualRole', count: 3, hoursPerDay: 8,
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-alice', name: 'Alice',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'EFFORT',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        // Manual ROLE profile — no planned-resource overlap
+        {
+          id: 'cp-role-manual', projectId: 'proj-1',
+          resourceTypeId: 'rt-manual', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'MANUAL', defaultPercent: 100,
+          startWeek: 2, endWeek: 6, legacy: null,
+          segments: [],
+        },
+      ],
+    })
+
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // Standalone manual ROLE profile — roleSegments must be present
+    expect(rt.roleSegments).toBeDefined()
+    expect(rt.roleSegments!.length).toBe(1)
+
+    // Alice (100%) + role (100%) = NOT double-counted as separate additive
+    // Alice: 100% × 40 = 40h. Role: 100% × 40 = 40h (phantom replacement)
+    expect(getWeeklyCapacity(rt, 3, 8)).toBe(80)
+  })
+
+  it('deterministic ordering: tiebreak by id when createdAt is identical', async () => {
+    const sameTime = new Date('2026-01-01T00:00:00.000Z')
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-order', name: 'OrderTest', count: 3, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-beta', name: 'Beta',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: sameTime,
+            },
+            {
+              id: 'nr-alpha', name: 'Alpha',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: sameTime,
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [],
+      activeCapacityPlan: {
+        id: 'plan-1',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-order', headcount: 2 }],
+          },
+        ],
+      },
+    })
+
+    const result1 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+
+    // NR order should be deterministic: alpha before beta (by id asc)
+    const rt = result1.resourceTypes[0]
+    expect(rt.namedResources[0].id).toBe('nr-alpha')
+    expect(rt.namedResources[1].id).toBe('nr-beta')
+
+    // Trajectory 0 maps to alpha, trajectory 1 maps to beta
+    expect(rt.namedResources[0].capacitySegments).toBeDefined()
+    expect(rt.namedResources[1].capacitySegments).toBeDefined()
+
+    // Repeated resolution produces identical output
+    expect(result1.resourceTypes).toEqual(result2.resourceTypes)
+  })
+})

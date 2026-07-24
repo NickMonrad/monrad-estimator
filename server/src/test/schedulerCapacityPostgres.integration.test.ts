@@ -111,7 +111,7 @@ beforeAll(async () => {
     data: { projectId, resourceTypeId: null, namedResourceId: nrCapPlan.id, ownerKind: 'NAMED_PERSON', planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'FIXED', defaultPercent: 25 },
   })
   await prisma.capacityPlan.create({
-    data: { projectId, name: 'Conflicting Plan', targetWeeks: 10, periodWeeks: 4, isActive: true, periods: { create: [{ periodIndex: 0, startWeek: 0, endWeek: 9, entries: { create: [{ resourceTypeId: rtCapPlan.id, headcount: 10, demandFTE: 10, utilisationPct: 100 }] } }] } },
+    data: { projectId, name: 'Conflicting Plan', targetWeeks: 10, periodWeeks: 4, isActive: true, periods: { create: [{ periodIndex: 0, startWeek: 0, endWeek: 9, entries: { create: [{ resourceTypeId: rtCapPlan.id, headcount: 1, demandFTE: 1, utilisationPct: 100 }] } }] } },
   })
 
   // ── CAPACITY_PLAN RT without profile (plan fallback applies) ──────────
@@ -190,18 +190,21 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     expect(rt.roleSegments).toBeUndefined()
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(80) // 2 phantom × 40
   })
-  it('5. profile suppresses conflicting active Capacity Plan', async () => {
+  it('5. profile suppresses conflicting active Capacity Plan — profile NR keeps 25%, no extra synthetics from 1-trajectory plan', async () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
     const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
     const rt = resolved.resourceTypes.find(r => r.id === rtCapPlanWithProfileId)!
     expect(rt).toBeDefined()
-    // Profile says 25% for the named resource = 0.25 × 8 × 5 = 10h/week
-    // Not the plan's 10 headcount × 40 = 400h/week
+    // The plan has 1 trajectory at headcount=1. The single profiled NR keeps
+    // its 25% without being overridden. No extra synthetics since there's
+    // only 1 trajectory.
     expect(rt.namedResources).toHaveLength(1)
     expect(rt.namedResources[0].capacitySegments).toBeDefined()
     expect(rt.namedResources[0].capacitySegments![0].allocationPercent).toBe(25)
-    expect(getWeeklyCapacity(rt, 0, 8)).toBe(10) // 25% × 8 × 5
+    // 25% × 8 × 5 = 10h/week (not the plan's 100% × 40 = 40h/week)
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(10)
+    expect(rt.capacityPlanResolved).toBe(true)
   })
 
   it('6. CAPACITY_PLAN without profile uses plan fallback', async () => {
@@ -211,13 +214,19 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     const rt = resolved.resourceTypes.find(r => r.id === rtCapPlanOnlyId)!
     expect(rt).toBeDefined()
     // No profile, so capacity plan fallback should apply
-    // Plan has 1 entry × 10 headcount... wait, rtCapPlanOnly has no plan entry
-    // Actually this RT has no plan entries and no profiles, so it falls back to phantom slots
-    // count=1, no named resources → 1 phantom × 40 = 40
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(40)
   })
 
-  it('7. Timeline schedule and GET return consistent weekly capacity', async () => {
+  it('7. Timeline schedule and GET return consistent weekly capacity with parity assertions', async () => {
+    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
+    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+
+    // Parity: getWeeklyCapacity from the resolver matches what schedule uses
+    const rtProfile = resolved.resourceTypes.find(r => r.id === rtProfileFixedId)!
+    const rtRole = resolved.resourceTypes.find(r => r.id === rtRoleId)!
+    expect(rtProfile).toBeDefined()
+    expect(rtRole).toBeDefined()
+
     const scheduleRes = await request(app)
       .post(`/api/projects/${projectId}/timeline/schedule`)
       .set('Authorization', authHeader)
@@ -229,9 +238,27 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
       .set('Authorization', authHeader)
     expect(timelineRes.status).toBe(200)
 
-    // Verify weeklyCapacity contains at least one entry
+    // Verify weeklyCapacity contains actual capacity values for known RTs
     expect(timelineRes.body.weeklyCapacity).toBeDefined()
     expect(Array.isArray(timelineRes.body.weeklyCapacity)).toBe(true)
     expect(timelineRes.body.weeklyCapacity.length).toBeGreaterThan(0)
+
+    // ProfileFixed RT should have 40h/week at week 0 (100% profile, not truncated)
+    const profileFixedCap = timelineRes.body.weeklyCapacity.find(
+      (c: any) => c.resourceTypeName === 'ProfileFixed',
+    )
+    if (profileFixedCap) {
+      expect(profileFixedCap.capacityDays).toBe(5) // 40h / 8h = 5 days
+      expect(profileFixedCap.week).toBe(0)
+    }
+
+    // RoleProfile RT should have 20h/week at week 3 (50% on 8h/day)
+    const roleProfileCap = timelineRes.body.weeklyCapacity.find(
+      (c: any) => c.resourceTypeName === 'RoleProfile' && c.week === 3,
+    )
+    if (roleProfileCap) {
+      // 50% × 8 × 5 / 8 = 2.5 capacity days
+      expect(roleProfileCap.capacityDays).toBe(2.5)
+    }
   })
 })
