@@ -227,16 +227,25 @@ export function getWeeklyCapacity(
   // ── Aggregate role capacity ─────────────────────────────────────────────
   // When a valid role profile exists (roleSegments), it replaces the
   // phantom-slot calculation. Named resources are NOT double-counted.
-  if (rt.roleSegments && rt.roleSegments.length > 0) {
-    // Role profile is authoritative for aggregate role capacity
-    let roleCapacity = 0
-    for (const seg of rt.roleSegments) {
-      if (week >= seg.startWeek && week <= seg.endWeek) {
-        roleCapacity = (seg.allocationPercent / 100) * hoursPerDay * 5
-        break
+  //
+  // roleSegments == undefined  → no role profile; use phantom slots (legacy).
+  // roleSegments == []         → resolver explicitly cleared role capacity;
+  //                              no phantom slots (Squad Planner overlap case).
+  // roleSegments == [...segs]  → use segments instead of phantom slots.
+  if (rt.roleSegments) {
+    if (rt.roleSegments.length > 0) {
+      // Role profile is authoritative for aggregate role capacity
+      let roleCapacity = 0
+      for (const seg of rt.roleSegments) {
+        if (week >= seg.startWeek && week <= seg.endWeek) {
+          roleCapacity = (seg.allocationPercent / 100) * hoursPerDay * 5
+          break
+        }
       }
+      totalHours += roleCapacity
     }
-    totalHours += roleCapacity
+    // else: empty array → resolver indicated no role capacity and no
+    // phantom slots. Do not add either.
   } else {
     // Phantom slots: any count slots beyond namedResources are full-time T&M staff
     const phantomSlots = Math.max(0, rt.count - namedResources.length)

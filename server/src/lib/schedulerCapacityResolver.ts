@@ -153,9 +153,18 @@ export async function resolveSchedulerCapacity(
   const rawRTs = await client.resourceType.findMany({
     where: { projectId },
     orderBy: [{ name: 'asc' }],
-    include: { namedResources: { orderBy: { createdAt: 'asc' } } },
+    include: { namedResources: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
   })
-  const resourceTypes = rawRTs as Array<Record<string, unknown>>
+  const resourceTypes = (rawRTs as Array<Record<string, unknown>>).map(rt => {
+    const nrs = ((rt.namedResources ?? []) as Array<Record<string, unknown>>)
+      .sort((a: any, b: any) => {
+        const aTime = a.createdAt?.getTime?.() ?? 0
+        const bTime = b.createdAt?.getTime?.() ?? 0
+        if (aTime !== bTime) return aTime - bTime
+        return (a.id ?? '').localeCompare(b.id ?? '')
+      })
+    return { ...rt, namedResources: nrs }
+  })
 
   // ── 2. Load capacity profiles with segments ──────────────────────────────
   const rawProfiles = await client.capacityProfile.findMany({
@@ -209,7 +218,20 @@ export async function resolveSchedulerCapacity(
     const roleProfile = profileMap.roleProfiles.get(rt.id)
     const roleProfileValid = roleProfile && roleProfile.resolutionSource === 'PROFILE'
 
-    if (roleProfileValid) {
+    // When Squad Planner persists both an aggregate ROLE profile (source:
+    // 'squadPlanner') AND planned-resource profiles for the same RT, they
+    // represent the same active plan capacity. Use only the planned-resource
+    // trajectories for scheduler capacity — don't expose roleSegments to
+    // avoid double-counting aggregate capacity on top of individual capacity.
+    const roleProfileIsSquadPlanner = roleProfile?.source === 'squadplanner'
+    const hasSquadPlannerPlannedResources = roleProfileIsSquadPlanner &&
+      rtNamedResources.some((nr: any) => {
+        const nrProfile = profileMap.namedResourceProfiles.get(nr.id)
+        return nrProfile?.resourceIdentity === 'PLANNED_RESOURCE'
+      })
+    const useRoleSegments = roleProfileValid && !hasSquadPlannerPlannedResources
+
+    if (useRoleSegments) {
       roleProfileRTIds.push(rt.id)
     }
 
@@ -251,7 +273,7 @@ export async function resolveSchedulerCapacity(
     // Named resources with ACTIVE_CAPACITY_PLAN segments must NOT suppress
     // plan fallback — additional trajectories beyond matched resources must
     // still be generated with deterministic IDs.
-    const hasProfileAuthority = roleProfileValid
+    const hasProfileAuthority = useRoleSegments
 
     if (
       !hasProfileAuthority &&
@@ -325,7 +347,7 @@ export async function resolveSchedulerCapacity(
       hoursPerDay: rt.hoursPerDay ?? null,
       allocationMode,
       namedResources,
-      roleSegments: roleProfileValid ? profileDataToSchedulerSegments(roleProfile) : undefined,
+      roleSegments: useRoleSegments ? profileDataToSchedulerSegments(roleProfile) : (roleProfileValid ? [] : undefined),
     }
   })
 
