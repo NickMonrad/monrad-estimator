@@ -145,6 +145,9 @@ describe('canonical cross-surface consistency', () => {
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
     vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValueOnce([] as never)
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValueOnce(null as never)
+    // resolveSchedulerCapacity also queries resourceType and capacityProfile
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce([] as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
 
     const res = await request(app)
@@ -258,13 +261,15 @@ describe('canonical cross-surface consistency', () => {
     )
     expect(res.body.summary.totalCost).toBe(rowCostSum + overheadCostSum)
   })
-
   it('Timeline and Resource Profile agree on actualAllocatedDays for the same NR', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValueOnce(baseProjectFixture() as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
     vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValueOnce([] as never)
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValueOnce(null as never)
+    // resolveSchedulerCapacity also queries resourceType and capacityProfile
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce([] as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
 
     const timelineRes = await request(app)
