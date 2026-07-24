@@ -18,6 +18,11 @@ type NamedResourceLike = {
   allocationStartWeek?: number | null
   allocationEndWeek?: number | null
   pricingModel?: string | null
+  /**
+   * Profile/plan capacity segments. When present, authoritative over
+   * legacy allocation fields for weekly capacity calculation.
+   */
+  capacitySegments?: { startWeek: number; endWeek: number; allocationPercent: number }[]
 }
 
 type ResourceTypeLike = {
@@ -37,6 +42,12 @@ type ResourceTypeLike = {
    * using count-based synthetic resources at 100%.
    */
   roleSegments?: { startWeek: number; endWeek: number; allocationPercent: number }[]
+  /**
+   * True when the scheduler capacity resolver has already resolved this RT
+   * from an active Capacity Plan. When set, the assignment function must
+   * not rematerialize the plan over already-authoritative output.
+   */
+  capacityPlanResolved?: boolean
   namedResources?: NamedResourceLike[]
 }
 
@@ -115,13 +126,14 @@ function buildEffectiveNamedResources(
   const mode = toAllocationMode(resourceType.allocationMode)
   const capacityPlanMaterialized = capacityPlanByRt.get(resourceType.id)
   const hasRoleSegments = resourceType.roleSegments && resourceType.roleSegments.length > 0
-
   // When a valid role profile is authoritative, suppress capacity plan fallback.
   // The role segments provide aggregate unnamed-staff capacity instead of
   // both the plan's trajectory set AND count-based phantom slots (defect #362).
+  // Also suppress when the resolver has already produced authoritative output.
   const useCapacityPlanFallback =
     mode === 'CAPACITY_PLAN' &&
     !resourceType.capacityProfileBacked &&
+    !resourceType.capacityPlanResolved &&
     !hasRoleSegments &&
     shouldFallbackToActiveCapacityPlan(persistedNamedResources, capacityPlanMaterialized)
 
