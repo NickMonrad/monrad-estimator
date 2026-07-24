@@ -38,7 +38,7 @@ let rtProfileSegmentedId: string
 let rtRoleId: string
 let rtCapPlanWithProfileId: string
 let rtCapPlanOnlyId: string
-
+let rtSquadPlannerId: string
 beforeAll(async () => {
   if (!runIntegration) return
   prisma = new PrismaClient({
@@ -119,6 +119,31 @@ beforeAll(async () => {
     data: { name: 'CapPlanOnly', category: 'ENGINEERING', count: 1, hoursPerDay: 8, allocationMode: 'CAPACITY_PLAN', projectId },
   })
   rtCapPlanOnlyId = rtCapPlanOnly.id
+
+  // ── Squad Planner composition fixture ────────────────────────────
+  const rtSquad = await prisma.resourceType.create({
+    data: { name: 'SquadPlannerRole', category: 'ENGINEERING', count: 3, hoursPerDay: 8, allocationMode: 'EFFORT', projectId },
+  })
+  rtSquadPlannerId = rtSquad.id
+  // Two planned-resource NRs
+  const nrSP1 = await prisma.namedResource.create({
+    data: { resourceTypeId: rtSquad.id, name: 'SP Planned 1', allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 100 },
+  })
+  const nrSP2 = await prisma.namedResource.create({
+    data: { resourceTypeId: rtSquad.id, name: 'SP Planned 2', allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 50 },
+  })
+  // Aggregate ROLE profile (SQUAD_PLANNER source)
+  await prisma.capacityProfile.create({
+    data: { projectId, resourceTypeId: rtSquad.id, namedResourceId: null, ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 150 },
+  })
+  await prisma.capacityProfile.create({
+    data: { projectId, resourceTypeId: null, namedResourceId: nrSP1.id, ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, segments: { create: [{ startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' }] } },
+  })
+  // PLANNED_RESOURCE profile 2 (SQUAD_PLANNER source)
+  await prisma.capacityProfile.create({
+    data: { projectId, resourceTypeId: null, namedResourceId: nrSP2.id, ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 50, segments: { create: [{ startWeek: 0, endWeek: 10, capacityPercent: 50, source: 'SQUAD_PLANNER' }] } },
+  })
+  // ── /Squad Planner fixture ──────────────────────────────────────────────
 
   // ── Timeline fixture ──────────────────────────────────────────────────
   const epic = await prisma.epic.create({ data: { name: 'Test Epic', projectId, order: 0 } })
@@ -221,11 +246,15 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
     const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
 
-    // Parity: getWeeklyCapacity from the resolver matches what schedule uses
     const rtProfile = resolved.resourceTypes.find(r => r.id === rtProfileFixedId)!
     const rtRole = resolved.resourceTypes.find(r => r.id === rtRoleId)!
+    const rtSquad = resolved.resourceTypes.find(r => r.id === rtSquadPlannerId)!
     expect(rtProfile).toBeDefined()
     expect(rtRole).toBeDefined()
+    expect(rtSquad).toBeDefined()
+
+    // Squad Planner overlap assertions (must be satisfied)
+    expect(rtSquad.roleSegments).toEqual([])
 
     const scheduleRes = await request(app)
       .post(`/api/projects/${projectId}/timeline/schedule`)
@@ -243,22 +272,93 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     expect(Array.isArray(timelineRes.body.weeklyCapacity)).toBe(true)
     expect(timelineRes.body.weeklyCapacity.length).toBeGreaterThan(0)
 
-    // ProfileFixed RT should have 40h/week at week 0 (100% profile, not truncated)
+    // ProfileFixed RT: must be present with exact capacity (required assertion)
     const profileFixedCap = timelineRes.body.weeklyCapacity.find(
-      (c: any) => c.resourceTypeName === 'ProfileFixed',
+      (c: any) => c.resourceTypeName === 'ProfileFixed' && c.week === 0,
     )
-    if (profileFixedCap) {
-      expect(profileFixedCap.capacityDays).toBe(5) // 40h / 8h = 5 days
-      expect(profileFixedCap.week).toBe(0)
-    }
+    expect(profileFixedCap).toBeDefined()
+    expect(profileFixedCap.capacityDays).toBe(5) // 40h / 8h = 5 days
 
-    // RoleProfile RT should have 20h/week at week 3 (50% on 8h/day)
+    // RoleProfile RT at week 3: must be present with exact capacity
     const roleProfileCap = timelineRes.body.weeklyCapacity.find(
       (c: any) => c.resourceTypeName === 'RoleProfile' && c.week === 3,
     )
-    if (roleProfileCap) {
-      // 50% × 8 × 5 / 8 = 2.5 capacity days
-      expect(roleProfileCap.capacityDays).toBe(2.5)
+    expect(roleProfileCap).toBeDefined()
+    expect(roleProfileCap.capacityDays).toBe(2.5) // 50% × 8 × 5 / 8 = 2.5 days
+
+    // Squad Planner RT: capacity = 60h (100% + 50%), not 120h
+    const squadCap = timelineRes.body.weeklyCapacity.find(
+      (c: any) => c.resourceTypeName === 'SquadPlannerRole' && c.week === 0,
+    )
+    expect(squadCap).toBeDefined()
+    expect(squadCap.capacityDays).toBe(7.5) // 60h / 8h = 7.5 days
+
+    // Named-resource assignment parity: PR1 (100%) + PR2 (50%) = 1.5 FTE
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    expect(getWeeklyCapacity(rtSquad, 0, 8)).toBe(60) // 100% + 50%
+
+    // Deterministic
+    const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
+    expect(resolved.resourceTypes).toEqual(resolved2.resourceTypes)
+  })
+
+  it('8. Squad Planner 1.5 FTE composition: postgres fixture parity', async () => {
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
+    const { deriveNamedResourceAssignments } = await import('../lib/namedResourceAssignments.js')
+    const { materializeCapacityPlanResources } = await import('../lib/capacityPlanMaterialisation.js')
+
+    // Verify persisted profiles have correct sources
+    const profiles = await prisma.capacityProfile.findMany({ where: { projectId, resourceTypeId: rtSquadPlannerId } })
+    expect(profiles.length).toBeGreaterThanOrEqual(1)
+    for (const p of profiles) {
+      // Raw persisted sources must be SQUAD_PLANNER (the Prisma enum)
+      if (p.ownerKind === 'ROLE') {
+        expect(p.source).toBe('SQUAD_PLANNER')
+      }
     }
+
+    // Check planned-resource profiles
+    const nrProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId, namedResourceId: { not: null }, ownerKind: 'PLANNED_RESOURCE' },
+    })
+    for (const p of nrProfiles) {
+      expect(p.source).toBe('SQUAD_PLANNER')
+    }
+
+    // Resolve
+    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const rt = resolved.resourceTypes.find(r => r.id === rtSquadPlannerId)!
+
+    // Resolver returns empty roleSegments (suppressed Squad Planner overlap)
+    expect(rt.roleSegments).toEqual([])
+    expect(rt.namedResources).toHaveLength(2)
+
+    // Exact deterministic identity
+    expect(rt.namedResources[0].id).toBeDefined()
+    expect(rt.namedResources[1].id).toBeDefined()
+
+    // 100% + 50% = 60h (not 150% role + 100% + 50% = 120h)
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(60)
+
+    // Named-resource assignment parity
+    const capacityPlanByRt = materializeCapacityPlanResources([])
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [rt],
+      weeklyDemand: Array.from({ length: 8 }, (_, w) => ({
+        week: w,
+        resourceTypeName: 'SquadPlannerRole',
+        demandDays: 10,
+      })),
+      capacityPlanByRt,
+    })
+    const rtAssign = assignments.get(rtSquadPlannerId)!
+    // PR1: 100% → 5d/wk, PR2: 50% → 2.5d/wk, total 7.5d/wk × 8 = 60d
+    expect(rtAssign.actualAllocatedDays).toBeCloseTo(60, 5)
+    expect(rtAssign.unallocatedDays).toBeCloseTo(20, 5) // 10d demand - 7.5d capacity = 2.5d/wk × 8
+
+    // Deterministic
+    const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
+    expect(resolved.resourceTypes).toEqual(resolved2.resourceTypes)
   })
 })

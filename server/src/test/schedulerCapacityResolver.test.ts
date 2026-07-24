@@ -1275,3 +1275,164 @@ describe('SQUAD_PLANNER to squadPlanner normalisation (remediation)', () => {
     expect(rt.namedResources[0].capacitySegments).toBeDefined()
   })
 })
+
+describe('overlap suppression precision (remediation)', () => {
+  it('manual PLANNED_RESOURCE does not suppress Squad Planner ROLE profile', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-overlap', name: 'Overlap', count: 1, hoursPerDay: 8,
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-manual', name: 'Manual PR',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'EFFORT',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        // Squad Planner ROLE profile
+        {
+          id: 'cp-role-sp', projectId: 'proj-1',
+          resourceTypeId: 'rt-overlap', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [],
+        },
+        // Manual PLANNED_RESOURCE (source: MANUAL, not SQUAD_PLANNER)
+        {
+          id: 'cp-nr-manual', projectId: 'proj-1',
+          resourceTypeId: 'rt-overlap', namedResourceId: 'nr-manual',
+          ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+      ],
+    })
+
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // Squad Planner ROLE must NOT be suppressed by manual PLANNED_RESOURCE
+    // Being unsuppressed: roleSegments provides additional capacity
+    expect(rt.roleSegments).toBeDefined()
+    expect(rt.roleSegments!.length).toBeGreaterThan(0)
+    expect(rt.namedResources).toHaveLength(1)
+    // NR (100%) = 40h + role (100%) = 40h → 80h total
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(80)
+  })
+
+  it('squad-planner ROLE not suppressed by legacy/fallback planned-resource identity', async () => {
+    // Simulate an active plan fallback producing a planned-resource-like profile
+    // that has resolutionSource ACTIVE_CAPACITY_PLAN, not PROFILE.
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-legacy', name: 'LegacyOverlap', count: 2, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-fallback', name: 'Fallback',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        // Squad Planner ROLE profile
+        {
+          id: 'cp-role-sp2', projectId: 'proj-1',
+          resourceTypeId: 'rt-legacy', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [],
+        },
+      ],
+      activeCapacityPlan: {
+        id: 'plan-fallback',
+        periods: [
+          {
+            periodIndex: 0, startWeek: 0, endWeek: 8,
+            entries: [{ resourceTypeId: 'rt-legacy', headcount: 1 }],
+          },
+        ],
+      },
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // The active plan produces ACTIVE_CAPACITY_PLAN profiles for the NR,
+    // not PROFILE. The Squad Planner ROLE must not be suppressed.
+    expect(rt.roleSegments).toBeDefined()
+    expect(rt.roleSegments!.length).toBeGreaterThan(0)
+  })
+
+  it('non-Squad-Planner ROLE not suppressed by Squad Planner planned resource', async () => {
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-mixed', name: 'Mixed', count: 2, hoursPerDay: 8,
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-sp-pr', name: 'SP Planned',
+              startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'EFFORT',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        // Manual ROLE profile (source: MANUAL, not SQUAD_PLANNER)
+        {
+          id: 'cp-role-man', projectId: 'proj-1',
+          resourceTypeId: 'rt-mixed', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'MANUAL', defaultPercent: 100,
+          startWeek: 0, endWeek: 10, legacy: null,
+          segments: [],
+        },
+        // Squad Planner planned-resource profile
+        {
+          id: 'cp-nr-sp', projectId: 'proj-1',
+          resourceTypeId: 'rt-mixed', namedResourceId: 'nr-sp-pr',
+          ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'squadPlanner' },
+          ],
+        },
+      ],
+    })
+
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // Manual ROLE must NOT be suppressed by a Squad Planner PR
+    expect(rt.roleSegments).toBeDefined()
+    expect(rt.roleSegments!.length).toBeGreaterThan(0)
+  })
+})

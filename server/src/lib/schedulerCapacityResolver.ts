@@ -224,10 +224,16 @@ export async function resolveSchedulerCapacity(
     // trajectories for scheduler capacity — don't expose roleSegments to
     // avoid double-counting aggregate capacity on top of individual capacity.
     const roleProfileIsSquadPlanner = roleProfile?.source === 'squadPlanner'
+    // The aggregate ROLE profile must only be suppressed when the overlapping
+    // planned-resource profiles are ALSO authoritative Squad Planner profiles.
+    // A manual, imported, derived, or fallback PLANNED_RESOURCE must NOT
+    // suppress a Squad Planner ROLE profile.
     const hasSquadPlannerPlannedResources = roleProfileIsSquadPlanner &&
       rtNamedResources.some((nr: any) => {
         const nrProfile = profileMap.namedResourceProfiles.get(nr.id)
-        return nrProfile?.resourceIdentity === 'PLANNED_RESOURCE'
+        return nrProfile?.resourceIdentity === 'PLANNED_RESOURCE' &&
+          nrProfile?.resolutionSource === 'PROFILE' &&
+          nrProfile?.source === 'squadPlanner'
       })
     const useRoleSegments = roleProfileValid && !hasSquadPlannerPlannedResources
 
