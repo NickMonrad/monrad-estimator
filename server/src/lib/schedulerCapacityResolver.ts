@@ -329,11 +329,28 @@ export async function resolveSchedulerCapacity(
         }
       })
 
-      // Preserve unmatched persisted NRs (those without a matching trajectory)
+      // Preserve unmatched persisted NRs — but set them to zero capacity.
+      // When the plan fallback runs, the plan's trajectories are the
+      // authoritative capacity. Unmatched NRs (e.g. original TIMELINE
+      // resources that became surplus after planner apply) must not
+      // contribute phantom or legacy capacity.
       const matchedExistingIds = new Set(
         matched.filter(m => m.existingNamedResourceId).map(m => m.existingNamedResourceId!),
       )
-      const unmatchedPersisted = namedResources.filter(nr => !matchedExistingIds.has(nr.id))
+      const unmatchedPersisted: SchedulerNamedResource[] = namedResources
+        .filter(nr => !matchedExistingIds.has(nr.id))
+        .map(nr => ({
+          id: nr.id,
+          name: nr.name,
+          startWeek: null,
+          endWeek: null,
+          allocationPct: 0,
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 0,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          capacitySegments: [{ startWeek: 0, endWeek: 9999, allocationPercent: 0 }],
+        }))
 
       return {
         id: rt.id,
