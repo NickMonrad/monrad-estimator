@@ -557,6 +557,12 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     // Week 0: capacity 7.5d, demand 10d → 7.5d allocated, 2.5d unallocated
     // Week 8: capacity 2.5d, demand 10d → 2.5d allocated, 7.5d unallocated
     expect(rtAssign.actualAllocatedDays).toBeCloseTo(10, 5) // 7.5 + 2.5
+    // Timeline schedule creates entries based on post-apply state
+    const scheduleRes = await request(app)
+      .post(`/api/projects/${projectId}/timeline/schedule`)
+      .set('Authorization', authHeader)
+      .send({ resourceLevel: false })
+    expect(scheduleRes.status).toBe(200)
 
     // Timeline GET exposes same weekly capacity
     const timelineRes = await request(app)
@@ -564,23 +570,20 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
       .set('Authorization', authHeader)
     expect(timelineRes.status).toBe(200)
 
-    const engCap = timelineRes.body.weeklyCapacity.find(
-      (c: any) => c.resourceTypeName === 'Engineer',
-    )
-    expect(engCap).toBeDefined()
-
+    // Week 0 must be present with exact capacity (unconditional assertion)
     const engCapW0 = timelineRes.body.weeklyCapacity.find(
       (c: any) => c.resourceTypeName === 'Engineer' && c.week === 0,
     )
+    expect(engCapW0).toBeDefined()
+    expect(engCapW0.capacityDays).toBe(7.5) // 60h / 8h
+
+    // Week 8 must be present with exact capacity (unconditional assertion)
     const engCapW8 = timelineRes.body.weeklyCapacity.find(
       (c: any) => c.resourceTypeName === 'Engineer' && c.week === 8,
     )
-    expect(engCapW0).toBeDefined()
-    expect(engCapW0.capacityDays).toBe(7.5) // 60h / 8h
-    if (engCapW8) {
-      // Plan drops to 0.5 FTE at week 8 → 20h / 8h = 2.5 days
-      expect(engCapW8.capacityDays).toBe(2.5)
-    }
+    expect(engCapW8).toBeDefined()
+    // Plan drops to 0.5 FTE at week 8 → 20h / 8h = 2.5 days
+    expect(engCapW8.capacityDays).toBe(2.5)
 
     // Deterministic
     const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
