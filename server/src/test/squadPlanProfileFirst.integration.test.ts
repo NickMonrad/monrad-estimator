@@ -397,13 +397,12 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     projectId = await createProject()
     rtId = await createResourceType(projectId, 'rt-eng-s1', 'Engineer')
     await createEpicBacklog(projectId, rtId)
-
     // Add enough backlog effort to span the plan duration so the scheduler
     // computes weekly capacity for the full 12-week horizon (weeks 0-11).
-    // 8 tasks × 70h = 560h ≈ 1.5 FTE × 8w + 0.5 FTE × 4w
+    // 12 stories × 60h = 720h ≈ 1.5 FTE × 12w × 5d/w × 8h/d
     const fillEpic = await prisma.epic.create({ data: { name: 'Fill Epic', projectId, order: 1 } })
     const fillFeature = await prisma.feature.create({ data: { name: 'Fill Feature', epicId: fillEpic.id, order: 0 } })
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 12; i++) {
       const fillStory = await prisma.userStory.create({
         data: { name: `Fill Story ${i}`, featureId: fillFeature.id, order: i },
       })
@@ -411,7 +410,7 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
         data: {
           name: `Fill Task ${i}`,
           userStoryId: fillStory.id, order: 0,
-          hoursEffort: 70,
+          hoursEffort: 60,
           resourceTypeId: rtId,
           durationDays: 5,
         },
@@ -667,12 +666,10 @@ describeIf('Scenario 2 — Equivalent reapply is idempotent', () => {
 describeIf('Scenario 3 — Resizing from 2 headcount to 1 produces surplus PLANNED_RESOURCE', () => {
   let projectId: string
   let rtId: string
-  let authHeader: string
 
   beforeAll(async () => {
     if (!runIntegration) return
     projectId = await createProject()
-    authHeader = 'Bearer test-token'
     rtId = await createResourceType(projectId, 'rt-eng-s3', 'Engineer')
     await createEpicBacklog(projectId, rtId)
 
