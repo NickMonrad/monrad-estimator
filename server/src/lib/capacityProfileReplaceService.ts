@@ -17,10 +17,6 @@ import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegac
 import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
 import { mapPersistedProfilesToDTOs } from './capacityProfileMapping.js'
 import type { CapacityProfileDTO } from './capacityProfileMapping.js'
-import { resolveRoleDefaultForMutation } from './resolveRoleDefaultForMutation.js'
-import { classifyNRsForRoleUpdate } from './classifyNRsForRoleUpdate.js'
-import type { NRToClassify, NRProfileState } from './classifyNRsForRoleUpdate.js'
-import { upsertNRProfileAndProjectLegacy } from './namedResourceCapacityProfileWrites.js'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -54,43 +50,26 @@ export class ServiceError extends Error {
 // ─── Role-inheritance helper (used by resourceTypes.ts) ──────────────────────
 
 /**
- * Apply the new role-level default to inherited named resources after a role
- * capacity profile has been replaced.
+ * Apply a new role-level default (capacity profile) to all inherited
+ * named resources by updating only their legacy compatibility fields.
  *
- * Each inherited NR receives:
- * 1. A CapacityProfile upsert (via `upsertNRProfileAndProjectLegacy`) so the
- *    profile-first authority is maintained at the NR level.
- * 2. Updated legacy NamedResource fields for backward compatibility.
+ * This does NOT create independent CapacityProfile records — the
+ * role-level profile remains the source of truth for inherited NRs.
  *
- * Named resources NOT in `inheritedNRIds` are left untouched.
- *
- * @param tx              Prisma transaction client
- * @param projectId       Project ID
- * @param rtId            ResourceType ID
- * @param inheritedNRIds  NR IDs classified as ROLE_DEFAULT
- * @param projection      The projected legacy allocation from the new role profile
+ * @param tx              Transaction client
+ * @param inheritedNRIds  NR IDs classified as ROLE_DEFAULT (inherited)
+ * @param projection      Projected legacy allocation from the role profile
  */
 export async function applyRoleDefaultToInheritedNRs(
   tx: any,
-  projectId: string,
-  rtId: string,
   inheritedNRIds: string[],
   projection: LegacyAllocationProjection,
 ): Promise<void> {
   if (!inheritedNRIds || inheritedNRIds.length === 0) return
 
-  // 1. Upsert CapacityProfile for each inherited NR via the profile-first helper
-  for (const nrId of inheritedNRIds) {
-    await upsertNRProfileAndProjectLegacy(tx, projectId, nrId, rtId, {
-      allocationMode: projection.allocationMode,
-      allocationPercent: projection.allocationPercent ?? 100,
-      allocationStartWeek: projection.allocationStartWeek,
-      allocationEndWeek: projection.allocationEndWeek,
-    })
-  }
-
-  // 2. Update legacy NamedResource fields for backward compatibility
-  // All inherited NRs share the same role default values.
+  // Update legacy NamedResource fields for backward compatibility.
+  // Do NOT create independent CapacityProfile records for inherited NRs —
+  // the role-level profile is the source of truth for inherited resources.
   await tx.namedResource.updateMany({
     where: { id: { in: inheritedNRIds } },
     data: {
@@ -175,58 +154,6 @@ export async function replaceCapacityProfile(
       })
     : []
 
-  // ── [ROLE only] Classify inherited named resources ─────────────────
-  /** Captured before mutation — used after profile write to update inherited NRs. */
-  let inheritedNRIds: string[] = []
-  if (ownerKind === 'ROLE') {
-    // Load current RT for old-role-default fallback
-    const rtRecord = await tx.resourceType.findFirst({
-      where: { id: ownerId },
-      select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
-    })
-
-    // Load existing role profiles with segments
-    const oldRoleProfiles = await tx.capacityProfile.findMany({
-      where: { resourceTypeId: ownerId, namedResourceId: null, projectId },
-      include: { segments: true },
-    })
-
-    // Resolve authoritative pre-mutation role default
-    const oldRoleDefault = resolveRoleDefaultForMutation({
-      resourceType: rtRecord!,
-      roleProfiles: oldRoleProfiles as unknown as readonly any[],
-    })
-
-    // Load all named resources for this ResourceType
-    const nrs = await tx.namedResource.findMany({
-      where: { resourceTypeId: ownerId },
-      orderBy: { createdAt: 'asc' },
-    })
-
-    // Load NR capacity profiles with segments
-    const nrProfileRows = nrs.length > 0
-      ? await tx.capacityProfile.findMany({
-          where: { namedResourceId: { in: nrs.map((n: { id: string }) => n.id) } },
-          include: { segments: true },
-        })
-      : []
-
-    // Classify: which NRs inherit the role default vs. are explicitly custom
-    const classification = classifyNRsForRoleUpdate(
-      nrs as unknown as NRToClassify[],
-      nrProfileRows as unknown as NRProfileState[],
-      {
-        allocationMode: oldRoleDefault.allocationMode,
-        allocationPercent: oldRoleDefault.allocationPercent,
-        allocationStartWeek: oldRoleDefault.allocationStartWeek,
-        allocationEndWeek: oldRoleDefault.allocationEndWeek,
-      },
-    )
-
-    inheritedNRIds = classification.inheritedNRIds
-  }
-
-  // ── 4. Persist capacity profile ──────────────────────────────────────
   if (existingId) {
     // Update existing profile — preserve id, replace segments
     await tx.capacityProfile.update({
@@ -334,11 +261,9 @@ export async function replaceCapacityProfile(
         },
       })
 
-      // Apply role default to inherited named resources
-      // — updates both NR CapacityProfile rows and legacy fields.
-      if (inheritedNRIds.length > 0) {
-        await applyRoleDefaultToInheritedNRs(tx, projectId, ownerId, inheritedNRIds, projection)
-      }
+      // Inherited named resources are NOT updated here — the role-level
+      // profile is the source of truth. The legacy resourceTypes.ts PUT
+      // route handles inherited-NR field updates separately.
     } else {
       await tx.namedResource.update({
         where: { id: ownerId },

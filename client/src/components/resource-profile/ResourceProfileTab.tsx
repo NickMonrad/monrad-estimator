@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { Fragment, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
@@ -15,6 +15,7 @@ import {
   formatEffectiveAvailabilityPeriod,
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
+import CapacityProfileEditorModal from './CapacityProfileEditorModal'
 
 const TYPE_OPTIONS = [
   { label: '% of task days', value: 'PERCENTAGE' },
@@ -42,6 +43,17 @@ export default function ResourceProfileTab({
   updateAllocationMutation,
 }: Props) {
   const navigate = useNavigate()
+  const [editingRoleProfile, setEditingRoleProfile] = useState<{
+    ownerKind: 'ROLE' | 'NAMED_PERSON'
+    ownerId: string
+    initialProfile: {
+      planningBasis: string
+      defaultPercent: number | null
+      startWeek: number | null
+      endWeek: number | null
+      segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    } | null
+  } | null>(null)
   return (
     <>
     <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
@@ -184,6 +196,22 @@ export default function ResourceProfileTab({
                           <div>
                             <button
                               onClick={() => {
+                                // Role rows with capacity profiles open the new profile editor
+                                if (row.capacityProfile && !row.namedResources?.length && row.capacityProfile?.source !== 'squadPlanner') {
+                                  setEditingRoleProfile({
+                                    ownerKind: 'ROLE',
+                                    ownerId: row.resourceTypeId,
+                                    initialProfile: row.capacityProfile ? {
+                                      planningBasis: row.capacityProfile.planningBasis,
+                                      defaultPercent: row.capacityProfile.defaultPercent ?? null,
+                                      startWeek: row.capacityProfile.startWeek ?? null,
+                                      endWeek: row.capacityProfile.endWeek ?? null,
+                                      segments: row.capacityProfile.segments,
+                                    } : null,
+                                  })
+                                  return
+                                }
+                                // Otherwise, use existing scalar editor
                                 if (editingAllocation === row.resourceTypeId) {
                                   setEditingAllocation(null)
                                   setAllocationDraft(null)
@@ -609,6 +637,21 @@ export default function ResourceProfileTab({
         </div>
       )}
     </section>
+      {/* ── ROLE / NAMED_PERSON capacity profile editor modal ─────────── */}
+      {editingRoleProfile && (
+        <CapacityProfileEditorModal
+          projectId={projectId}
+          ownerKind={editingRoleProfile.ownerKind}
+          ownerId={editingRoleProfile.ownerId}
+          initialProfile={editingRoleProfile.initialProfile}
+          onSaved={() => {
+            setEditingRoleProfile(null)
+          }}
+          onCancel={() => {
+            setEditingRoleProfile(null)
+          }}
+        />
+      )}
     </>
   )
 }

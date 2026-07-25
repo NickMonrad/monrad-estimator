@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
-import type { ResourceProfileRow } from '../../types/backlog'
+import type { ResourceProfileRow, CapacityProfilePlanningBasis } from '../../types/backlog'
 import {
   formatPlanningBasis,
   formatCapacityProfileSource,
@@ -65,7 +65,7 @@ export default function NamedResourcesPanel({
     ownerKind: 'ROLE' | 'NAMED_PERSON'
     ownerId: string
     initialProfile: {
-      planningBasis: string
+      planningBasis: CapacityProfilePlanningBasis
       defaultPercent: number | null
       startWeek: number | null
       endWeek: number | null

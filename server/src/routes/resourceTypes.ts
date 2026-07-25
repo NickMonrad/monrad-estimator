@@ -175,8 +175,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       // 2. Apply role default to inherited NRs via profile-first helper
       await applyRoleDefaultToInheritedNRs(
         tx,
-        req.params.projectId as string,
-        req.params.id as string,
         [...inheritedIds],
         projection,
       )

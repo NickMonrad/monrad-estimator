@@ -31,6 +31,7 @@ interface EditorProfile {
   startWeek: number | null
   endWeek: number | null
   segments: SegmentInput[]
+  source?: string
 }
 
 // ─── Props ──────────────────────────────────────────────────────────────────
@@ -98,7 +99,7 @@ export default function CapacityProfileEditor({
   const saveMutation = useMutation({
     mutationFn: () =>
       api.put(
-        `/api/projects/${projectId}/capacity-profiles/${ownerKind}/${ownerId}`,
+        `/projects/${projectId}/capacity-profiles/${ownerKind}/${ownerId}`,
         {
           planningBasis,
           defaultPercent: planningBasis === 'capacityProfile' ? null : defaultPercent,
@@ -115,11 +116,15 @@ export default function CapacityProfileEditor({
       onSaved()
     },
     onError: (err: unknown) => {
-      const axiosError = err as AxiosError<{ error?: string }>
-      const msg =
-        axiosError?.response?.data?.error ??
-        (err instanceof Error ? err.message : 'Failed to save capacity profile')
-      setError(msg)
+      const axiosError = err as AxiosError<{ error?: string; details?: string[] }>
+      const responseData = axiosError?.response?.data
+      const serverMsg = responseData?.error ?? 'Failed to save capacity profile'
+      const serverDetails = responseData?.details
+      if (serverDetails && serverDetails.length > 0) {
+        setError(serverMsg + ': ' + serverDetails.join('; '))
+      } else {
+        setError(serverMsg)
+      }
     },
   })
 

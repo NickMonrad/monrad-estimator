@@ -92,7 +92,7 @@ describe('CapacityProfileEditor — demandFollowing', () => {
 
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledWith(
-        '/api/projects/proj-1/capacity-profiles/ROLE/rt-1',
+        '/projects/proj-1/capacity-profiles/ROLE/rt-1',
         expect.objectContaining({ planningBasis: 'demandFollowing', defaultPercent: 100 }),
       )
     })
@@ -244,7 +244,7 @@ describe('CapacityProfileEditor — capacityProfile (segments)', () => {
 
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledWith(
-        '/api/projects/proj-1/capacity-profiles/ROLE/rt-1',
+        '/projects/proj-1/capacity-profiles/ROLE/rt-1',
         expect.objectContaining({
           planningBasis: 'capacityProfile',
           segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
@@ -390,7 +390,7 @@ describe('CapacityProfileEditor — NAMED_PERSON owner', () => {
 
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledWith(
-        '/api/projects/proj-1/capacity-profiles/NAMED_PERSON/nr-1',
+        '/projects/proj-1/capacity-profiles/NAMED_PERSON/nr-1',
         expect.anything(),
       )
     })
