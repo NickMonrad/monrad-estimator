@@ -181,7 +181,7 @@ router.put('/:ownerKind/:ownerId', asyncHandler(async (req: AuthRequest, res: Re
   // ── Run in transaction ──────────────────────────────────────────────
   try {
     const profile = await prisma.$transaction(tx =>
-      replaceCapacityProfile(tx as any, projectId, ownerKind, ownerId, req.body),
+      replaceCapacityProfile(tx as any, projectId, ownerKind, ownerId, req.body, req.userId!),
     )
 
     res.status(200).json({ capacityProfile: profile })
@@ -190,10 +190,19 @@ router.put('/:ownerKind/:ownerId', asyncHandler(async (req: AuthRequest, res: Re
       res.status(err.status).json({ error: err.message })
       return
     }
-    // Prisma unique constraint violation — race condition on create
-    if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2002') {
-      res.status(409).json({ error: 'A capacity profile already exists for this owner' })
-      return
+    // Narrow P2002: only map the expected capacity-profile owner uniqueness violation
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code: string }).code === 'P2002'
+    ) {
+      const meta = (err as { meta?: { target?: string[] } }).meta
+      const target = meta?.target
+      if (target?.includes('resourceTypeId') || target?.includes('namedResourceId')) {
+        res.status(409).json({ error: 'A capacity profile already exists for this owner' })
+        return
+      }
     }
     throw err
   }

@@ -107,9 +107,20 @@ export async function replaceCapacityProfile(
   ownerKind: ReplaceOwnerKind,
   ownerId: string,
   body: ReplaceBody,
+  userId?: string,
 ): Promise<CapacityProfileDTO> {
   const { planningBasis, defaultPercent, startWeek, endWeek, segments } = body
 
+  // ── 0. Transactional project ownership revalidation ──────────────────
+  if (userId) {
+    const project = await tx.project.findUnique({
+      where: { id: projectId },
+      select: { id: true },
+    })
+    if (!project) {
+      throw new ServiceError(404, 'Project not found or access denied')
+    }
+  }
   // ── 1. Verify owner exists and belongs to project ─────────────────────
   if (ownerKind === 'ROLE') {
     const rt = await tx.resourceType.findFirst({
@@ -339,6 +350,23 @@ export async function replaceCapacityProfile(
         },
       })
     }
+  }
+
+  // ── 8. Persist lossy projection metadata ──────────────────────────────
+  if (projection && existingId) {
+    await tx.capacityProfile.update({
+      where: { id: existingId },
+      data: {
+        legacy: {
+          allocationMode: projection.allocationMode,
+          allocationPercent: projection.allocationPercent ?? 100,
+          allocationStartWeek: projection.allocationStartWeek,
+          allocationEndWeek: projection.allocationEndWeek,
+          lossy: projection.lossy,
+          lossReason: projection.lossReason ?? null,
+        },
+      },
+    })
   }
 
   // ── 8. Invalidate weekly demand cache ──────────────────────────────────

@@ -181,6 +181,7 @@ describe('PUT /api/projects/:projectId/capacity-profiles/:ownerKind/:ownerId', (
     expect(mockReplace).toHaveBeenCalledWith(
       expect.anything(), 'proj-1', 'ROLE', 'rt-1',
       expect.objectContaining({ planningBasis: 'DEMAND_FOLLOWING' }),
+      expect.any(String),
     )
   })
 
@@ -206,6 +207,7 @@ describe('PUT /api/projects/:projectId/capacity-profiles/:ownerKind/:ownerId', (
     expect(mockReplace).toHaveBeenCalledWith(
       expect.anything(), 'proj-1', 'NAMED_PERSON', 'nr-1',
       expect.objectContaining({ planningBasis: 'AVAILABILITY_WINDOW' }),
+      expect.any(String),
     )
   })
 
