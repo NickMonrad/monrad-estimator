@@ -190,6 +190,11 @@ router.put('/:ownerKind/:ownerId', asyncHandler(async (req: AuthRequest, res: Re
       res.status(err.status).json({ error: err.message })
       return
     }
+    // Prisma unique constraint violation — race condition on create
+    if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2002') {
+      res.status(409).json({ error: 'A capacity profile already exists for this owner' })
+      return
+    }
     throw err
   }
 }))

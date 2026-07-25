@@ -17,6 +17,8 @@ import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegac
 import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
 import { mapPersistedProfilesToDTOs } from './capacityProfileMapping.js'
 import type { CapacityProfileDTO } from './capacityProfileMapping.js'
+import { resolveRoleDefaultForMutation } from './resolveRoleDefaultForMutation.js'
+import { classifyNRsForRoleUpdate } from './classifyNRsForRoleUpdate.js'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -126,7 +128,7 @@ export async function replaceCapacityProfile(
     }
   }
 
-  // ── 2. Check planner-owned boundary ───────────────────────────────────
+  // ── 2. Fail-closed: guard against ambiguous or protected state ─────────
   const existingProfiles = await tx.capacityProfile.findMany({
     where: ownerKind === 'ROLE'
       ? { resourceTypeId: ownerId, projectId }
@@ -134,7 +136,14 @@ export async function replaceCapacityProfile(
     select: { id: true, ownerKind: true, source: true },
   })
 
+  if (existingProfiles.length > 1) {
+    throw new ServiceError(409, `Multiple capacity profiles exist for this ${ownerKind.toLowerCase()}`)
+  }
+
   for (const ep of existingProfiles) {
+    if (ep.ownerKind !== ownerKind) {
+      throw new ServiceError(409, `ownerKind mismatch: profile has kind "${ep.ownerKind}" but route requested "${ownerKind}"`)
+    }
     if (ep.ownerKind === 'PLANNED_RESOURCE') {
       throw new ServiceError(409, 'Cannot replace a PLANNED_RESOURCE profile manually')
     }
@@ -143,9 +152,59 @@ export async function replaceCapacityProfile(
     }
   }
 
-  const existingId = existingProfiles.length > 0 ? existingProfiles[0].id : null
+  const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
 
-  // ── 3. Prepare segment data with deterministic ordering ───────────────
+  // ── 3. [ROLE only] Classify inherited named resources ──────────────────
+  let inheritedNRIds: string[] = []
+  if (ownerKind === 'ROLE') {
+    // Load current RT for old-role-default fallback
+    const rtRecord = await tx.resourceType.findFirst({
+      where: { id: ownerId },
+      select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
+    })
+
+    // Load existing role profiles with segments
+    const oldRoleProfiles = await tx.capacityProfile.findMany({
+      where: { resourceTypeId: ownerId, namedResourceId: null, projectId },
+      include: { segments: true },
+    })
+
+    // Resolve authoritative pre-mutation role default
+    const oldRoleDefault = resolveRoleDefaultForMutation({
+      resourceType: rtRecord!,
+      roleProfiles: oldRoleProfiles as unknown as readonly any[],
+    })
+
+    // Load all named resources for this ResourceType
+    const nrs = await tx.namedResource.findMany({
+      where: { resourceTypeId: ownerId },
+      orderBy: { createdAt: 'asc' },
+    })
+
+    // Load NR capacity profiles with segments
+    const nrProfileRows = nrs.length > 0
+      ? await tx.capacityProfile.findMany({
+          where: { namedResourceId: { in: nrs.map((n: { id: string }) => n.id) } },
+          include: { segments: true },
+        })
+      : []
+
+    // Classify: which NRs inherit the role default vs. are explicitly custom
+    const classification = classifyNRsForRoleUpdate(
+      nrs as any,
+      nrProfileRows as any,
+      {
+        allocationMode: oldRoleDefault.allocationMode,
+        allocationPercent: oldRoleDefault.allocationPercent,
+        allocationStartWeek: oldRoleDefault.allocationStartWeek,
+        allocationEndWeek: oldRoleDefault.allocationEndWeek,
+      },
+    )
+
+    inheritedNRIds = classification.inheritedNRIds
+  }
+
+  // ── 4. Prepare segment data with deterministic ordering ────────────────
   const sortedSegments = Array.isArray(segments) && segments.length > 0
     ? [...segments].sort((a, b) => {
         return a.startWeek - b.startWeek
@@ -154,6 +213,7 @@ export async function replaceCapacityProfile(
       })
     : []
 
+  // ── 5. Persist capacity profile ───────────────────────────────────────
   if (existingId) {
     // Update existing profile — preserve id, replace segments
     await tx.capacityProfile.update({
@@ -167,12 +227,9 @@ export async function replaceCapacityProfile(
       },
     })
 
-    // Delete existing segments
-    await tx.capacitySegment.deleteMany({
-      where: { capacityProfileId: existingId },
-    })
+    // Delete old segments and create new ones
+    await tx.capacitySegment.deleteMany({ where: { capacityProfileId: existingId } })
 
-    // Create new segments with deterministic ordering
     for (let i = 0; i < sortedSegments.length; i++) {
       const seg = sortedSegments[i]
       await tx.capacitySegment.create({
@@ -230,7 +287,7 @@ export async function replaceCapacityProfile(
     }
   }
 
-  // ── 5. Project back to legacy fields ─────────────────────────────────
+  // ── 6. Project back to legacy fields ──────────────────────────────────
   const camelPlanningBasis = planningBasis.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
 
   const projectionInput = {
@@ -248,7 +305,7 @@ export async function replaceCapacityProfile(
 
   const projection = projectCapacityProfileToLegacyAllocation(projectionInput)
 
-  // ── 6. Write projection to legacy fields ─────────────────────────────
+  // ── 7. Write projection to legacy compatibility fields ────────────────
   if (projection) {
     if (ownerKind === 'ROLE') {
       await tx.resourceType.update({
@@ -258,12 +315,15 @@ export async function replaceCapacityProfile(
           allocationPercent: projection.allocationPercent,
           allocationStartWeek: projection.allocationStartWeek,
           allocationEndWeek: projection.allocationEndWeek,
+          startWeek: projection.allocationStartWeek,
+          endWeek: projection.allocationEndWeek,
         },
       })
 
-      // Inherited named resources are NOT updated here — the role-level
-      // profile is the source of truth. The legacy resourceTypes.ts PUT
-      // route handles inherited-NR field updates separately.
+      // Apply role default to inherited named resources (compatibility fields only)
+      if (inheritedNRIds.length > 0) {
+        await applyRoleDefaultToInheritedNRs(tx, inheritedNRIds, projection)
+      }
     } else {
       await tx.namedResource.update({
         where: { id: ownerId },
@@ -280,13 +340,13 @@ export async function replaceCapacityProfile(
     }
   }
 
-  // ── 7. Clear project weeklyDemandCache ────────────────────────────────
+  // ── 8. Invalidate weekly demand cache ──────────────────────────────────
   await tx.project.update({
     where: { id: projectId },
     data: { weeklyDemandCache: {} },
   })
 
-  // ── 8. Read back and return as DTO ────────────────────────────────────
+  // ── 9. Read back and return as DTO ────────────────────────────────────
   const persistedProfile = await tx.capacityProfile.findFirst({
     where: existingId
       ? { id: existingId }
@@ -308,32 +368,24 @@ export async function replaceCapacityProfile(
     throw new ServiceError(500, 'Failed to read back persisted profile')
   }
 
-  // Build resource-type and named-resource maps for DTO conversion
-  const projectData = await tx.project.findFirst({
-    where: { id: projectId },
-    select: {
-      resourceTypes: {
-        select: { id: true, name: true },
-      },
-    },
-  })
-
+  // Build lookup maps for DTO conversion
   const resourceTypeById = new Map<string, { id: string; name: string }>()
-  const namedResourceById = new Map<string, { id: string; name: string; resourceTypeId: string }>()
-
-  if (projectData?.resourceTypes) {
-    for (const rt of projectData.resourceTypes) {
-      resourceTypeById.set(rt.id, { id: rt.id, name: rt.name })
-    }
+  if (ownerKind === 'ROLE') {
+    const rt = await tx.resourceType.findUnique({
+      where: { id: ownerId },
+      select: { id: true, name: true },
+    })
+    if (rt) resourceTypeById.set(rt.id, { id: rt.id, name: rt.name })
   }
 
+  const namedResourceById = new Map<string, { id: string; name: string; resourceTypeId: string }>()
   if (ownerKind === 'NAMED_PERSON') {
     const nrLookup = await tx.namedResource.findFirst({
       where: { id: ownerId },
       select: { id: true, name: true, resourceTypeId: true },
     })
     if (nrLookup) {
-      namedResourceById.set(nrLookup.id, { id: nrLookup.id, name: nrLookup.name, resourceTypeId: nrLookup.resourceTypeId })
+      namedResourceById.set(nrLookup.id, { id: nrLookup.id, name: nrLookup.name, resourceTypeId: nrLookup.resourceTypeId! })
     }
   }
 

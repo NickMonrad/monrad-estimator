@@ -92,7 +92,7 @@ describe('CapacityProfileEditor — demandFollowing', () => {
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledWith(
         '/projects/proj-1/capacity-profiles/ROLE/rt-1',
-        expect.objectContaining({ planningBasis: 'demandFollowing', defaultPercent: 100 }),
+        expect.objectContaining({ planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 100 }),
       )
     })
   })
@@ -133,7 +133,27 @@ describe('CapacityProfileEditor — wholeProjectAllocation', () => {
     expect(screen.queryByTestId('cp-start-week-input')).not.toBeInTheDocument()
     expect(screen.queryByTestId('cp-end-week-input')).not.toBeInTheDocument()
   })
-})
+
+  it('sends WHOLE_PROJECT_ALLOCATION to server', async () => {
+    mockPut.mockResolvedValue({ data: { capacityProfile: {} } })
+    renderEditor(
+      <CapacityProfileEditor
+        projectId="proj-1"
+        ownerKind="ROLE"
+        ownerId="rt-1"
+        initialProfile={{ planningBasis: 'wholeProjectAllocation', defaultPercent: 75, startWeek: null, endWeek: null, segments: [] }}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('cp-save-btn'))
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ planningBasis: 'WHOLE_PROJECT_ALLOCATION' }),
+      )
+    })
+  })
 
 describe('CapacityProfileEditor — availabilityWindow', () => {
   beforeEach(() => { vi.clearAllMocks() })
@@ -174,6 +194,27 @@ describe('CapacityProfileEditor — availabilityWindow', () => {
     expect(screen.getByTestId('cp-default-pct-input')).toBeInTheDocument()
     expect(screen.getByTestId('cp-start-week-input')).toBeInTheDocument()
     expect(screen.getByTestId('cp-end-week-input')).toBeInTheDocument()
+  })
+
+  it('sends AVAILABILITY_WINDOW to server', async () => {
+    mockPut.mockResolvedValue({ data: { capacityProfile: {} } })
+    renderEditor(
+      <CapacityProfileEditor
+        projectId="proj-1"
+        ownerKind="ROLE"
+        ownerId="rt-1"
+        initialProfile={{ planningBasis: 'availabilityWindow', defaultPercent: 80, startWeek: 2, endWeek: 10, segments: [] }}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('cp-save-btn'))
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ planningBasis: 'AVAILABILITY_WINDOW' }),
+      )
+    })
   })
 })
 
@@ -245,7 +286,7 @@ describe('CapacityProfileEditor — capacityProfile (segments)', () => {
       expect(mockPut).toHaveBeenCalledWith(
         '/projects/proj-1/capacity-profiles/ROLE/rt-1',
         expect.objectContaining({
-          planningBasis: 'capacityProfile',
+          planningBasis: 'CAPACITY_PROFILE',
           segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
         }),
       )

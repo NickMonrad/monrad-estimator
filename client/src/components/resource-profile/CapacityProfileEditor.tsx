@@ -17,7 +17,13 @@ import { formatPlanningBasis } from '../../lib/capacityProfileFormatting'
 import type { CapacityProfilePlanningBasis } from '../../types/backlog'
 import type { AxiosError } from 'axios'
 
-// ─── Segment types ──────────────────────────────────────────────────────────
+/** Map client PlanningBasis values to server UPPER_SNAKE_CASE contract. */
+const PLANNING_BASIS_TO_SERVER: Record<string, string> = {
+  demandFollowing: 'DEMAND_FOLLOWING',
+  wholeProjectAllocation: 'WHOLE_PROJECT_ALLOCATION',
+  availabilityWindow: 'AVAILABILITY_WINDOW',
+  capacityProfile: 'CAPACITY_PROFILE',
+}
 
 interface SegmentInput {
   startWeek: number
@@ -101,7 +107,7 @@ export default function CapacityProfileEditor({
       api.put(
         `/projects/${projectId}/capacity-profiles/${ownerKind}/${ownerId}`,
         {
-          planningBasis,
+          planningBasis: PLANNING_BASIS_TO_SERVER[planningBasis] as string,
           defaultPercent: planningBasis === 'capacityProfile' ? null : defaultPercent,
           startWeek: planningBasis === 'availabilityWindow' ? startWeek : null,
           endWeek: planningBasis === 'availabilityWindow' ? endWeek : null,
@@ -258,7 +264,7 @@ export default function CapacityProfileEditor({
               id="cp-default-pct"
               type="number"
               min={0}
-              max={100}
+              max={ownerKind === 'NAMED_PERSON' ? 100 : undefined}
               step={5}
               value={defaultPercent ?? 100}
               onChange={e => setDefaultPercent(e.target.value === '' ? null : Number(e.target.value))}
@@ -278,7 +284,7 @@ export default function CapacityProfileEditor({
                   id="cp-start-week"
                   type="number"
                   min={0}
-                  step={0.5}
+                  step={1}
                   value={startWeek ?? ''}
                   onChange={e => setStartWeek(e.target.value === '' ? null : Number(e.target.value))}
                   placeholder="0"
@@ -294,7 +300,7 @@ export default function CapacityProfileEditor({
                   id="cp-end-week"
                   type="number"
                   min={0}
-                  step={0.5}
+                  step={1}
                   value={endWeek ?? ''}
                   onChange={e => setEndWeek(e.target.value === '' ? null : Number(e.target.value))}
                   placeholder="0"
@@ -329,7 +335,7 @@ export default function CapacityProfileEditor({
                   <input
                     type="number"
                     min={0}
-                    step={0.5}
+                    step={1}
                     value={seg.startWeek}
                     onChange={e => handleSegmentChange(i, 'startWeek', e.target.value)}
                     className="w-16 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -341,7 +347,7 @@ export default function CapacityProfileEditor({
                   <input
                     type="number"
                     min={0}
-                    step={0.5}
+                    step={1}
                     value={seg.endWeek}
                     onChange={e => handleSegmentChange(i, 'endWeek', e.target.value)}
                     className="w-16 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -353,7 +359,7 @@ export default function CapacityProfileEditor({
                   <input
                     type="number"
                     min={0}
-                    max={100}
+                    max={ownerKind === 'NAMED_PERSON' ? 100 : undefined}
                     step={5}
                     value={seg.capacityPercent}
                     onChange={e => handleSegmentChange(i, 'capacityPercent', e.target.value)}

@@ -181,37 +181,65 @@ export default function ResourceProfileTab({
                     </td>
                     <td className="px-4 py-3">
                       {(() => {
-                        if (row.namedResources && row.namedResources.length > 0) {
-                          const count = row.namedResources.length
-                          const profileCount = row.namedResources.filter(nr => nr.capacityProfile).length
+                        const hasNamedResources = row.namedResources && row.namedResources.length > 0
+                        const profile = row.capacityProfile
+                        const isPlannerSquad = profile?.source === 'squadPlanner' || profile?.ownerKind === 'PLANNED_RESOURCE'
+                        const isManualEditable = !isPlannerSquad
+
+                        // ── Open profile editor (create or edit) ────────
+                        function openProfileEditor() {
+                          setEditingRoleProfile({
+                            ownerKind: 'ROLE',
+                            ownerId: row.resourceTypeId,
+                            initialProfile: profile ? {
+                              planningBasis: profile.planningBasis,
+                              defaultPercent: profile.defaultPercent ?? null,
+                              startWeek: profile.startWeek ?? null,
+                              endWeek: profile.endWeek ?? null,
+                              segments: profile.segments,
+                            } : null,
+                          })
+                        }
+
+                        if (hasNamedResources) {
+                          const count = row.namedResources!.length
+                          const profileCount = row.namedResources!.filter(nr => nr.capacityProfile).length
                           const hint = profileCount > 0 ? `${profileCount} capacity profile${profileCount > 1 ? 's' : ''}` : 'No profiles'
                           return (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
-                              {count} {count === 1 ? 'person' : 'people'} · {hint}
-                            </span>
+                            <div className="flex flex-col gap-1">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+                                {count} {count === 1 ? 'person' : 'people'} · {hint}
+                              </span>
+                              {isManualEditable ? (
+                                <button
+                                  onClick={openProfileEditor}
+                                  className="inline-flex items-center gap-1 rounded bg-lab3-navy text-white px-2.5 py-1 text-[10px] font-medium hover:bg-lab3-blue transition-colors self-start"
+                                >
+                                  {profile ? 'Edit role profile' : 'Create role profile'}
+                                </button>
+                              ) : profile && (
+                                <button
+                                  onClick={() => navigate(`/projects/${projectId}/timeline`)}
+                                  className="inline-flex items-center gap-1 rounded bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 px-2.5 py-1 text-[10px] font-medium hover:opacity-80 transition-opacity self-start"
+                                >
+                                  Open Squad Planner
+                                </button>
+                              )}
+                            </div>
                           )
                         }
+
                         const badge = getEffectiveAvailabilityBadge(availability, profile?.projectDurationWeeks)
                         return (
                           <div>
                             <button
                               onClick={() => {
-                                // Role rows with capacity profiles open the new profile editor
-                                if (row.capacityProfile && !row.namedResources?.length && row.capacityProfile?.source !== 'squadPlanner') {
-                                  setEditingRoleProfile({
-                                    ownerKind: 'ROLE',
-                                    ownerId: row.resourceTypeId,
-                                    initialProfile: row.capacityProfile ? {
-                                      planningBasis: row.capacityProfile.planningBasis,
-                                      defaultPercent: row.capacityProfile.defaultPercent ?? null,
-                                      startWeek: row.capacityProfile.startWeek ?? null,
-                                      endWeek: row.capacityProfile.endWeek ?? null,
-                                      segments: row.capacityProfile.segments,
-                                    } : null,
-                                  })
+                                // Open profile editor for any manual ROLE (existing profile or legacy-only)
+                                if (isManualEditable) {
+                                  openProfileEditor()
                                   return
                                 }
-                                // Otherwise, use existing scalar editor
+                                // Legacy scalar editor for planned/protected profiles
                                 if (editingAllocation === row.resourceTypeId) {
                                   setEditingAllocation(null)
                                   setAllocationDraft(null)
@@ -235,26 +263,26 @@ export default function ResourceProfileTab({
                                 }
                               }}
                               className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.color} hover:opacity-80 transition-opacity`}
-                              title="Click to edit allocation"
+                              title={isPlannerSquad ? 'Managed by Squad Planner' : 'Click to edit allocation'}
                             >
                               {badge.label}
                             </button>
-                            {row.capacityProfile && (
+                            {profile && (
                               <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 uppercase tracking-wide" aria-describedby={`profile-meta-${row.resourceTypeId}`}>
-                                {formatCapacityProfileSource(row.capacityProfile.source)}
+                                {formatCapacityProfileSource(profile.source)}
                               </span>
                             )}
-                            {row.capacityProfile && (
+                            {profile && (
                               <span id={`profile-meta-${row.resourceTypeId}`} className="sr-only">
-                                Profile source: {formatCapacityProfileSource(row.capacityProfile.source)} · Resolution source: {formatResolutionSource(row.capacityProfile.resolutionSource)}
+                                Profile source: {formatCapacityProfileSource(profile.source)} · Resolution source: {formatResolutionSource(profile.resolutionSource)}
                               </span>
                             )}
                             {badge.sub && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{badge.sub}</div>
                             )}
-                            {row.capacityProfile && row.capacityProfile.segments.length > 0 && (
+                            {profile && profile.segments.length > 0 && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                                {row.capacityProfile.segments.map((seg, i) => (
+                                {profile.segments.map((seg: { startWeek: number; endWeek: number; capacityPercent: number }, i: number) => (
                                   <span key={i}>
                                     {i > 0 && <span className="mx-1">·</span>}
                                     W{seg.startWeek + 1}-W{seg.endWeek + 1}: {seg.capacityPercent}%

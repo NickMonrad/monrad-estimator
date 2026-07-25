@@ -200,8 +200,12 @@ export function validateReplaceCapacityProfileRequest(
         (seg.capacityPercent as number) < 0
       ) {
         segLabels.push('capacityPercent must be a finite non-negative number')
+      } else if (
+        ownerKind !== 'ROLE' &&
+        (seg.capacityPercent as number) > 100
+      ) {
+        segLabels.push('capacityPercent must be at most 100 for NAMED_PERSON')
       }
-
       if (segLabels.length > 0) {
         errors.push(`Segment ${idx}: ${segLabels.join('; ')}`)
       }
