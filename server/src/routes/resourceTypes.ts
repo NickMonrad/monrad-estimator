@@ -8,6 +8,7 @@ import { exitCapacityPlanRoleOnly } from '../lib/capacityPlanExit.js'
 import { upsertRTProfileAndProjectLegacy, buildMissingRTProfilePayload } from '../lib/resourceTypeCapacityProfileWrites.js'
 import { toLegacyAllocationPct } from '../lib/resolveRoleDefaultForMutation.js'
 import { resolveRTPatchState, resolveRoleSchedulingState } from '../lib/resolveRTPatchState.js'
+import { applyRoleDefaultToInheritedNRs } from '../lib/capacityProfileReplaceService.js'
 
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
   (tx ?? prisma).project.update({
@@ -171,21 +172,14 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         tx, req.params.projectId as string, req.params.id as string,
         capacityPayload,
       )
-      // 2. Update inherited NRs to the new projected role default
-      if (inheritedIds.size > 0) {
-        await tx.namedResource.updateMany({
-          where: { id: { in: [...inheritedIds] } },
-          data: {
-            allocationMode: projection.allocationMode,
-            allocationPercent: projection.allocationPercent ?? 100,
-            allocationStartWeek: projection.allocationStartWeek,
-            allocationEndWeek: projection.allocationEndWeek,
-            allocationPct: toLegacyAllocationPct(projection.allocationPercent ?? 100),
-            startWeek: projection.allocationStartWeek,
-            endWeek: projection.allocationEndWeek,
-          },
-        })
-      }
+      // 2. Apply role default to inherited NRs via profile-first helper
+      await applyRoleDefaultToInheritedNRs(
+        tx,
+        req.params.projectId as string,
+        req.params.id as string,
+        [...inheritedIds],
+        projection,
+      )
       // Explicit/custom/segmented/planned NRs are left untouched
 
       updated = await tx.resourceType.update({

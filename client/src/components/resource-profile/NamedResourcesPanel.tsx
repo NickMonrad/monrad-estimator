@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
@@ -8,6 +9,7 @@ import {
   formatResolutionSource,
   getEffectiveAvailabilityDisplay,
 } from '../../lib/capacityProfileFormatting'
+import CapacityProfileEditorModal from './CapacityProfileEditorModal'
 
 
 type PricingModel = 'ACTUAL_DAYS' | 'PRO_RATA'
@@ -59,6 +61,17 @@ export default function NamedResourcesPanel({
   allocations = [],
 }: NamedResourcesPanelProps) {
   const qc = useQueryClient()
+  const [editingProfile, setEditingProfile] = useState<{
+    ownerKind: 'ROLE' | 'NAMED_PERSON'
+    ownerId: string
+    initialProfile: {
+      planningBasis: string
+      defaultPercent: number | null
+      startWeek: number | null
+      endWeek: number | null
+      segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    } | null
+  } | null>(null)
 
   const { data: resources = [], isLoading } = useQuery<NamedResource[]>({
     queryKey: ['named-resources', projectId, rtId],
@@ -347,6 +360,27 @@ export default function NamedResourcesPanel({
                           ))}
                         </div>
                       )}
+                      {/* Edit button for non-planner-managed profiles */}
+                      {!resource.availability?.isProfileManaged && resource.resourceIdentity !== 'PLANNED_RESOURCE' && (
+                        <div className="mt-1">
+                          <button
+                            onClick={() => setEditingProfile({
+                              ownerKind: 'NAMED_PERSON',
+                              ownerId: resource.id,
+                              initialProfile: resource.allocation?.capacityProfile ? {
+                                planningBasis: resource.allocation.capacityProfile.planningBasis,
+                                defaultPercent: resource.allocation.capacityProfile.defaultPercent ?? null,
+                                startWeek: resource.allocation.capacityProfile.startWeek ?? null,
+                                endWeek: resource.allocation.capacityProfile.endWeek ?? null,
+                                segments: resource.allocation.capacityProfile.segments,
+                              } : null,
+                            })}
+                            className="inline-flex items-center gap-1 rounded bg-lab3-navy text-white px-2.5 py-1 text-[10px] font-medium hover:bg-lab3-blue transition-colors"
+                          >
+                            Edit profile
+                          </button>
+                        </div>
+                      )}
                       {/* Profile-managed guidance */}
                       {resource.availability?.isProfileManaged && (() => {
                         const isPlannerManaged = resource.allocation?.capacityProfile?.resolutionSource === 'ACTIVE_CAPACITY_PLAN' || resource.resourceIdentity === 'PLANNED_RESOURCE'
@@ -383,6 +417,19 @@ export default function NamedResourcesPanel({
           >
             {createResource.isPending ? 'Adding…' : '+ Add person'}
           </button>
+          {/* Capacity profile editor modal */}
+          {editingProfile && (
+            <CapacityProfileEditorModal
+              isOpen={true}
+              onClose={() => setEditingProfile(null)}
+              initialProfile={editingProfile.initialProfile}
+              ownerKind={editingProfile.ownerKind}
+              ownerId={editingProfile.ownerId}
+              projectId={projectId}
+              onSaved={() => void 0}
+              onCancel={() => setEditingProfile(null)}
+            />
+          )}
         </div>
       </td>
     </tr>
