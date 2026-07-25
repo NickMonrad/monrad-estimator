@@ -234,12 +234,12 @@ export default function ResourceProfileTab({
                           <div>
                             <button
                               onClick={() => {
-                                // Open profile editor for any manual ROLE (existing profile or legacy-only)
-                                if (isManualEditable) {
+                                // Open profile editor for existing manual profiles (not legacy-only)
+                                if (profile && isManualEditable) {
                                   openProfileEditor()
                                   return
                                 }
-                                // Legacy scalar editor for planned/protected profiles
+                                // Legacy scalar editor for legacy-only and planned/protected profiles
                                 if (editingAllocation === row.resourceTypeId) {
                                   setEditingAllocation(null)
                                   setAllocationDraft(null)
@@ -290,7 +290,7 @@ export default function ResourceProfileTab({
                                 ))}
                               </div>
                             )}
-                          </div>
+                          </div>  {/* closes the outer div */}
                         )
                       })()}
                     </td>
