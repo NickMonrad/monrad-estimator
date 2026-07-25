@@ -1,7 +1,6 @@
 import { Fragment, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
+import { ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
 } from 'recharts'
 import type { UseResourceProfileReturn } from '../../hooks/useResourceProfile'
 import {
@@ -16,6 +15,7 @@ import {
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 import CapacityProfileEditorModal from './CapacityProfileEditorModal'
+import type { CapacityProfilePlanningBasis } from '../../types/backlog'
 
 const TYPE_OPTIONS = [
   { label: '% of task days', value: 'PERCENTAGE' },
@@ -47,7 +47,7 @@ export default function ResourceProfileTab({
     ownerKind: 'ROLE' | 'NAMED_PERSON'
     ownerId: string
     initialProfile: {
-      planningBasis: string
+      planningBasis: CapacityProfilePlanningBasis
       defaultPercent: number | null
       startWeek: number | null
       endWeek: number | null
@@ -637,13 +637,14 @@ export default function ResourceProfileTab({
         </div>
       )}
     </section>
-      {/* ── ROLE / NAMED_PERSON capacity profile editor modal ─────────── */}
       {editingRoleProfile && (
         <CapacityProfileEditorModal
+          isOpen={true}
           projectId={projectId}
           ownerKind={editingRoleProfile.ownerKind}
           ownerId={editingRoleProfile.ownerId}
           initialProfile={editingRoleProfile.initialProfile}
+          onClose={() => setEditingRoleProfile(null)}
           onSaved={() => {
             setEditingRoleProfile(null)
           }}
