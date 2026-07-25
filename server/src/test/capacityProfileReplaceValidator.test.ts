@@ -521,13 +521,12 @@ describe('validateReplaceCapacityProfileRequest', () => {
     expect(errors.some(e => /startWeek.*non-negative integer/i.test(e))).toBe(true)
   })
 
-  it('rejects non-integer defaultPercent', () => {
+  it('accepts non-integer defaultPercent', () => {
     const errors = validateReplaceCapacityProfileRequest(
       validDemandFollowing({ defaultPercent: 99.5 }),
       'ROLE',
     )
-    expect(errors.length).toBeGreaterThan(0)
-    expect(errors[0]).toMatch(/defaultPercent.*integer/i)
+    expect(errors).toHaveLength(0)
   })
 
   it('rejects negative defaultPercent', () => {

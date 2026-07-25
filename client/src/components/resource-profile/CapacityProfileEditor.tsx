@@ -215,15 +215,25 @@ export default function CapacityProfileEditor({
     e.preventDefault()
     setError(null)
 
-    // Basic validation
+    // Basic validation — non-segmented defaults
+    if (planningBasis !== 'capacityProfile' && defaultPercent != null) {
+      const maxPct = ownerKind === 'NAMED_PERSON' ? 100 : Infinity
+      if (defaultPercent < 0 || defaultPercent > maxPct) {
+        setError(`Default percent must be ${ownerKind === 'NAMED_PERSON' ? 'between 0 and 100' : 'non-negative'}`)
+        return
+      }
+    }
+
+    // Segment validation
     if (planningBasis === 'capacityProfile') {
       for (const [i, seg] of segments.entries()) {
         if (seg.startWeek > seg.endWeek) {
           setError(`Segment ${i + 1}: start week must be ≤ end week`)
           return
         }
-        if (seg.capacityPercent < 0 || seg.capacityPercent > 100) {
-          setError(`Segment ${i + 1}: capacity percent must be between 0 and 100`)
+        const maxPct = ownerKind === 'NAMED_PERSON' ? 100 : Infinity
+        if (seg.capacityPercent < 0 || seg.capacityPercent > maxPct) {
+          setError(`Segment ${i + 1}: capacity percent must be ${ownerKind === 'NAMED_PERSON' ? 'between 0 and 100' : 'non-negative'}`)
           return
         }
       }
@@ -265,7 +275,7 @@ export default function CapacityProfileEditor({
               type="number"
               min={0}
               max={ownerKind === 'NAMED_PERSON' ? 100 : undefined}
-              step={5}
+              step="any"
               value={defaultPercent ?? 100}
               onChange={e => setDefaultPercent(e.target.value === '' ? null : Number(e.target.value))}
               className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -360,9 +370,8 @@ export default function CapacityProfileEditor({
                     type="number"
                     min={0}
                     max={ownerKind === 'NAMED_PERSON' ? 100 : undefined}
-                    step={5}
                     value={seg.capacityPercent}
-                    onChange={e => handleSegmentChange(i, 'capacityPercent', e.target.value)}
+                    step="any"
                     className="w-16 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                     data-testid={`cp-seg-pct-${i}`}
                   />

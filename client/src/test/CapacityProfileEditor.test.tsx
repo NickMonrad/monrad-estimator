@@ -552,7 +552,8 @@ describe('CapacityProfileEditorModal', () => {
 describe('CapacityProfileEditor — validation', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
-  it('shows error for invalid segment capacity percent', async () => {
+  it('accepts ROLE segment capacityPercent above 100', async () => {
+    mockPut.mockResolvedValue({ data: { capacityProfile: {} } })
     renderEditor(
       <CapacityProfileEditor
         projectId="proj-1"
@@ -563,11 +564,26 @@ describe('CapacityProfileEditor — validation', () => {
         onCancel={vi.fn()}
       />,
     )
-
-    // Submit the form directly to ensure submit handler fires
     const form = screen.getByTestId('capacity-profile-editor')
     fireEvent.submit(form)
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalled()
+    })
+  })
 
+  it('rejects NAMED_PERSON segment capacityPercent above 100', async () => {
+    renderEditor(
+      <CapacityProfileEditor
+        projectId="proj-1"
+        ownerKind="NAMED_PERSON"
+        ownerId="nr-1"
+        initialProfile={{ planningBasis: 'capacityProfile', defaultPercent: null, startWeek: null, endWeek: null, segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 150 }] }}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    const form = screen.getByTestId('capacity-profile-editor')
+    fireEvent.submit(form)
     await waitFor(() => {
       expect(screen.getByTestId('cp-error')).toBeInTheDocument()
     })

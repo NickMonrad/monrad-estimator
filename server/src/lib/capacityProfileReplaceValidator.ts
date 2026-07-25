@@ -83,8 +83,6 @@ export function validateReplaceCapacityProfileRequest(
   if (req.defaultPercent !== undefined && req.defaultPercent !== null) {
     if (!isFiniteNumber(req.defaultPercent) || req.defaultPercent < 0) {
       errors.push('defaultPercent must be a finite non-negative number')
-    } else if (!isInteger(req.defaultPercent)) {
-      errors.push('defaultPercent must be an integer')
     } else if (ownerKind !== 'ROLE' && req.defaultPercent > 100) {
       errors.push(`defaultPercent must be in range [0, 100] for ${ownerKind} profiles`)
     }

@@ -182,8 +182,8 @@ export default function ResourceProfileTab({
                     <td className="px-4 py-3">
                       {(() => {
                         const hasNamedResources = row.namedResources && row.namedResources.length > 0
-                        const profile = row.capacityProfile
-                        const isPlannerSquad = profile?.source === 'squadPlanner' || profile?.ownerKind === 'PLANNED_RESOURCE'
+                        const roleProfile = row.capacityProfile
+                        const isPlannerSquad = roleProfile?.source === 'squadPlanner' || roleProfile?.resourceIdentity === 'PLANNED_RESOURCE'
                         const isManualEditable = !isPlannerSquad
 
                         // ── Open profile editor (create or edit) ────────
@@ -191,20 +191,20 @@ export default function ResourceProfileTab({
                           setEditingRoleProfile({
                             ownerKind: 'ROLE',
                             ownerId: row.resourceTypeId,
-                            initialProfile: profile ? {
-                              planningBasis: profile.planningBasis,
-                              defaultPercent: profile.defaultPercent ?? null,
-                              startWeek: profile.startWeek ?? null,
-                              endWeek: profile.endWeek ?? null,
-                              segments: profile.segments,
+                            initialProfile: roleProfile ? {
+                              planningBasis: roleProfile.planningBasis,
+                              defaultPercent: roleProfile.defaultPercent ?? null,
+                              startWeek: roleProfile.startWeek ?? null,
+                              endWeek: roleProfile.endWeek ?? null,
+                              segments: roleProfile.segments,
                             } : null,
                           })
                         }
 
                         if (hasNamedResources) {
                           const count = row.namedResources!.length
-                          const profileCount = row.namedResources!.filter(nr => nr.capacityProfile).length
-                          const hint = profileCount > 0 ? `${profileCount} capacity profile${profileCount > 1 ? 's' : ''}` : 'No profiles'
+                          const nrProfileCount = row.namedResources!.filter(nr => nr.capacityProfile).length
+                          const hint = nrProfileCount > 0 ? `${nrProfileCount} capacity profile${nrProfileCount > 1 ? 's' : ''}` : 'No profiles'
                           return (
                             <div className="flex flex-col gap-1">
                               <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
@@ -215,9 +215,9 @@ export default function ResourceProfileTab({
                                   onClick={openProfileEditor}
                                   className="inline-flex items-center gap-1 rounded bg-lab3-navy text-white px-2.5 py-1 text-[10px] font-medium hover:bg-lab3-blue transition-colors self-start"
                                 >
-                                  {profile ? 'Edit role profile' : 'Create role profile'}
+                                  {roleProfile ? 'Edit role profile' : 'Create role profile'}
                                 </button>
-                              ) : profile && (
+                              ) : roleProfile && (
                                 <button
                                   onClick={() => navigate(`/projects/${projectId}/timeline`)}
                                   className="inline-flex items-center gap-1 rounded bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 px-2.5 py-1 text-[10px] font-medium hover:opacity-80 transition-opacity self-start"
@@ -234,8 +234,8 @@ export default function ResourceProfileTab({
                           <div>
                             <button
                               onClick={() => {
-                                // Open profile editor for existing manual profiles (not legacy-only)
-                                if (profile && isManualEditable) {
+                                // Open profile editor for existing manual profiles
+                                if (roleProfile && isManualEditable) {
                                   openProfileEditor()
                                   return
                                 }
@@ -267,22 +267,22 @@ export default function ResourceProfileTab({
                             >
                               {badge.label}
                             </button>
-                            {profile && (
+                            {roleProfile && (
                               <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 uppercase tracking-wide" aria-describedby={`profile-meta-${row.resourceTypeId}`}>
-                                {formatCapacityProfileSource(profile.source)}
+                                {formatCapacityProfileSource(roleProfile.source)}
                               </span>
                             )}
-                            {profile && (
+                            {roleProfile && (
                               <span id={`profile-meta-${row.resourceTypeId}`} className="sr-only">
-                                Profile source: {formatCapacityProfileSource(profile.source)} · Resolution source: {formatResolutionSource(profile.resolutionSource)}
+                                Profile source: {formatCapacityProfileSource(roleProfile.source)} · Resolution source: {formatResolutionSource(roleProfile.resolutionSource)}
                               </span>
                             )}
                             {badge.sub && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{badge.sub}</div>
                             )}
-                            {profile && profile.segments.length > 0 && (
+                            {roleProfile && roleProfile.segments.length > 0 && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                                {profile.segments.map((seg: { startWeek: number; endWeek: number; capacityPercent: number }, i: number) => (
+                                {roleProfile.segments.map((seg: { startWeek: number; endWeek: number; capacityPercent: number }, i: number) => (
                                   <span key={i}>
                                     {i > 0 && <span className="mx-1">·</span>}
                                     W{seg.startWeek + 1}-W{seg.endWeek + 1}: {seg.capacityPercent}%
@@ -290,7 +290,7 @@ export default function ResourceProfileTab({
                                 ))}
                               </div>
                             )}
-                          </div>  {/* closes the outer div */}
+                          </div>
                         )
                       })()}
                     </td>

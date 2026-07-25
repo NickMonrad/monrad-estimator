@@ -19,7 +19,10 @@ import { mapPersistedProfilesToDTOs } from './capacityProfileMapping.js'
 import type { CapacityProfileDTO } from './capacityProfileMapping.js'
 import { resolveRoleDefaultForMutation } from './resolveRoleDefaultForMutation.js'
 import { classifyNRsForRoleUpdate } from './classifyNRsForRoleUpdate.js'
+import type { PrismaClient } from '@prisma/client'
 
+/** Inferred Prisma transaction client type used throughout this module. */
+type TxClient = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0]
 // ─── Public types ────────────────────────────────────────────────────────────
 
 export type ReplaceOwnerKind = 'ROLE' | 'NAMED_PERSON'
@@ -31,7 +34,7 @@ export interface ReplaceSegmentInput {
 }
 
 export interface ReplaceBody {
-  planningBasis: string
+  planningBasis: 'DEMAND_FOLLOWING' | 'AVAILABILITY_WINDOW' | 'WHOLE_PROJECT_ALLOCATION' | 'CAPACITY_PROFILE'
   defaultPercent?: number | null
   startWeek?: number | null
   endWeek?: number | null
@@ -59,11 +62,9 @@ export class ServiceError extends Error {
  * role-level profile remains the source of truth for inherited NRs.
  *
  * @param tx              Transaction client
- * @param inheritedNRIds  NR IDs classified as ROLE_DEFAULT (inherited)
- * @param projection      Projected legacy allocation from the role profile
  */
 export async function applyRoleDefaultToInheritedNRs(
-  tx: any,
+  tx: TxClient,
   inheritedNRIds: string[],
   projection: LegacyAllocationProjection,
 ): Promise<void> {
@@ -101,7 +102,7 @@ export async function applyRoleDefaultToInheritedNRs(
  * @throws ServiceError with appropriate HTTP status on validation/ownership failure
  */
 export async function replaceCapacityProfile(
-  tx: any,
+  tx: TxClient,
   projectId: string,
   ownerKind: ReplaceOwnerKind,
   ownerId: string,
@@ -140,20 +141,22 @@ export async function replaceCapacityProfile(
     throw new ServiceError(409, `Multiple capacity profiles exist for this ${ownerKind.toLowerCase()}`)
   }
 
+  // Check each existing profile; use runtime type for DB values that may not match route ownerKind.
   for (const ep of existingProfiles) {
-    if (ep.ownerKind !== ownerKind) {
-      throw new ServiceError(409, `ownerKind mismatch: profile has kind "${ep.ownerKind}" but route requested "${ownerKind}"`)
-    }
-    if (ep.ownerKind === 'PLANNED_RESOURCE') {
+    const epOwnerKind = ep.ownerKind as string
+    if (epOwnerKind === 'PLANNED_RESOURCE') {
       throw new ServiceError(409, 'Cannot replace a PLANNED_RESOURCE profile manually')
     }
     if (ep.source === 'SQUAD_PLANNER') {
       throw new ServiceError(409, 'Cannot overwrite a SQUAD_PLANNER profile manually')
     }
+    if (epOwnerKind !== ownerKind) {
+      throw new ServiceError(409, `ownerKind mismatch: profile has kind "${epOwnerKind}" but route requested "${ownerKind}"`)
+    }
   }
 
-  const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
 
+  const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
   // ── 3. [ROLE only] Classify inherited named resources ──────────────────
   let inheritedNRIds: string[] = []
   if (ownerKind === 'ROLE') {
@@ -312,11 +315,9 @@ export async function replaceCapacityProfile(
         where: { id: ownerId },
         data: {
           allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent,
+          allocationPercent: projection.allocationPercent ?? 100,
           allocationStartWeek: projection.allocationStartWeek,
           allocationEndWeek: projection.allocationEndWeek,
-          startWeek: projection.allocationStartWeek,
-          endWeek: projection.allocationEndWeek,
         },
       })
 
@@ -329,8 +330,8 @@ export async function replaceCapacityProfile(
         where: { id: ownerId },
         data: {
           allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent,
-          allocationPct: projection.allocationPercent != null ? Math.round(projection.allocationPercent) : null,
+          allocationPercent: projection.allocationPercent ?? 100,
+          allocationPct: Math.round(projection.allocationPercent ?? 100),
           allocationStartWeek: projection.allocationStartWeek,
           allocationEndWeek: projection.allocationEndWeek,
           startWeek: projection.allocationStartWeek,
