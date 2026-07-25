@@ -35,7 +35,7 @@
     "capacity-profiles:reconcile": "npm run capacity-profiles:reconcile --workspace=server"
   },
   "devDependencies": {
-    "concurrently": "^10.0.3"
+    "concurrently": "^10.0.4"
   },
   "dependencies": {
     "ip-address": "^10.2.0"
