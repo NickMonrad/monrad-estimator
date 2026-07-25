@@ -18,6 +18,11 @@ type NamedResourceLike = {
   allocationStartWeek?: number | null
   allocationEndWeek?: number | null
   pricingModel?: string | null
+  /**
+   * Profile/plan capacity segments. When present, authoritative over
+   * legacy allocation fields for weekly capacity calculation.
+   */
+  capacitySegments?: { startWeek: number; endWeek: number; allocationPercent: number }[]
 }
 
 type ResourceTypeLike = {
@@ -31,6 +36,18 @@ type ResourceTypeLike = {
    * resources over the persisted profile-backed resources.
    */
   capacityProfileBacked?: boolean
+  /**
+   * Resolved aggregate role-level capacity segments.
+   * When present, constrains the phantom/unnamed-slot capacity instead of
+   * using count-based synthetic resources at 100%.
+   */
+  roleSegments?: { startWeek: number; endWeek: number; allocationPercent: number }[]
+  /**
+   * True when the scheduler capacity resolver has already resolved this RT
+   * from an active Capacity Plan. When set, the assignment function must
+   * not rematerialize the plan over already-authoritative output.
+   */
+  capacityPlanResolved?: boolean
   namedResources?: NamedResourceLike[]
 }
 
@@ -108,9 +125,16 @@ function buildEffectiveNamedResources(
   const persistedNamedResources = resourceType.namedResources ?? []
   const mode = toAllocationMode(resourceType.allocationMode)
   const capacityPlanMaterialized = capacityPlanByRt.get(resourceType.id)
+  const hasRoleSegments = resourceType.roleSegments && resourceType.roleSegments.length > 0
+  // When a valid role profile is authoritative, suppress capacity plan fallback.
+  // The role segments provide aggregate unnamed-staff capacity instead of
+  // both the plan's trajectory set AND count-based phantom slots (defect #362).
+  // Also suppress when the resolver has already produced authoritative output.
   const useCapacityPlanFallback =
     mode === 'CAPACITY_PLAN' &&
     !resourceType.capacityProfileBacked &&
+    !resourceType.capacityPlanResolved &&
+    !hasRoleSegments &&
     shouldFallbackToActiveCapacityPlan(persistedNamedResources, capacityPlanMaterialized)
 
   const baseNamedResources = useCapacityPlanFallback && capacityPlanMaterialized
@@ -152,7 +176,62 @@ function buildEffectiveNamedResources(
         synthetic: false,
       }))
 
-  const effectiveCount = Math.max(resourceType.count ?? 0, baseNamedResources.length)
+  // ── Role-segment authority: provide aggregate role capacity ────────────
+  // When a valid role profile is authoritative, generate a synthetic NR
+  // carrying the role segments. This replaces count-based phantom slots
+  // and provides the aggregate unnamed-staff capacity. Named resources
+  // contribute their own capacity independently; the role synthetic adds
+  // the capacity that count would have provided for phantom slots.
+  // Keeps assignment capacity consistent with getWeeklyCapacity().
+  if (hasRoleSegments && hasDemand) {
+    const roleNR = {
+      id: `${resourceType.id}-role`,
+      name: `${resourceType.name} (Role)`,
+      startWeek: null,
+      endWeek: null,
+      allocationPct: 100,
+      allocationMode: 'EFFORT' as const,
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      pricingModel: 'ACTUAL_DAYS' as const,
+      synthetic: true,
+      capacitySegments: resourceType.roleSegments,
+    }
+
+    return [roleNR, ...baseNamedResources].map((namedResource, order) => ({
+      id: namedResource.id,
+      resourceTypeId: resourceType.id,
+      resourceTypeName: resourceType.name,
+      name: namedResource.name,
+      allocationMode: namedResource.allocationMode ?? 'EFFORT',
+      allocationPercent: namedResource.allocationPercent ?? namedResource.allocationPct ?? 100,
+      allocationStartWeek: namedResource.allocationStartWeek ?? null,
+      allocationEndWeek: namedResource.allocationEndWeek ?? null,
+      pricingModel: namedResource.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
+      startWeek: namedResource.startWeek ?? null,
+      endWeek: namedResource.endWeek ?? null,
+      synthetic: namedResource.synthetic,
+      actualAllocatedDays: 0,
+      actualAllocationStartWeek: null,
+      actualAllocationEndWeek: null,
+      actualAllocatedWeeks: [],
+      actualAllocationSegments: [],
+      capacitySegments: (namedResource as { capacitySegments?: CapacityPlanSlotWindow[] }).capacitySegments,
+      order,
+      lastAssignedWeek: null,
+    }))
+  }
+  // ── Legacy fallback: count-based phantom slots ──────────────────────────
+  // When roleSegments is an empty array (explicit Squad Planner overlap
+  // suppression), the resolver has already cleared aggregate capacity.
+  // Do NOT add phantom slots — they would double-count capacity that the
+  // persisted planned-resource profiles already provide.  (Matches the
+  // getWeeklyCapacity contract at scheduler.ts lines 228-246.)
+  const hasExplicitEmptyRoleSegments = Array.isArray(resourceType.roleSegments) && resourceType.roleSegments.length === 0
+  const effectiveCount = hasExplicitEmptyRoleSegments
+    ? baseNamedResources.length
+    : Math.max(resourceType.count ?? 0, baseNamedResources.length)
   const namedResources = hasDemand && effectiveCount > baseNamedResources.length
     ? [
         ...baseNamedResources,
@@ -162,11 +241,11 @@ function buildEffectiveNamedResources(
           startWeek: null,
           endWeek: null,
           allocationPct: 100,
-          allocationMode: 'EFFORT',
+          allocationMode: 'EFFORT' as const,
           allocationPercent: 100,
           allocationStartWeek: null,
           allocationEndWeek: null,
-          pricingModel: 'ACTUAL_DAYS',
+          pricingModel: 'ACTUAL_DAYS' as const,
           synthetic: true,
         })),
       ]
@@ -199,21 +278,21 @@ function weeklyCapacityForNamedResource(
   namedResource: DerivedNamedResourceAssignment,
   week: number,
 ): number {
-  const startWeek = namedResource.startWeek ?? 0
-  const endWeek = namedResource.endWeek ?? Infinity
-
-  if (week < startWeek || week > endWeek) return 0
-
-  const mode = toAllocationMode(namedResource.allocationMode)
-
-  // Segment-aware capacity for CAPACITY_PLAN resources with trajectory segments
-  if (mode === 'CAPACITY_PLAN' && namedResource.capacitySegments && namedResource.capacitySegments.length > 0) {
+  // Profile/segment-first: if capacity segments are present, use them
+  // regardless of legacy start/end week or allocation mode
+  if (namedResource.capacitySegments && namedResource.capacitySegments.length > 0) {
     const segment = namedResource.capacitySegments.find(
       s => week >= s.startWeek && week <= s.endWeek,
     )
     return segment ? 5 * (segment.allocationPercent / 100) : 0
   }
 
+  const startWeek = namedResource.startWeek ?? 0
+  const endWeek = namedResource.endWeek ?? Infinity
+
+  if (week < startWeek || week > endWeek) return 0
+
+  const mode = toAllocationMode(namedResource.allocationMode)
   const allocationPercent = namedResource.allocationPercent ?? 100
 
   if (mode === 'EFFORT') return 5

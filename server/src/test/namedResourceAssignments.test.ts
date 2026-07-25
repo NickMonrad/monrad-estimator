@@ -310,3 +310,297 @@ describe('deriveNamedResourceAssignments', () => {
     expect(rtAssign.actualAllocatedDays).toBeCloseTo(60, 5)
   })
 })
+
+describe('roleSegments limit named-resource assignment (fix 1)', () => {
+  it('fixed role profile limits named-resource assignment when no NRs exist', () => {
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [
+        {
+          id: 'rt-role',
+          name: 'Role-Dev',
+          count: 2,
+          allocationMode: 'EFFORT',
+          namedResources: [],
+          roleSegments: [
+            { startWeek: 0, endWeek: 10, allocationPercent: 50 },
+          ],
+        },
+      ],
+      weeklyDemand: Array.from({ length: 8 }, (_, w) => ({
+        week: w,
+        resourceTypeName: 'Role-Dev',
+        demandDays: 5,
+      })),
+    })
+
+    const rtAssign = assignments.get('rt-role')!
+    // Role profile at 50% = 2.5 days/week (not 2 × 5 = 10 from count)
+    expect(rtAssign.namedResources).toHaveLength(1)
+    expect(rtAssign.namedResources[0].synthetic).toBe(true)
+    expect(rtAssign.namedResources[0].id).toBe('rt-role-role')
+    // Each week: min(5 demand, 2.5 capacity) = 2.5 days × 8 weeks
+    expect(rtAssign.actualAllocatedDays).toBeCloseTo(20, 5)
+    expect(rtAssign.unallocatedDays).toBeCloseTo(20, 5)
+  })
+
+  it('segmented role profile changes assignment capacity by week', () => {
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [
+        {
+          id: 'rt-seg',
+          name: 'Segmented',
+          count: 3,
+          allocationMode: 'EFFORT',
+          namedResources: [],
+          roleSegments: [
+            { startWeek: 0, endWeek: 3, allocationPercent: 100 },
+            { startWeek: 6, endWeek: 9, allocationPercent: 50 },
+          ],
+        },
+      ],
+      weeklyDemand: Array.from({ length: 10 }, (_, w) => ({
+        week: w,
+        resourceTypeName: 'Segmented',
+        demandDays: 10,
+      })),
+    })
+
+    const rtAssign = assignments.get('rt-seg')!
+    expect(rtAssign.namedResources).toHaveLength(1)
+    const roleNR = rtAssign.namedResources[0]
+
+    // Weeks 0-3: 100% → 5 days/week, demand 10 → only 5 allocated
+    const w0 = roleNR.actualAllocatedWeeks.find(w => w.week === 0)
+    expect(w0?.capacityDays).toBe(5)
+
+    // Weeks 4-5: gap (zero capacity) → nothing allocated
+    const w4 = roleNR.actualAllocatedWeeks.find(w => w.week === 4)
+    expect(w4).toBeUndefined()
+
+    // Weeks 6-9: 50% → 2.5 days/week, demand 10 → only 2.5 allocated
+    const w6 = roleNR.actualAllocatedWeeks.find(w => w.week === 6)
+    expect(w6?.capacityDays).toBe(2.5)
+
+    expect(rtAssign.actualAllocatedDays).toBeCloseTo(4 * 5 + 4 * 2.5, 5) // 20 + 10 = 30
+  })
+
+  it('gap between role segments produces zero assignment capacity', () => {
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [
+        {
+          id: 'rt-gap',
+          name: 'Gapped',
+          count: 2,
+          allocationMode: 'EFFORT',
+          namedResources: [],
+          roleSegments: [
+            { startWeek: 0, endWeek: 2, allocationPercent: 100 },
+            { startWeek: 6, endWeek: 8, allocationPercent: 100 },
+          ],
+        },
+      ],
+      weeklyDemand: Array.from({ length: 9 }, (_, w) => ({
+        week: w,
+        resourceTypeName: 'Gapped',
+        demandDays: 10,
+      })),
+    })
+
+    const rtAssign = assignments.get('rt-gap')!
+    expect(rtAssign.namedResources).toHaveLength(1)
+    const roleNR = rtAssign.namedResources[0]
+
+    // Weeks 0-2: 5 days/week
+    expect(roleNR.actualAllocatedWeeks.filter(w => w.week <= 2).length).toBe(3)
+    // Weeks 3-5: gap → nothing
+    expect(roleNR.actualAllocatedWeeks.find(w => w.week === 3)).toBeUndefined()
+    expect(roleNR.actualAllocatedWeeks.find(w => w.week === 4)).toBeUndefined()
+    expect(roleNR.actualAllocatedWeeks.find(w => w.week === 5)).toBeUndefined()
+    // Weeks 6-8: 5 days/week
+    expect(roleNR.actualAllocatedWeeks.filter(w => w.week >= 6).length).toBe(3)
+  })
+
+  it('valid role profile on CAPACITY_PLAN resource type suppresses active-plan fallback', () => {
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 8, entries: [{ resourceTypeId: 'rt-cp', headcount: 3 }] },
+    ]
+    const capacityPlanByRt = materializeCapacityPlanResources(periods)
+
+    // Even though the RT has CAPACITY_PLAN mode and a plan exists, the role
+    // profile should suppress plan fallback: assignment uses roleSegments.
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [
+        {
+          id: 'rt-cp',
+          name: 'Plan-Dev',
+          count: 3,
+          allocationMode: 'CAPACITY_PLAN',
+          namedResources: [],
+          capacityProfileBacked: false,
+          roleSegments: [
+            { startWeek: 0, endWeek: 8, allocationPercent: 50 },
+          ],
+        },
+      ],
+      weeklyDemand: Array.from({ length: 8 }, (_, w) => ({
+        week: w,
+        resourceTypeName: 'Plan-Dev',
+        demandDays: 10,
+      })),
+      capacityPlanByRt,
+    })
+
+    const rtAssign = assignments.get('rt-cp')!
+    // Role profile at 50% = 2.5 days/week (not 3 × 5 from plan or 3 × 5 from count)
+    expect(rtAssign.namedResources).toHaveLength(1)
+    expect(rtAssign.namedResources[0].id).toBe('rt-cp-role')
+    expect(rtAssign.actualAllocatedDays).toBeCloseTo(8 * 2.5, 5) // 20
+  })
+
+  it('role profile with existing named resources produces correct combined assignment', () => {
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [
+        {
+          id: 'rt-comb',
+          name: 'Combined',
+          count: 3,
+          allocationMode: 'EFFORT',
+          namedResources: [
+            {
+              id: 'nr-alice',
+              name: 'Alice',
+              startWeek: null,
+              endWeek: null,
+              allocationMode: 'EFFORT',
+              allocationPercent: 100,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+            },
+          ],
+          roleSegments: [
+            { startWeek: 0, endWeek: 10, allocationPercent: 100 },
+          ],
+        },
+      ],
+      weeklyDemand: Array.from({ length: 8 }, (_, w) => ({
+        week: w,
+        resourceTypeName: 'Combined',
+        demandDays: 15, // More than total capacity (5 + 5 = 10)
+      })),
+    })
+
+    const rtAssign = assignments.get('rt-comb')!
+    // Alice (5 days/week) + role (5 days/week) = 10 total
+    expect(rtAssign.namedResources).toHaveLength(2)
+
+    const alice = rtAssign.namedResources.find(nr => nr.id === 'nr-alice')
+    expect(alice!.actualAllocatedDays).toBeCloseTo(40, 5) // 5 × 8 = 40
+
+    const roleNR = rtAssign.namedResources.find(nr => nr.id === 'rt-comb-role')
+    expect(roleNR).toBeDefined()
+    expect(roleNR!.actualAllocatedDays).toBeCloseTo(40, 5) // 5 × 8 = 40
+
+    expect(rtAssign.actualAllocatedDays).toBeCloseTo(80, 5) // 10 × 8 = 80
+    expect(rtAssign.unallocatedDays).toBeCloseTo(40, 5) // (15 - 10) × 8 = 40
+  })
+})
+
+describe('consumer parity: resolver output drives assignments (remediation)', () => {
+  it('resolver output with capacityPlanResolved prevents plan rematerialization in assignments', () => {
+    // Simulate resolver output: A(100% trajectory), B(50% profile)
+    const rtId = 'rt-parity'
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 8,
+        entries: [{ resourceTypeId: rtId, headcount: 2 }] },
+    ]
+    const capacityPlanByRt = materializeCapacityPlanResources(periods)
+
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [{
+        id: rtId,
+        name: 'Parity',
+        count: 2,
+        allocationMode: 'CAPACITY_PLAN',
+        // This is the resolver output: already resolved, don't rematerialize
+        capacityPlanResolved: true,
+        namedResources: [
+          {
+            id: 'nr-a', name: 'Resource A',
+            startWeek: 0, endWeek: 7,
+            allocationMode: 'CAPACITY_PLAN',
+            allocationPercent: 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            capacitySegments: [
+              { startWeek: 0, endWeek: 7, allocationPercent: 100 },
+            ],
+          },
+          {
+            id: 'nr-b', name: 'Resource B',
+            startWeek: 0, endWeek: 7,
+            allocationMode: 'CAPACITY_PLAN',
+            allocationPercent: 50,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            capacitySegments: [
+              { startWeek: 0, endWeek: 7, allocationPercent: 50 },
+            ],
+          },
+        ],
+      }],
+      weeklyDemand: Array.from({ length: 8 }, (_, w) => ({
+        week: w,
+        resourceTypeName: 'Parity',
+        demandDays: 10,
+      })),
+      capacityPlanByRt,
+    })
+
+    const rtAssign = assignments.get(rtId)!
+    // Must have exactly the 2 NRs from resolver (not rematerialized)
+    expect(rtAssign.namedResources).toHaveLength(2)
+    expect(rtAssign.namedResources[0].id).toBe('nr-a')
+    expect(rtAssign.namedResources[1].id).toBe('nr-b')
+
+    // A: 100% → 5d/wk × 8 = 40d
+    // B: 50% → 2.5d/wk × 8 = 20d
+    // Total: 60d, demand 80d → 20d unallocated
+    expect(rtAssign.actualAllocatedDays).toBeCloseTo(60, 5)
+    expect(rtAssign.unallocatedDays).toBeCloseTo(20, 5)
+
+    // Verify no synthetic resources were added
+    const synthetics = rtAssign.namedResources.filter(nr => nr.synthetic)
+    expect(synthetics).toHaveLength(0)
+  })
+
+  it('resolver output without capacityPlanResolved still falls back to plan correctly', () => {
+    // Same scenario but WITHOUT capacityPlanResolved → should use plan fallback
+    const rtId = 'rt-nr'
+    const periods = [
+      { periodIndex: 0, startWeek: 0, endWeek: 8,
+        entries: [{ resourceTypeId: rtId, headcount: 1.5 }] },
+    ]
+    const capacityPlanByRt = materializeCapacityPlanResources(periods)
+
+    const assignments = deriveNamedResourceAssignments({
+      resourceTypes: [{
+        id: rtId,
+        name: 'NoResolve',
+        count: 0,
+        allocationMode: 'CAPACITY_PLAN',
+        capacityProfileBacked: false,
+        namedResources: [],
+      }],
+      weeklyDemand: Array.from({ length: 8 }, (_, w) => ({
+        week: w,
+        resourceTypeName: 'NoResolve',
+        demandDays: 10,
+      })),
+      capacityPlanByRt,
+    })
+
+    const rtAssign = assignments.get(rtId)!
+    // Plan fallback should generate trajectories
+    expect(rtAssign.namedResources.length).toBeGreaterThanOrEqual(2)
+  })
+})

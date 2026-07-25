@@ -1,3 +1,5 @@
+import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+
 /**
  * optimiser.ts — Express routes for the Resource Optimiser (Phase 3, issue #233).
  *
@@ -43,10 +45,8 @@ router.use(authenticate)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data loader — same pattern as POST /timeline/schedule
-// ─────────────────────────────────────────────────────────────────────────────
-
 async function loadSchedulerInput(projectId: string, hoursPerDay: number): Promise<SchedulerInput> {
-  const [allEpics, resourceTypes, manualFeatures, manualStories, epicDeps] = await Promise.all([
+  const [allEpics, resolved, manualFeatures, manualStories, epicDeps] = await Promise.all([
     prisma.epic.findMany({
       where: { projectId },
       orderBy: { order: 'asc' },
@@ -66,10 +66,7 @@ async function loadSchedulerInput(projectId: string, hoursPerDay: number): Promi
         },
       },
     }),
-    prisma.resourceType.findMany({
-      where: { projectId },
-      include: { namedResources: true },
-    }),
+    resolveSchedulerCapacity(prisma, projectId, hoursPerDay),
     prisma.timelineEntry.findMany({
       where: { projectId, isManual: true },
     }),
@@ -81,6 +78,7 @@ async function loadSchedulerInput(projectId: string, hoursPerDay: number): Promi
       select: { epicId: true, dependsOnId: true },
     }),
   ])
+  const resourceTypes = resolved.resourceTypes
 
   // Filter out inactive epics and features (mirror POST /schedule behaviour)
   const epics = allEpics
