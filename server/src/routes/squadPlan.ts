@@ -1,3 +1,5 @@
+import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+
 /**
  * squadPlan.ts — Express routes for the Capacity Planner (squad sizing).
  *
@@ -174,7 +176,7 @@ function buildWeeklyDemandCacheFromPlannerResult(
   return weeklyDemandCache
 }
 
-function buildReplayPlannerResourceTypes(
+export function buildReplayPlannerResourceTypes(
   resourceTypes: SchedulerResourceType[],
   slotWindowsByRt: Map<string, CapacityPlanSlotWindow[]>,
   maxHeadcountByRt: Map<string, number>,
@@ -188,6 +190,10 @@ function buildReplayPlannerResourceTypes(
     return {
       ...resourceType,
       count: maxHeadcount,
+      // Clear stale roleSegments: the proposed plan IS the authoritative
+      // capacity for affected resource types. Retaining old roleSegments
+      // would cause getWeeklyCapacity() to double-count (defect #362 fix 3).
+      roleSegments: undefined,
       namedResources: slotWindows.map((slotWindow, idx) => ({
         id: `capacity-plan-${resourceType.id}-${idx}`,
         name: `${resourceType.name} ${idx + 1}`,
@@ -202,14 +208,13 @@ function buildReplayPlannerResourceTypes(
     }
   })
 }
-
 async function loadSchedulerInput(
   projectId: string,
   hoursPerDay: number,
   options: PlannerInputLoadOptions = {},
 ): Promise<SchedulerInput> {
   const { includeCapacityPlanMaterialization = true } = options
-  const [allEpics, resourceTypes, manualFeatures, manualStories, epicDeps] = await Promise.all([
+  const [allEpics, resolved, manualFeatures, manualStories, epicDeps] = await Promise.all([
     prisma.epic.findMany({
       where: { projectId },
       orderBy: { order: 'asc' },
@@ -229,10 +234,7 @@ async function loadSchedulerInput(
         },
       },
     }),
-    prisma.resourceType.findMany({
-      where: { projectId },
-      include: { namedResources: true },
-    }),
+    resolveSchedulerCapacity(prisma, projectId, hoursPerDay),
     prisma.timelineEntry.findMany({
       where: { projectId, isManual: true },
     }),
@@ -245,10 +247,13 @@ async function loadSchedulerInput(
     }),
   ])
 
+  const resourceTypes = resolved.resourceTypes
+
   const epics = allEpics
     .filter(e => e.isActive !== false)
     .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
 
+  // When capacity plan materialization is excluded, strip plan-based allocationMode
   const plannerResourceTypes = includeCapacityPlanMaterialization
     ? resourceTypes as SchedulerResourceType[]
     : stripCapacityPlanMaterialization(resourceTypes as PlannerInputResourceType[])
@@ -994,6 +999,17 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     includeCapacityPlanMaterialization: false,
   })
   const projectRtIds = new Set(schedulerInput.resourceTypes.map(rt => rt.id))
+  // Convert only the explicit empty overlap marker (roleSegments: []) back to
+  // undefined so the SA planner uses count-based phantom-slot capacity.
+  // A Squad Planner apply sets roleSegments=[] to suppress aggregate ROLE
+  // capacity when PLANNED_RESOURCE profiles already represent the trajectories.
+  // Non-empty ROLE profiles are preserved unchanged — they must continue to
+  // constrain planner capacity under profile-first authority.
+  for (const rt of schedulerInput.resourceTypes) {
+    if (Array.isArray(rt.roleSegments) && rt.roleSegments.length === 0) {
+      rt.roleSegments = undefined
+    }
+  }
 
   // ── Build minFloor map ──────────────────────────────────────────────────
   const minFloor = new Map<string, number>()

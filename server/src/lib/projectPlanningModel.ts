@@ -14,18 +14,19 @@
  */
 
 import { prisma } from './prisma.js'
+import { resolveSchedulerCapacity } from './schedulerCapacityResolver.js'
+
 import {
   getWeeklyCapacity,
   computeParallelWarnings,
   type ParallelWarning,
   type SchedulerNamedResource,
+  type SchedulerCapacitySegment,
+  type SchedulerResourceType,
 } from './scheduler.js'
 import {
-  materializeCapacityPlanResources,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
-import { buildResourceCapacityProfileMap } from './capacityProfileResourceAdapter.js'
-import type { CapacityProfileAdapterInput } from './capacityProfileResourceAdapter.js'
 import { deriveNamedResourceAssignments } from './namedResourceAssignments.js'
 import { effectiveDays } from '../utils/round.js'
 
@@ -465,6 +466,7 @@ export function computeWeeklyCapacity(
     allocationMode: string | null
     count: number
     namedResources: SchedulerNamedResource[]
+    roleSegments?: SchedulerCapacitySegment[]
   }>,
   hoursPerDay: number,
   endWeek: number,
@@ -476,13 +478,23 @@ export function computeWeeklyCapacity(
   for (const rt of resourceTypes) {
     for (let w = 0; w < endWeek; w++) {
       let capDays: number
-      if ((rt.allocationMode as string | null) === 'CAPACITY_PLAN') {
+
+      // Profile-authoritative: capacitySegments or roleSegments override legacy fallback
+      const hasProfileAuthority = (rt.namedResources ?? []).some(
+        nr => nr.capacitySegments && nr.capacitySegments.length > 0,
+      ) || (rt.roleSegments && rt.roleSegments.length > 0)
+
+      if (hasProfileAuthority) {
+        const hpd = rt.hoursPerDay ?? hoursPerDay
+        capDays = getWeeklyCapacity(rt as SchedulerResourceType, w, hoursPerDay) / hpd
+      } else if ((rt.allocationMode as string | null) === 'CAPACITY_PLAN') {
         const materialized = capacityPlanByRt.get(rt.id)
         capDays = materialized ? (materialized.weeklyHeadcount.get(w) ?? 0) * 5 : 0
       } else {
         const hpd = rt.hoursPerDay ?? hoursPerDay
-        capDays = getWeeklyCapacity(rt, w, hoursPerDay) / hpd
+        capDays = getWeeklyCapacity(rt as SchedulerResourceType, w, hoursPerDay) / hpd
       }
+
       result.push({
         week: w,
         resourceTypeName: rt.name,
@@ -509,32 +521,37 @@ export async function buildProjectPlanningModel(
   // ── 1. Load project with ownership check ───────────────────────────────
   const project = await prisma.project.findFirst({
     where: { id: projectId, ownerId: userId },
-    include: {
-      capacityProfiles: {
-        include: {
-          segments: {
-            orderBy: [
-              { startWeek: 'asc' },
-              { endWeek: 'asc' },
-            ],
-          },
-        },
-      },
-    },
   })
 
   if (!project) {
     throw new NotFoundError('Project not found')
   }
 
-  // ── 2. Load resource types ─────────────────────────────────────────────
-  const resourceTypes = await prisma.resourceType.findMany({
+  // ── 2. Load Prisma resource types (for display fields) ────────────────
+  const prismaResourceTypes = await prisma.resourceType.findMany({
     where: { projectId },
     include: {
       namedResources: { orderBy: { createdAt: 'asc' } },
     },
   })
-  // ── 2. Load timeline entries ──────────────────────────────────────────
+
+  // ── 3. Resolve scheduler capacity (profile-first) ─────────────────────
+  const resolved = await resolveSchedulerCapacity(prisma, projectId, project.hoursPerDay)
+  const capacityResourceTypes = resolved.resourceTypes
+  const capacityPlanByRt = resolved.capacityPlanByRt
+  const profileBackedNamedResourceIds = new Set(resolved.meta.profileBackedNamedResourceIds)
+
+  // A resource type is "profile-backed" when every named resource has a valid profile
+  const capacityProfileBackedResourceTypeIds = new Set(
+    prismaResourceTypes
+      .filter(rt =>
+        rt.namedResources.length > 0 &&
+        rt.namedResources.every(nr => profileBackedNamedResourceIds.has(nr.id)),
+      )
+      .map(rt => rt.id),
+  )
+
+  // ── 4. Load timeline entries ──────────────────────────────────────────
   const [timelineEntries, storyTimelineEntries] = await Promise.all([
     prisma.timelineEntry.findMany({
       where: { projectId },
@@ -558,7 +575,7 @@ export async function buildProjectPlanningModel(
     }),
   ])
 
-  // ── 3. Filter active entries ──────────────────────────────────────────
+  // ── 5. Filter active entries ──────────────────────────────────────────
   const activeEntries = timelineEntries.filter(
     e => e.feature.isActive !== false && e.feature.epic.isActive !== false,
   )
@@ -571,7 +588,7 @@ export async function buildProjectPlanningModel(
     activeFeatureIdSet.has(e.story.featureId),
   )
 
-  // ── 4. Load dependencies (active-only) ────────────────────────────────
+  // ── 6. Load dependencies (active-only) ────────────────────────────────
   const [featureDeps, storyDeps, epicDeps] = await Promise.all([
     prisma.featureDependency.findMany({
       where: { featureId: { in: activeFeatureIds } },
@@ -587,36 +604,7 @@ export async function buildProjectPlanningModel(
     }),
   ])
 
-  // ── 5. Load active capacity plan ─────────────────────────────────────
-  const activeCapacityPlan = await prisma.capacityPlan.findFirst({
-    where: { projectId, isActive: true },
-    include: {
-      periods: {
-        include: { entries: true },
-        orderBy: { periodIndex: 'asc' },
-      },
-    },
-  })
-  const capacityPlanByRt = materializeCapacityPlanResources(activeCapacityPlan?.periods ?? [])
-  const { namedResourceProfiles } = buildResourceCapacityProfileMap({
-    id: project.id,
-    hoursPerDay: project.hoursPerDay,
-    resourceTypes,
-    capacityProfiles: project.capacityProfiles,
-    capacityPlans: activeCapacityPlan ? [activeCapacityPlan] : [],
-  } as unknown as CapacityProfileAdapterInput)
-  const capacityProfileBackedResourceTypeIds = new Set(
-    resourceTypes
-      .filter(rt =>
-        rt.namedResources.length > 0 &&
-        rt.namedResources.every(
-          namedResource => namedResourceProfiles.get(namedResource.id)?.resolutionSource === 'PROFILE',
-        ),
-      )
-      .map(rt => rt.id),
-  )
-
-  // ── 6. Resolved entries (with display metadata) ──────────────────────
+  // ── 7. Resolved entries (with display metadata) ──────────────────────
   const resolvedEntries: FeatureEntryDetail[] = activeEntries.map(e => ({
     featureId: e.featureId,
     featureName: e.feature.name,
@@ -636,8 +624,8 @@ export async function buildProjectPlanningModel(
     isManual: e.isManual,
   }))
 
-  // ── 7. Build resource type planning facts ────────────────────────────
-  const resourceTypeFacts: ResourceTypePlanningFact[] = resourceTypes.map(rt => ({
+  // ── 8. Build resource type planning facts ────────────────────────────
+  const resourceTypeFacts: ResourceTypePlanningFact[] = prismaResourceTypes.map(rt => ({
     id: rt.id,
     name: rt.name,
     category: rt.category,
@@ -667,7 +655,7 @@ export async function buildProjectPlanningModel(
   // Apply capacity plan fallback for CAPACITY_PLAN RTs with no named resources
   const enrichedFacts = applyCapacityPlanFallback(resourceTypeFacts, capacityPlanByRt)
 
-  // ── 8. Compute planning window ───────────────────────────────────────
+  // ── 9. Compute planning window ───────────────────────────────────────
   const planningWindow = computePlanningWindow(
     activeEntries,
     project.startDate,
@@ -675,22 +663,19 @@ export async function buildProjectPlanningModel(
     project.onboardingWeeks ?? 0,
   )
 
-  // ── 9. Compute weekly demand ─────────────────────────────────────────
+  // ── 10. Compute weekly demand ─────────────────────────────────────────
   const simulatedDemand = convertWeeklyDemandCache(
     project.weeklyDemandCache as Record<string, number> | null,
-    resourceTypes,
+    prismaResourceTypes,
   )
 
   const fallbackDemand = buildFallbackWeeklyDemand(
     activeEntries,
-    resourceTypes.map(rt => ({
-      name: rt.name,
-      id: rt.id,
-      hoursPerDay: rt.hoursPerDay,
-      allocationMode: rt.allocationMode,
-      count: rt.count,
-      namedResources: (rt.namedResources ?? []) as unknown as SchedulerNamedResource[],
-    })),
+    capacityResourceTypes as Array<{
+      name: string; id: string; hoursPerDay: number | null;
+      allocationMode: string | null; count: number;
+      namedResources: SchedulerNamedResource[]
+    }>,
     capacityPlanByRt,
     project.hoursPerDay,
   )
@@ -700,7 +685,7 @@ export async function buildProjectPlanningModel(
       ? mergeWeeklyDemand(fallbackDemand, simulatedDemand)
       : fallbackDemand
 
-  // ── 10. Compute weekly capacity ──────────────────────────────────────
+  // ── 11. Compute weekly capacity ──────────────────────────────────────
   const maxDemandWeek =
     weeklyDemand.length > 0 ? Math.max(...weeklyDemand.map(d => d.week)) : 0
   const capacityEndWeek = Math.max(
@@ -709,20 +694,22 @@ export async function buildProjectPlanningModel(
   )
 
   const rtNamesWithDemand = new Set(weeklyDemand.map(d => d.resourceTypeName))
-  const capacityRelevantRTs = resourceTypes.filter(rt =>
+  const capacityRelevantRTs = capacityResourceTypes.filter(rt =>
     rtNamesWithDemand.has(rt.name),
   )
 
   const weeklyCapacity = computeWeeklyCapacity(
-    capacityRelevantRTs,
+    capacityRelevantRTs as Array<{
+      id: string; name: string; hoursPerDay: number | null;
+      allocationMode: string | null; count: number;
+      namedResources: SchedulerNamedResource[]
+    }>,
     project.hoursPerDay,
     capacityEndWeek,
     capacityPlanByRt,
   )
 
-  // ── 11. Reconcile capacity on demand rows ────────────────────────────
-  // Some demand rows from mergeWeeklyDemand have capacityDays=0 when they come
-  // from simulated demand. Fill in the correct capacity from weeklyCapacity.
+  // ── 12. Reconcile capacity on demand rows ────────────────────────────
   const capMap = new Map<string, number>()
   for (const cap of weeklyCapacity) {
     capMap.set(weeklyDemandKey(cap.week, cap.resourceTypeName), cap.capacityDays)
@@ -734,9 +721,9 @@ export async function buildProjectPlanningModel(
     }
   }
 
-  // ── 12. Derive named resource assignments ────────────────────────────
+  // ── 13. Derive named resource assignments ────────────────────────────
   const namedResourceAssignments = deriveNamedResourceAssignments({
-    resourceTypes: resourceTypes.map(rt => ({
+    resourceTypes: capacityResourceTypes.map(rt => ({
       ...rt,
       capacityProfileBacked: capacityProfileBackedResourceTypeIds.has(rt.id),
     })) as unknown as Parameters<typeof deriveNamedResourceAssignments>[0]['resourceTypes'],
@@ -744,16 +731,22 @@ export async function buildProjectPlanningModel(
     capacityPlanByRt,
   })
 
-  // ── 13. Compute parallel warnings ────────────────────────────────────
+  // ── 14. Compute parallel warnings (profile-aware) ────────────────────
   const activeFeatures = activeEntries.map(e => e.feature)
 
-  // Apply capacity-plan fallback to resource types for parallel warnings
-  // (same logic as timeline.ts buildWarningResourceTypes)
-  const warningResourceTypes = resourceTypes.map(rt => {
+  // Use profile-aware capacity resource types for warnings
+  const warningResourceTypes = capacityResourceTypes.map(rt => {
     if (rt.allocationMode !== 'CAPACITY_PLAN') return rt
+
+    // Profile-backed NRs or role segments are already authoritative — skip fallback
+    const hasAnyProfileAuthority = (rt.namedResources ?? []).some(
+      nr => nr.capacitySegments && nr.capacitySegments.length > 0,
+    ) || (rt.roleSegments && rt.roleSegments.length > 0)
+    if (hasAnyProfileAuthority) return rt
+
     const materialized = capacityPlanByRt.get(rt.id)
     if (!materialized) return rt
-    // Only fall back when the RT has no named resources
+    // Only fall back when the RT has no named resources (legacy behaviour)
     if ((rt.namedResources ?? []).length > 0) return rt
     return {
       ...rt,
@@ -770,7 +763,7 @@ export async function buildProjectPlanningModel(
         pricingModel: undefined,
       })),
     }
-  }) as Array<typeof resourceTypes[number]>
+  }) as typeof capacityResourceTypes
 
   const parallelWarnings = computeParallelWarnings(
     project.hoursPerDay,

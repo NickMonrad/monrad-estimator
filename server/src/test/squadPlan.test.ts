@@ -34,9 +34,12 @@ import { prisma } from '../lib/prisma.js'
 import {
   deriveFeatureSpanFromWeeklyAllocations,
   stripCapacityPlanMaterialization,
+  buildReplayPlannerResourceTypes,
 } from '../routes/squadPlan.js'
 import { buildSnapshot } from '../routes/snapshots.js'
+import type { CapacityPlanSlotWindow } from '../lib/capacityPlanMaterialisation.js'
 import type { SchedulerResourceType } from '../lib/scheduler.js'
+import { getWeeklyCapacity } from '../lib/scheduler.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
 
 
@@ -716,5 +719,216 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     expect(res.status).toBe(409)
     expect(prisma.backlogSnapshot.create).toHaveBeenCalled()
     expect(prisma.backlogSnapshot.delete).toHaveBeenCalledWith({ where: { id: 'test-snapshot-id' } })
+  })
+})
+
+describe('buildReplayPlannerResourceTypes (fix 3)', () => {
+  it('clears roleSegments when resource type is in the proposed plan', () => {
+    const existingRT: SchedulerResourceType = {
+      id: 'rt-dev',
+      name: 'Developer',
+      count: 3,
+      hoursPerDay: 8,
+      allocationMode: 'CAPACITY_PLAN',
+      namedResources: [],
+      roleSegments: [
+        { startWeek: 0, endWeek: 10, allocationPercent: 100 },
+      ],
+    }
+
+    const slotWindows = new Map<string, CapacityPlanSlotWindow[]>()
+    slotWindows.set('rt-dev', [
+      { startWeek: 2, endWeek: 6, allocationPercent: 100 },
+      { startWeek: 2, endWeek: 6, allocationPercent: 50 },
+    ])
+
+    const maxHeadcount = new Map<string, number>()
+    maxHeadcount.set('rt-dev', 2)
+
+    const result = buildReplayPlannerResourceTypes(
+      [existingRT],
+      slotWindows,
+      maxHeadcount,
+    )
+
+    const replayed = result.find(rt => rt.id === 'rt-dev')!
+    // roleSegments must be cleared — the proposed plan IS the authority
+    expect(replayed.roleSegments).toBeUndefined()
+    // Named resources come from proposed plan, not old roleSegments
+    expect(replayed.namedResources).toHaveLength(2)
+  })
+
+  it('replay capacity equals only the proposed plan, not old roleSegments', () => {
+    // If roleSegments survived, getWeeklyCapacity would sum both
+    const existingRT: SchedulerResourceType = {
+      id: 'rt-dev',
+      name: 'Developer',
+      count: 3,
+      hoursPerDay: 8,
+      allocationMode: 'CAPACITY_PLAN',
+      namedResources: [],
+      roleSegments: [
+        { startWeek: 0, endWeek: 10, allocationPercent: 100 },
+      ],
+    }
+
+    const slotWindows = new Map<string, CapacityPlanSlotWindow[]>()
+    slotWindows.set('rt-dev', [
+      { startWeek: 0, endWeek: 10, allocationPercent: 50 },
+    ])
+
+    const maxHeadcount = new Map<string, number>()
+    maxHeadcount.set('rt-dev', 1)
+
+    const result = buildReplayPlannerResourceTypes(
+      [existingRT],
+      slotWindows,
+      maxHeadcount,
+    )
+
+    const replayed = result.find(rt => rt.id === 'rt-dev')!
+    expect(replayed.roleSegments).toBeUndefined()
+
+    // Single NR at 50% = 20h/week (not role 100% = 40h)
+    const capacity = getWeeklyCapacity(replayed, 5, 8)
+    // 50% of 40h = 20h exactly (proposed plan only, no old roleSegments)
+    expect(capacity).toBe(20)
+  })
+
+  it('unaffected resource types keep their roleSegments', () => {
+    const existingRTs: SchedulerResourceType[] = [
+      {
+        id: 'rt-affected',
+        name: 'Affected',
+        count: 2,
+        hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        namedResources: [],
+        roleSegments: [
+          { startWeek: 0, endWeek: 10, allocationPercent: 50 },
+        ],
+      },
+      {
+        id: 'rt-unaffected',
+        name: 'Unaffected',
+        count: 1,
+        hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        namedResources: [],
+        roleSegments: [
+          { startWeek: 0, endWeek: 10, allocationPercent: 100 },
+        ],
+      },
+    ]
+
+    const slotWindows = new Map<string, CapacityPlanSlotWindow[]>()
+    slotWindows.set('rt-affected', [
+      { startWeek: 0, endWeek: 10, allocationPercent: 100 },
+    ])
+
+    const maxHeadcount = new Map<string, number>()
+    maxHeadcount.set('rt-affected', 1)
+
+    const result = buildReplayPlannerResourceTypes(
+      existingRTs,
+      slotWindows,
+      maxHeadcount,
+    )
+
+    const affected = result.find(rt => rt.id === 'rt-affected')!
+    expect(affected.roleSegments).toBeUndefined()
+
+    const unaffected = result.find(rt => rt.id === 'rt-unaffected')!
+    expect(unaffected.roleSegments).toBeDefined()
+    expect(unaffected.roleSegments).toHaveLength(1)
+  })
+
+  it('reapplying the same plan produces deterministic results', () => {
+    const existingRT: SchedulerResourceType = {
+      id: 'rt-dev',
+      name: 'Developer',
+      count: 3,
+      hoursPerDay: 8,
+      allocationMode: 'CAPACITY_PLAN',
+      namedResources: [],
+      roleSegments: [
+        { startWeek: 0, endWeek: 10, allocationPercent: 100 },
+      ],
+    }
+
+    const slotWindows = new Map<string, CapacityPlanSlotWindow[]>()
+    slotWindows.set('rt-dev', [
+      { startWeek: 0, endWeek: 10, allocationPercent: 75 },
+    ])
+
+    const maxHeadcount = new Map<string, number>()
+    maxHeadcount.set('rt-dev', 1)
+
+    const result1 = buildReplayPlannerResourceTypes(
+      [existingRT], slotWindows, maxHeadcount,
+    )
+    const result2 = buildReplayPlannerResourceTypes(
+      [existingRT], slotWindows, maxHeadcount,
+    )
+
+    expect(result1).toEqual(result2)
+  })
+})
+
+describe('generation roleSegments empty-array conversion (fix #362 regression)', () => {
+  it('converts empty roleSegments to undefined (count-based capacity)', () => {
+    // Simulates a resource type after a Squad Planner apply:
+    // the resolver returns roleSegments=[] to suppress aggregate ROLE
+    // capacity overlap. The generation boundary must convert this to
+    // undefined so the SA planner uses count-based phantom-slot capacity.
+    const rts: SchedulerResourceType[] = [
+      {
+        id: 'rt-dev', name: 'Developer', count: 3, hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        namedResources: [],
+        roleSegments: [] as SchedulerResourceType['roleSegments'],
+      },
+    ]
+
+    // Apply the same conversion the generation endpoint uses
+    for (const rt of rts) {
+      if (Array.isArray(rt.roleSegments) && rt.roleSegments.length === 0) {
+        rt.roleSegments = undefined
+      }
+    }
+
+    expect(rts[0].roleSegments).toBeUndefined()
+    // count=3, no named resources → 3 × 40 = 120h (phantom slots, not 0)
+    expect(getWeeklyCapacity(rts[0], 0, 8)).toBe(120)
+  })
+
+  it('preserves non-empty ROLE profile segments (profile-first authority)', () => {
+    // A valid persisted ROLE profile with allocationPercent=50 must
+    // survive the generation boundary unchanged — planner capacity stays
+    // constrained to the profile, not replaced by count-based phantoms.
+    const rts: SchedulerResourceType[] = [
+      {
+        id: 'rt-dev', name: 'Developer', count: 3, hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        namedResources: [],
+        roleSegments: [
+          { startWeek: 0, endWeek: 8, allocationPercent: 50 },
+        ],
+      },
+    ]
+
+    // Apply the same conversion the generation endpoint uses
+    for (const rt of rts) {
+      if (Array.isArray(rt.roleSegments) && rt.roleSegments.length === 0) {
+        rt.roleSegments = undefined
+      }
+    }
+
+    // Non-empty profile is preserved — segments unchanged
+    expect(rts[0].roleSegments).toEqual([
+      { startWeek: 0, endWeek: 8, allocationPercent: 50 },
+    ])
+    // 50% × 40h = 20h (NOT 3 × 40h = 120h count-based phantom)
+    expect(getWeeklyCapacity(rts[0], 0, 8)).toBe(20)
   })
 })

@@ -165,10 +165,339 @@ describe('getWeeklyCapacity', () => {
   })
 })
 
+
 // ─────────────────────────────────────────────────────────────────────────────
-// runScheduler tests
+// Profile-aware capacity (segments) tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe('effectiveAllocationPct with segments', () => {
+  it('profile segment overrides contradictory legacy FULL_PROJECT fields', () => {
+    const nr = {
+      id: 'nr1', name: 'Dev 1',
+      startWeek: 0, endWeek: null,
+      allocationPct: 100, allocationMode: 'FULL_PROJECT',
+      allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+      capacitySegments: [{ startWeek: 0, endWeek: 3, allocationPercent: 50 }],
+    }
+    // Profile says 50% in weeks 0-3; legacy says 100% FULL_PROJECT
+    expect(effectiveAllocationPct(nr, 0)).toBe(50)
+    expect(effectiveAllocationPct(nr, 3)).toBe(50)
+    expect(effectiveAllocationPct(nr, 4)).toBe(0) // gap after segment
+  })
+
+  it('gap between segments produces zero capacity', () => {
+    const nr = {
+      id: 'nr1', name: 'Dev 1',
+      startWeek: 0, endWeek: null,
+      allocationPct: 100, allocationMode: 'FULL_PROJECT',
+      allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+      capacitySegments: [
+        { startWeek: 0, endWeek: 2, allocationPercent: 100 },
+        { startWeek: 5, endWeek: 7, allocationPercent: 100 },
+      ],
+    }
+    expect(effectiveAllocationPct(nr, 1)).toBe(100)
+    expect(effectiveAllocationPct(nr, 3)).toBe(0) // gap
+    expect(effectiveAllocationPct(nr, 4)).toBe(0) // gap
+    expect(effectiveAllocationPct(nr, 6)).toBe(100)
+  })
+
+  it('legacy fallback when no segments present', () => {
+    const nr = {
+      id: 'nr1', name: 'Dev 1',
+      startWeek: 0, endWeek: null,
+      allocationPct: 100, allocationMode: 'FULL_PROJECT',
+      allocationPercent: 80, allocationStartWeek: null, allocationEndWeek: null,
+      capacitySegments: undefined,
+    }
+    expect(effectiveAllocationPct(nr, 0)).toBe(80)
+    expect(effectiveAllocationPct(nr, 99)).toBe(80)
+  })
+
+  it('empty segments array treated as no profile', () => {
+    const nr = {
+      id: 'nr1', name: 'Dev 1',
+      startWeek: 0, endWeek: null,
+      allocationPct: 100, allocationMode: 'FULL_PROJECT',
+      allocationPercent: 75, allocationStartWeek: null, allocationEndWeek: null,
+      capacitySegments: [],
+    }
+    // Empty array falls back to legacy
+    expect(effectiveAllocationPct(nr, 0)).toBe(75)
+  })
+
+  it('multiple segments with changing percentages', () => {
+    const nr = {
+      id: 'nr1', name: 'Dev 1',
+      startWeek: 0, endWeek: null,
+      allocationPct: 100, allocationMode: 'FULL_PROJECT',
+      allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+      capacitySegments: [
+        { startWeek: 0, endWeek: 1, allocationPercent: 100 },
+        { startWeek: 2, endWeek: 4, allocationPercent: 75 },
+        { startWeek: 5, endWeek: 10, allocationPercent: 50 },
+      ],
+    }
+    expect(effectiveAllocationPct(nr, 0)).toBe(100)
+    expect(effectiveAllocationPct(nr, 1)).toBe(100)
+    expect(effectiveAllocationPct(nr, 2)).toBe(75)
+    expect(effectiveAllocationPct(nr, 4)).toBe(75)
+    expect(effectiveAllocationPct(nr, 5)).toBe(50)
+    expect(effectiveAllocationPct(nr, 10)).toBe(50)
+    expect(effectiveAllocationPct(nr, 11)).toBe(0) // gap after last segment
+  })
+})
+
+describe('getWeeklyCapacity with profile-backed named resources', () => {
+  it('single profile-backed NR with 100% segment matches legacy FULL_PROJECT', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Alice',
+        startWeek: 0, endWeek: null,
+        allocationPct: 100, allocationMode: 'FULL_PROJECT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        capacitySegments: [{ startWeek: 0, endWeek: 50, allocationPercent: 100 }],
+      }],
+    }
+    // 1 NR × 1.0 × 8 × 5 = 40, phantom: max(0, 1-1) × 40 = 0
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(40)
+    expect(getWeeklyCapacity(rt, 10, 8)).toBe(40)
+  })
+
+  it('profile-backed NR with partial segment reduces capacity proportionally', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Alice',
+        startWeek: 0, endWeek: null,
+        allocationPct: 100, allocationMode: 'FULL_PROJECT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        capacitySegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 50 }],
+      }],
+    }
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(0.5 * 8 * 5)  // 20h
+    expect(getWeeklyCapacity(rt, 11, 8)).toBe(0)  // outside segment
+  })
+
+  it('profile-backed NR with zero-capacity gap returns 0 for gap week', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Alice',
+        startWeek: 0, endWeek: null,
+        allocationPct: 100, allocationMode: 'FULL_PROJECT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        capacitySegments: [
+          { startWeek: 0, endWeek: 2, allocationPercent: 100 },
+          { startWeek: 5, endWeek: 7, allocationPercent: 100 },
+        ],
+      }],
+    }
+    expect(getWeeklyCapacity(rt, 1, 8)).toBe(40)
+    expect(getWeeklyCapacity(rt, 3, 8)).toBe(0)  // gap
+    expect(getWeeklyCapacity(rt, 6, 8)).toBe(40)
+  })
+
+  it('mixed: two profile-backed NRs + phantom slot from count', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 3, hoursPerDay: 8,
+      namedResources: [
+        {
+          id: 'nr1', name: 'Alice',
+          startWeek: 0, endWeek: null,
+          allocationPct: 100, allocationMode: 'FULL_PROJECT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          capacitySegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 50 }],
+        },
+        {
+          id: 'nr2', name: 'Bob',
+          startWeek: 0, endWeek: null,
+          allocationPct: 100, allocationMode: 'FULL_PROJECT',
+          allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+          capacitySegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 100 }],
+        },
+      ],
+    }
+    // NR1: 0.5×8×5=20, NR2: 1×8×5=40, phantom: max(0,3-2)×8×5=40 → total=100
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(100)
+  })
+
+  it('phantom slots remain unchanged when profile-backed NRs exist below count', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 4, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Alice',
+        startWeek: 0, endWeek: null,
+        allocationPct: 100, allocationMode: 'FULL_PROJECT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        capacitySegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 50 }],
+      }],
+    }
+    // NR1: 0.5×8×5=20, phantom: max(0,4-1)×8×5=120 → total=140
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(140)
+  })
+})
+
+describe('getWeeklyCapacity with stale legacy windows (profile-first)', () => {
+  it('whole-project profile not truncated by stale legacy startWeek=5', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Alice',
+        startWeek: 5, endWeek: 10,  // stale legacy window
+        allocationPct: 100, allocationMode: 'FULL_PROJECT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        capacitySegments: [{ startWeek: 0, endWeek: Infinity, allocationPercent: 100 }],
+      }],
+    }
+    // Profile says 100% from week 0; legacy says 5-10 — profile wins
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(40)
+    expect(getWeeklyCapacity(rt, 3, 8)).toBe(40)
+    expect(getWeeklyCapacity(rt, 5, 8)).toBe(40)
+    expect(getWeeklyCapacity(rt, 12, 8)).toBe(40)
+  })
+
+  it('availability-window profile extends beyond stale legacy bounds', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Bob',
+        startWeek: 2, endWeek: 5,  // stale legacy window
+        allocationPct: 50, allocationMode: 'TIMELINE',
+        allocationPercent: 50, allocationStartWeek: 2, allocationEndWeek: 5,
+        capacitySegments: [{ startWeek: 1, endWeek: 8, allocationPercent: 75 }],
+      }],
+    }
+    // Profile says 75% weeks 1-8; legacy says 50% weeks 2-5
+    expect(getWeeklyCapacity(rt, 1, 8)).toBe(0.75 * 8 * 5)  // 30h
+    expect(getWeeklyCapacity(rt, 4, 8)).toBe(0.75 * 8 * 5)  // 30h
+    expect(getWeeklyCapacity(rt, 6, 8)).toBe(0.75 * 8 * 5)  // 30h — outside legacy bounds
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(0)  // before segment start
+    expect(getWeeklyCapacity(rt, 9, 8)).toBe(0)  // after segment end
+  })
+
+  it('multi-segment profile ignoring legacy bounds', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Charlie',
+        startWeek: 2, endWeek: 6,
+        allocationPct: 50, allocationMode: 'TIMELINE',
+        allocationPercent: 50, allocationStartWeek: 2, allocationEndWeek: 6,
+        capacitySegments: [
+          { startWeek: 0, endWeek: 3, allocationPercent: 100 },
+          { startWeek: 4, endWeek: 4, allocationPercent: 50 },
+          { startWeek: 5, endWeek: 10, allocationPercent: 25 },
+        ],
+      }],
+    }
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(40)    // 100% × 8 × 5
+    expect(getWeeklyCapacity(rt, 3, 8)).toBe(40)    // 100% — legacy says 50%
+    expect(getWeeklyCapacity(rt, 4, 8)).toBe(0.5 * 8 * 5) // 50% — legacy says 50%, same
+    expect(getWeeklyCapacity(rt, 5, 8)).toBe(0.25 * 8 * 5) // 25% — legacy says 50%
+    expect(getWeeklyCapacity(rt, 11, 8)).toBe(0)    // gap
+  })
+
+  it('legacy-only named resource unaffected by changes', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 1, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Legacy',
+        startWeek: 2, endWeek: 6,
+        allocationPct: 50, allocationMode: 'TIMELINE',
+        allocationPercent: 50, allocationStartWeek: 2, allocationEndWeek: 6,
+        capacitySegments: undefined,
+      }],
+    }
+    // Legacy-only: respects startWeek/endWeek
+    expect(getWeeklyCapacity(rt, 1, 8)).toBe(0)
+    expect(getWeeklyCapacity(rt, 2, 8)).toBe(0.5 * 8 * 5)
+    expect(getWeeklyCapacity(rt, 4, 8)).toBe(0.5 * 8 * 5)
+    expect(getWeeklyCapacity(rt, 7, 8)).toBe(0)
+  })
+})
+
+describe('getWeeklyCapacity with role profiles', () => {
+  it('role-only fixed profile at 50% replaces phantom slots', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 2, hoursPerDay: 8,
+      namedResources: [],
+      roleSegments: [{ startWeek: 0, endWeek: Infinity, allocationPercent: 50 }],
+    }
+    // Role profile: 50% × 8 × 5 = 20 (replaces 2 × phantom × 40)
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(0.5 * 8 * 5)
+  })
+
+  it('role-only availability-window profile', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 3, hoursPerDay: 8,
+      namedResources: [],
+      roleSegments: [{ startWeek: 2, endWeek: 5, allocationPercent: 75 }],
+    }
+    expect(getWeeklyCapacity(rt, 1, 8)).toBe(0)         // before window
+    expect(getWeeklyCapacity(rt, 2, 8)).toBe(0.75 * 8 * 5)  // 30h
+    expect(getWeeklyCapacity(rt, 5, 8)).toBe(0.75 * 8 * 5)  // 30h
+    expect(getWeeklyCapacity(rt, 6, 8)).toBe(0)         // after window
+  })
+
+  it('role-only segmented profile with zero-capacity gap', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 2, hoursPerDay: 8,
+      namedResources: [],
+      roleSegments: [
+        { startWeek: 0, endWeek: 2, allocationPercent: 100 },
+        { startWeek: 5, endWeek: 7, allocationPercent: 50 },
+      ],
+    }
+    expect(getWeeklyCapacity(rt, 1, 8)).toBe(40)        // 100%
+    expect(getWeeklyCapacity(rt, 3, 8)).toBe(0)          // gap
+    expect(getWeeklyCapacity(rt, 5, 8)).toBe(0.5 * 8 * 5)  // 50%
+    expect(getWeeklyCapacity(rt, 8, 8)).toBe(0)          // gap
+  })
+
+  it('role profile combined with named resources without double-counting', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 2, hoursPerDay: 8,
+      namedResources: [{
+        id: 'nr1', name: 'Alice',
+        startWeek: 0, endWeek: null,
+        allocationPct: 100, allocationMode: 'FULL_PROJECT',
+        allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null,
+        capacitySegments: undefined,
+      }],
+      roleSegments: [{ startWeek: 0, endWeek: Infinity, allocationPercent: 50 }],
+    }
+    // Named resource: 1 × 100% × 8 × 5 = 40
+    // Role profile: 50% × 8 × 5 = 20 (replaces phantom max(0, 2-1) × 40)
+    // Total: 40 + 20 = 60 (NOT 40 + 80 = 120)
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(60)
+  })
+
+  it('no role profile: phantom slots unchanged', () => {
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 3, hoursPerDay: 8,
+      namedResources: [
+        { id: 'nr1', name: 'Alice', startWeek: 0, endWeek: null, allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null, capacitySegments: undefined, pricingModel: undefined },
+      ],
+    }
+    // 1 NR × 40 = 40, phantom: max(0, 3-1) × 40 = 80 → total 120
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(120)
+  })
+
+  it('role profile suppresses active capacity plan fallback', () => {
+    // This tests that the resolver's hasProfileAuthority check prevents
+    // capacity plan synthetic NRs when a role profile exists.
+    // The resolver test for this is in schedulerCapacityResolver.test.ts
+    const rt = {
+      id: 'rt1', name: 'Dev', count: 2, hoursPerDay: 8,
+      namedResources: [],
+      roleSegments: [{ startWeek: 0, endWeek: Infinity, allocationPercent: 100 }],
+    }
+    // Role profile capacity should be 100% × 8 × 5 = 40
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(40)
+  })
+})
 describe('runScheduler', () => {
   // ── Happy path ──────────────────────────────────────────────────────────────
   it('single epic, single feature, single task → schedules at week 0', () => {

@@ -1,3 +1,5 @@
+import { resolveSchedulerCapacity } from './schedulerCapacityResolver.js'
+
 /**
  * Profile-first Resource Optimiser apply orchestration.
  *
@@ -672,13 +674,12 @@ async function loadOptimiserApplyPlan(
     plannerManagedResourceTypeIds,
   })
 }
-
 async function loadSchedulerInput(
   db: PrismaTransactionClient,
   projectId: string,
   hoursPerDay: number,
 ): Promise<SchedulerInput> {
-  const [allEpics, resourceTypes, manualFeatures, manualStories, epicDeps] = await Promise.all([
+  const [allEpics, resolved, manualFeatures, manualStories, epicDeps] = await Promise.all([
     db.epic.findMany({
       where: { projectId },
       orderBy: { order: 'asc' },
@@ -698,10 +699,7 @@ async function loadSchedulerInput(
         },
       },
     }),
-    db.resourceType.findMany({
-      where: { projectId },
-      include: { namedResources: true },
-    }),
+    resolveSchedulerCapacity(db, projectId, hoursPerDay),
     db.timelineEntry.findMany({ where: { projectId, isManual: true } }),
     db.storyTimelineEntry.findMany({ where: { projectId, isManual: true } }),
     db.epicDependency.findMany({
@@ -715,7 +713,7 @@ async function loadSchedulerInput(
     epics: allEpics
       .filter(epic => epic.isActive !== false)
       .map(epic => ({ ...epic, features: epic.features.filter(feature => feature.isActive !== false) })),
-    resourceTypes: resourceTypes as SchedulerResourceType[],
+    resourceTypes: resolved.resourceTypes as SchedulerResourceType[],
     epicDeps,
     manualFeatureEntries: manualFeatures.map(entry => ({
       featureId: entry.featureId,
