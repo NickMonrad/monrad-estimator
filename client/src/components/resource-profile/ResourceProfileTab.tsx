@@ -183,7 +183,7 @@ export default function ResourceProfileTab({
                       {(() => {
                         const hasNamedResources = row.namedResources && row.namedResources.length > 0
                         const roleProfile = row.capacityProfile
-                        const isPlannerSquad = roleProfile?.source === 'squadPlanner' || roleProfile?.resourceIdentity === 'PLANNED_RESOURCE'
+                        const isPlannerSquad = roleProfile?.source === 'squadPlanner'
                         const isManualEditable = !isPlannerSquad
 
                         // ── Open profile editor (create or edit) ────────

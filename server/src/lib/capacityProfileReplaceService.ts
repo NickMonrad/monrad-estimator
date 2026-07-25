@@ -113,8 +113,8 @@ export async function replaceCapacityProfile(
 
   // ── 0. Transactional project ownership revalidation ──────────────────
   if (userId) {
-    const project = await tx.project.findUnique({
-      where: { id: projectId },
+    const project = await tx.project.findFirst({
+      where: { id: projectId, ownerId: userId },
       select: { id: true },
     })
     if (!project) {
@@ -301,6 +301,20 @@ export async function replaceCapacityProfile(
     }
   }
 
+
+  // Track persisted profile ID for legacy metadata
+  const profileId = existingId ?? (ownerKind === 'ROLE'
+    ? (await tx.capacityProfile.findFirstOrThrow({
+        where: { resourceTypeId: ownerId, namedResourceId: null, projectId },
+        select: { id: true },
+        orderBy: { createdAt: 'desc' },
+      })).id
+    : (await tx.capacityProfile.findFirstOrThrow({
+        where: { namedResourceId: ownerId, resourceTypeId: null, projectId },
+        select: { id: true },
+        orderBy: { createdAt: 'desc' },
+      })).id
+  )
   // ── 6. Project back to legacy fields ──────────────────────────────────
   const camelPlanningBasis = planningBasis.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
 
@@ -353,11 +367,13 @@ export async function replaceCapacityProfile(
   }
 
   // ── 8. Persist lossy projection metadata ──────────────────────────────
-  if (projection && existingId) {
+  if (projection && profileId) {
     await tx.capacityProfile.update({
-      where: { id: existingId },
+      where: { id: profileId },
       data: {
         legacy: {
+          version: 1,
+          writer: 'manual-editor',
           allocationMode: projection.allocationMode,
           allocationPercent: projection.allocationPercent ?? 100,
           allocationStartWeek: projection.allocationStartWeek,

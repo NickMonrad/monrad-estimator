@@ -181,7 +181,7 @@ router.put('/:ownerKind/:ownerId', asyncHandler(async (req: AuthRequest, res: Re
   // ── Run in transaction ──────────────────────────────────────────────
   try {
     const profile = await prisma.$transaction(tx =>
-      replaceCapacityProfile(tx as any, projectId, ownerKind, ownerId, req.body, req.userId!),
+      replaceCapacityProfile(tx, projectId, ownerKind, ownerId, req.body, req.userId!),
     )
 
     res.status(200).json({ capacityProfile: profile })
