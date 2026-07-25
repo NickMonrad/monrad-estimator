@@ -154,6 +154,8 @@ describe('CapacityProfileEditor — wholeProjectAllocation', () => {
       )
     })
   })
+})
+
 
 describe('CapacityProfileEditor — availabilityWindow', () => {
   beforeEach(() => { vi.clearAllMocks() })
