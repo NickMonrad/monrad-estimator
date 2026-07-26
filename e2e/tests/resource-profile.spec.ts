@@ -527,15 +527,7 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     // Segment W2-W4 at 80%: capacityDays = 5 * 0.8 = 4.0
     // Gap W5-W7 (no segment): 0 capacity
     // Segment W8-W10 at 60%: capacityDays = 5 * 0.6 = 3.0
-    const devW2 = timelineData.weeklyDemand.find(
-      w => w.week === 1 && /dev/i.test(w.resourceTypeName),
-    )
-    const devW5 = timelineData.weeklyDemand.find(
-      w => w.week === 4 && /dev/i.test(w.resourceTypeName),
-    )
-    const devW8 = timelineData.weeklyDemand.find(
-      w => w.week === 7 && /dev/i.test(w.resourceTypeName),
-    )
+
 
     // Filter Developer entries
     const devEntries = timelineData.weeklyDemand.filter(
