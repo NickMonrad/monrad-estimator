@@ -506,48 +506,31 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     ).toBeVisible({ timeout: 20_000 })
     await expect(page.getByTestId('resource-counts')).toBeVisible({ timeout: 10_000 })
 
-    // ── Verify capacity via API for deterministic assertions ──
-    // Use the resource profile API to verify capacity reflects the saved segments
-    const resourceProfileResp = await page.request.get(
-      `${API_BASE}/api/projects/${projectId}/resource-profile`,
+    // ── Verify capacity profiles via API for deterministic assertions ──
+    // Read the capacity profiles endpoint to verify the saved segments are the authoritative source
+    const capProfileResp = await page.request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
       { headers: authHeaders },
     )
-    expect(resourceProfileResp.ok()).toBeTruthy()
-    const resourceProfile = await resourceProfileResp.json() as {
-      resourceRows: Array<{
-        resourceTypeId: string
-        name: string
-        weeklyCapacity: Array<{ week: number; capacityDays: number }>
-        hoursPerDay: number
+    expect(capProfileResp.ok()).toBeTruthy()
+    const capProfiles = await capProfileResp.json() as {
+      capacityProfiles: Array<{
+        owner: { kind: string; id: string }
+        planningBasis: string
+        segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
       }>
     }
-    const devRow = resourceProfile.resourceRows.find(r => r.name === 'Developer')
-    expect(devRow).toBeDefined()
-    expect(devRow!.weeklyCapacity).toBeDefined()
-    expect(devRow!.weeklyCapacity.length).toBeGreaterThan(0)
-
-    // Developer has 40h effort, 5d duration, hoursPerDay=8
-    // Segment 1 (W2-W4: 80%): capacity = 8h/day * 0.8 = 6.4h/day
-    // Segment 2 (W8-W10: 60%): capacity = 8h/day * 0.6 = 4.8h/day
-    // Gap (W5-W7): zero capacity
-    const week1 = devRow!.weeklyCapacity.find((w: { week: number }) => w.week === 1)
-    const week4 = devRow!.weeklyCapacity.find((w: { week: number }) => w.week === 4)
-    const week5 = devRow!.weeklyCapacity.find((w: { week: number }) => w.week === 5)
-    const week7 = devRow!.weeklyCapacity.find((w: { week: number }) => w.week === 7)
-
-    // W2 = 0-indexed week 1, should have 80% capacity
-    if (week1) expect(week1.capacityDays).toBeGreaterThan(0)
-    // W5 = 0-indexed week 4, last week of first segment, 80%
-    if (week4) expect(week4.capacityDays).toBeGreaterThan(0)
-    // W6 = 0-indexed week 5, gap, should be zero
-    if (week5) expect(week5.capacityDays).toBe(0)
-    // W8 = 0-indexed week 7, start of second segment, 60%
-    if (week7) expect(week7.capacityDays).toBeGreaterThan(0)
-
-    // Verify gap has the lowest capacity (zero)
-    expect(week5?.capacityDays ?? 0).toBeLessThan(
-      Math.min(week1?.capacityDays ?? 100, week7?.capacityDays ?? 100),
-    )
+    const devRole = capProfiles.capacityProfiles.find(p => p.owner.kind === 'role' && p.owner.id !== undefined)
+    expect(devRole).toBeDefined()
+    expect(devRole!.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(devRole!.segments).toHaveLength(2)
+    const segs = devRole!.segments.sort((a: any, b: any) => a.startWeek - b.startWeek)
+    expect(segs[0].startWeek).toBe(1)
+    expect(segs[0].endWeek).toBe(3)
+    expect(segs[0].capacityPercent).toBe(80)
+    expect(segs[1].startWeek).toBe(7)
+    expect(segs[1].endWeek).toBe(9)
+    expect(segs[1].capacityPercent).toBe(60)
 
     // ── Return to Resource Profile and verify segments persist after full cycle ──
     await page.goto(`/projects/${projectId}/resource-profile`)

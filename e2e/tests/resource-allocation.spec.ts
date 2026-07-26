@@ -506,7 +506,7 @@ test.describe('Resource Allocation', () => {
     await expect(page.getByRole('button', { name: /Edit profile|Create profile/i })).toHaveCount(0)
 
     await plannerLink.click()
-    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\?panel=squad-planner`))
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
     await expect(page.getByRole('dialog', { name: 'Squad Planner' })).toBeVisible({ timeout: 15_000 })
 const profilePath = `/api/projects/${projectId}/resource-profile`
     const [returnedProfileResponse] = await Promise.all([
