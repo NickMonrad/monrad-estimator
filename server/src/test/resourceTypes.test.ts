@@ -125,15 +125,8 @@ describe('resource type manual scheduling regression', () => {
     })
     // Only the ID-scoped updateMany — no blanket update
     expect(tx.namedResource.updateMany).toHaveBeenCalledTimes(1)
-    // Sync called with scoped options and only explicit NR IDs preserved
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(
-      tx, 'proj-1',
-      {
-        scopeResourceTypeId: 'rt-1',
-        preserveResourceTypeIds: ['rt-1'],
-        preserveNamedResourceIds: ['nr-cust-1', 'nr-seg-1', 'nr-plan-1'],
-      },
-    )
+    // Sync is NOT called after #364
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
   it('preserves explicit allocationMode edits on the resource type route', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
@@ -186,25 +179,9 @@ describe('resource type manual scheduling regression', () => {
       },
     })
     expect(tx.namedResource.updateMany).not.toHaveBeenCalled()
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(
-      tx, 'proj-1',
-      expect.objectContaining({
-        scopeResourceTypeId: 'rt-1',
-        preserveResourceTypeIds: ['rt-1'],
-      }),
-    )
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
-
   it('rolls back PUT capacity-plan exit when named-resource updates fail', async () => {
-    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
-    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
-      id: 'rt-1',
-      projectId: 'proj-1',
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 25,
-      allocationStartWeek: 4,
-      allocationEndWeek: 8,
-    } as never)
     const committedState = {
       resourceType: {
         id: 'rt-1',
@@ -249,7 +226,6 @@ describe('resource type manual scheduling regression', () => {
         },
         namedResource: {
           findMany: vi.fn(async () => {
-            // Ensure classifier sees current draft state
             return draftState.namedResources.map((nr: { id: string }) => ({ ...nr }))
           }),
           updateMany: vi.fn(async () => {
@@ -513,6 +489,10 @@ describe('weeklyDemandCache invalidation', () => {
         update: vi.fn().mockResolvedValue({ ...createdRt, count: 1 }),
       },
       namedResource: { create: vi.fn().mockResolvedValue({}) },
+      capacityProfile: {
+        create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       project: { update: vi.fn().mockResolvedValue({}) },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -542,7 +522,19 @@ describe('weeklyDemandCache invalidation', () => {
     const tx = {
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'New Role' }) },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'cp-1',
+          ownerKind: 'ROLE',
+          projectId: 'proj-1',
+          resourceTypeId: 'rt-1',
+          namedResourceId: null,
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          segments: [],
+        }]),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
       },
@@ -740,10 +732,10 @@ describe('named-resource auto-name race safety', () => {
   })
 })
 
-describe('capacity profile sync integration', () => {
+describe('capacity profile profile-first writes (no sync)', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('PUT calls syncCapacityProfilesForProject inside the transaction', async () => {
+  it('PUT capacity update calls upsertRTProfileAndProjectLegacy and does not call sync', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     const tx = {
@@ -762,14 +754,14 @@ describe('capacity profile sync integration', () => {
     await request(app)
       .put('/api/projects/proj-1/resource-types/rt-1')
       .set('Authorization', authHeader)
-      .send({ name: 'Updated' })
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({
-      scopeResourceTypeId: 'rt-1',
-      preserveResourceTypeIds: ['rt-1'],
-    }))
+      .send({ allocationMode: 'TIMELINE', allocationPercent: 80 })
+    // Profile-first write helper creates role profile (no existing profile to delete)
+    expect(tx.capacityProfile.create).toHaveBeenCalled()
+    // Sync is NOT called after #364
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 
-  it('PATCH count increase calls sync after NR creation and count update', async () => {
+  it('PATCH count increase does not call sync', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT', name: 'Engineer', allocationPercent: null, allocationStartWeek: null, allocationEndWeek: null } as never)
     const tx = {
@@ -793,10 +785,11 @@ describe('capacity profile sync integration', () => {
 
     expect(tx.namedResource.create).toHaveBeenCalled()
     expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 2 } }))
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({ scopeResourceTypeId: 'rt-1' }))
+    // Sync is NOT called after #364
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 
-  it('DELETE calls sync inside transaction after scoped delete', async () => {
+  it('DELETE does not call sync (cascade handles profiles)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     const tx = {
       resourceType: {
@@ -813,20 +806,18 @@ describe('capacity profile sync integration', () => {
     expect(tx.resourceType.deleteMany).toHaveBeenCalledWith({
       where: { id: 'rt-1', projectId: 'proj-1' },
     })
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1')
+    // Sync is NOT called after #364
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 
-  it('sync is called with tx object, not bare prisma', async () => {
+  it('PUT non-capacity fails closed when no profile exists', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     const tx = {
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Updated' }) },
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([]),
-        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
-        create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
       },
-      capacitySegment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       namedResource: { findMany: vi.fn().mockResolvedValue([]) },
       project: { update: vi.fn() },
     }
@@ -837,12 +828,9 @@ describe('capacity profile sync integration', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
 
-    // Must be called with the transaction object, not bare prisma
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', expect.objectContaining({
-      scopeResourceTypeId: 'rt-1',
-      preserveResourceTypeIds: ['rt-1'],
-    }))
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalledWith(prisma, 'proj-1', expect.anything())
+    // Missing profile should fail closed → no resource type update
+    expect(tx.resourceType.update).not.toHaveBeenCalled()
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 })
 describe('PATCH regression coverage', () => {
@@ -877,13 +865,8 @@ describe('PATCH regression coverage', () => {
       .patch('/api/projects/proj-1/resource-types/rt-1')
       .set('Authorization', authHeader)
       .send({ count: 3 })
-
-    // Sync called with explicit NR IDs preserved and resource scope
-    expect(syncCapacityProfilesForProject).toHaveBeenCalledWith(tx, 'proj-1', {
-      preserveNamedResourceIds: ['nr-exp-1'],
-      preserveResourceTypeIds: ['rt-1'],
-      scopeResourceTypeId: 'rt-1',
-    })
+    // Sync is NOT called after #364
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
     expect(tx.namedResource.create).toHaveBeenCalled()
     expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 3 } }))
   })
@@ -1093,16 +1076,13 @@ describe('PATCH regression coverage', () => {
         endWeek: null,
       },
     })
-
-    // Cache clear and sync should run after CAPACITY_PLAN exit (not short-circuited by no-op branch)
+    // Cache clear runs after CAPACITY_PLAN exit
     expect(tx.project.update).toHaveBeenCalled()
-    expect(syncCapacityProfilesForProject).toHaveBeenCalled()
+    // Sync is NOT called after #364
+    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
 
-    expect(tx.resourceType.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ allocationMode: 'TIMELINE' }) }),
-    )
+
   })
-
 
   it('PATCH reduction preserves NR with duplicate profiles when second profile is explicit', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)

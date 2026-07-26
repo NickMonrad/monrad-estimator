@@ -2,7 +2,6 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { loadExactCapacityProfiles } from '../lib/exactCapacityProfileReader.js'
 import { snapshotJsonValueToPrisma } from '../lib/projectSnapshotTypes.js'
 
@@ -540,7 +539,25 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     },
     include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
   })
-  await syncCapacityProfilesForProject(prisma, project.id)
+
+  // Create authoritative role-owned capacity profiles for each seeded resource type
+  await prisma.$transaction(async tx => {
+    for (const rt of project.resourceTypes) {
+      await tx.capacityProfile.create({
+        data: {
+          ownerKind: 'ROLE',
+          projectId: project.id,
+          resourceTypeId: rt.id,
+          namedResourceId: null,
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'USER',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+        },
+      })
+    }
+  })
   res.status(201).json(project)
 }))
 

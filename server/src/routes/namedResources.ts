@@ -4,7 +4,6 @@ import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { PrismaTransactionClient } from '../lib/squadPlannerProfileWriter.js'
@@ -213,8 +212,6 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     // Sync resource type count to match total named resources
     const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
     await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
-    // Sync remaining profiles (role-level, other NRs) for full project reconciliation
-    await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [created.id] })
 
 
     return updated
@@ -222,29 +219,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   res.status(201).json(resource)
 }))
-/**
- * Build a capacity payload for the missing-profile case in non-capacity PUT.
- * When no CapacityProfile exists and the PUT only changes non-capacity fields
- * (name/pricingModel), create a profile from existing legacy fields.
- */
-function buildMissingProfilePayload(existing: any): NamedResourceCapacityPayload {
-  const isTimeline = existing.allocationMode === 'TIMELINE'
-  const startWeek = isTimeline
-    ? (existing.allocationStartWeek ?? existing.startWeek ?? null)
-    : null
-  const endWeek = isTimeline
-    ? (existing.allocationEndWeek ?? existing.endWeek ?? null)
-    : null
-  return {
-    allocationMode: existing.allocationMode,
-    allocationPercent: existing.allocationPercent,
-    allocationPct: existing.allocationPct,
-    allocationStartWeek: startWeek,
-    allocationEndWeek: endWeek,
-    startWeek,
-    endWeek,
-  }
-}
+
 
 router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
@@ -359,18 +334,20 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           },
         })
       } else {
-        // No capacity changes — preserve existing profile row identity if present.
+        // No capacity changes — profile must already exist
         const existingProfiles = await tx.capacityProfile.findMany({
           where: { namedResourceId: id, projectId },
           select: { id: true },
         })
         if (existingProfiles.length === 0) {
-          await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, buildMissingProfilePayload(existing))
+          throw new Error(
+            'Missing capacity profile for this named resource. ' +
+            'Run the capacity profile backfill/repair workflow before retrying this operation.',
+          )
         }
         updated = await tx.namedResource.findFirst({ where: { id } })
         if (!updated) throw new Error('NamedResource not found after update')
       }
-      await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
       await clearWeeklyDemandCache(projectId, tx)
       return updated
     })
@@ -456,8 +433,6 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           endWeek: projection.allocationEndWeek,
         },
       })
-      // Sync remaining profiles (role-level, other NRs) for full project reconciliation
-      await syncCapacityProfilesForProject(tx, projectId, { preserveNamedResourceIds: [id] })
 
       await clearWeeklyDemandCache(projectId, tx)
       return updated
@@ -499,8 +474,6 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     // Sync resource type count (can reach 0 when all named resources are deleted)
     const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
     await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
-
-    await syncCapacityProfilesForProject(tx, projectId)
   })
 
   res.status(204).send()
