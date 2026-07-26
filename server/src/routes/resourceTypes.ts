@@ -8,6 +8,7 @@ import { upsertRTProfileAndProjectLegacy } from '../lib/resourceTypeCapacityProf
 import { toLegacyAllocationPct } from '../lib/resolveRoleDefaultForMutation.js'
 import { resolveRTPatchState, resolveRoleSchedulingState } from '../lib/resolveRTPatchState.js'
 import { applyRoleDefaultToInheritedNRs } from '../lib/capacityProfileReplaceService.js'
+import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
   (tx ?? prisma).project.update({
@@ -68,7 +69,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         resourceTypeId: created.id,
         namedResourceId: null,
         planningBasis: 'DEMAND_FOLLOWING',
-        source: 'USER',
+        source: 'FIXED',
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,
@@ -83,7 +84,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         resourceTypeId: null,
         namedResourceId: defaultNr.id,
         planningBasis: 'DEMAND_FOLLOWING',
-        source: 'USER',
+        source: 'FIXED',
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,
@@ -216,7 +217,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         select: { id: true },
       })
       if (existingProfiles.length === 0) {
-        throw new Error(
+        throw new CapacityIntegrityError(
           'Missing capacity profile for this resource type. ' +
           'Run the capacity profile backfill/repair workflow before retrying this operation.',
         )
@@ -287,6 +288,19 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       // Explicit, custom, segmented, planned NRs are left untouched
     }
 
+    // ── Reload role profile after CAPACITY_PLAN exit ──────────
+    // If we exited CAPACITY_PLAN, state.roleProfileRows[0] is stale (still has
+    // pre-exit CAPACITY_PROFILE/SQUAD_PLANNER values). Re-fetch the authoritative
+    // role profile so subsequent count-increase creates NR profiles with the
+    // post-exit manual scheduling state, not stale planner state.
+    let roleProfileRows = state.roleProfileRows
+    if (isCapacityPlan) {
+      roleProfileRows = await tx.capacityProfile.findMany({
+        where: { resourceTypeId: rt.id, namedResourceId: null, ownerKind: 'ROLE' },
+        include: { segments: true },
+      }) ?? []
+    }
+
     // ── Helper to create the full compatibility shape ───────────
     const buildInheritedNRCreateData = (name: string, nrCount: number) => ({
       name: `${name} ${nrCount}`,
@@ -300,16 +314,26 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       endWeek: defaultAllocEndWeek,
     } as any)
 
+
+    // ── Fail-closed: role profile must exist for count changes ──
+    // Normal paths always have a valid role profile (created during RT creation,
+    // maintained by PUT/PATCH capacity updates). If missing, the database has
+    // invalid persisted state that must be repaired via backfill tooling.
+    if (count !== currentCount && roleProfileRows.length === 0) {
+      throw new CapacityIntegrityError(
+        'Missing capacity profile for this resource type. ' +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
     // ── Count increase ─────────────────────────────────────────
     if (count > currentCount) {
       for (let n = currentCount + 1; n <= count; n++) {
         const nr = await tx.namedResource.create({
           data: buildInheritedNRCreateData(rt.name, n),
         })
-
+        const roleProfile = roleProfileRows[0]
         // Always create a NAMED_PERSON profile for each new inherited NR
         // derived from the current role-level default profile state.
-        const roleProfile = state.roleProfileRows[0]
         if (roleProfile) {
           await tx.capacityProfile.create({
             data: {

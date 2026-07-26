@@ -525,38 +525,40 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     dayRate: gt.defaultDayRate ?? null,
   }))
 
-  const project = await prisma.project.create({
-    data: {
-      name,
-      description,
-      status: status ?? 'DRAFT',
-      hoursPerDay: hoursPerDay ?? 7.6,
-      bufferWeeks: bufferWeeks ?? 0,
-      customerId,
-      orgId,
-      ownerId: req.userId!,
-      resourceTypes: { create: seedTypes },
-    },
-    include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
-  })
+  const project = await prisma.$transaction(async tx => {
+    const p = await tx.project.create({
+      data: {
+        name,
+        description,
+        status: status ?? 'DRAFT',
+        hoursPerDay: hoursPerDay ?? 7.6,
+        bufferWeeks: bufferWeeks ?? 0,
+        customerId,
+        orgId,
+        ownerId: req.userId!,
+        resourceTypes: { create: seedTypes },
+      },
+      include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
+    })
 
-  // Create authoritative role-owned capacity profiles for each seeded resource type
-  await prisma.$transaction(async tx => {
-    for (const rt of project.resourceTypes) {
+    // Create authoritative role-owned capacity profiles for each seeded resource type
+    for (const rt of p.resourceTypes) {
       await tx.capacityProfile.create({
         data: {
           ownerKind: 'ROLE',
-          projectId: project.id,
+          projectId: p.id,
           resourceTypeId: rt.id,
           namedResourceId: null,
           planningBasis: 'DEMAND_FOLLOWING',
-          source: 'USER',
+          source: 'FIXED',
           defaultPercent: 100,
           startWeek: null,
           endWeek: null,
         },
       })
     }
+
+    return p
   })
   res.status(201).json(project)
 }))

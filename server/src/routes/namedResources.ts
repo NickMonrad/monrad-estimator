@@ -8,6 +8,7 @@ import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityPro
 import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { PrismaTransactionClient } from '../lib/squadPlannerProfileWriter.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
+import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -340,7 +341,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           select: { id: true },
         })
         if (existingProfiles.length === 0) {
-          throw new Error(
+          throw new CapacityIntegrityError(
             'Missing capacity profile for this named resource. ' +
             'Run the capacity profile backfill/repair workflow before retrying this operation.',
           )

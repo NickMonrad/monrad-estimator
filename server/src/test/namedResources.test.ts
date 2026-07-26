@@ -67,6 +67,7 @@ describe('named-resource capacity profile write', () => {
     const tx = {
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([]),
+        update: vi.fn(),
       },
       namedResource: {
         update: vi.fn().mockResolvedValue({ id: 'nr-1' }),
@@ -104,6 +105,7 @@ describe('named-resource capacity profile write', () => {
     const tx = {
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([]),
+        update: vi.fn(),
       },
       namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1' }) },
       project: { update: vi.fn() },
@@ -129,6 +131,7 @@ describe('named-resource capacity profile write', () => {
     const tx = {
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([{ id: 'cp-1' }]),
+        update: vi.fn(),
       },
       namedResource: {
         update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
@@ -216,6 +219,7 @@ describe('named-resource capacity profile write', () => {
     const tx = {
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue([]),
+        update: vi.fn(),
       },
       namedResource: { update: vi.fn().mockResolvedValue({ id: 'nr-1' }) },
       project: { update: vi.fn() },
@@ -227,9 +231,9 @@ describe('named-resource capacity profile write', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Updated' })
 
-    // Missing profile should fail closed with 500
-    expect(res.status).toBe(500)
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
+    // Missing profile should fail closed with 409 via CapacityIntegrityError
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 })
 
@@ -253,6 +257,7 @@ describe('named-resource capacity guard', () => {
     const tx = {
       capacityProfile: {
         findMany: vi.fn().mockResolvedValue(profiles),
+        update: vi.fn(),
       },
       namedResource: {
         update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),
@@ -376,6 +381,7 @@ describe('named-resource capacity guard', () => {
       const tx = {
         capacityProfile: {
           findMany: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+          update: vi.fn(),
         },
         namedResource: {
           update: vi.fn(),
@@ -411,6 +417,7 @@ describe('named-resource capacity guard', () => {
         capacityProfile: {
           // Return existing profiles so the non-capacity path skips missing-profile reconstruction
           findMany: vi.fn().mockResolvedValue(profiles),
+          update: vi.fn(),
         },
         namedResource: {
           update: vi.fn().mockResolvedValue({ id: 'nr-1', name: 'Updated' }),

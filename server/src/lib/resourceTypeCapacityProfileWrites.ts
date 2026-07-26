@@ -13,6 +13,7 @@
 
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
 
 // ─── Mapping tables (legacy → profile) ───────────────────────────────────────
 
@@ -89,36 +90,52 @@ export async function upsertRTProfileAndProjectLegacy(
     segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number; source: string }>,
   }
 
-  // ── 2. Persist role-owned CapacityProfile ─────────────────────────────
-  // Delete any existing role-level profile for this RT first, then create new.
+  // ── 2. Persist role-owned CapacityProfile (update in place if exists) ─
   const existingProfiles = await tx.capacityProfile.findMany({
     where: { resourceTypeId: rtId, namedResourceId: null, projectId },
     select: { id: true },
   })
-  const existingProfileIds = existingProfiles.map((p: { id: string }) => p.id)
 
-  if (existingProfileIds.length > 0) {
-    await tx.capacitySegment.deleteMany({
-      where: { capacityProfileId: { in: existingProfileIds } },
-    })
-    await tx.capacityProfile.deleteMany({
-      where: { id: { in: existingProfileIds } },
-    })
+  if (existingProfiles.length > 1) {
+    throw new CapacityIntegrityError(
+      `Multiple capacity profiles exist for resource type ${rtId}. ` +
+      'Run the capacity profile backfill/repair workflow before retrying this operation.',
+    )
   }
 
-  await tx.capacityProfile.create({
-    data: {
-      ownerKind: 'ROLE',
-      projectId,
-      resourceTypeId: rtId,
-      namedResourceId: null,
-      planningBasis,
-      source,
-      defaultPercent: percent,
-      startWeek: allocationStartWeek,
-      endWeek: allocationEndWeek,
-    },
-  })
+  const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
+
+  if (existingId) {
+    // Update in place — preserve profile ID
+    await tx.capacitySegment.deleteMany({
+      where: { capacityProfileId: existingId },
+    })
+    await tx.capacityProfile.update({
+      where: { id: existingId },
+      data: {
+        ownerKind: 'ROLE',
+        planningBasis,
+        source,
+        defaultPercent: percent,
+        startWeek: allocationStartWeek,
+        endWeek: allocationEndWeek,
+      },
+    })
+  } else {
+    await tx.capacityProfile.create({
+      data: {
+        ownerKind: 'ROLE',
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        planningBasis,
+        source,
+        defaultPercent: percent,
+        startWeek: allocationStartWeek,
+        endWeek: allocationEndWeek,
+      },
+    })
+  }
 
   // ── 3. Project back to legacy ──────────────────────────────────────────
   const projection = projectCapacityProfileToLegacyAllocation(profile)

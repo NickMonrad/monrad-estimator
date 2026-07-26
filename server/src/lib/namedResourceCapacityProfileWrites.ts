@@ -12,6 +12,7 @@
 
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
 
 // ─── Mapping tables (legacy → profile) ───────────────────────────────────────
 
@@ -111,38 +112,52 @@ export async function upsertNRProfileAndProjectLegacy(
     segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number; source: string }>,
   }
 
-  // ── 2. Persist CapacityProfile ─────────────────────────────────────────
-  // Delete any existing profile + segments for this NR first.
-  // Use explicit profile lookup + ID-based delete for compatibility with
-  // both Prisma's nested relation filters and the integration test store.
+  // ── 2. Persist CapacityProfile (update in place if exists) ────────────
   const existingProfiles = await tx.capacityProfile.findMany({
     where: { namedResourceId: nrId, projectId },
     select: { id: true },
   })
-  const existingProfileIds = existingProfiles.map((p: { id: string }) => p.id)
 
-  if (existingProfileIds.length > 0) {
-    await tx.capacitySegment.deleteMany({
-      where: { capacityProfileId: { in: existingProfileIds } },
-    })
-    await tx.capacityProfile.deleteMany({
-      where: { id: { in: existingProfileIds } },
-    })
+  if (existingProfiles.length > 1) {
+    throw new CapacityIntegrityError(
+      `Multiple capacity profiles exist for named resource ${nrId}. ` +
+      'Run the capacity profile backfill/repair workflow before retrying this operation.',
+    )
   }
 
-  await tx.capacityProfile.create({
-    data: {
-      ownerKind: options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
-      projectId,
-      resourceTypeId: null,
-      namedResourceId: nrId,
-      planningBasis,
-      source,
-      defaultPercent: percent,
-      startWeek: allocationStartWeek,
-      endWeek: allocationEndWeek,
-    },
-  })
+  const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
+
+  if (existingId) {
+    // Update in place — preserve profile ID, replace segments
+    await tx.capacitySegment.deleteMany({
+      where: { capacityProfileId: existingId },
+    })
+    await tx.capacityProfile.update({
+      where: { id: existingId },
+      data: {
+        ownerKind: options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
+        planningBasis,
+        source,
+        defaultPercent: percent,
+        startWeek: allocationStartWeek,
+        endWeek: allocationEndWeek,
+      },
+    })
+  } else {
+    await tx.capacityProfile.create({
+      data: {
+        ownerKind: options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        planningBasis,
+        source,
+        defaultPercent: percent,
+        startWeek: allocationStartWeek,
+        endWeek: allocationEndWeek,
+      },
+    })
+  }
 
   // ── 3. Replace segments ────────────────────────────────────────────────
   // For simple legacy-style payloads there are no segments to create.
