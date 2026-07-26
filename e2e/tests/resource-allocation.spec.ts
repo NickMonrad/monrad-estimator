@@ -460,12 +460,12 @@ test.describe('Resource Allocation', () => {
     expect(badgeTextAfter?.trim()).toBe(badgeTextBefore?.trim())
   })
 
-  test('summary tab shows Planning basis column', async ({ page }) => {
+  test('summary tab shows availability pattern column', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
 
-    const allocationHeader = page.locator('th').filter({ hasText: /^Planning basis$/ })
+    const allocationHeader = page.locator('th').filter({ hasText: /^Availability pattern$/ })
     await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
   })
 
