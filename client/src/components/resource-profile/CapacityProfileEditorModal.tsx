@@ -13,11 +13,13 @@ import CapacityProfileEditor, {
 export interface CapacityProfileEditorModalProps extends CapacityProfileEditorProps {
   isOpen: boolean
   onClose: () => void
+  isPersisted?: boolean
 }
 
 export default function CapacityProfileEditorModal({
   isOpen,
   onClose,
+  isPersisted,
   ...editorProps
 }: CapacityProfileEditorModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -48,7 +50,7 @@ export default function CapacityProfileEditorModal({
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-gray-900 dark:text-white">
-            {editorProps.initialProfile ? 'Edit' : 'Create'} Capacity Profile
+            {isPersisted ?? Boolean(editorProps.initialProfile) ? 'Edit' : 'Create'} Capacity Profile
           </h3>
           <button
             onClick={onClose}

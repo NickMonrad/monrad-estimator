@@ -197,9 +197,16 @@ router.put('/:ownerKind/:ownerId', asyncHandler(async (req: AuthRequest, res: Re
       'code' in err &&
       (err as { code: string }).code === 'P2002'
     ) {
-      const meta = (err as { meta?: { target?: string[] } }).meta
-      const target = meta?.target
-      if (target?.includes('resourceTypeId') || target?.includes('namedResourceId')) {
+      const meta = (err as {
+        meta?: { modelName?: string; target?: string[] }
+      }).meta
+      const expectedTarget = ownerKind === 'ROLE' ? 'resourceTypeId' : 'namedResourceId'
+      if (
+        meta?.modelName === 'CapacityProfile'
+        && Array.isArray(meta.target)
+        && meta.target.length === 1
+        && meta.target[0] === expectedTarget
+      ) {
         res.status(409).json({ error: 'A capacity profile already exists for this owner' })
         return
       }

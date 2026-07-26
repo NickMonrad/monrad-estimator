@@ -194,6 +194,31 @@ describe('validateReplaceCapacityProfileRequest', () => {
     expect(errors[0]).toMatch(/AVAILABILITY_WINDOW.*must not have segments/i)
   })
 
+  it.each([
+    ['DEMAND_FOLLOWING', 'invalid'],
+    ['WHOLE_PROJECT_ALLOCATION', { startWeek: 0 }],
+    ['AVAILABILITY_WINDOW', 42],
+  ])('rejects malformed scalar segments for %s', (planningBasis, segments) => {
+    const errors = validateReplaceCapacityProfileRequest({
+      planningBasis,
+      defaultPercent: 75,
+      startWeek: planningBasis === 'AVAILABILITY_WINDOW' ? 0 : null,
+      endWeek: planningBasis === 'AVAILABILITY_WINDOW' ? 2 : null,
+      segments,
+    }, 'ROLE')
+    expect(errors.some(error => error.includes('must not have segments'))).toBe(true)
+  })
+
+  it.each([
+    ['omitted', undefined],
+    ['null', null],
+    ['empty array', []],
+  ])('accepts %s scalar segments', (_label, segments) => {
+    const body: Record<string, unknown> = validDemandFollowing()
+    if (segments !== undefined) body.segments = segments
+    expect(validateReplaceCapacityProfileRequest(body, 'ROLE')).toEqual([])
+  })
+
   it('accepts AVAILABILITY_WINDOW with startWeek and endWeek', () => {
     const errors = validateReplaceCapacityProfileRequest(
       validAvailabilityWindow({ startWeek: 2, endWeek: 10 }),

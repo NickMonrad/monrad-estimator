@@ -116,10 +116,12 @@ export function validateReplaceCapacityProfileRequest(
 
   // ── Planning-basis-specific rules ──────────────────────────────────────
   const segmentsRaw = req.segments !== undefined ? req.segments : []
+  const hasInvalidScalarSegments = segmentsRaw !== null
+    && (!Array.isArray(segmentsRaw) || segmentsRaw.length > 0)
 
   if (planningBasis === 'DEMAND_FOLLOWING') {
     // No segments, no startWeek/endWeek
-    if (segmentsRaw !== null && segmentsRaw !== undefined && Array.isArray(segmentsRaw) && segmentsRaw.length > 0) {
+    if (hasInvalidScalarSegments) {
       errors.push('DEMAND_FOLLOWING profiles must not have segments')
     }
     if (startWeek !== null) {
@@ -130,7 +132,7 @@ export function validateReplaceCapacityProfileRequest(
     }
   } else if (planningBasis === 'WHOLE_PROJECT_ALLOCATION') {
     // No segments, no startWeek/endWeek
-    if (segmentsRaw !== null && segmentsRaw !== undefined && Array.isArray(segmentsRaw) && segmentsRaw.length > 0) {
+    if (hasInvalidScalarSegments) {
       errors.push('WHOLE_PROJECT_ALLOCATION profiles must not have segments')
     }
     if (startWeek !== null) {
@@ -141,7 +143,7 @@ export function validateReplaceCapacityProfileRequest(
     }
   } else if (planningBasis === 'AVAILABILITY_WINDOW') {
     // No segments, startWeek/endWeek nullable but preserved exactly
-    if (segmentsRaw !== null && segmentsRaw !== undefined && Array.isArray(segmentsRaw) && segmentsRaw.length > 0) {
+    if (hasInvalidScalarSegments) {
       errors.push('AVAILABILITY_WINDOW profiles must not have segments')
     }
   } else if (planningBasis === 'CAPACITY_PROFILE') {

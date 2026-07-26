@@ -130,6 +130,49 @@ describe('PUT /api/projects/:projectId/capacity-profiles/:ownerKind/:ownerId', (
     expect(res.body).toHaveProperty('error')
   })
 
+  it.each([
+    ['string', 'invalid'],
+    ['object', { startWeek: 0 }],
+    ['number', 42],
+  ])('returns 400 for malformed scalar segments shaped as %s', async (_shape, segments) => {
+    const res = await request(app)
+      .put('/api/projects/proj-1/capacity-profiles/ROLE/rt-1')
+      .set('Authorization', authHeader)
+      .send({ ...validRoleBody, segments })
+    expect(res.status).toBe(400)
+    expect(res.body.details).toEqual(expect.arrayContaining([
+      expect.stringMatching(/must not have segments/i),
+    ]))
+    expect(mockReplace).not.toHaveBeenCalled()
+  })
+
+  it('maps only the expected CapacityProfile owner uniqueness P2002 to 409', async () => {
+    mockReplace.mockRejectedValue({
+      code: 'P2002',
+      meta: { modelName: 'CapacityProfile', target: ['resourceTypeId'] },
+    })
+    const res = await request(app)
+      .put('/api/projects/proj-1/capacity-profiles/ROLE/rt-1')
+      .set('Authorization', authHeader)
+      .send(validRoleBody)
+    expect(res.status).toBe(409)
+    expect(res.body.error).toMatch(/already exists for this owner/i)
+  })
+
+  it.each([
+    ['another model', { modelName: 'ResourceType', target: ['resourceTypeId'] }],
+    ['another target', { modelName: 'CapacityProfile', target: ['projectId'] }],
+    ['compound target', { modelName: 'CapacityProfile', target: ['resourceTypeId', 'projectId'] }],
+  ])('does not map unrelated P2002 from %s to the owner conflict', async (_case, meta) => {
+    mockReplace.mockRejectedValue({ code: 'P2002', meta })
+    const res = await request(app)
+      .put('/api/projects/proj-1/capacity-profiles/ROLE/rt-1')
+      .set('Authorization', authHeader)
+      .send(validRoleBody)
+    expect(res.status).toBe(500)
+    expect(res.body.error).not.toBe('A capacity profile already exists for this owner')
+  })
+
   it('returns 409 when service throws ServiceError(409)', async () => {
     mockReplace.mockRejectedValue(new ServiceError(409, 'Cannot replace a PLANNED_RESOURCE profile manually'))
     const res = await request(app)

@@ -9,7 +9,7 @@ import React from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import CapacityProfileEditor from '@/components/resource-profile/CapacityProfileEditor'
+import CapacityProfileEditor, { validateCapacityProfileDraft } from '@/components/resource-profile/CapacityProfileEditor'
 import CapacityProfileEditorModal from '@/components/resource-profile/CapacityProfileEditorModal'
 
 const { mockPut } = vi.hoisted(() => ({
@@ -590,5 +590,119 @@ describe('CapacityProfileEditor — validation', () => {
       expect(screen.getByTestId('cp-error')).toBeInTheDocument()
     })
     expect(screen.getByTestId('cp-error').textContent).toContain('capacity percent must be between 0 and 100')
+  })
+})
+
+describe('validateCapacityProfileDraft', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  const scalarDraft = {
+    planningBasis: 'demandFollowing' as const,
+    defaultPercent: 100,
+    startWeek: null,
+    endWeek: null,
+    segments: [],
+  }
+
+  it('accepts a ROLE percentage over 100 and decimal percentages', () => {
+    expect(validateCapacityProfileDraft({ ...scalarDraft, defaultPercent: 150.5 }, 'ROLE')).toBeNull()
+    expect(validateCapacityProfileDraft({ ...scalarDraft, defaultPercent: 72.25 }, 'NAMED_PERSON')).toBeNull()
+  })
+
+  it('rejects invalid scalar percentages', () => {
+    expect(validateCapacityProfileDraft({ ...scalarDraft, defaultPercent: 100.1 }, 'NAMED_PERSON')).toContain('between 0 and 100')
+    expect(validateCapacityProfileDraft({ ...scalarDraft, defaultPercent: -1 }, 'ROLE')).toContain('finite non-negative')
+    expect(validateCapacityProfileDraft({ ...scalarDraft, defaultPercent: Number.NaN }, 'ROLE')).toContain('finite non-negative')
+    expect(validateCapacityProfileDraft({ ...scalarDraft, defaultPercent: Number.POSITIVE_INFINITY }, 'ROLE')).toContain('finite non-negative')
+  })
+
+  it('rejects invalid selected windows', () => {
+    const windowDraft = { ...scalarDraft, planningBasis: 'availabilityWindow' as const, startWeek: 0, endWeek: 2 }
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: -1 }, 'ROLE')).toContain('non-negative integer')
+    expect(validateCapacityProfileDraft({ ...windowDraft, endWeek: 1.5 }, 'ROLE')).toContain('non-negative integer')
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: 3 }, 'ROLE')).toContain('less than or equal')
+  })
+
+  it('rejects duplicate and overlapping segments but allows gaps', () => {
+    const profileDraft = {
+      ...scalarDraft,
+      planningBasis: 'capacityProfile' as const,
+      defaultPercent: null,
+      segments: [
+        { startWeek: 0, endWeek: 2, capacityPercent: 80 },
+        { startWeek: 0, endWeek: 2, capacityPercent: 60 },
+      ],
+    }
+    expect(validateCapacityProfileDraft(profileDraft, 'ROLE')).toContain('duplicated')
+    expect(validateCapacityProfileDraft({
+      ...profileDraft,
+      segments: [
+        { startWeek: 0, endWeek: 2, capacityPercent: 80 },
+        { startWeek: 2, endWeek: 4, capacityPercent: 60 },
+      ],
+    }, 'ROLE')).toContain('overlap')
+    expect(validateCapacityProfileDraft({
+      ...profileDraft,
+      segments: [
+        { startWeek: 0, endWeek: 2, capacityPercent: 80 },
+        { startWeek: 4, endWeek: 6, capacityPercent: 60 },
+      ],
+    }, 'ROLE')).toBeNull()
+  })
+
+  it('preserves edited segment values when validation fails', () => {
+    renderEditor(
+      <CapacityProfileEditor
+        projectId="proj-1"
+        ownerKind="ROLE"
+        ownerId="rt-1"
+        initialProfile={{
+          planningBasis: 'capacityProfile',
+          defaultPercent: null,
+          startWeek: null,
+          endWeek: null,
+          segments: [
+            { startWeek: 0, endWeek: 2, capacityPercent: 75 },
+            { startWeek: 0, endWeek: 2, capacityPercent: 65 },
+          ],
+        }}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    fireEvent.submit(screen.getByTestId('capacity-profile-editor'))
+    expect(screen.getByTestId('cp-error')).toHaveTextContent('duplicated')
+    expect(screen.getByTestId('cp-seg-pct-0')).toHaveValue(75)
+    expect(screen.getByTestId('cp-seg-pct-1')).toHaveValue(65)
+    expect(mockPut).not.toHaveBeenCalled()
+  })
+
+  it('sends an edited segment percentage in the API payload', async () => {
+    renderEditor(
+      <CapacityProfileEditor
+        projectId="proj-1"
+        ownerKind="ROLE"
+        ownerId="rt-1"
+        initialProfile={{
+          planningBasis: 'capacityProfile',
+          defaultPercent: null,
+          startWeek: null,
+          endWeek: null,
+          segments: [{ startWeek: 0, endWeek: 2, capacityPercent: 50 }],
+        }}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('cp-seg-pct-0'), { target: { value: '72.5' } })
+    fireEvent.submit(screen.getByTestId('capacity-profile-editor'))
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/projects/proj-1/capacity-profiles/ROLE/rt-1',
+        expect.objectContaining({
+          segments: [{ startWeek: 0, endWeek: 2, capacityPercent: 72.5 }],
+        }),
+      )
+    })
   })
 })

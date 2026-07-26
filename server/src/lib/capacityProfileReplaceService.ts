@@ -142,27 +142,51 @@ export async function replaceCapacityProfile(
 
   // ── 2. Fail-closed: guard against ambiguous or protected state ─────────
   const existingProfiles = await tx.capacityProfile.findMany({
-    where: ownerKind === 'ROLE'
-      ? { resourceTypeId: ownerId, projectId }
-      : { namedResourceId: ownerId, projectId },
-    select: { id: true, ownerKind: true, source: true },
+    where: {
+      OR: [
+        { resourceTypeId: ownerId },
+        { namedResourceId: ownerId },
+      ],
+    },
+    select: {
+      id: true,
+      projectId: true,
+      ownerKind: true,
+      source: true,
+      resourceTypeId: true,
+      namedResourceId: true,
+    },
   })
 
   if (existingProfiles.length > 1) {
     throw new ServiceError(409, `Multiple capacity profiles exist for this ${ownerKind.toLowerCase()}`)
   }
 
-  // Check each existing profile; use runtime type for DB values that may not match route ownerKind.
-  for (const ep of existingProfiles) {
-    const epOwnerKind = ep.ownerKind as string
-    if (epOwnerKind === 'PLANNED_RESOURCE') {
+  for (const profile of existingProfiles) {
+    const persistedOwnerKind = profile.ownerKind as string
+    if (persistedOwnerKind === 'PLANNED_RESOURCE') {
       throw new ServiceError(409, 'Cannot replace a PLANNED_RESOURCE profile manually')
     }
-    if (ep.source === 'SQUAD_PLANNER') {
+    if (profile.source === 'SQUAD_PLANNER') {
       throw new ServiceError(409, 'Cannot overwrite a SQUAD_PLANNER profile manually')
     }
-    if (epOwnerKind !== ownerKind) {
-      throw new ServiceError(409, `ownerKind mismatch: profile has kind "${epOwnerKind}" but route requested "${ownerKind}"`)
+
+    const hasExactlyOneOwner = (profile.resourceTypeId === null) !== (profile.namedResourceId === null)
+    const validRoleOwner = ownerKind === 'ROLE'
+      && persistedOwnerKind === 'ROLE'
+      && profile.resourceTypeId === ownerId
+      && profile.namedResourceId === null
+    const validNamedPersonOwner = ownerKind === 'NAMED_PERSON'
+      && persistedOwnerKind === 'NAMED_PERSON'
+      && profile.namedResourceId === ownerId
+      && profile.resourceTypeId === null
+
+    if (
+      profile.projectId !== projectId
+      || !hasExactlyOneOwner
+      || (!validRoleOwner && !validNamedPersonOwner)
+    ) {
+      throw new ServiceError(409, `Malformed persisted ownership for requested ${ownerKind} profile`)
     }
   }
 

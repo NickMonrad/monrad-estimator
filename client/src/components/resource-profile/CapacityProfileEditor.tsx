@@ -69,6 +69,83 @@ function emptySegment(): SegmentInput {
   return { startWeek: 0, endWeek: 0, capacityPercent: 100 }
 }
 
+interface CapacityProfileValidationDraft {
+  planningBasis: CapacityProfilePlanningBasis
+  defaultPercent: number | null
+  startWeek: number | null
+  endWeek: number | null
+  segments: SegmentInput[]
+}
+
+function validatePercentage(value: number | null, label: string, ownerKind: 'ROLE' | 'NAMED_PERSON') {
+  if (value === null || !Number.isFinite(value) || value < 0) {
+    return `${label} must be a finite non-negative number`
+  }
+  if (ownerKind === 'NAMED_PERSON' && value > 100) {
+    return `${label} must be between 0 and 100`
+  }
+  return null
+}
+
+function validateWeek(value: number | null, label: string) {
+  if (value === null || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    return `${label} must be a finite non-negative integer`
+  }
+  return null
+}
+
+export function validateCapacityProfileDraft(
+  draft: CapacityProfileValidationDraft,
+  ownerKind: 'ROLE' | 'NAMED_PERSON',
+): string | null {
+  if (draft.planningBasis !== 'capacityProfile') {
+    const percentageError = validatePercentage(draft.defaultPercent, 'Default percent', ownerKind)
+    if (percentageError) return percentageError
+
+    if (draft.planningBasis === 'availabilityWindow') {
+      const startError = validateWeek(draft.startWeek, 'Start week')
+      if (startError) return startError
+      const endError = validateWeek(draft.endWeek, 'End week')
+      if (endError) return endError
+      if ((draft.startWeek as number) > (draft.endWeek as number)) {
+        return 'Start week must be less than or equal to end week'
+      }
+    }
+    return null
+  }
+
+  if (draft.segments.length === 0) return 'At least one segment is required'
+
+  for (const [index, segment] of draft.segments.entries()) {
+    const prefix = `Segment ${index + 1}`
+    const startError = validateWeek(segment.startWeek, `${prefix} start week`)
+    if (startError) return startError
+    const endError = validateWeek(segment.endWeek, `${prefix} end week`)
+    if (endError) return endError
+    if (segment.startWeek > segment.endWeek) {
+      return `${prefix}: start week must be ≤ end week`
+    }
+    const percentageError = validatePercentage(segment.capacityPercent, `${prefix} capacity percent`, ownerKind)
+    if (percentageError) return percentageError
+  }
+
+  const ranges = new Set<string>()
+  for (const segment of draft.segments) {
+    const range = `${segment.startWeek}:${segment.endWeek}`
+    if (ranges.has(range)) return 'Segment ranges must not be duplicated'
+    ranges.add(range)
+  }
+
+  const ordered = [...draft.segments].sort((a, b) => a.startWeek - b.startWeek || a.endWeek - b.endWeek)
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index].startWeek <= ordered[index - 1].endWeek) {
+      return 'Segment ranges must not overlap'
+    }
+  }
+
+  return null
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function CapacityProfileEditor({
@@ -215,35 +292,23 @@ export default function CapacityProfileEditor({
     e.preventDefault()
     setError(null)
 
-    // Basic validation — non-segmented defaults
-    if (planningBasis !== 'capacityProfile' && defaultPercent != null) {
-      const maxPct = ownerKind === 'NAMED_PERSON' ? 100 : Infinity
-      if (defaultPercent < 0 || defaultPercent > maxPct) {
-        setError(`Default percent must be ${ownerKind === 'NAMED_PERSON' ? 'between 0 and 100' : 'non-negative'}`)
-        return
-      }
-    }
-
-    // Segment validation
-    if (planningBasis === 'capacityProfile') {
-      for (const [i, seg] of segments.entries()) {
-        if (seg.startWeek > seg.endWeek) {
-          setError(`Segment ${i + 1}: start week must be ≤ end week`)
-          return
-        }
-        const maxPct = ownerKind === 'NAMED_PERSON' ? 100 : Infinity
-        if (seg.capacityPercent < 0 || seg.capacityPercent > maxPct) {
-          setError(`Segment ${i + 1}: capacity percent must be ${ownerKind === 'NAMED_PERSON' ? 'between 0 and 100' : 'non-negative'}`)
-          return
-        }
-      }
+    const validationError = validateCapacityProfileDraft({
+      planningBasis,
+      defaultPercent,
+      startWeek,
+      endWeek,
+      segments,
+    }, ownerKind)
+    if (validationError) {
+      setError(validationError)
+      return
     }
 
     saveMutation.mutate()
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4" data-testid="capacity-profile-editor">
+    <form noValidate onSubmit={handleSubmit} className="space-y-4" data-testid="capacity-profile-editor">
       {/* Planning basis */}
       <div>
         <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1" htmlFor="cp-planning-basis">

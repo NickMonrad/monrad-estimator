@@ -20,19 +20,6 @@ vi.mock('../lib/prisma.js', async (importOriginal) => {
   return await importOriginal()
 })
 
-// ─── Mock the replace service only so test 7 can inject failure ─────
-// The mock wraps the real implementation. All tests 1-6, 8 work
-// normally; test 7 overrides for a single call.
-const mockReplace = vi.hoisted(() => vi.fn())
-vi.mock('../lib/capacityProfileReplaceService.js', async (importOriginal) => {
-  const mod = (await importOriginal()) as Record<string, unknown>
-  const replaceFn = mod.replaceCapacityProfile as (...args: unknown[]) => Promise<unknown>
-  mockReplace.mockImplementation(replaceFn)
-  return {
-    ...mod,
-    replaceCapacityProfile: mockReplace,
-  }
-})
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import request from 'supertest'
@@ -40,9 +27,7 @@ import jwt from 'jsonwebtoken'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
 import { app } from '../app.js'
-// Static import of mocked service — vi.mock is hoisted, so this
-// receives the wrapped mock (mockReplace) declared above.
-import { replaceCapacityProfile as mockedService } from '../lib/capacityProfileReplaceService.js'
+import { replaceCapacityProfile } from '../lib/capacityProfileReplaceService.js'
 
 
 // ─── Guard ──────────────────────────────────────────────────────────
@@ -67,6 +52,8 @@ let roleRtId: string
 /** Existing profile ID for the role RT (created in beforeAll) */
 let roleProfileId: string
 
+/** Inherited named resource whose compatibility fields must roll back with ROLE edits */
+let inheritedNrId: string
 /** Named resource for tests 2, 5, 6, 7 */
 let nrId: string
 /** Existing profile ID for the named resource (created in beforeAll) */
@@ -164,55 +151,6 @@ async function snapshotRoleState(rtId: string): Promise<{
   return { profiles, segments, rt, cache: cacheRow?.weeklyDemandCache ?? null }
 }
 
-/**
- * Snapshot state for a specific named resource (person-owner profile).
- */
-async function snapshotNRState(nrLookupId: string): Promise<{
-  profiles: Array<Record<string, unknown>>
-  segments: Array<Record<string, unknown>>
-  nr: Record<string, unknown> | null
-  cache: unknown
-}> {
-  const profiles = canonicalize(
-    await prisma.capacityProfile.findMany({
-      where: { projectId, namedResourceId: nrLookupId },
-      orderBy: { createdAt: 'asc' },
-    }) ?? [],
-  )
-  const allProfileIds = profiles.map((p: any) => p.id)
-  const segments = allProfileIds.length > 0
-    ? canonicalize(
-        await prisma.capacitySegment.findMany({
-          where: { capacityProfileId: { in: allProfileIds } },
-          orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }, { capacityPercent: 'asc' }],
-        }) ?? [],
-      )
-    : []
-
-  const nr = canonicalize(
-    await prisma.namedResource.findFirst({
-      where: { id: nrLookupId },
-      select: {
-        id: true,
-        name: true,
-        allocationMode: true,
-        allocationPercent: true,
-        allocationPct: true,
-        allocationStartWeek: true,
-        allocationEndWeek: true,
-        startWeek: true,
-        endWeek: true,
-      },
-    }),
-  )
-
-  const cacheRow = await prisma.project.findFirst({
-    where: { id: projectId },
-    select: { weeklyDemandCache: true },
-  })
-
-  return { profiles, segments, nr, cache: cacheRow?.weeklyDemandCache ?? null }
-}
 
 // ─── Lifecycle ──────────────────────────────────────────────────────
 
@@ -281,6 +219,20 @@ beforeAll(async () => {
       source: 'MANUAL',
     },
   })
+  const inheritedNr = await prisma.namedResource.create({
+    data: {
+      resourceTypeId: roleRt.id,
+      name: 'InheritedRoleDefault',
+      allocationPct: 100,
+      allocationPercent: 100,
+      allocationMode: 'EFFORT',
+      allocationStartWeek: 0,
+      allocationEndWeek: 4,
+      startWeek: 0,
+      endWeek: 4,
+    },
+  })
+  inheritedNrId = inheritedNr.id
 
   // ── Fixture 2: Named resource with initial profile ────────────────
   const nrRt = await prisma.resourceType.create({
@@ -765,61 +717,62 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
   // ── Test 7: Injected mid-transaction failure ──────────────────
 
   it('7. Injected mid-transaction failure: profile, segments, compatibility and cache remain unchanged', async () => {
-    // Step 1: Read the before-state for a clean comparison
     const beforeRole = await snapshotRoleState(roleRtId)
-    const beforeNR = await snapshotNRState(nrId)
+    const beforeInherited = canonicalize(await prisma.namedResource.findUniqueOrThrow({
+      where: { id: inheritedNrId },
+    }))
     const beforeAll = await snapshotDbState()
 
-    // The cache must be non-empty before our attempt
     expect(beforeRole.cache).toBeDefined()
 
-    // Step 2: Override the mock to throw on the next call
-    // After this one throw, the vi.fn(originalImpl) fallback kicks in.
-    vi.mocked(mockedService).mockImplementationOnce(async (_tx: unknown, pId: string) => {
-      if (pId === projectId) {
-        throw new Error('Simulated mid-transaction failure')
-      }
-      // Fallback for unexpected calls — delegate to the real mock wrapper
-      return mockReplace.mock.results[0]?.value ?? (() => { throw new Error('no fallback') })()
-    })
+    await expect(prisma.$transaction(async (tx) => {
+      const failingTx = new Proxy(tx, {
+        get(target, property, receiver) {
+          if (property !== 'project') return Reflect.get(target, property, receiver)
 
-    // Step 3: Make the PUT request — it should fail
-    const res = await request(app)
-      .put(`/api/projects/${projectId}/capacity-profiles/ROLE/${roleRtId}`)
-      .set('Authorization', authHeader)
-      .send({
-        planningBasis: 'CAPACITY_PROFILE',
-        segments: [
-          { startWeek: 0, endWeek: 10, capacityPercent: 100 },
-        ],
+          return new Proxy(target.project, {
+            get(projectTarget, projectProperty, projectReceiver) {
+              if (projectProperty === 'update') {
+                return async () => {
+                  throw new Error('Simulated cache invalidation failure')
+                }
+              }
+              return Reflect.get(projectTarget, projectProperty, projectReceiver)
+            },
+          })
+        },
       })
 
-    // The route re-throws the non-ServiceError → Express error handler → 500
-    expect(res.status).toBe(500)
+      return replaceCapacityProfile(
+        failingTx,
+        projectId,
+        'ROLE',
+        roleRtId,
+        {
+          planningBasis: 'CAPACITY_PROFILE',
+          segments: [
+            { startWeek: 0, endWeek: 3, capacityPercent: 90 },
+            { startWeek: 6, endWeek: 10, capacityPercent: 40 },
+          ],
+        },
+        userId,
+      )
+    })).rejects.toThrow('Simulated cache invalidation failure')
 
-    // Step 4: Verify state is unchanged
     const afterRole = await snapshotRoleState(roleRtId)
-
-    // Profiles must be identical (when comparing JSON-serialized snapshots)
     expect(afterRole.profiles).toEqual(beforeRole.profiles)
     expect(afterRole.segments).toEqual(beforeRole.segments)
     expect(afterRole.rt).toEqual(beforeRole.rt)
-
-    // The cache must also be preserved since the transaction rolled back
-    // and no project.update({ weeklyDemandCache: {} }) was never committed.
     expect(afterRole.cache).toEqual(beforeRole.cache)
 
-    // Also verify the NR state is untouched
-    const afterNR = await snapshotNRState(nrId)
-    expect(afterNR.profiles).toEqual(beforeNR.profiles)
-    expect(afterNR.segments).toEqual(beforeNR.segments)
-    expect(afterNR.nr).toEqual(beforeNR.nr)
-    expect(afterNR.cache).toEqual(beforeNR.cache)
+    const afterInherited = canonicalize(await prisma.namedResource.findUniqueOrThrow({
+      where: { id: inheritedNrId },
+    }))
+    expect(afterInherited).toEqual(beforeInherited)
 
-    // Verify no extra profiles were created anywhere in the project
     const afterAll = await snapshotDbState()
-    expect(afterAll.profiles.length).toBe(beforeAll.profiles.length)
-    expect(afterAll.segments.length).toBe(beforeAll.segments.length)
+    expect(afterAll.profiles).toEqual(beforeAll.profiles)
+    expect(afterAll.segments).toEqual(beforeAll.segments)
     expect(afterAll.cache).toEqual(beforeAll.cache)
   })
 
@@ -872,5 +825,303 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
       select: { weeklyDemandCache: true },
     })
     expect(afterCache?.weeklyDemandCache).toEqual(beforeCache?.weeklyDemandCache)
+  })
+
+  it('9. ROLE edits preserve explicit named profiles while inherited compatibility follows twice', async () => {
+    const inheritanceRole = await prisma.resourceType.create({
+      data: {
+        projectId,
+        name: 'InheritanceRegressionRole',
+        category: 'ENGINEERING',
+        count: 5,
+        hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        allocationPercent: 60,
+      },
+    })
+
+    const [inherited, manualScalar, manualSegmented, planned, squadOwned] = await Promise.all(
+      ['Inherited', 'ManualScalar', 'ManualSegmented', 'Planned', 'SquadOwned'].map(name =>
+        prisma.namedResource.create({
+          data: {
+            resourceTypeId: inheritanceRole.id,
+            name,
+            allocationMode: 'EFFORT',
+            allocationPercent: 60,
+            allocationPct: 60,
+          },
+        }),
+      ),
+    )
+
+    const scalarCreate = await request(app)
+      .put(`/api/projects/${projectId}/capacity-profiles/NAMED_PERSON/${manualScalar.id}`)
+      .set('Authorization', authHeader)
+      .send({ planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 60 })
+    expect(scalarCreate.status).toBe(200)
+
+    const segmentedCreate = await request(app)
+      .put(`/api/projects/${projectId}/capacity-profiles/NAMED_PERSON/${manualSegmented.id}`)
+      .set('Authorization', authHeader)
+      .send({
+        planningBasis: 'CAPACITY_PROFILE',
+        segments: [
+          { startWeek: 0, endWeek: 3, capacityPercent: 50 },
+          { startWeek: 6, endWeek: 9, capacityPercent: 80 },
+        ],
+      })
+    expect(segmentedCreate.status).toBe(200)
+
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        namedResourceId: planned.id,
+        ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+        source: 'MANUAL',
+        defaultPercent: 60,
+      },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        namedResourceId: squadOwned.id,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 60,
+      },
+    })
+
+    const explicitIds = [manualScalar.id, manualSegmented.id, planned.id, squadOwned.id]
+    const beforeExplicitProfiles = canonicalize(await prisma.capacityProfile.findMany({
+      where: { namedResourceId: { in: explicitIds } },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }] } },
+      orderBy: { namedResourceId: 'asc' },
+    }))
+    const beforeExplicitResources = canonicalize(await prisma.namedResource.findMany({
+      where: { id: { in: explicitIds } },
+      orderBy: { id: 'asc' },
+    }))
+    const scalarProfile = beforeExplicitProfiles.find(profile => profile.namedResourceId === manualScalar.id)
+    expect(scalarProfile?.legacy).toMatchObject({
+      version: 1,
+      writer: 'manual-editor',
+      allocationMode: 'EFFORT',
+      allocationPercent: 60,
+    })
+    expect(beforeExplicitResources.find(resource => resource.id === manualScalar.id)).toMatchObject({
+      allocationMode: 'EFFORT',
+      allocationPercent: 60,
+      allocationPct: 60,
+    })
+
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: { sentinel: 'first-role-edit' } },
+    })
+    const firstEdit = await request(app)
+      .put(`/api/projects/${projectId}/capacity-profiles/ROLE/${inheritanceRole.id}`)
+      .set('Authorization', authHeader)
+      .send({ planningBasis: 'WHOLE_PROJECT_ALLOCATION', defaultPercent: 80 })
+    expect(firstEdit.status).toBe(200)
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: inherited.id } })).toMatchObject({
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 80,
+      allocationPct: 80,
+    })
+    expect((await prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })).weeklyDemandCache).toEqual({})
+
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { weeklyDemandCache: { sentinel: 'second-role-edit' } },
+    })
+    const secondEdit = await request(app)
+      .put(`/api/projects/${projectId}/capacity-profiles/ROLE/${inheritanceRole.id}`)
+      .set('Authorization', authHeader)
+      .send({
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: 70,
+        startWeek: 2,
+        endWeek: 8,
+      })
+    expect(secondEdit.status).toBe(200)
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: inherited.id } })).toMatchObject({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 70,
+      allocationPct: 70,
+      allocationStartWeek: 2,
+      allocationEndWeek: 8,
+      startWeek: 2,
+      endWeek: 8,
+    })
+    expect(await prisma.capacityProfile.findMany({
+      where: { namedResourceId: inherited.id },
+    })).toEqual([])
+
+    expect(canonicalize(await prisma.capacityProfile.findMany({
+      where: { namedResourceId: { in: explicitIds } },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }] } },
+      orderBy: { namedResourceId: 'asc' },
+    }))).toEqual(beforeExplicitProfiles)
+    expect(canonicalize(await prisma.namedResource.findMany({
+      where: { id: { in: explicitIds } },
+      orderBy: { id: 'asc' },
+    }))).toEqual(beforeExplicitResources)
+    expect((await prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })).weeklyDemandCache).toEqual({})
+  })
+
+  it('10. Representable persisted ownership conflicts fail closed without writes', async () => {
+    const carrierRole = await prisma.resourceType.create({
+      data: {
+        projectId,
+        name: 'ConflictCarrierRole',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 8,
+      },
+    })
+
+    async function expectConflictWithoutWrites(
+      ownerKind: 'ROLE' | 'NAMED_PERSON',
+      ownerId: string,
+    ) {
+      await prisma.project.update({
+        where: { id: projectId },
+        data: { weeklyDemandCache: { conflictOwnerId: ownerId } },
+      })
+      const before = await snapshotDbState()
+      const response = await request(app)
+        .put(`/api/projects/${projectId}/capacity-profiles/${ownerKind}/${ownerId}`)
+        .set('Authorization', authHeader)
+        .send({ planningBasis: 'WHOLE_PROJECT_ALLOCATION', defaultPercent: 77 })
+      expect(response.status).toBe(409)
+      expect(await snapshotDbState()).toEqual(before)
+    }
+
+    const sharedId = `shared-${Date.now()}`
+    await prisma.resourceType.create({
+      data: {
+        id: sharedId,
+        projectId,
+        name: 'MultipleCandidateRole',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 8,
+      },
+    })
+    await prisma.namedResource.create({
+      data: {
+        id: sharedId,
+        resourceTypeId: carrierRole.id,
+        name: 'MultipleCandidatePerson',
+      },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: sharedId,
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'MANUAL',
+        segments: {
+          create: [{ startWeek: 0, endWeek: 2, capacityPercent: 50, source: 'MANUAL' }],
+        },
+      },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        namedResourceId: sharedId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'MANUAL',
+        segments: {
+          create: [{ startWeek: 4, endWeek: 6, capacityPercent: 60, source: 'MANUAL' }],
+        },
+      },
+    })
+    await expectConflictWithoutWrites('ROLE', sharedId)
+
+    const mismatchedId = `mismatched-${Date.now()}`
+    await prisma.resourceType.create({
+      data: {
+        id: mismatchedId,
+        projectId,
+        name: 'MismatchedCandidateRole',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 8,
+      },
+    })
+    await prisma.namedResource.create({
+      data: {
+        id: mismatchedId,
+        resourceTypeId: carrierRole.id,
+        name: 'MismatchedCandidatePerson',
+      },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        namedResourceId: mismatchedId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'MANUAL',
+        segments: {
+          create: [{ startWeek: 1, endWeek: 3, capacityPercent: 65, source: 'MANUAL' }],
+        },
+      },
+    })
+    await expectConflictWithoutWrites('ROLE', mismatchedId)
+
+    const plannedResource = await prisma.namedResource.create({
+      data: {
+        resourceTypeId: carrierRole.id,
+        name: 'PlannedOwnershipConflict',
+      },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        namedResourceId: plannedResource.id,
+        ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'MANUAL',
+        segments: {
+          create: [{ startWeek: 2, endWeek: 5, capacityPercent: 70, source: 'MANUAL' }],
+        },
+      },
+    })
+    await expectConflictWithoutWrites('NAMED_PERSON', plannedResource.id)
+
+    const squadRole = await prisma.resourceType.create({
+      data: {
+        projectId,
+        name: 'SquadOwnershipConflict',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 8,
+      },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: squadRole.id,
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        segments: {
+          create: [{ startWeek: 3, endWeek: 7, capacityPercent: 75, source: 'SQUAD_PLANNER' }],
+        },
+      },
+    })
+    await expectConflictWithoutWrites('ROLE', squadRole.id)
   })
 })

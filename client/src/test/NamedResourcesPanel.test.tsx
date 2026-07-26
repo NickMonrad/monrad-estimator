@@ -263,9 +263,7 @@ describe('NamedResourcesPanel capacity profile display', () => {
     expect(screen.getByText('W1-W4: 50%')).toBeInTheDocument()
     expect(screen.getByText('W5-W8: 75%')).toBeInTheDocument()
     expect(screen.getByText('W9-W12: 100%')).toBeInTheDocument()
-    // Profile-managed guidance shown
-    expect(screen.getByText(/Availability varies by week/)).toBeInTheDocument()
-    expect(screen.getByText(/this weekly profile is protected/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open Squad Planner' })).toBeInTheDocument()
 
     // Billing basis label is separate from capacity profile
     const billingBasisElements = screen.getAllByText('Billing basis')
@@ -394,12 +392,9 @@ describe('NamedResourcesPanel capacity profile display', () => {
 
     await screen.findByDisplayValue('Planned Tech Lead')
 
-    // The guidance is shown inline (no toggle button needed)
-    expect(screen.getByText(/Availability varies by week/)).toBeInTheDocument()
-    expect(screen.getByText(/managed through the weekly capacity plan/i)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Open Squad Planner/i })).toHaveAttribute(
       'href',
-      '/projects/proj-1/timeline?panel=squad-planner',
+      '/projects/proj-1/squad-planner',
     )
   })
 })
@@ -653,11 +648,8 @@ describe('NamedResourcesPanel authoritative null handling', () => {
     expect(variesElements.length).toBe(2) // one for startWeek, one for endWeek
     // Stale values replaced by "Varies"/"—"; name editable
 
-    // Protected guidance visible
-    expect(screen.getByText(/Availability varies by week/)).toBeInTheDocument()
-    expect(screen.getByText(/this weekly profile is protected/i)).toBeInTheDocument()
-
-    // No Squad Planner link (non-planner-owned named person)
+    // Manual segmented profiles remain editable in the first-class editor.
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toBeInTheDocument()
     expect(screen.queryByText(/Open Squad Planner/i)).not.toBeInTheDocument()
 
     expect(screen.getByDisplayValue('Alice')).not.toBeDisabled()

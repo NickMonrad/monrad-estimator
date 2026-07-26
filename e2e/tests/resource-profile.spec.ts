@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, createProject } from './helpers'
+import { login, createProject, quickSchedule } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -355,6 +355,164 @@ test.describe('Resource Profile — cache invalidation from Timeline', () => {
     await page.getByRole('button', { name: /commercial/i }).click()
     await expect(
       page.getByRole('heading', { name: /cost summary/i })
+    ).toBeVisible({ timeout: 10_000 })
+  })
+})
+
+/* ======================================================================== *
+ *  Capacity Profile Editor — issue #363                                    *
+ *  Tests the first-class capacity-profile editor for ROLE with Varies      *
+ *  by week segments, cross-view parity (Timeline, Commercial).             *
+ *  Creates a project with Developer + Tech Lead tasks, opens the ROLE      *
+ *  capacity profile badge, sets CAPACITY_PLAN mode with two non-overlapping*
+ *  segments separated by a gap, saves, verifies badge display on Resource  *
+ *  Profile, navigates to Timeline to verify capacity renders, returns to   *
+ *  Resource Profile to confirm persistence, and opens Commercial to        *
+ *  verify billing basis unchanged.                                         *
+ * ======================================================================== */
+const CAP_PROFILE_CSV = [
+  'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+  'Epic,Platform Build,,,,,,,,,,,,',
+  'Feature,Platform Build,Core API,,,,,,,,,,,',
+  'Story,Platform Build,Core API,API Design,,,,,,,,,,',
+  'Task,Platform Build,Core API,API Design,Implement,,Developer,40,5,,,,,',
+  'Task,Platform Build,Core API,API Design,Review,,Tech Lead,16,2,,,,,',
+].join('\n')
+
+test.describe('Capacity profile editor — ROLE segments', () => {
+  test('create Varies by week segments, verify cross-view persistence and Commercial unchanged', async ({ page }) => {
+    test.setTimeout(120_000)
+
+    // ── Setup: login, create project, seed backlog with Developer + Tech Lead ──
+    await login(page)
+    const projectName = `E2E CapProfile ${Date.now()}`
+    await createProject(page, projectName)
+
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
+    const tmpFile = path.join(os.tmpdir(), `cap-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, CAP_PROFILE_CSV)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
+
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+
+    // ── Navigate to Resource Profile ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // Wait for Developer resource type row to load
+    const developerRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(developerRow).toBeVisible({ timeout: 10_000 })
+
+    // ── Open capacity profile editor for the Developer ROLE ──
+    const editBadge = developerRow.getByTitle('Click to edit capacity profile')
+    await expect(editBadge).toBeVisible({ timeout: 10_000 })
+    await editBadge.click()
+
+    await expect(
+      page.getByRole('dialog', { name: /edit capacity profile/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    // ── Select Varies by week (capacityProfile) mode ──
+    const basisSelect = page.getByTestId('cp-planning-basis-select')
+    await expect(basisSelect).toBeVisible()
+    await basisSelect.selectOption('capacityProfile')
+
+    // ── Fill first segment: W2-W4 (0-indexed weeks 1-3), 80% ──
+    // First segment row exists by default when switching to capacityProfile
+    await page.getByTestId('cp-seg-start-0').fill('1')
+    await page.getByTestId('cp-seg-end-0').fill('3')
+    await page.getByTestId('cp-seg-pct-0').fill('80')
+
+    // ── Add second segment: W8-W10 (0-indexed weeks 7-9), 60% ──
+    // Gap: W5-W7 (0-indexed weeks 4-6) has no segment coverage
+    await page.getByTestId('cp-add-segment').click()
+    await page.getByTestId('cp-seg-start-1').fill('7')
+    await page.getByTestId('cp-seg-end-1').fill('9')
+    await page.getByTestId('cp-seg-pct-1').fill('60')
+
+    // ── Save and wait for modal to close ──
+    const saveResponse = page.waitForResponse(
+      resp => resp.url().includes('/capacity-profiles/') && resp.request().method() === 'PUT',
+      { timeout: 15_000 },
+    )
+    await page.getByTestId('cp-save-btn').click()
+    expect((await saveResponse).ok()).toBeTruthy()
+    await expect(
+      page.getByRole('dialog', { name: /edit capacity profile/i }),
+    ).not.toBeVisible({ timeout: 8_000 })
+
+    // ── Verify badge shows Varies by week after save ──
+    await expect(
+      developerRow.getByRole('button', { name: /Varies by week/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // ── Navigate to Timeline, schedule, verify capacity renders ──
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    await page.locator('input[type="date"]').fill('2026-06-01')
+    await expect(page.locator('input[type="date"]')).toHaveValue('2026-06-01')
+    await quickSchedule(page)
+    await expect(
+      page.getByRole('button', { name: /sequential|parallel/i }).first(),
+    ).toBeVisible({ timeout: 20_000 })
+    // Verify resource-counts panel renders (capacity data reflects profile)
+    // The panel exists in the DOM even when collapsed
+    await expect(page.getByTestId('resource-counts')).toBeVisible({ timeout: 10_000 })
+
+    // ── Return to Resource Profile and verify persistence after navigation ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+    const reloadedDeveloperRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(reloadedDeveloperRow).toBeVisible({ timeout: 10_000 })
+
+    // Verify badge still shows Varies by week after navigation
+    await expect(
+      reloadedDeveloperRow.getByRole('button', { name: /Varies by week/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // Open editor again to verify segments persisted
+    await reloadedDeveloperRow.getByTitle('Click to edit capacity profile').click()
+    await expect(
+      page.getByRole('dialog', { name: /edit capacity profile/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    await expect(page.getByTestId('cp-seg-start-0')).toHaveValue('1')
+    await expect(page.getByTestId('cp-seg-end-0')).toHaveValue('3')
+    await expect(page.getByTestId('cp-seg-pct-0')).toHaveValue('80')
+    await expect(page.getByTestId('cp-seg-start-1')).toHaveValue('7')
+    await expect(page.getByTestId('cp-seg-end-1')).toHaveValue('9')
+    await expect(page.getByTestId('cp-seg-pct-1')).toHaveValue('60')
+
+    // Cancel to close editor
+    await page.getByTestId('cp-cancel-btn').click()
+    await expect(
+      page.getByRole('dialog', { name: /edit capacity profile/i }),
+    ).not.toBeVisible({ timeout: 5_000 })
+
+    // ── Open Commercial tab — verify billing basis unchanged ──
+    // Day rates were not configured for this test project, so the allocation
+    // badges may not render. The key assertion is that the Cost Summary heading
+    // loads without error — confirming the capacity profile change did not break
+    // the Commercial billing page.
+    await page.getByRole('button', { name: /commercial/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /cost summary/i }),
     ).toBeVisible({ timeout: 10_000 })
   })
 })
