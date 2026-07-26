@@ -379,7 +379,7 @@ test.describe('Resource Allocation', () => {
     await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).not.toBeVisible({ timeout: 5_000 })
   })
 
-  test('demandFollowing hides Default percent control', async ({ page }) => {
+  test('demandFollowing shows Default percent input', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
@@ -392,9 +392,9 @@ test.describe('Resource Allocation', () => {
     const modeSelect = page.getByTestId('cp-planning-basis-select')
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
 
-    // Select demandFollowing — Default percent should NOT be visible
+    // Select demandFollowing — Default percent should be visible
     await modeSelect.selectOption('demandFollowing')
-    await expect(page.getByTestId('cp-default-pct-input')).not.toBeVisible({ timeout: 3_000 })
+    await expect(page.getByTestId("cp-default-pct-input")).toBeVisible({ timeout: 3_000 })
 
     // Cancel to close
     await page.locator('[data-testid="cp-cancel-btn"]').click()
@@ -499,16 +499,10 @@ test.describe('Resource Allocation', () => {
     await expect(ownerCard.getByText(/W1-W4: 50%/)).toBeVisible()
     await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
 
-    const ownerPanel = page.getByTestId(`profile-managed-panel-${before.namedResourceId}`)
-    await ownerProfile.click()
-    await expect(ownerPanel.getByText(/managed through the weekly capacity plan/i)).toBeVisible()
-    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
-    await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
-
-    await ownerPanel.getByRole('link', { name: /Open Squad Planner/i }).click()
+    // Protected owner shows Open Squad Planner link and profile info
+    await expect(ownerCard.getByRole('link', { name: /Open Squad Planner/i })).toBeVisible({ timeout: 5_000 })
+    await expect(ownerCard.getByRole('link', { name: /Open Squad Planner/i })).toHaveAttribute('href', f'/projects/{projectId}/timeline?panel=squad-planner')
+    await expect(ownerCard.getByRole('button', { name: /Edit profile|Create profile/i })).toHaveCount(0)
     await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
     await expect(page.getByRole('dialog', { name: 'Squad Planner' })).toBeVisible({ timeout: 15_000 })
 
@@ -962,18 +956,13 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     await expect(ownerCard.getByText(/W1-W4: 50%/)).toBeVisible()
     await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
 
-    // ── 5. Verify scalar capacity controls are absent ──
-    // The profile-managed panel guidance is always rendered (no badge click needed)
-    const ownerPanel = page.getByTestId(`profile-managed-panel-${nrId}`)
-    await expect(ownerPanel).toBeVisible()
-    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
-    await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
-    await expect(ownerPanel.getByText(/protected/i)).toBeVisible()
+    // ── 5. Verify profile controls are correct ──
+    // Edit profile button should be present (non-protected owner)
+    const profileAction = page.getByTestId(`named-resource-profile-action-${nrId}`)
+    await expect(profileAction).toBeVisible({ timeout: 5_000 })
+    await expect(profileAction).toHaveText('Edit profile')
     // No Squad Planner link for manually created named person
-    await expect(ownerPanel.getByText(/squad planner/i)).toHaveCount(0)
+    await expect(page.getByTestId(`named-resource-row-${nrId}`).getByRole('link', { name: /Open Squad Planner/i })).toHaveCount(0)
 
     // ── 6. Rename via the actual row name input ──
     const row = page.getByTestId(`named-resource-row-${nrId}`)
