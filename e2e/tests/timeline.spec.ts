@@ -991,49 +991,50 @@ test.describe('Resource Profile allocation', () => {
     ).toBeVisible({ timeout: 10_000 })
   })
 
-  test('allocation mode dropdown changes from Timeline to Fixed for whole project', async ({ page }) => {
-    // Find the Developer row and click its allocation badge
+  test('planning basis dropdown changes to wholeProjectAllocation', async ({ page }) => {
+    // Find the Developer row and click its capacity profile badge
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
 
     // The initial badge shows "Fixed for selected weeks · 100%" (database default for new resource types)
-    const badge = devRow.locator('button[title="Click to edit allocation"]')
+    const badge = devRow.locator('button[title="Click to edit capacity profile"]')
     await expect(badge).toBeVisible()
-    // The initial badge shows "Fixed for selected weeks · 100%" (database default for new resource types)
 
-    // Click the badge to open the inline edit form
+    // Click the badge to open the capacity profile modal
     await badge.click()
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).toBeVisible({ timeout: 5_000 })
 
-    // The allocation mode dropdown should be visible
-    const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
+    // The planning basis selector should be visible
+    const modeSelect = page.getByTestId('cp-planning-basis-select')
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
     // Change to Fixed for whole project
-    await modeSelect.selectOption('FULL_PROJECT')
+    await modeSelect.selectOption('wholeProjectAllocation')
 
-    // Set FTE to 50%
-    const fteInput = page.locator('input[type="number"][min="1"][max="100"]').first()
+    // Set FTE default percent to 50%
+    const fteInput = page.getByTestId('cp-default-pct-input')
     await fteInput.fill('50')
 
-    // Click Save (data-testid="allocation-save")
-    await page.locator('[data-testid="allocation-save"]').click()
+    // Click Save
+    await page.locator('[data-testid="cp-save-btn"]').click()
 
-    // After save, the badge should show "Fixed for whole project · 50%"
+    // After save, the badge should show the updated text
+    await expect(badge).toHaveText(/Fixed for whole project/, { timeout: 10_000 })
   })
 
-  test('Fixed for selected weeks mode shows start/end week inputs and persists', async ({ page }) => {
+  test('availabilityWindow mode shows start/end week inputs and persists', async ({ page }) => {
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
-    const badge = devRow.locator('button[title="Click to edit allocation"]')
+    const badge = devRow.locator('button[title="Click to edit capacity profile"]')
     await expect(badge).toBeVisible()
     await badge.click()
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).toBeVisible({ timeout: 5_000 })
 
-    // Change mode to Timeline
-    const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
+    // The planning basis selector should be visible with default availabilityWindow
+    const modeSelect = page.getByTestId('cp-planning-basis-select')
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
-    // Change mode to Fixed for selected weeks
-    // Start/end week inputs should appear
-    const startInput = page.locator('input[placeholder="auto"]').first()
-    const endInput = page.locator('input[placeholder="auto"]').last()
+    // Start/end week inputs should appear (default is availabilityWindow for new resource types)
+    const startInput = page.getByTestId('cp-start-week-input')
+    const endInput = page.getByTestId('cp-end-week-input')
     await expect(startInput).toBeVisible({ timeout: 5_000 })
     await expect(endInput).toBeVisible({ timeout: 5_000 })
 
@@ -1042,33 +1043,36 @@ test.describe('Resource Profile allocation', () => {
     await endInput.fill('10')
 
     // Click Save
-    await page.locator('[data-testid="allocation-save"]').click()
+    await page.locator('[data-testid="cp-save-btn"]').click()
 
-    // Badge should show "Fixed for selected weeks · 100%" (default % when switching from EFFORT)
+    // Badge should show the updated text
+    await expect(badge).toHaveText(/Fixed for selected weeks/, { timeout: 10_000 })
   })
 
-  test('allocation % input persists independently', async ({ page }) => {
+  test('default percent input persists independently', async ({ page }) => {
     const devRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
-    const badge = devRow.locator('button[title="Click to edit allocation"]')
+    const badge = devRow.locator('button[title="Click to edit capacity profile"]')
     await expect(badge).toBeVisible()
     await badge.click()
-    const modeSelect = page.locator('select').filter({ has: page.locator('option[value="EFFORT"]') }).first()
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).toBeVisible({ timeout: 5_000 })
+    const modeSelect = page.getByTestId('cp-planning-basis-select')
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
 
     // Change mode to Fixed for whole project (has % field)
-    await modeSelect.selectOption('FULL_PROJECT')
+    await modeSelect.selectOption('wholeProjectAllocation')
 
     // Set FTE to 75%
-    const fteInput = page.locator('input[type="number"][min="1"][max="100"]').first()
+    const fteInput = page.getByTestId('cp-default-pct-input')
     await fteInput.fill('75')
 
     // Save
-    await page.locator('[data-testid="allocation-save"]').click()
-    await expect(badge).toHaveText(/75%/, { timeout: 8_000 })
+    await page.locator('[data-testid="cp-save-btn"]').click()
+    await expect(badge).toHaveText(/75%/, { timeout: 10_000 })
 
-    // Re-open the edit form — the % should persist
+    // Re-open the modal — the % should persist
     await badge.click()
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).toBeVisible({ timeout: 5_000 })
     await expect(fteInput).toHaveValue('75')
   })
 })

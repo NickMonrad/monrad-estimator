@@ -16,6 +16,12 @@ import {
   validatePersistedCapacityProfiles,
   checkPersistedCompleteness,
 } from '../lib/persistedCapacityProfileValidation.js'
+import {
+  validateReplaceCapacityProfileRequest,
+} from '../lib/capacityProfileReplaceValidator.js'
+import type { ReplaceCapacityProfileOwnerKind } from '../lib/capacityProfileReplaceValidator.js'
+import { replaceCapacityProfile, ServiceError } from '../lib/capacityProfileReplaceService.js'
+import { ownedProject } from '../lib/ownership.js'
 
 
 const router = Router({ mergeParams: true })
@@ -141,6 +147,72 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   })
 
   res.json({ capacityProfiles: legacyProfiles })
+}))
+
+const VALID_OWNER_KINDS: Record<string, ReplaceCapacityProfileOwnerKind> = {
+  ROLE: 'ROLE',
+  NAMED_PERSON: 'NAMED_PERSON',
+}
+
+router.put('/:ownerKind/:ownerId', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const projectId = req.params.projectId as string
+  const ownerKindParam = req.params.ownerKind as string
+  const ownerId = req.params.ownerId as string
+
+  // ── Project ownership check ─────────────────────────────────────────
+  const project = await ownedProject(projectId, req.userId!)
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' })
+    return
+  }
+  // ── Validate ownerKind ──────────────────────────────────────────────
+  const ownerKind = VALID_OWNER_KINDS[ownerKindParam]
+  if (!ownerKind) {
+    res.status(400).json({ error: 'ownerKind must be "ROLE" or "NAMED_PERSON"' })
+    return
+  }
+  // ── Validate request body ───────────────────────────────────────────
+  const bodyErrors = validateReplaceCapacityProfileRequest(req.body, ownerKind)
+  if (bodyErrors.length > 0) {
+    res.status(400).json({ error: 'Invalid request body', details: bodyErrors })
+    return
+  }
+
+  // ── Run in transaction ──────────────────────────────────────────────
+  try {
+    const profile = await prisma.$transaction(tx =>
+      replaceCapacityProfile(tx, projectId, ownerKind, ownerId, req.body, req.userId!),
+    )
+
+    res.status(200).json({ capacityProfile: profile })
+  } catch (err) {
+    if (err instanceof ServiceError) {
+      res.status(err.status).json({ error: err.message })
+      return
+    }
+    // Narrow P2002: only map the expected capacity-profile owner uniqueness violation
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code: string }).code === 'P2002'
+    ) {
+      const meta = (err as {
+        meta?: { modelName?: string; target?: string[] }
+      }).meta
+      const expectedTarget = ownerKind === 'ROLE' ? 'resourceTypeId' : 'namedResourceId'
+      if (
+        meta?.modelName === 'CapacityProfile'
+        && Array.isArray(meta.target)
+        && meta.target.length === 1
+        && meta.target[0] === expectedTarget
+      ) {
+        res.status(409).json({ error: 'A capacity profile already exists for this owner' })
+        return
+      }
+    }
+    throw err
+  }
 }))
 
 export default router

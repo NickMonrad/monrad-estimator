@@ -224,6 +224,37 @@ export interface EffectiveAvailabilityDisplay extends EffectiveAvailabilityState
   periodLabel: 'Varies by week' | null
 }
 
+export interface CapacityProfileEditorDraft {
+  planningBasis: CapacityProfilePlanningBasis
+  defaultPercent: number | null
+  startWeek: number | null
+  endWeek: number | null
+  segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+}
+
+/** Build a non-persisted editor draft from effective compatibility values. */
+export function buildEffectiveProfileDraft(
+  availability: EffectiveAvailabilityDisplay,
+): CapacityProfileEditorDraft | null {
+  const planningBasis = availability.effectiveMode === 'EFFORT'
+    ? 'demandFollowing'
+    : availability.effectiveMode === 'FULL_PROJECT'
+      ? 'wholeProjectAllocation'
+      : availability.effectiveMode === 'TIMELINE'
+        ? 'availabilityWindow'
+        : null
+
+  if (!planningBasis) return null
+
+  return {
+    planningBasis,
+    defaultPercent: availability.percentage,
+    startWeek: planningBasis === 'availabilityWindow' ? availability.startWeek : null,
+    endWeek: planningBasis === 'availabilityWindow' ? availability.endWeek : null,
+    segments: [],
+  }
+}
+
 export function deriveEffectiveAvailabilityState(row: EffectiveAvailabilityInput): EffectiveAvailabilityState {
   const resolutionSource = row.capacityProfile?.resolutionSource as ('PROFILE' | 'ACTIVE_CAPACITY_PLAN' | null | undefined)
   const planningBasis = row.capacityProfile?.planningBasis
