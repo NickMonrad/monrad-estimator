@@ -505,17 +505,19 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await page.locator('input[type="date"]').fill('2026-06-01')
     await expect(page.locator('input[type="date"]')).toHaveValue('2026-06-01')
 
+    // Start listening for the timeline response BEFORE scheduling
+    const timelineRespPromise = page.waitForResponse(
+      r => r.url().includes(`/api/projects/${projectId}/timeline`)
+        && r.request().method() === 'GET',
+      { timeout: 20_000 },
+    )
+
     await quickSchedule(page)
     await expect(
       page.getByRole('button', { name: /sequential|parallel/i }).first(),
     ).toBeVisible({ timeout: 20_000 })
 
-    // Intercept the timeline API response after scheduling completes
-    const timelineResp = await page.waitForResponse(
-      r => r.url().includes(`/projects/${projectId}/timeline`)
-        && r.request().method() === 'GET',
-      { timeout: 15_000 },
-    )
+    const timelineResp = await timelineRespPromise
     expect(timelineResp.ok()).toBeTruthy()
     const timelineData = await timelineResp.json() as {
       weeklyDemand: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
