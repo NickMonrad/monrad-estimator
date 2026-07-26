@@ -590,7 +590,7 @@ test.describe('Capacity profile editor — ROLE segments', () => {
 
     expect(secondSegmentWeek!.week).toBe(8)
     expect(secondSegmentWeek!.capacityDays).toBeCloseTo(3, 5)
-── Return to Resource Profile and verify segments persist after full cycle ──
+    // ── Return to Resource Profile and verify segments persist after full cycle ──
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
