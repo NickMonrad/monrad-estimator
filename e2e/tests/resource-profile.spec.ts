@@ -511,8 +511,10 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     ).toBeVisible({ timeout: 20_000 })
 
     // Read timeline data directly via authenticated API to verify profile consumption
+    const token = await page.evaluate(() => localStorage.getItem('token'))
     const timelineResp = await page.request.get(
       `/api/projects/${projectId}/timeline`,
+      { headers: { Authorization: `Bearer ${token}` } },
     )
     expect(timelineResp.ok()).toBeTruthy()
     const timelineData = await timelineResp.json() as {
