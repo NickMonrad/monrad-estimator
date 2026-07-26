@@ -390,7 +390,7 @@ export default function NamedResourcesPanel({
                   <div className="mt-1">
                     {isProtectedOwner(resource) ? (
                       <a
-                        href={`/projects/${projectId}/squad-planner`}
+                        href={`/projects/${projectId}/timeline?panel=squad-planner`}
                         className="text-xs text-lab3-blue hover:underline"
                       >
                         Open Squad Planner

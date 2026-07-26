@@ -351,120 +351,121 @@ test.describe('Resource Allocation', () => {
     await gotoResourceProfile(page, projectId)
 
     // Open the first editable row
-    const badge = page.locator('button[title="Click to edit allocation"]').first()
+    const badge = page.locator('button[title="Click to edit capacity profile"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
-    // Regression: button contract must remain "Click to edit allocation"
-    await expect(badge).toHaveAttribute('title', 'Click to edit allocation')
+    // Regression: button contract must remain "Click to edit capacity profile"
+    await expect(badge).toHaveAttribute('title', 'Click to edit capacity profile')
     await badge.click({ force: true })
-
-    await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
-
-    // Select FULL_PROJECT to make Available % visible
-    const modeSelect = page.locator('select').first()
+    // Modal should open
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).toBeVisible({ timeout: 8_000 })
+    // Default planning basis selector (new resource type initially has a capacity profile)
+    await expect(page.getByTestId('cp-planning-basis-select')).toBeVisible({ timeout: 5_000 })
+    // Select wholeProjectAllocation to make Default percent visible
+    const modeSelect = page.getByTestId('cp-planning-basis-select')
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
-    await modeSelect.selectOption('FULL_PROJECT')
+    await modeSelect.selectOption('wholeProjectAllocation')
 
-    // Now Available % should be visible
-    await expect(page.getByText(/Available %/i).first()).toBeVisible({ timeout: 5_000 })
-    const capacityInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
+    // Now Default percent should be visible
+    await expect(page.getByText(/Default percent/i).first()).toBeVisible({ timeout: 5_000 })
+    const capacityInput = page.getByTestId('cp-default-pct-input')
     await expect(capacityInput).toBeVisible({ timeout: 5_000 })
 
-    await expect(page.locator('[data-testid="allocation-save"]')).toBeVisible()
-    await expect(page.locator('[data-testid="allocation-cancel"]')).toBeVisible()
+    // Save and Cancel buttons
+    await expect(page.locator('[data-testid="cp-save-btn"]')).toBeVisible()
+    await expect(page.locator('[data-testid="cp-cancel-btn"]')).toBeVisible()
 
-    // Cancel to close
-    await page.locator('[data-testid="allocation-cancel"]').click()
-    await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
+    // Cancel to close the modal
+    await page.locator('[data-testid="cp-cancel-btn"]').click()
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).not.toBeVisible({ timeout: 5_000 })
   })
 
-  test('EFFORT hides Available % control', async ({ page }) => {
+  test('demandFollowing hides Default percent control', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
 
-    const badge = page.locator('button[title="Click to edit allocation"]').first()
+    const badge = page.locator('button[title="Click to edit capacity profile"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
     await badge.click({ force: true })
 
-    await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
-    const modeSelect = page.locator('select').first()
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).toBeVisible({ timeout: 8_000 })
+    const modeSelect = page.getByTestId('cp-planning-basis-select')
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
 
-    // Select EFFORT — Available % should NOT be visible
-    await modeSelect.selectOption('EFFORT')
-    await expect(page.getByText(/Available %/i)).not.toBeVisible({ timeout: 3_000 })
-    await expect(page.getByText(/Available Percent/i)).not.toBeVisible({ timeout: 3_000 })
+    // Select demandFollowing — Default percent should NOT be visible
+    await modeSelect.selectOption('demandFollowing')
+    await expect(page.getByTestId('cp-default-pct-input')).not.toBeVisible({ timeout: 3_000 })
 
     // Cancel to close
-    await page.locator('[data-testid="allocation-cancel"]').click()
-    await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 5_000 })
+    await page.locator('[data-testid="cp-cancel-btn"]').click()
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).not.toBeVisible({ timeout: 5_000 })
   })
 
 
-  test('changing Available % updates allocated days', async ({ page }) => {
+  test('changing Default percent updates allocated days', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
 
-    const badge = page.locator('button[title="Click to edit allocation"]').first()
+    const badge = page.locator('button[title="Click to edit capacity profile"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
     await badge.click({ force: true })
 
-    await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).toBeVisible({ timeout: 8_000 })
 
-    // Select FULL_PROJECT to access Available %
-    const modeSelect = page.locator('select').first()
-    await modeSelect.selectOption('FULL_PROJECT')
-    await expect(page.getByText(/Available %/i).first()).toBeVisible({ timeout: 5_000 })
+    // Select wholeProjectAllocation to access Default percent
+    const modeSelect = page.getByTestId('cp-planning-basis-select')
+    await modeSelect.selectOption('wholeProjectAllocation')
+    await expect(page.getByTestId('cp-default-pct-input')).toBeVisible({ timeout: 5_000 })
 
-    const capacityInput = page.locator('input[type="number"]').filter({ hasAttribute: 'min' }).first()
+    const capacityInput = page.getByTestId('cp-default-pct-input')
     await capacityInput.fill('50')
 
-    await page.locator('[data-testid="allocation-save"]').click()
+    await page.locator('[data-testid="cp-save-btn"]').click()
 
-    // Wait for the editor to close (onSuccess handler sets editingAllocation to null)
-    await expect(page.locator('[data-testid="allocation-save"]')).not.toBeVisible({ timeout: 10_000 })
+    // Wait for the modal to close (onSuccess handler calls onSaved which calls onClose)
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).not.toBeVisible({ timeout: 10_000 })
 
     // The badge should still be visible (row intact after save)
     await expect(
-      page.locator('button[title="Click to edit allocation"]').first()
+      page.locator('button[title="Click to edit capacity profile"]').first()
     ).toBeVisible({ timeout: 8_000 })
   })
 
-  test('cancel closes editor without changing mode badge', async ({ page }) => {
+  test('cancel closes modal without changing mode badge', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
 
-    const badge = page.locator('button[title="Click to edit allocation"]').first()
+    const badge = page.locator('button[title="Click to edit capacity profile"]').first()
     await expect(badge).toBeVisible({ timeout: 10_000 })
     const badgeTextBefore = await badge.textContent()
 
     await badge.click({ force: true })
-    await expect(page.getByText(/Availability pattern/i).first()).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).toBeVisible({ timeout: 8_000 })
 
-    const modeSelect = page.locator('select').first()
+    const modeSelect = page.getByTestId('cp-planning-basis-select')
     await expect(modeSelect).toBeVisible({ timeout: 5_000 })
-    await modeSelect.selectOption('FULL_PROJECT')
+    await modeSelect.selectOption('wholeProjectAllocation')
 
     // Click Cancel via data-testid
-    await page.locator('[data-testid="allocation-cancel"]').click()
+    await page.locator('[data-testid="cp-cancel-btn"]').click()
 
-    // Editor should close
-    await expect(page.locator('[data-testid="allocation-cancel"]')).not.toBeVisible({ timeout: 8_000 })
+    // Modal should close
+    await expect(page.getByRole('dialog', { name: /edit capacity profile/i })).not.toBeVisible({ timeout: 8_000 })
 
     // Badge text should be unchanged
-    const badgeAfter = page.locator('button[title="Click to edit allocation"]').first()
+    const badgeAfter = page.locator('button[title="Click to edit capacity profile"]').first()
     const badgeTextAfter = await badgeAfter.textContent()
     expect(badgeTextAfter?.trim()).toBe(badgeTextBefore?.trim())
   })
 
-  test('summary tab shows Availability pattern column', async ({ page }) => {
+  test('summary tab shows Planning basis column', async ({ page }) => {
     test.setTimeout(90_000)
     const projectId = await setupCommercialTab(page)
     await gotoResourceProfile(page, projectId)
 
-    const allocationHeader = page.locator('th').filter({ hasText: /^Availability pattern$/ })
+    const allocationHeader = page.locator('th').filter({ hasText: /^Planning basis$/ })
     await expect(allocationHeader.first()).toBeVisible({ timeout: 8_000 })
   })
 
@@ -501,8 +502,8 @@ test.describe('Resource Allocation', () => {
     const ownerPanel = page.getByTestId(`profile-managed-panel-${before.namedResourceId}`)
     await ownerProfile.click()
     await expect(ownerPanel.getByText(/managed through the weekly capacity plan/i)).toBeVisible()
-    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
+    await expect(ownerPanel.getByRole('combobox', { name: /Planning basis/i })).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Default percent$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
     await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
@@ -965,8 +966,8 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     // The profile-managed panel guidance is always rendered (no badge click needed)
     const ownerPanel = page.getByTestId(`profile-managed-panel-${nrId}`)
     await expect(ownerPanel).toBeVisible()
-    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
+    await expect(ownerPanel.getByRole('combobox', { name: /Planning basis/i })).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Default percent$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
     await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)

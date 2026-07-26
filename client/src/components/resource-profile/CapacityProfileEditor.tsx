@@ -94,6 +94,14 @@ function validateWeek(value: number | null, label: string) {
   return null
 }
 
+function validateNullableWeek(value: number | null, label: string) {
+  if (value === null) return null
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    return `${label} must be a finite non-negative integer or null`
+  }
+  return null
+}
+
 export function validateCapacityProfileDraft(
   draft: CapacityProfileValidationDraft,
   ownerKind: 'ROLE' | 'NAMED_PERSON',
@@ -103,11 +111,11 @@ export function validateCapacityProfileDraft(
     if (percentageError) return percentageError
 
     if (draft.planningBasis === 'availabilityWindow') {
-      const startError = validateWeek(draft.startWeek, 'Start week')
+      const startError = validateNullableWeek(draft.startWeek, 'Start week')
       if (startError) return startError
-      const endError = validateWeek(draft.endWeek, 'End week')
+      const endError = validateNullableWeek(draft.endWeek, 'End week')
       if (endError) return endError
-      if ((draft.startWeek as number) > (draft.endWeek as number)) {
+      if (draft.startWeek !== null && draft.endWeek !== null && (draft.startWeek as number) > (draft.endWeek as number)) {
         return 'Start week must be less than or equal to end week'
       }
     }

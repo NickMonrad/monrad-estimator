@@ -107,19 +107,17 @@ export async function replaceCapacityProfile(
   ownerKind: ReplaceOwnerKind,
   ownerId: string,
   body: ReplaceBody,
-  userId?: string,
+  userId: string,
 ): Promise<CapacityProfileDTO> {
   const { planningBasis, defaultPercent, startWeek, endWeek, segments } = body
 
   // ── 0. Transactional project ownership revalidation ──────────────────
-  if (userId) {
-    const project = await tx.project.findFirst({
-      where: { id: projectId, ownerId: userId },
-      select: { id: true },
-    })
-    if (!project) {
-      throw new ServiceError(404, 'Project not found or access denied')
-    }
+  const project = await tx.project.findFirst({
+    where: { id: projectId, ownerId: userId },
+    select: { id: true },
+  })
+  if (!project) {
+    throw new ServiceError(404, 'Project not found or access denied')
   }
   // ── 1. Verify owner exists and belongs to project ─────────────────────
   if (ownerKind === 'ROLE') {

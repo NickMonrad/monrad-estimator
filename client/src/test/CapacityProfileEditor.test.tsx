@@ -623,6 +623,27 @@ describe('validateCapacityProfileDraft', () => {
     expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: 3 }, 'ROLE')).toContain('less than or equal')
   })
 
+  it('accepts nullable availability-window bounds', () => {
+    const windowDraft = { ...scalarDraft, planningBasis: 'availabilityWindow' as const, defaultPercent: 75 }
+    // Both null
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: null, endWeek: null }, 'ROLE')).toBeNull()
+    // Only start provided
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: 2, endWeek: null }, 'ROLE')).toBeNull()
+    // Only end provided
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: null, endWeek: 5 }, 'ROLE')).toBeNull()
+    // Both provided — valid
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: 0, endWeek: 8 }, 'ROLE')).toBeNull()
+  })
+
+  it('rejects nullable window with invalid populated values', () => {
+    const windowDraft = { ...scalarDraft, planningBasis: 'availabilityWindow' as const, defaultPercent: 75 }
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: -1, endWeek: null }, 'ROLE')).toContain('non-negative integer')
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: null, endWeek: 1.5 }, 'ROLE')).toContain('non-negative integer')
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: 10, endWeek: 2 }, 'ROLE')).toContain('less than or equal')
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: Number.NaN, endWeek: 2 }, 'ROLE')).toContain('non-negative integer')
+    expect(validateCapacityProfileDraft({ ...windowDraft, startWeek: 0, endWeek: Number.POSITIVE_INFINITY }, 'ROLE')).toContain('non-negative integer')
+  })
+
   it('rejects duplicate and overlapping segments but allows gaps', () => {
     const profileDraft = {
       ...scalarDraft,

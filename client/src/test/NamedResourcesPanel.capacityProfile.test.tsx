@@ -97,7 +97,7 @@ describe('NamedResourcesPanel first-class profile access', () => {
       allocation({ id: 'planned-1', name: 'Planned Alex', resourceIdentity: 'PLANNED_RESOURCE', synthetic: true }),
     ], [])
 
-    expect(await screen.findByRole('link', { name: 'Open Squad Planner' })).toHaveAttribute('href', '/projects/project-1/squad-planner')
+    expect(await screen.findByRole('link', { name: 'Open Squad Planner' })).toHaveAttribute('href', '/projects/project-1/timeline?panel=squad-planner')
     expect(screen.queryByRole('button', { name: /profile/i })).not.toBeInTheDocument()
   })
 

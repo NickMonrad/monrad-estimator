@@ -381,7 +381,7 @@ const CAP_PROFILE_CSV = [
 
 test.describe('Capacity profile editor — ROLE segments', () => {
   test('create Varies by week segments, verify cross-view persistence and Commercial unchanged', async ({ page }) => {
-    test.setTimeout(120_000)
+    test.setTimeout(150_000)
 
     // ── Setup: login, create project, seed backlog with Developer + Tech Lead ──
     await login(page)
@@ -402,34 +402,51 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
 
-    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    const projectId = page.url().match(/\/projects\/([^\/]+)/)?.[1]!
 
-    // ── Navigate to Resource Profile ──
+    // ── Navigate to Resource Profile and set day rate ──
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
     ).toBeVisible({ timeout: 10_000 })
 
-    // Wait for Developer resource type row to load
     const developerRow = page.locator('tr').filter({ hasText: /developer/i }).first()
     await expect(developerRow).toBeVisible({ timeout: 10_000 })
 
-    // ── Open capacity profile editor for the Developer ROLE ──
-    const editBadge = developerRow.getByTitle('Click to edit capacity profile')
-    await expect(editBadge).toBeVisible({ timeout: 10_000 })
-    await editBadge.click()
+    // Set a day rate for Commercial assertions
+    const dayRateInput = page.locator('input.w-20').first()
+    await expect(dayRateInput).toBeVisible({ timeout: 10_000 })
+    await dayRateInput.fill('1200')
+    await dayRateInput.press('Tab')
 
+    // ── Capture initial Commercial billing badge before profile change ──
+    await page.getByRole('button', { name: /commercial/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /cost summary/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const initialBadge = page.getByText(/^(As needed|Fixed for selected weeks \u00b7|Fixed for whole project \u00b7|Varies by week)/).first()
+    await expect(initialBadge).toBeVisible({ timeout: 10_000 })
+    const initialBadgeText = await initialBadge.textContent()
+
+    // ── Return to Resource Profile and open capacity profile editor ──
+    await page.getByRole('button', { name: /resource profile/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const rpDeveloperRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(rpDeveloperRow).toBeVisible({ timeout: 10_000 })
+
+    await rpDeveloperRow.getByTitle('Click to edit capacity profile').click()
     await expect(
       page.getByRole('dialog', { name: /edit capacity profile/i }),
     ).toBeVisible({ timeout: 8_000 })
 
     // ── Select Varies by week (capacityProfile) mode ──
-    const basisSelect = page.getByTestId('cp-planning-basis-select')
-    await expect(basisSelect).toBeVisible()
-    await basisSelect.selectOption('capacityProfile')
+    await page.getByTestId('cp-planning-basis-select').selectOption('capacityProfile')
 
     // ── Fill first segment: W2-W4 (0-indexed weeks 1-3), 80% ──
-    // First segment row exists by default when switching to capacityProfile
     await page.getByTestId('cp-seg-start-0').fill('1')
     await page.getByTestId('cp-seg-end-0').fill('3')
     await page.getByTestId('cp-seg-pct-0').fill('80')
@@ -441,21 +458,30 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await page.getByTestId('cp-seg-end-1').fill('9')
     await page.getByTestId('cp-seg-pct-1').fill('60')
 
-    // ── Save and wait for modal to close ──
-    const saveResponse = page.waitForResponse(
-      resp => resp.url().includes('/capacity-profiles/') && resp.request().method() === 'PUT',
+    // ── Save and verify modal closes ──
+    const saveResp = page.waitForResponse(
+      r => r.url().includes('/capacity-profiles/') && r.request().method() === 'PUT',
       { timeout: 15_000 },
     )
     await page.getByTestId('cp-save-btn').click()
-    expect((await saveResponse).ok()).toBeTruthy()
+    expect((await saveResp).ok()).toBeTruthy()
     await expect(
       page.getByRole('dialog', { name: /edit capacity profile/i }),
     ).not.toBeVisible({ timeout: 8_000 })
 
-    // ── Verify badge shows Varies by week after save ──
+    // ── Verify exact visible segment display on Resource Profile row ──
     await expect(
-      developerRow.getByRole('button', { name: /Varies by week/i }),
+      rpDeveloperRow.getByRole('button', { name: /Varies by week/i }),
     ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      rpDeveloperRow.getByText(/W2-W4: 80%/),
+    ).toBeVisible({ timeout: 5_000 })
+    await expect(
+      rpDeveloperRow.getByText(/W8-W10: 60%/),
+    ).toBeVisible({ timeout: 5_000 })
+    // The segments display is: "W2-W4: 80% \u00b7 W8-W10: 60%"
+    // No filler segment for the gap weeks 5-7
+    await expect(rpDeveloperRow.locator('text=W5-W7')).toHaveCount(0)
 
     // ── Navigate to Timeline, schedule, verify capacity renders ──
     await page.goto(`/projects/${projectId}/timeline`)
@@ -469,25 +495,27 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await expect(
       page.getByRole('button', { name: /sequential|parallel/i }).first(),
     ).toBeVisible({ timeout: 20_000 })
-    // Verify resource-counts panel renders (capacity data reflects profile)
-    // The panel exists in the DOM even when collapsed
     await expect(page.getByTestId('resource-counts')).toBeVisible({ timeout: 10_000 })
 
-    // ── Return to Resource Profile and verify persistence after navigation ──
+    // ── Return to Resource Profile and verify segments persist after full cycle ──
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
     ).toBeVisible({ timeout: 10_000 })
-    const reloadedDeveloperRow = page.locator('tr').filter({ hasText: /developer/i }).first()
-    await expect(reloadedDeveloperRow).toBeVisible({ timeout: 10_000 })
 
-    // Verify badge still shows Varies by week after navigation
+    const finalDevRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(finalDevRow).toBeVisible({ timeout: 10_000 })
+
     await expect(
-      reloadedDeveloperRow.getByRole('button', { name: /Varies by week/i }),
+      finalDevRow.getByRole('button', { name: /Varies by week/i }),
     ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      finalDevRow.getByText(/W2-W4: 80% \u00b7 W8-W10: 60%/),
+    ).toBeVisible({ timeout: 5_000 })
+    await expect(finalDevRow.locator('text=W5-W7')).toHaveCount(0)
 
-    // Open editor again to verify segments persisted
-    await reloadedDeveloperRow.getByTitle('Click to edit capacity profile').click()
+    // Open editor to verify segments persisted after navigation
+    await finalDevRow.getByTitle('Click to edit capacity profile').click()
     await expect(
       page.getByRole('dialog', { name: /edit capacity profile/i }),
     ).toBeVisible({ timeout: 8_000 })
@@ -499,20 +527,20 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await expect(page.getByTestId('cp-seg-end-1')).toHaveValue('9')
     await expect(page.getByTestId('cp-seg-pct-1')).toHaveValue('60')
 
-    // Cancel to close editor
     await page.getByTestId('cp-cancel-btn').click()
     await expect(
       page.getByRole('dialog', { name: /edit capacity profile/i }),
     ).not.toBeVisible({ timeout: 5_000 })
 
-    // ── Open Commercial tab — verify billing basis unchanged ──
-    // Day rates were not configured for this test project, so the allocation
-    // badges may not render. The key assertion is that the Cost Summary heading
-    // loads without error — confirming the capacity profile change did not break
-    // the Commercial billing page.
+    // ── Verify Commercial billing basis unchanged after profile edit ──
     await page.getByRole('button', { name: /commercial/i }).click()
     await expect(
       page.getByRole('heading', { name: /cost summary/i }),
     ).toBeVisible({ timeout: 10_000 })
+
+    const finalBadge = page.getByText(/^(As needed|Fixed for selected weeks \u00b7|Fixed for whole project \u00b7|Varies by week)/).first()
+    await expect(finalBadge).toBeVisible({ timeout: 10_000 })
+    const finalBadgeText = await finalBadge.textContent()
+    expect(finalBadgeText?.trim()).toBe(initialBadgeText?.trim())
   })
 })

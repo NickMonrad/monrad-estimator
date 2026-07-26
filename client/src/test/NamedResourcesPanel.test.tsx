@@ -394,7 +394,7 @@ describe('NamedResourcesPanel capacity profile display', () => {
 
     expect(screen.getByRole('link', { name: /Open Squad Planner/i })).toHaveAttribute(
       'href',
-      '/projects/proj-1/squad-planner',
+      '/projects/proj-1/timeline?panel=squad-planner',
     )
   })
 })
