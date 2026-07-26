@@ -499,14 +499,16 @@ test.describe('Resource Allocation', () => {
     await expect(ownerCard.getByText(/W1-W4: 50%/)).toBeVisible()
     await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
 
-    // Protected owner shows Open Squad Planner link and profile info
-    await expect(page.getByRole("link", { name: "Open Squad Planner" }).first()).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByRole("link", { name: "Open Squad Planner" }).first()).toHaveAttribute('href', `/projects/${projectId}/timeline?panel=squad-planner`)
+        // Protected owner shows Open Squad Planner link and profile info
+    const plannerLink = page.getByRole('link', { name: 'Open Squad Planner' }).first()
+    await expect(plannerLink).toBeVisible({ timeout: 5_000 })
+    await expect(plannerLink).toHaveAttribute('href', `/projects/${projectId}/timeline?panel=squad-planner`)
     await expect(page.getByRole('button', { name: /Edit profile|Create profile/i })).toHaveCount(0)
-    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
-    await expect(page.getByRole('dialog', { name: 'Squad Planner' })).toBeVisible({ timeout: 15_000 })
 
-    const profilePath = `/api/projects/${projectId}/resource-profile`
+    await plannerLink.click()
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\?panel=squad-planner`))
+    await expect(page.getByRole('dialog', { name: 'Squad Planner' })).toBeVisible({ timeout: 15_000 })
+const profilePath = `/api/projects/${projectId}/resource-profile`
     const [returnedProfileResponse] = await Promise.all([
       page.waitForResponse(response => new URL(response.url()).pathname === profilePath && response.request().method() === 'GET'),
       page.goBack(),
