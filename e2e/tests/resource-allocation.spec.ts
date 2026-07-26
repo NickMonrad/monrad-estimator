@@ -366,7 +366,7 @@ test.describe('Resource Allocation', () => {
     await modeSelect.selectOption('wholeProjectAllocation')
 
     // Now Default percent should be visible
-    await expect(page.getByText(/Default percent/i).first()).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByTestId('cp-default-pct-input')).toBeVisible({ timeout: 5_000 })
     const capacityInput = page.getByTestId('cp-default-pct-input')
     await expect(capacityInput).toBeVisible({ timeout: 5_000 })
 
@@ -502,8 +502,8 @@ test.describe('Resource Allocation', () => {
     const ownerPanel = page.getByTestId(`profile-managed-panel-${before.namedResourceId}`)
     await ownerProfile.click()
     await expect(ownerPanel.getByText(/managed through the weekly capacity plan/i)).toBeVisible()
-    await expect(ownerPanel.getByRole('combobox', { name: /Planning basis/i })).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Default percent$/)).toHaveCount(0)
+    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
     await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
@@ -966,8 +966,8 @@ test.describe('Segmented NAMED_PERSON protection', () => {
     // The profile-managed panel guidance is always rendered (no badge click needed)
     const ownerPanel = page.getByTestId(`profile-managed-panel-${nrId}`)
     await expect(ownerPanel).toBeVisible()
-    await expect(ownerPanel.getByRole('combobox', { name: /Planning basis/i })).toHaveCount(0)
-    await expect(ownerPanel.getByText(/^Default percent$/)).toHaveCount(0)
+    await expect(ownerPanel.getByRole('combobox', { name: /availability pattern/i })).toHaveCount(0)
+    await expect(ownerPanel.getByText(/^Available %$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available from$/)).toHaveCount(0)
     await expect(ownerPanel.getByText(/^Available to$/)).toHaveCount(0)
     await expect(ownerPanel.getByRole('button', { name: /^Save$/ })).toHaveCount(0)
