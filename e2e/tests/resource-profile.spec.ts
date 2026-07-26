@@ -606,4 +606,4 @@ test.describe('Capacity profile editor — ROLE segments', () => {
       }
     }
   })
-}))
+})
