@@ -479,7 +479,7 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await expect(
       rpDeveloperRow.getByText(/W8-W10: 60%/),
     ).toBeVisible({ timeout: 5_000 })
-    // The segments display is: "W2-W4: 80% \u00b7 W8-W10: 60%"
+    // The segments display is: "W2-W4: 80%·W8-W10: 60%"
     // No filler segment for the gap weeks 5-7
     await expect(rpDeveloperRow.locator('text=W5-W7')).toHaveCount(0)
 
@@ -510,7 +510,7 @@ test.describe('Capacity profile editor — ROLE segments', () => {
       finalDevRow.getByRole('button', { name: /Varies by week/i }),
     ).toBeVisible({ timeout: 10_000 })
     await expect(
-      finalDevRow.getByText(/W2-W4: 80% \u00b7 W8-W10: 60%/),
+      finalDevRow.getByText(/W2-W4: 80%·W8-W10: 60%/),
     ).toBeVisible({ timeout: 5_000 })
     await expect(finalDevRow.locator('text=W5-W7')).toHaveCount(0)
 
