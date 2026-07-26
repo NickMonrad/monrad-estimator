@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, createProject } from './helpers'
+import { login, createProject, quickSchedule } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -92,8 +92,8 @@ test.describe('Resource Profile', () => {
 
     const hubUrl = page.url().replace('/backlog', '')
     await page.goto(hubUrl)
-    await page.getByRole('button', { name: /resource profile/i }).waitFor({ timeout: 8_000 })
-    await page.getByRole('button', { name: /resource profile/i }).click()
+    await page.getByRole('button', { name: /resource profile/i }).first().waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /resource profile/i }).first().click()
 
     await expect(
       page.getByRole('heading', { name: /resource profile/i })
@@ -356,5 +356,300 @@ test.describe('Resource Profile — cache invalidation from Timeline', () => {
     await expect(
       page.getByRole('heading', { name: /cost summary/i })
     ).toBeVisible({ timeout: 10_000 })
+  })
+})
+
+/* ======================================================================== *
+ *  Capacity Profile Editor — issue #363                                    *
+ *  Tests the first-class capacity-profile editor for ROLE with Varies      *
+ *  by week segments, cross-view parity (Timeline, Commercial).             *
+ *  Creates a project with Developer + Tech Lead tasks, opens the ROLE      *
+ *  capacity profile badge, sets CAPACITY_PLAN mode with two non-overlapping*
+ *  segments separated by a gap, saves, verifies badge display on Resource  *
+ *  Profile, navigates to Timeline to verify capacity renders, returns to   *
+ *  Resource Profile to confirm persistence, and opens Commercial to        *
+ *  verify billing basis unchanged.                                         *
+ * ======================================================================== */
+const CAP_PROFILE_CSV = [
+  'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+  'Epic,Platform Build,,,,,,,,,,,,',
+  'Feature,Platform Build,Alpha Feature,,,,,,,,,,,',
+  'Feature,Platform Build,Bravo Feature,,,,,,,,,,,',
+  'Feature,Platform Build,Charlie Feature,,,,,,,,,,,',
+  'Story,Platform Build,Alpha Feature,Alpha Story,,,,,,,,,,',
+  'Story,Platform Build,Bravo Feature,Bravo Story,,,,,,,,,,',
+  'Story,Platform Build,Charlie Feature,Charlie Story,,,,,,,,,,',
+  'Task,Platform Build,Alpha Feature,Alpha Story,Alpha Task,,Developer,8,1,,,,,',
+  'Task,Platform Build,Bravo Feature,Bravo Story,Bravo Task,,Developer,8,1,,,,,',
+  'Task,Platform Build,Charlie Feature,Charlie Story,Charlie Task,,Developer,8,1,,,,,',
+].join('\n')
+
+test.describe('Capacity profile editor — ROLE segments', () => {
+  test('create Varies by week segments, verify cross-view persistence and Commercial unchanged', async ({ page }) => {
+    test.setTimeout(150_000)
+
+    // ── Setup: login, create project, seed backlog with Developer + Tech Lead ──
+    await login(page)
+    const projectName = `E2E CapProfile ${Date.now()}`
+    await createProject(page, projectName)
+
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
+    const tmpFile = path.join(os.tmpdir(), `cap-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, CAP_PROFILE_CSV)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
+
+    const projectId = page.url().match(/\/projects\/([^\/]+)/)?.[1]!
+
+    // ── Navigate to Resource Profile and set day rate ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const developerRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(developerRow).toBeVisible({ timeout: 10_000 })
+
+    // Set a day rate for Commercial assertions
+    const dayRateInput = page.locator('input.w-20').first()
+    await expect(dayRateInput).toBeVisible({ timeout: 10_000 })
+    await dayRateInput.fill('1200')
+    await dayRateInput.press('Tab')
+
+    // ── Capture initial Commercial values before profile change ──
+    await page.getByRole('button', { name: /commercial/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /cost summary/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // Locate the Developer Commercial row by its name cell
+    const devCommercialRow = page.locator('tr').filter({ hasText: 'Developer' }).first()
+    await expect(devCommercialRow).toBeVisible({ timeout: 10_000 })
+
+    // Capture day rate: Commercial table renders it in the first td with day rate amount
+    // The row has columns: name, count, effortDays, dayRate, billableDays, subtotal
+    const devDayRateCell = devCommercialRow.locator('td').nth(6)
+    await expect(devDayRateCell).toBeVisible({ timeout: 5_000 })
+    const initialDayRate = await devDayRateCell.textContent()
+
+    // Capture billable days (effort-based billing quantity)
+    const devBillableCell = devCommercialRow.locator('td').nth(5)
+    await expect(devBillableCell).toBeVisible({ timeout: 5_000 })
+    const initialBillableDays = await devBillableCell.textContent()
+
+    // Capture subtotal
+    const devSubtotalCell = devCommercialRow.locator('td').nth(7)
+    await expect(devSubtotalCell).toBeVisible({ timeout: 5_000 })
+    const initialSubtotal = await devSubtotalCell.textContent()
+
+    // ── Return to Resource Profile and open capacity profile editor ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const rpDevRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(rpDevRow).toBeVisible({ timeout: 10_000 })
+
+    await rpDevRow.getByTitle('Click to edit capacity profile').click()
+    await expect(
+      page.getByRole('dialog', { name: /edit capacity profile/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    // ── Select Varies by week (capacityProfile) mode ──
+    await page.getByTestId('cp-planning-basis-select').selectOption('capacityProfile')
+
+    // ── Fill first segment: W2-W4 (0-indexed weeks 1-3), 80% ──
+    await page.getByTestId('cp-seg-start-0').fill('1')
+    await page.getByTestId('cp-seg-end-0').fill('3')
+    await page.getByTestId('cp-seg-pct-0').fill('80')
+
+    // ── Add second segment: W8-W10 (0-indexed weeks 7-9), 60% ──
+    await page.getByTestId('cp-add-segment').click()
+    await page.getByTestId('cp-seg-start-1').fill('7')
+    await page.getByTestId('cp-seg-end-1').fill('9')
+    await page.getByTestId('cp-seg-pct-1').fill('60')
+
+    // ── Save and verify modal closes ──
+    const saveResp = page.waitForResponse(
+      r => r.url().includes('/capacity-profiles/') && r.request().method() === 'PUT',
+      { timeout: 15_000 },
+    )
+    await page.getByTestId('cp-save-btn').click()
+    expect((await saveResp).ok()).toBeTruthy()
+    await expect(
+      page.getByRole('dialog', { name: /edit capacity profile/i }),
+    ).not.toBeVisible({ timeout: 8_000 })
+
+    // ── Verify exact visible segment display on Resource Profile row ──
+    await expect(
+      rpDevRow.getByRole('button', { name: /Varies by week/i }),
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      rpDevRow.getByText(/W2-W4: 80%/),
+    ).toBeVisible({ timeout: 5_000 })
+    await expect(
+      rpDevRow.getByText(/W8-W10: 60%/),
+    ).toBeVisible({ timeout: 5_000 })
+    await expect(rpDevRow.locator('text=W5-W7')).toHaveCount(0)
+
+    // ── Navigate to Timeline, schedule, intercept capacity data ──
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    await page.locator('input[type="date"]').fill('2026-06-01')
+    await expect(page.locator('input[type="date"]')).toHaveValue('2026-06-01')
+
+        await quickSchedule(page)
+    await expect(
+      page.getByRole('button', { name: /sequential|parallel/i }).first(),
+    ).toBeVisible({ timeout: 20_000 })
+
+    // Read timeline to discover feature IDs, then position them deterministically
+    const token = await page.evaluate(() => localStorage.getItem('token'))
+    const authHeaders = { Authorization: `Bearer ${token}` }
+
+    const initialTimelineResp = await page.request.get(
+      `/api/projects/${projectId}/timeline`,
+      { headers: authHeaders },
+    )
+    expect(initialTimelineResp.ok()).toBeTruthy()
+    const initialTimelineData = await initialTimelineResp.json() as {
+      entries: Array<{ featureId: string; featureName: string }>
+    }
+    expect(initialTimelineData.entries.length).toBeGreaterThanOrEqual(3)
+
+    // Position three features to create Developer demand in each profile region:
+    // Alpha Feature at week 1 (W2, inside first segment at 80%)
+    // Bravo Feature at week 4 (W5, inside gap at 0%)
+    // Charlie Feature at week 7 (W8, inside second segment at 60%)
+    const alphaFeature = initialTimelineData.entries.find((e: { featureName: string }) => /alpha/i.test(e.featureName))
+    const bravoFeature = initialTimelineData.entries.find((e: { featureName: string }) => /bravo/i.test(e.featureName))
+    const charlieFeature = initialTimelineData.entries.find((e: { featureName: string }) => /charlie/i.test(e.featureName))
+    expect(alphaFeature).toBeDefined()
+    expect(bravoFeature).toBeDefined()
+    expect(charlieFeature).toBeDefined()
+
+    for (const [feature, startWeek] of [
+      [alphaFeature!, 1],
+      [bravoFeature!, 4],
+      [charlieFeature!, 7],
+    ] as const) {
+      const posResp = await page.request.put(
+        `/api/projects/${projectId}/timeline/${feature.featureId}`,
+        { headers: authHeaders, data: { startWeek, durationWeeks: 1 } },
+      )
+      expect(posResp.ok(), `Failed to position ${feature.featureName} at week ${startWeek}`).toBeTruthy()
+    }
+
+    // Re-read timeline after positioning all three features
+    const timelineResp = await page.request.get(
+      `/api/projects/${projectId}/timeline`,
+      { headers: authHeaders },
+    )
+    expect(timelineResp.ok()).toBeTruthy()
+    const timelineData = await timelineResp.json() as {
+      weeklyDemand: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
+    }
+    expect(timelineData.weeklyDemand).toBeDefined()
+
+    // One Developer provides five capacity days per week.
+    // The resolved capacity profile applies:
+    //   W2-W4 (indices 1-3): 80% -> 4 capacity days
+    //   W5-W7 (indices 4-6): gap (0%) -> 0 capacity days
+    //   W8-W10 (indices 7-9): 60% -> 3 capacity days
+    const devEntries = timelineData.weeklyDemand.filter(
+      (w: { resourceTypeName: string }) => /dev/i.test(w.resourceTypeName),
+    )
+
+    // Choose week 2 (W3, inside first segment), week 5 (W6, gap), week 8 (W9, inside second segment)
+    const firstSegmentWeek = devEntries.find((w: { week: number }) => w.week === 1)
+    const gapWeek = devEntries.find((w: { week: number }) => w.week === 4)
+    const secondSegmentWeek = devEntries.find((w: { week: number }) => w.week === 7)
+
+    expect(firstSegmentWeek, 'No Developer demand at week 2 (first segment)').toBeDefined()
+    expect(gapWeek, 'No Developer demand at week 5 (gap)').toBeDefined()
+    expect(secondSegmentWeek, 'No Developer demand at week 8 (second segment)').toBeDefined()
+
+    // Assert exact resolved capacity values from the profile
+    expect(firstSegmentWeek!.week).toBe(1)
+    expect(firstSegmentWeek!.capacityDays).toBeCloseTo(4, 5)
+
+    expect(gapWeek!.week).toBe(4)
+    expect(gapWeek!.capacityDays).toBe(0)
+
+    expect(secondSegmentWeek!.week).toBe(7)
+    expect(secondSegmentWeek!.capacityDays).toBeCloseTo(3, 5)
+    // ── Return to Resource Profile and verify segments persist after full cycle ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const finalDevRow = page.locator('tr').filter({ hasText: /developer/i }).first()
+    await expect(finalDevRow).toBeVisible({ timeout: 10_000 })
+
+    await expect(
+      finalDevRow.getByRole('button', { name: /Varies by week/i }),
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      finalDevRow.getByText(/W2-W4: 80%·W8-W10: 60%/),
+    ).toBeVisible({ timeout: 5_000 })
+    await expect(finalDevRow.locator('text=W5-W7')).toHaveCount(0)
+
+    await finalDevRow.getByTitle('Click to edit capacity profile').click()
+    await expect(
+      page.getByRole('dialog', { name: /edit capacity profile/i }),
+    ).toBeVisible({ timeout: 8_000 })
+
+    await expect(page.getByTestId('cp-seg-start-0')).toHaveValue('1')
+    await expect(page.getByTestId('cp-seg-end-0')).toHaveValue('3')
+    await expect(page.getByTestId('cp-seg-pct-0')).toHaveValue('80')
+    await expect(page.getByTestId('cp-seg-start-1')).toHaveValue('7')
+    await expect(page.getByTestId('cp-seg-end-1')).toHaveValue('9')
+    await expect(page.getByTestId('cp-seg-pct-1')).toHaveValue('60')
+
+    await page.getByTestId('cp-cancel-btn').click()
+    await expect(
+      page.getByRole('dialog', { name: /edit capacity profile/i }),
+    ).not.toBeVisible({ timeout: 5_000 })
+
+    // ── Verify Commercial billing values unchanged after profile edit ──
+    await page.getByRole('button', { name: /commercial/i }).click()
+    await expect(
+      page.getByRole('heading', { name: /cost summary/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // Locate Developer row again
+    const finalDevCommercialRow = page.locator('tr').filter({ hasText: 'Developer' }).first()
+    await expect(finalDevCommercialRow).toBeVisible({ timeout: 10_000 })
+
+    // Assert day rate unchanged
+    const finalDayRateCell = finalDevCommercialRow.locator('td').nth(6)
+    await expect(finalDayRateCell).toBeVisible({ timeout: 5_000 })
+    const finalDayRate = await finalDayRateCell.textContent()
+    expect(finalDayRate?.trim()).toBe(initialDayRate?.trim())
+
+    // Assert billable days unchanged
+    const finalBillableCell = finalDevCommercialRow.locator('td').nth(5)
+    await expect(finalBillableCell).toBeVisible({ timeout: 5_000 })
+    const finalBillableDays = await finalBillableCell.textContent()
+    expect(finalBillableDays?.trim()).toBe(initialBillableDays?.trim())
+
+    // Assert subtotal unchanged
+    const finalSubtotalCell = finalDevCommercialRow.locator('td').nth(7)
+    await expect(finalSubtotalCell).toBeVisible({ timeout: 5_000 })
+    const finalSubtotal = await finalSubtotalCell.textContent()
+    expect(finalSubtotal?.trim()).toBe(initialSubtotal?.trim())
   })
 })

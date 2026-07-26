@@ -35,6 +35,7 @@ export function invalidateProjectResourceProfile(
   queryClient.invalidateQueries({ queryKey: ['resource-types', projectId] })
   queryClient.invalidateQueries({ queryKey: ['overheads', projectId] })
   queryClient.invalidateQueries({ queryKey: ['timeline', projectId] })
+  queryClient.invalidateQueries({ queryKey: ['capacity-profiles', projectId] })
 }
 
 /**

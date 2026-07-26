@@ -34,13 +34,13 @@ describe('projectInvalidation', () => {
 
       invalidateProjectResourceProfile({ invalidateQueries } as never, 'project-1')
 
-      expect(invalidateQueries).toHaveBeenCalledTimes(4)
+      expect(invalidateQueries).toHaveBeenCalledTimes(5)
       expect(invalidateQueries).toHaveBeenNthCalledWith(1, { queryKey: ['resource-profile', 'project-1'] })
       expect(invalidateQueries).toHaveBeenNthCalledWith(2, { queryKey: ['resource-types', 'project-1'] })
       expect(invalidateQueries).toHaveBeenNthCalledWith(3, { queryKey: ['overheads', 'project-1'] })
       expect(invalidateQueries).toHaveBeenNthCalledWith(4, { queryKey: ['timeline', 'project-1'] })
+      expect(invalidateQueries).toHaveBeenNthCalledWith(5, { queryKey: ['capacity-profiles', 'project-1'] })
     })
-
     it('does nothing when projectId is undefined', () => {
       const invalidateQueries = vi.fn()
 

@@ -187,7 +187,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
-### `resource-profile.spec.ts` — Resource Profile & Commercial (8 tests)
+### `resource-profile.spec.ts` — Resource Profile & Commercial (9 tests)
 
 #### `Resource Profile` describe block (1 test — original)
 
@@ -216,6 +216,12 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | Test | Description |
 |------|-------------|
 | rate cards page loads with create button | Navigates to `/rate-cards`; verifies "Rate Cards" heading and "+ Create Rate Card" button are visible |
+
+#### `Capacity profile editor — ROLE segments` describe block (1 test — issue #363)
+
+| Test | Description |
+|------|-------------|
+| create Varies by week segments, verify cross-view persistence and Commercial unchanged | Seeds Developer + Tech Lead tasks via CSV, opens the ROLE capacity profile editor on the Developer row, selects "Varies by week" (capacityProfile) mode, adds two non-overlapping segments (W2-W4: 80%, W8-W10: 60%) with a gap (W5-W7), saves, verifies badge shows "Varies by week", navigates to Timeline → sets start date → Quick schedule → verifies resource-counts panel renders, returns to Resource Profile — verifies badge and editor segments persist after navigation, switches to Commercial tab — verifies Cost Summary heading loads without error |
 
 ---
 

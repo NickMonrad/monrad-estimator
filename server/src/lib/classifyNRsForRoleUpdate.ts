@@ -26,6 +26,7 @@ export interface NRProfileState {
   namedResourceId: string | null
   legacy: unknown
   ownerKind?: string
+  source?: string | null
   segments?: unknown[]
 }
 
@@ -161,6 +162,12 @@ export function classifyNRsForRoleUpdate(
         }
 
         if (profile.segments && profile.segments.length > 0) {
+          hasProtectedEvidence = true
+          break
+        }
+
+        // Manual profiles with explicit source are protected — even with legacy metadata
+        if (profile.source === 'MANUAL') {
           hasProtectedEvidence = true
           break
         }

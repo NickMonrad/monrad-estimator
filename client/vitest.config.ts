@@ -9,5 +9,6 @@ export default mergeConfig(viteConfig, defineConfig({
       jsdom: { url: 'http://localhost/' },
     },
     setupFiles: './src/test/setup.ts',
+    include: ['src/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
   },
 }))

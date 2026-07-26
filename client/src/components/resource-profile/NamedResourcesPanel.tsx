@@ -1,13 +1,17 @@
+import { useState } from 'react'
 import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type { ResourceProfileRow } from '../../types/backlog'
 import {
+  buildEffectiveProfileDraft,
   formatPlanningBasis,
   formatCapacityProfileSource,
   formatResolutionSource,
   getEffectiveAvailabilityDisplay,
 } from '../../lib/capacityProfileFormatting'
+import CapacityProfileEditorModal from './CapacityProfileEditorModal'
+import type { CapacityProfileEditorDraft } from '../../lib/capacityProfileFormatting'
 
 
 type PricingModel = 'ACTUAL_DAYS' | 'PRO_RATA'
@@ -59,6 +63,12 @@ export default function NamedResourcesPanel({
   allocations = [],
 }: NamedResourcesPanelProps) {
   const qc = useQueryClient()
+  const [editingProfile, setEditingProfile] = useState<{
+    ownerKind: 'ROLE' | 'NAMED_PERSON'
+    ownerId: string
+    initialProfile: CapacityProfileEditorDraft
+    isPersisted: boolean
+  } | null>(null)
 
   const { data: resources = [], isLoading } = useQuery<NamedResource[]>({
     queryKey: ['named-resources', projectId, rtId],
@@ -161,6 +171,34 @@ export default function NamedResourcesPanel({
         }
       }),
   ]
+
+  function isProtectedOwner(resource: (typeof mergedResources)[number]) {
+    return resource.resourceIdentity === 'PLANNED_RESOURCE'
+      || resource.allocation?.capacityProfile?.source === 'squadPlanner'
+  }
+
+  function hasEditableDraft(resource: (typeof mergedResources)[number]) {
+    return Boolean(resource.allocation?.capacityProfile || buildEffectiveProfileDraft(resource.availability))
+  }
+
+  function openProfileEditor(resource: (typeof mergedResources)[number]) {
+    if (isProtectedOwner(resource)) return
+    const profile = resource.allocation?.capacityProfile
+    const draft: CapacityProfileEditorDraft | null = profile ? {
+      planningBasis: profile.planningBasis,
+      defaultPercent: profile.defaultPercent ?? null,
+      startWeek: profile.startWeek ?? null,
+      endWeek: profile.endWeek ?? null,
+      segments: profile.segments,
+    } : buildEffectiveProfileDraft(resource.availability)
+    if (!draft) return
+    setEditingProfile({
+      ownerKind: 'NAMED_PERSON',
+      ownerId: resource.id,
+      initialProfile: draft,
+      isPersisted: Boolean(profile),
+    })
+  }
 
   return (
     <tr>
@@ -347,30 +385,28 @@ export default function NamedResourcesPanel({
                           ))}
                         </div>
                       )}
-                      {/* Profile-managed guidance */}
-                      {resource.availability?.isProfileManaged && (() => {
-                        const isPlannerManaged = resource.allocation?.capacityProfile?.resolutionSource === 'ACTIVE_CAPACITY_PLAN' || resource.resourceIdentity === 'PLANNED_RESOURCE'
-                        return (
-                          <div data-testid={`profile-managed-panel-${resource.id}`} className="mt-1 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-2 text-xs">
-                            <p className="text-gray-600 dark:text-gray-300">
-                              Availability varies by week.
-                              {isPlannerManaged
-                                ? ' This profile is managed through the weekly capacity plan.'
-                                : ' This weekly profile is protected and cannot be edited through the scalar input fields.'}
-                            </p>
-                            {isPlannerManaged && (
-                              <a
-                                href={`/projects/${projectId}/timeline?panel=squad-planner`}
-                                className="mt-2 inline-flex items-center rounded-lg bg-lab3-navy px-3 py-1 text-xs font-medium text-white hover:bg-lab3-blue"
-                              >
-                                Open Squad Planner ↗
-                              </a>
-                            )}
-                          </div>
-                        )
-                      })()}
                     </div>
                   )}
+                  <div className="mt-1">
+                    {isProtectedOwner(resource) ? (
+                      <a
+                        href={`/projects/${projectId}/timeline?panel=squad-planner`}
+                        className="text-xs text-lab3-blue hover:underline"
+                      >
+                        Open Squad Planner
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        data-testid={`named-resource-profile-action-${resource.id}`}
+                        onClick={() => openProfileEditor(resource)}
+                        disabled={!hasEditableDraft(resource)}
+                        className="text-xs text-lab3-blue hover:underline disabled:text-gray-400 disabled:no-underline"
+                      >
+                        {resource.allocation?.capacityProfile ? 'Edit profile' : 'Create profile'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -383,6 +419,20 @@ export default function NamedResourcesPanel({
           >
             {createResource.isPending ? 'Adding…' : '+ Add person'}
           </button>
+          {/* Capacity profile editor modal */}
+          {editingProfile && (
+            <CapacityProfileEditorModal
+              isOpen={true}
+              onClose={() => setEditingProfile(null)}
+              initialProfile={editingProfile.initialProfile}
+              isPersisted={editingProfile.isPersisted}
+              ownerKind={editingProfile.ownerKind}
+              ownerId={editingProfile.ownerId}
+              projectId={projectId}
+              onSaved={() => void 0}
+              onCancel={() => setEditingProfile(null)}
+            />
+          )}
         </div>
       </td>
     </tr>

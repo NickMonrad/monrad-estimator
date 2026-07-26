@@ -113,12 +113,8 @@ describe('Capacity Profile Display', () => {
       })}
     />,</MemoryRouter>)
 
-    // Badge should show 'As needed' from profile, not 'Fixed for selected weeks' from stale allocationMode
-    expect(screen.getByText(/As needed/i)).toBeInTheDocument()
-    // Button title is the stable action label
-    const button = screen.getByTitle('Click to edit allocation')
-    expect(button).toBeInTheDocument()
-    // Source tag should indicate Squad Planner (formatted via shared helper)
+    // Squad Planner ownership protects the profile while preserving source metadata.
+    expect(screen.getByRole('button', { name: 'Open Squad Planner' })).toHaveAttribute('title', 'Managed by Squad Planner')
     expect(screen.getByText('Squad Planner')).toBeInTheDocument()
     // SR-only metadata present with formatted source and resolution
     expect(screen.getByText(/Profile source:/)).toBeInTheDocument()
@@ -162,8 +158,7 @@ describe('Capacity Profile Display', () => {
     expect(sourceTag.closest('span')).toHaveClass('uppercase')
     // SR-only span contains formatted resolution source
     expect(screen.getByText(/Resolution source: Profile/)).toBeInTheDocument()
-    // Button has stable title
-    expect(screen.getByTitle('Click to edit allocation')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Squad Planner' })).toHaveAttribute('title', 'Managed by Squad Planner')
   })
 
   it('renders capacity segments correctly', () => {
@@ -514,9 +509,7 @@ describe('Named resource aggregate hint', () => {
       })}
     />,</MemoryRouter>)
 
-    // Aggregate hint: single person, no capacity profiles
-    expect(screen.getByText(/1 person · No profiles/)).toBeInTheDocument()
-    // Role identity label
+    expect(screen.getByText(/1 person · No capacity profiles/)).toBeInTheDocument()
     expect(screen.getByText('Named person')).toBeInTheDocument()
   })
 })
