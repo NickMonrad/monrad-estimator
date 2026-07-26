@@ -373,10 +373,15 @@ test.describe('Resource Profile — cache invalidation from Timeline', () => {
 const CAP_PROFILE_CSV = [
   'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
   'Epic,Platform Build,,,,,,,,,,,,',
-  'Feature,Platform Build,Core API,,,,,,,,,,,',
-  'Story,Platform Build,Core API,API Design,,,,,,,,,,',
-  'Task,Platform Build,Core API,API Design,Implement,,Developer,40,5,,,,,',
-  'Task,Platform Build,Core API,API Design,Review,,Tech Lead,16,2,,,,,',
+  'Feature,Platform Build,Alpha Feature,,,,,,,,,,,',
+  'Feature,Platform Build,Bravo Feature,,,,,,,,,,,',
+  'Feature,Platform Build,Charlie Feature,,,,,,,,,,,',
+  'Story,Platform Build,Alpha Feature,Alpha Story,,,,,,,,,,',
+  'Story,Platform Build,Bravo Feature,Bravo Story,,,,,,,,,,',
+  'Story,Platform Build,Charlie Feature,Charlie Story,,,,,,,,,,',
+  'Task,Platform Build,Alpha Feature,Alpha Story,Alpha Task,,Developer,8,1,,,,,',
+  'Task,Platform Build,Bravo Feature,Bravo Story,Bravo Task,,Developer,8,1,,,,,',
+  'Task,Platform Build,Charlie Feature,Charlie Story,Charlie Task,,Developer,8,1,,,,,',
 ].join('\n')
 
 test.describe('Capacity profile editor — ROLE segments', () => {
@@ -505,71 +510,87 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await page.locator('input[type="date"]').fill('2026-06-01')
     await expect(page.locator('input[type="date"]')).toHaveValue('2026-06-01')
 
-    await quickSchedule(page)
+        await quickSchedule(page)
     await expect(
       page.getByRole('button', { name: /sequential|parallel/i }).first(),
     ).toBeVisible({ timeout: 20_000 })
 
-    // Read timeline data directly via authenticated API to verify profile consumption
+    // Read timeline to discover feature IDs, then position them deterministically
     const token = await page.evaluate(() => localStorage.getItem('token'))
+    const authHeaders = { Authorization: `Bearer ${token}` }
+
+    const initialTimelineResp = await page.request.get(
+      `/api/projects/${projectId}/timeline`,
+      { headers: authHeaders },
+    )
+    expect(initialTimelineResp.ok()).toBeTruthy()
+    const initialTimelineData = await initialTimelineResp.json() as {
+      entries: Array<{ featureId: string; featureName: string }>
+    }
+    expect(initialTimelineData.entries.length).toBeGreaterThanOrEqual(3)
+
+    // Position three features to create Developer demand in each profile region:
+    // Alpha Feature at week 1 (W2, inside first segment at 80%)
+    // Bravo Feature at week 4 (W5, inside gap at 0%)
+    // Charlie Feature at week 7 (W8, inside second segment at 60%)
+    const alphaFeature = initialTimelineData.entries.find((e: { featureName: string }) => /alpha/i.test(e.featureName))
+    const bravoFeature = initialTimelineData.entries.find((e: { featureName: string }) => /bravo/i.test(e.featureName))
+    const charlieFeature = initialTimelineData.entries.find((e: { featureName: string }) => /charlie/i.test(e.featureName))
+    expect(alphaFeature).toBeDefined()
+    expect(bravoFeature).toBeDefined()
+    expect(charlieFeature).toBeDefined()
+
+    for (const [feature, startWeek] of [
+      [alphaFeature!, 1],
+      [bravoFeature!, 4],
+      [charlieFeature!, 7],
+    ] as const) {
+      const posResp = await page.request.put(
+        `/api/projects/${projectId}/timeline/${feature.featureId}`,
+        { headers: authHeaders, data: { startWeek, durationWeeks: 1 } },
+      )
+      expect(posResp.ok(), `Failed to position ${feature.featureName} at week ${startWeek}`).toBeTruthy()
+    }
+
+    // Re-read timeline after positioning all three features
     const timelineResp = await page.request.get(
       `/api/projects/${projectId}/timeline`,
-      { headers: { Authorization: `Bearer ${token}` } },
+      { headers: authHeaders },
     )
     expect(timelineResp.ok()).toBeTruthy()
     const timelineData = await timelineResp.json() as {
       weeklyDemand: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
     }
     expect(timelineData.weeklyDemand).toBeDefined()
-    expect(timelineData.weeklyDemand.length).toBeGreaterThan(0)
 
-    // Developer has 40h effort / 8h/day = 5 person-days total
-    // Segment W2-W4 at 80%: capacityDays = 5 * 0.8 = 4.0
-    // Gap W5-W7 (no segment): 0 capacity
-    // Segment W8-W10 at 60%: capacityDays = 5 * 0.6 = 3.0
-
-
-    // Filter Developer entries
+    // One Developer provides five capacity days per week.
+    // The resolved capacity profile applies:
+    //   W2-W4 (indices 1-3): 80% -> 4 capacity days
+    //   W5-W7 (indices 4-6): gap (0%) -> 0 capacity days
+    //   W8-W10 (indices 7-9): 60% -> 3 capacity days
     const devEntries = timelineData.weeklyDemand.filter(
-      w => /dev/i.test(w.resourceTypeName),
+      (w: { resourceTypeName: string }) => /dev/i.test(w.resourceTypeName),
     )
-    expect(devEntries.length).toBeGreaterThan(0)
 
-    // Find weeks matching segment ranges and the gap
-    // Segment 1: W2-W4 (week indices 1-3) at 80% → capacity > 0
-    // Gap: W5-W7 (week indices 4-6) → capacity = 0
-    // Segment 2: W8-W10 (week indices 7-9) at 60% → capacity > 0
-    const seg1Weeks = devEntries.filter(w => w.week >= 1 && w.week <= 3)
-    const gapWeeks = devEntries.filter(w => w.week >= 4 && w.week <= 6)
-    const seg2Weeks = devEntries.filter(w => w.week >= 7 && w.week <= 9)
+    // Choose week 2 (W3, inside first segment), week 5 (W6, gap), week 8 (W9, inside second segment)
+    const firstSegmentWeek = devEntries.find((w: { week: number }) => w.week === 2)
+    const gapWeek = devEntries.find((w: { week: number }) => w.week === 5)
+    const secondSegmentWeek = devEntries.find((w: { week: number }) => w.week === 8)
 
-    // Verify at least one segment-1 week has non-zero capacity
-    if (seg1Weeks.length > 0) {
-      const maxSeg1 = Math.max(...seg1Weeks.map(w => w.capacityDays))
-      expect(maxSeg1, 'First segment should have non-zero capacity').toBeGreaterThan(0)
-    }
+    expect(firstSegmentWeek, 'No Developer demand at week 3 (first segment)').toBeDefined()
+    expect(gapWeek, 'No Developer demand at week 6 (gap)').toBeDefined()
+    expect(secondSegmentWeek, 'No Developer demand at week 9 (second segment)').toBeDefined()
 
-    // If gap entries exist, they must be zero
-    for (const gap of gapWeeks) {
-      expect(gap.capacityDays, `Gap week ${gap.week + 1} should have zero capacity`).toBe(0)
-    }
+    // Assert exact resolved capacity values from the profile
+    expect(firstSegmentWeek!.week).toBe(2)
+    expect(firstSegmentWeek!.capacityDays).toBeCloseTo(4, 5)
 
-    // Verify at least one segment-2 week has non-zero capacity
-    if (seg2Weeks.length > 0) {
-      const maxSeg2 = Math.max(...seg2Weeks.map(w => w.capacityDays))
-      expect(maxSeg2, 'Second segment should have non-zero capacity').toBeGreaterThan(0)
-    }
+    expect(gapWeek!.week).toBe(5)
+    expect(gapWeek!.capacityDays).toBe(0)
 
-    // If both segments have data, gap capacity must be less than both
-    if (seg1Weeks.length > 0 && seg2Weeks.length > 0 && gapWeeks.length > 0) {
-      const maxGap = Math.max(...gapWeeks.map(w => w.capacityDays))
-      const minSeg1 = Math.min(...seg1Weeks.map(w => w.capacityDays))
-      const minSeg2 = Math.min(...seg2Weeks.map(w => w.capacityDays))
-      expect(maxGap).toBeLessThan(minSeg1)
-      expect(maxGap).toBeLessThan(minSeg2)
-    }
-
-    // ── Return to Resource Profile and verify segments persist after full cycle ──
+    expect(secondSegmentWeek!.week).toBe(8)
+    expect(secondSegmentWeek!.capacityDays).toBeCloseTo(3, 5)
+── Return to Resource Profile and verify segments persist after full cycle ──
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
