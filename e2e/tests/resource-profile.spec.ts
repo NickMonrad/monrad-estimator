@@ -573,22 +573,22 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     )
 
     // Choose week 2 (W3, inside first segment), week 5 (W6, gap), week 8 (W9, inside second segment)
-    const firstSegmentWeek = devEntries.find((w: { week: number }) => w.week === 2)
-    const gapWeek = devEntries.find((w: { week: number }) => w.week === 5)
-    const secondSegmentWeek = devEntries.find((w: { week: number }) => w.week === 8)
+    const firstSegmentWeek = devEntries.find((w: { week: number }) => w.week === 1)
+    const gapWeek = devEntries.find((w: { week: number }) => w.week === 4)
+    const secondSegmentWeek = devEntries.find((w: { week: number }) => w.week === 7)
 
-    expect(firstSegmentWeek, 'No Developer demand at week 3 (first segment)').toBeDefined()
-    expect(gapWeek, 'No Developer demand at week 6 (gap)').toBeDefined()
-    expect(secondSegmentWeek, 'No Developer demand at week 9 (second segment)').toBeDefined()
+    expect(firstSegmentWeek, 'No Developer demand at week 2 (first segment)').toBeDefined()
+    expect(gapWeek, 'No Developer demand at week 5 (gap)').toBeDefined()
+    expect(secondSegmentWeek, 'No Developer demand at week 8 (second segment)').toBeDefined()
 
     // Assert exact resolved capacity values from the profile
-    expect(firstSegmentWeek!.week).toBe(2)
+    expect(firstSegmentWeek!.week).toBe(1)
     expect(firstSegmentWeek!.capacityDays).toBeCloseTo(4, 5)
 
-    expect(gapWeek!.week).toBe(5)
+    expect(gapWeek!.week).toBe(4)
     expect(gapWeek!.capacityDays).toBe(0)
 
-    expect(secondSegmentWeek!.week).toBe(8)
+    expect(secondSegmentWeek!.week).toBe(7)
     expect(secondSegmentWeek!.capacityDays).toBeCloseTo(3, 5)
     // ── Return to Resource Profile and verify segments persist after full cycle ──
     await page.goto(`/projects/${projectId}/resource-profile`)
