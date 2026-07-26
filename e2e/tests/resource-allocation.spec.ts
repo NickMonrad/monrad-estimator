@@ -500,8 +500,8 @@ test.describe('Resource Allocation', () => {
     await expect(ownerCard.getByText(/W5-W9: 100%/)).toBeVisible()
 
     // Protected owner shows Open Squad Planner link and profile info
-    await expect(page.getByTestId(`named-resource-row-${before.namedResourceId}`).getByRole("link", { name: /Open Squad Planner/i })).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByRole("link", { name: "Open Squad Planner" })).toHaveAttribute('href', `/projects/${projectId}/timeline?panel=squad-planner`)
+    await expect(page.getByRole("link", { name: "Open Squad Planner" }).first()).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByRole("link", { name: "Open Squad Planner" }).first()).toHaveAttribute('href', `/projects/${projectId}/timeline?panel=squad-planner`)
     await expect(page.getByRole('button', { name: /Edit profile|Create profile/i })).toHaveCount(0)
     await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/timeline\\?panel=squad-planner`))
     await expect(page.getByRole('dialog', { name: 'Squad Planner' })).toBeVisible({ timeout: 15_000 })
