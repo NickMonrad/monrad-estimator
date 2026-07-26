@@ -425,20 +425,25 @@ test.describe('Capacity profile editor — ROLE segments', () => {
       page.getByRole('heading', { name: /cost summary/i }),
     ).toBeVisible({ timeout: 10_000 })
 
-    // Capture the day rate from the Commercial row
-    // The Commercial tab shows a table with day rate, billable days, subtotal columns
-    // Capture the per-resource-type subtotal as the invariant
-    const subtotalCells = page.locator('td:has-text("$")').filter({ hasText: /^\$[0-9]/ })
-    let initialSubtotal: string | null = null
-    if ((await subtotalCells.count()) > 0) {
-      initialSubtotal = await subtotalCells.first().textContent()
-    }
-    // Also capture the overall subtotal
-    const totalSubtotal = page.getByText(/Subtotal: \$[0-9]/).first()
-    let initialTotalSubtotal: string | null = null
-    if (await totalSubtotal.isVisible().catch(() => false)) {
-      initialTotalSubtotal = await totalSubtotal.textContent()
-    }
+    // Locate the Developer Commercial row by its name cell
+    const devCommercialRow = page.locator('tr').filter({ hasText: 'Developer' }).first()
+    await expect(devCommercialRow).toBeVisible({ timeout: 10_000 })
+
+    // Capture day rate: Commercial table renders it in the first td with day rate amount
+    // The row has columns: name, count, effortDays, dayRate, billableDays, subtotal
+    const devDayRateCell = devCommercialRow.locator('td').nth(3)
+    await expect(devDayRateCell).toBeVisible({ timeout: 5_000 })
+    const initialDayRate = await devDayRateCell.textContent()
+
+    // Capture billable days (effort-based billing quantity)
+    const devBillableCell = devCommercialRow.locator('td').nth(4)
+    await expect(devBillableCell).toBeVisible({ timeout: 5_000 })
+    const initialBillableDays = await devBillableCell.textContent()
+
+    // Capture subtotal
+    const devSubtotalCell = devCommercialRow.locator('td').nth(5)
+    await expect(devSubtotalCell).toBeVisible({ timeout: 5_000 })
+    const initialSubtotal = await devSubtotalCell.textContent()
 
     // ── Return to Resource Profile and open capacity profile editor ──
     await page.goto(`/projects/${projectId}/resource-profile`)
@@ -491,7 +496,7 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     ).toBeVisible({ timeout: 5_000 })
     await expect(rpDevRow.locator('text=W5-W7')).toHaveCount(0)
 
-    // ── Navigate to Timeline, schedule, verify capacity ──
+    // ── Navigate to Timeline, schedule, intercept capacity data ──
     await page.goto(`/projects/${projectId}/timeline`)
     await expect(
       page.getByRole('heading', { name: /timeline planner/i }),
@@ -499,17 +504,55 @@ test.describe('Capacity profile editor — ROLE segments', () => {
 
     await page.locator('input[type="date"]').fill('2026-06-01')
     await expect(page.locator('input[type="date"]')).toHaveValue('2026-06-01')
+
+    // Intercept the timeline API response after scheduling
+    const timelineRespPromise = page.waitForResponse(
+      r => r.url().includes(`/projects/${projectId}/timeline`)
+        && r.request().method() === 'GET',
+      { timeout: 15_000 },
+    )
+
     await quickSchedule(page)
     await expect(
       page.getByRole('button', { name: /sequential|parallel/i }).first(),
     ).toBeVisible({ timeout: 20_000 })
-    await expect(page.getByTestId('resource-counts')).toBeVisible({ timeout: 10_000 })
 
-    // ── Verify capacity data via timeline resource-counts UI ──
-    // The timeline resource-counts panel confirms the shared resolver consumed the profile
-    await expect(page.getByTestId('resource-counts')).toBeVisible({ timeout: 10_000 })
-    // Verify the badge reflects the saved capacityProfile mode
-    await expect(page.getByRole('button', { name: /sequential|parallel/i }).first()).toBeVisible({ timeout: 20_000 })
+    const timelineResp = await timelineRespPromise
+    expect(timelineResp.ok()).toBeTruthy()
+    const timelineData = await timelineResp.json() as {
+      weeklyDemand: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
+    }
+    expect(timelineData.weeklyDemand).toBeDefined()
+    expect(timelineData.weeklyDemand.length).toBeGreaterThan(0)
+
+    // Developer has 40h effort / 8h/day = 5 person-days total
+    // Segment W2-W4 at 80%: capacityDays = 5 * 0.8 = 4.0
+    // Gap W5-W7 (no segment): 0 capacity
+    // Segment W8-W10 at 60%: capacityDays = 5 * 0.6 = 3.0
+    const devW2 = timelineData.weeklyDemand.find(
+      w => w.week === 1 && /developer/i.test(w.resourceTypeName),
+    )
+    const devW5 = timelineData.weeklyDemand.find(
+      w => w.week === 4 && /developer/i.test(w.resourceTypeName),
+    )
+    const devW8 = timelineData.weeklyDemand.find(
+      w => w.week === 7 && /developer/i.test(w.resourceTypeName),
+    )
+
+    expect(devW2, 'Developer week 2 (index 1) should have non-zero capacity').toBeDefined()
+    expect(devW2!.capacityDays).toBeGreaterThan(0)
+    expect(devW2!.capacityDays).toBeLessThanOrEqual(5)
+
+    expect(devW5, 'Developer week 5 (index 4) is in the uncovered gap — should be zero').toBeDefined()
+    expect(devW5!.capacityDays).toBe(0)
+
+    expect(devW8, 'Developer week 8 (index 7) should have non-zero capacity').toBeDefined()
+    expect(devW8!.capacityDays).toBeGreaterThan(0)
+    expect(devW8!.capacityDays).toBeLessThanOrEqual(5)
+
+    // Gap value must be strictly less than both segment values
+    expect(devW5!.capacityDays).toBeLessThan(devW2!.capacityDays)
+    expect(devW5!.capacityDays).toBeLessThan(devW8!.capacityDays)
 
     // ── Return to Resource Profile and verify segments persist after full cycle ──
     await page.goto(`/projects/${projectId}/resource-profile`)
@@ -551,21 +594,26 @@ test.describe('Capacity profile editor — ROLE segments', () => {
       page.getByRole('heading', { name: /cost summary/i }),
     ).toBeVisible({ timeout: 10_000 })
 
-    // Verify day rate row subtotal is unchanged (capacity profile edit does not affect billing)
-    if (initialSubtotal) {
-      const finalSubtotalCells = page.locator('td:has-text("$")').filter({ hasText: /^\$[0-9]/ })
-      if ((await finalSubtotalCells.count()) > 0) {
-        const finalSubtotal = await finalSubtotalCells.first().textContent()
-        expect(finalSubtotal?.trim()).toBe(initialSubtotal.trim())
-      }
-    }
-    // Verify overall subtotal unchanged
-    if (initialTotalSubtotal) {
-      const finalTotalSubtotal = page.getByText(/Subtotal: \$[0-9]/).first()
-      if (await finalTotalSubtotal.isVisible().catch(() => false)) {
-        const finalTotalSubtotalText = await finalTotalSubtotal.textContent()
-        expect(finalTotalSubtotalText?.trim()).toBe(initialTotalSubtotal.trim())
-      }
-    }
+    // Locate Developer row again
+    const finalDevCommercialRow = page.locator('tr').filter({ hasText: 'Developer' }).first()
+    await expect(finalDevCommercialRow).toBeVisible({ timeout: 10_000 })
+
+    // Assert day rate unchanged
+    const finalDayRateCell = finalDevCommercialRow.locator('td').nth(3)
+    await expect(finalDayRateCell).toBeVisible({ timeout: 5_000 })
+    const finalDayRate = await finalDayRateCell.textContent()
+    expect(finalDayRate?.trim()).toBe(initialDayRate?.trim())
+
+    // Assert billable days unchanged
+    const finalBillableCell = finalDevCommercialRow.locator('td').nth(4)
+    await expect(finalBillableCell).toBeVisible({ timeout: 5_000 })
+    const finalBillableDays = await finalBillableCell.textContent()
+    expect(finalBillableDays?.trim()).toBe(initialBillableDays?.trim())
+
+    // Assert subtotal unchanged
+    const finalSubtotalCell = finalDevCommercialRow.locator('td').nth(5)
+    await expect(finalSubtotalCell).toBeVisible({ timeout: 5_000 })
+    const finalSubtotal = await finalSubtotalCell.textContent()
+    expect(finalSubtotal?.trim()).toBe(initialSubtotal?.trim())
   })
 })
