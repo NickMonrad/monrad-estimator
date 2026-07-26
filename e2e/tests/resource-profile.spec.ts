@@ -92,8 +92,8 @@ test.describe('Resource Profile', () => {
 
     const hubUrl = page.url().replace('/backlog', '')
     await page.goto(hubUrl)
-    await page.getByRole('button', { name: /resource profile/i }).waitFor({ timeout: 8_000 })
-    await page.getByRole('button', { name: /resource profile/i }).click()
+    await page.getByRole('button', { name: /resource profile/i }).first().waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /resource profile/i }).first().click()
 
     await expect(
       page.getByRole('heading', { name: /resource profile/i })
@@ -430,7 +430,7 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     const initialBadgeText = await initialBadge.textContent()
 
     // ── Return to Resource Profile and open capacity profile editor ──
-    await page.getByRole('button', { name: /resource profile/i }).click()
+    await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
     ).toBeVisible({ timeout: 10_000 })
