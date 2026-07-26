@@ -431,17 +431,17 @@ test.describe('Capacity profile editor — ROLE segments', () => {
 
     // Capture day rate: Commercial table renders it in the first td with day rate amount
     // The row has columns: name, count, effortDays, dayRate, billableDays, subtotal
-    const devDayRateCell = devCommercialRow.locator('td').nth(3)
+    const devDayRateCell = devCommercialRow.locator('td').nth(6)
     await expect(devDayRateCell).toBeVisible({ timeout: 5_000 })
     const initialDayRate = await devDayRateCell.textContent()
 
     // Capture billable days (effort-based billing quantity)
-    const devBillableCell = devCommercialRow.locator('td').nth(4)
+    const devBillableCell = devCommercialRow.locator('td').nth(5)
     await expect(devBillableCell).toBeVisible({ timeout: 5_000 })
     const initialBillableDays = await devBillableCell.textContent()
 
     // Capture subtotal
-    const devSubtotalCell = devCommercialRow.locator('td').nth(5)
+    const devSubtotalCell = devCommercialRow.locator('td').nth(7)
     await expect(devSubtotalCell).toBeVisible({ timeout: 5_000 })
     const initialSubtotal = await devSubtotalCell.textContent()
 
@@ -505,19 +505,17 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await page.locator('input[type="date"]').fill('2026-06-01')
     await expect(page.locator('input[type="date"]')).toHaveValue('2026-06-01')
 
-    // Intercept the timeline API response after scheduling
-    const timelineRespPromise = page.waitForResponse(
-      r => r.url().includes(`/projects/${projectId}/timeline`)
-        && r.request().method() === 'GET',
-      { timeout: 15_000 },
-    )
-
     await quickSchedule(page)
     await expect(
       page.getByRole('button', { name: /sequential|parallel/i }).first(),
     ).toBeVisible({ timeout: 20_000 })
 
-    const timelineResp = await timelineRespPromise
+    // Intercept the timeline API response after scheduling completes
+    const timelineResp = await page.waitForResponse(
+      r => r.url().includes(`/projects/${projectId}/timeline`)
+        && r.request().method() === 'GET',
+      { timeout: 15_000 },
+    )
     expect(timelineResp.ok()).toBeTruthy()
     const timelineData = await timelineResp.json() as {
       weeklyDemand: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
@@ -529,14 +527,15 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     // Segment W2-W4 at 80%: capacityDays = 5 * 0.8 = 4.0
     // Gap W5-W7 (no segment): 0 capacity
     // Segment W8-W10 at 60%: capacityDays = 5 * 0.6 = 3.0
+    // Find Developer entries by checking all resourceTypeName values
     const devW2 = timelineData.weeklyDemand.find(
-      w => w.week === 1 && /developer/i.test(w.resourceTypeName),
+      w => w.week === 1 && /dev/i.test(w.resourceTypeName),
     )
     const devW5 = timelineData.weeklyDemand.find(
-      w => w.week === 4 && /developer/i.test(w.resourceTypeName),
+      w => w.week === 4 && /dev/i.test(w.resourceTypeName),
     )
     const devW8 = timelineData.weeklyDemand.find(
-      w => w.week === 7 && /developer/i.test(w.resourceTypeName),
+      w => w.week === 7 && /dev/i.test(w.resourceTypeName),
     )
 
     expect(devW2, 'Developer week 2 (index 1) should have non-zero capacity').toBeDefined()
@@ -599,19 +598,19 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await expect(finalDevCommercialRow).toBeVisible({ timeout: 10_000 })
 
     // Assert day rate unchanged
-    const finalDayRateCell = finalDevCommercialRow.locator('td').nth(3)
+    const finalDayRateCell = finalDevCommercialRow.locator('td').nth(6)
     await expect(finalDayRateCell).toBeVisible({ timeout: 5_000 })
     const finalDayRate = await finalDayRateCell.textContent()
     expect(finalDayRate?.trim()).toBe(initialDayRate?.trim())
 
     // Assert billable days unchanged
-    const finalBillableCell = finalDevCommercialRow.locator('td').nth(4)
+    const finalBillableCell = finalDevCommercialRow.locator('td').nth(5)
     await expect(finalBillableCell).toBeVisible({ timeout: 5_000 })
     const finalBillableDays = await finalBillableCell.textContent()
     expect(finalBillableDays?.trim()).toBe(initialBillableDays?.trim())
 
     // Assert subtotal unchanged
-    const finalSubtotalCell = finalDevCommercialRow.locator('td').nth(5)
+    const finalSubtotalCell = finalDevCommercialRow.locator('td').nth(7)
     await expect(finalSubtotalCell).toBeVisible({ timeout: 5_000 })
     const finalSubtotal = await finalSubtotalCell.textContent()
     expect(finalSubtotal?.trim()).toBe(initialSubtotal?.trim())
