@@ -8,6 +8,8 @@ import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityP
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
+import { toLegacyAllocationPct } from '../lib/resolveRoleDefaultForMutation.js'
+import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
@@ -210,12 +212,39 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const { name, startWeek, endWeek, allocationPct, pricingModel, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek } = req.body
 
-  if (allocationPct !== undefined && (allocationPct < 0 || allocationPct > 100)) {
-    res.status(400).json({ error: 'allocationPct must be between 0 and 100' }); return
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
+
+  // ── Percentage validation ─────────────────────────────────────────────
+  function isValidPercent(v: unknown): v is number {
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100
+  }
+  function isExplicitNull(v: unknown): v is null {
+    return v === null
   }
 
-  if (pricingModel !== undefined && !VALID_PRICING_MODELS.includes(pricingModel)) {
-    res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
+  if (has('allocationPercent')) {
+    if (isExplicitNull(allocationPercent)) {
+      res.status(400).json({ error: 'allocationPercent must not be null.' }); return
+    }
+    if (!isValidPercent(allocationPercent)) {
+      res.status(400).json({ error: 'allocationPercent must be a finite number between 0 and 100.' }); return
+    }
+  }
+  if (has('allocationPct')) {
+    if (isExplicitNull(allocationPct)) {
+      res.status(400).json({ error: 'allocationPct must not be null.' }); return
+    }
+    if (!isValidPercent(allocationPct)) {
+      res.status(400).json({ error: 'allocationPct must be a finite number between 0 and 100.' }); return
+    }
+  }
+  if (has('allocationPercent') && has('allocationPct') && allocationPct !== allocationPercent) {
+    res.status(400).json({ error: 'allocationPercent and allocationPct must represent the same value.' }); return
+  }
+  // ── Pre-validate allocation mode ─────────────────────────────────────────
+  if (has('allocationMode') && allocationMode !== undefined && allocationMode !== null && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode as string)) {
+    res.status(400).json({ error: `Invalid allocationMode "${allocationMode}". Supported modes: EFFORT, TIMELINE, FULL_PROJECT.` })
+    return
   }
 
   // Non-capacity fields written directly to NamedResource
@@ -224,7 +253,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     if (nrData[key] === undefined) delete nrData[key]
   })
 
-  const has = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
   const hasCapacityInput =
     has('allocationMode') ||
     has('allocationPercent') ||
@@ -233,11 +261,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     has('allocationEndWeek') ||
     has('startWeek') ||
     has('endWeek')
-  // ── Pre-validate allocation mode ─────────────────────────────────────────
-  if (has('allocationMode') && allocationMode !== undefined && allocationMode !== null && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode as string)) {
-    res.status(400).json({ error: `Invalid allocationMode "${allocationMode}". Supported modes: EFFORT, TIMELINE, FULL_PROJECT.` })
-    return
-  }
 
   try {
     const resource = await prisma.$transaction(async tx => {
@@ -301,8 +324,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         // ── 4. Apply only explicitly supplied request fields ──────
         const mode = has('allocationMode') ? allocationMode : profileAllocMode
         const percent = has('allocationPercent') ? allocationPercent : (has('allocationPct') ? allocationPct : profileAllocPercent)
-        const compatStartWeek = has('allocationStartWeek') ? allocationStartWeek : (has('startWeek') ? startWeek : profileAllocStartWeek)
-        const compatEndWeek = has('allocationEndWeek') ? allocationEndWeek : (has('endWeek') ? endWeek : profileAllocEndWeek)
         const nrStartWeek = has('startWeek') ? startWeek : (has('allocationStartWeek') ? allocationStartWeek : profileAllocStartWeek)
         const nrEndWeek = has('endWeek') ? endWeek : (has('allocationEndWeek') ? allocationEndWeek : profileAllocEndWeek)
 
@@ -321,23 +342,31 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
             endWeek: isNonWindow ? null : nrEndWeek,
           },
         })
-        // Replace segments — for scalar updates, clear any existing segments
-        await tx.capacitySegment.deleteMany({
-          where: { capacityProfileId: nrProfile.id },
-        })
 
-        // ── 7. Write compatibility fields atomically ─────────────
+        // ── 7. Write compatibility fields from profile projection ──
+        const compatProjection = projectCapacityProfileToLegacyAllocation({
+          planningBasis: planningBasis,
+          defaultPercent: percent,
+          startWeek: isNonWindow ? null : nrStartWeek,
+          endWeek: isNonWindow ? null : nrEndWeek,
+          segments: [],
+          source: source,
+        })
+        const compatMode = compatProjection?.allocationMode ?? 'EFFORT'
+        const compatPercent = compatProjection?.allocationPercent ?? 100
+        const compatStart = compatProjection?.allocationStartWeek ?? null
+        const compatEnd = compatProjection?.allocationEndWeek ?? null
         await tx.namedResource.update({
           where: { id },
           data: {
             ...nrData,
-            allocationMode: mode,
-            allocationPercent: percent,
-            allocationPct: Math.round(percent),
-            allocationStartWeek: isNonWindow ? null : compatStartWeek,
-            allocationEndWeek: isNonWindow ? null : compatEndWeek,
-            startWeek: isNonWindow ? null : nrStartWeek,
-            endWeek: isNonWindow ? null : nrEndWeek,
+            allocationMode: compatMode,
+            allocationPercent: compatPercent,
+            allocationPct: toLegacyAllocationPct(compatPercent),
+            allocationStartWeek: compatStart,
+            allocationEndWeek: compatEnd,
+            startWeek: compatStart,
+            endWeek: compatEnd,
           },
         })
       } else {
@@ -372,16 +401,37 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
-  const { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek, startWeek, endWeek } = req.body
+  const { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek, startWeek, endWeek, allocationPct } = req.body
 
   const hasPatch = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
 
-  // ── Pre-validate allocation mode ─────────────────────────────────────────
-  if (hasPatch('allocationMode') && allocationMode !== undefined && allocationMode !== null && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode as string)) {
-    res.status(400).json({ error: `Invalid allocationMode "${allocationMode}". Supported modes: EFFORT, TIMELINE, FULL_PROJECT.` })
-    return
+  // ── Percentage validation ─────────────────────────────────────────────
+  function isValidPercent(v: unknown): v is number {
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100
+  }
+  function isExplicitNull(v: unknown): v is null {
+    return v === null
   }
 
+  if (hasPatch('allocationPercent')) {
+    if (isExplicitNull(allocationPercent)) {
+      res.status(400).json({ error: 'allocationPercent must not be null.' }); return
+    }
+    if (!isValidPercent(allocationPercent)) {
+      res.status(400).json({ error: 'allocationPercent must be a finite number between 0 and 100.' }); return
+    }
+  }
+  if (hasPatch('allocationPct')) {
+    if (isExplicitNull(allocationPct)) {
+      res.status(400).json({ error: 'allocationPct must not be null.' }); return
+    }
+    if (!isValidPercent(allocationPct)) {
+      res.status(400).json({ error: 'allocationPct must be a finite number between 0 and 100.' }); return
+    }
+  }
+  if (hasPatch('allocationPercent') && hasPatch('allocationPct') && allocationPct !== allocationPercent) {
+    res.status(400).json({ error: 'allocationPercent and allocationPct must represent the same value.' }); return
+  }
   try {
     const resource = await prisma.$transaction(async tx => {
       // ── 0. Load existing profile rows to determine exact owner kind ─
@@ -443,8 +493,6 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       // ── 4. Apply only explicitly supplied request fields ─────────
       const mode = hasPatch('allocationMode') ? allocationMode : profileAllocMode
       const percent = hasPatch('allocationPercent') ? allocationPercent : profileAllocPercent
-      const compatStartWeek = hasPatch('allocationStartWeek') ? allocationStartWeek : (hasPatch('startWeek') ? startWeek : profileAllocStartWeek)
-      const compatEndWeek = hasPatch('allocationEndWeek') ? allocationEndWeek : (hasPatch('endWeek') ? endWeek : profileAllocEndWeek)
       const nrStartWeek = hasPatch('startWeek') ? startWeek : (hasPatch('allocationStartWeek') ? allocationStartWeek : profileAllocStartWeek)
       const nrEndWeek = hasPatch('endWeek') ? endWeek : (hasPatch('allocationEndWeek') ? allocationEndWeek : profileAllocEndWeek)
 
@@ -462,17 +510,29 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           endWeek: isNonWindow ? null : nrEndWeek,
         },
       })
-      // ── 7. Write compatibility fields atomically ─────────────────
+      // ── 7. Write compatibility fields from profile projection ──
+      const compatProjection = projectCapacityProfileToLegacyAllocation({
+        planningBasis: planningBasis,
+        defaultPercent: percent,
+        startWeek: isNonWindow ? null : nrStartWeek,
+        endWeek: isNonWindow ? null : nrEndWeek,
+        segments: [],
+        source: source,
+      })
+      const compatMode = compatProjection?.allocationMode ?? 'EFFORT'
+      const compatPercent = compatProjection?.allocationPercent ?? 100
+      const compatStart = compatProjection?.allocationStartWeek ?? null
+      const compatEnd = compatProjection?.allocationEndWeek ?? null
       const updated = await tx.namedResource.update({
         where: { id },
         data: {
-          allocationMode: mode,
-          allocationPercent: percent,
-          allocationPct: Math.round(percent),
-          allocationStartWeek: isNonWindow ? null : compatStartWeek,
-          allocationEndWeek: isNonWindow ? null : compatEndWeek,
-          startWeek: isNonWindow ? null : nrStartWeek,
-          endWeek: isNonWindow ? null : nrEndWeek,
+          allocationMode: compatMode,
+          allocationPercent: compatPercent,
+          allocationPct: toLegacyAllocationPct(compatPercent),
+          allocationStartWeek: compatStart,
+          allocationEndWeek: compatEnd,
+          startWeek: compatStart,
+          endWeek: compatEnd,
         },
       })
 

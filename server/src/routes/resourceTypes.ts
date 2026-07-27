@@ -10,6 +10,7 @@ import { resolveRTPatchState, resolveRoleSchedulingState } from '../lib/resolveR
 import { applyRoleDefaultToInheritedNRs } from '../lib/capacityProfileReplaceService.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
+import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
   (tx ?? prisma).project.update({
@@ -239,14 +240,9 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     // CAPACITY_PLAN state from authoritative role profile first, legacy fallback
     const schedulingState = resolveRoleSchedulingState(state)
     const isCapacityPlan = schedulingState.isCapacityPlan
-    const defaultAllocMode = isCapacityPlan ? 'TIMELINE' : state.roleDefault.allocationMode
-    const defaultAllocPercent = isCapacityPlan ? 100 : state.roleDefault.allocationPercent
-    const defaultAllocStartWeek = isCapacityPlan ? null : state.roleDefault.allocationStartWeek
-    const defaultAllocEndWeek = isCapacityPlan ? null : state.roleDefault.allocationEndWeek
-    const defaultAllocPct = toLegacyAllocationPct(defaultAllocPercent)
     const inheritedIds = new Set(state.classification.inheritedNRIds)
     const roleProfileRows = state.roleProfileRows
-    // ── CAPACITY_PLAN exit (before count logic) ────────────────
+    let postExitRole: any = null
     if (isCapacityPlan) {
       // 1. Upsert the role-owned profile with manual-scheduling defaults
       await upsertRTProfileAndProjectLegacy(
@@ -256,92 +252,153 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       // 2. Transition the role-level compatibility fields
       await exitCapacityPlanRoleOnly(rt.id, tx)
+      // 3. Strictly reload the post-exit ROLE profile
+      postExitRole = await loadAndValidateOwnerProfile({
+        tx,
+        projectId: req.params.projectId as string,
+        ownerKind: 'ROLE',
+        ownerId: rt.id,
+      })
 
-      // 3. Update inherited NR profiles and compatibility fields
+      // 4. Project the post-exit ROLE to legacy values
+      const roleLegacy = projectCapacityProfileToLegacyAllocation({
+        planningBasis: postExitRole.planningBasis,
+        defaultPercent: postExitRole.defaultPercent,
+        startWeek: postExitRole.startWeek,
+        endWeek: postExitRole.endWeek,
+        segments: postExitRole.segments.map((s: any) => ({
+          startWeek: s.startWeek,
+          endWeek: s.endWeek,
+          capacityPercent: s.capacityPercent,
+          source: s.source,
+        })),
+        source: postExitRole.source,
+      })
+      if (!roleLegacy) {
+        throw new Error('Failed to project post-exit role profile to legacy values')
+      }
+      const rolePct = toLegacyAllocationPct(roleLegacy.allocationPercent ?? 100)
+
+      // 5. Update inherited NR profiles to match post-exit ROLE semantics
       if (inheritedIds.size > 0) {
         for (const inhId of inheritedIds) {
-          // Find the validated NR profile from state
           const inhProfile = state.nrProfileRows.find(
             (np: any) => np.namedResourceId === inhId,
           )
-          if (inhProfile) {
-            // Update profile to post-exit inherited state (preserve ID)
-            await tx.capacityProfile.update({
-              where: { id: inhProfile.id },
-              data: {
-                ownerKind: 'NAMED_PERSON',
-                planningBasis: 'DEMAND_FOLLOWING' as any,
-                source: 'FIXED' as any,
-                defaultPercent: 100,
-                endWeek: null,
-              },
-            })
-            // Clear any planner segments from inherited profiles
-            await tx.capacitySegment.deleteMany({
-              where: { capacityProfileId: inhProfile.id },
+          if (!inhProfile) {
+            throw new CapacityIntegrityError(
+              `Cannot update inherited named resource ${inhId}: validated profile not found.`,
+            )
+          }
+          // Update profile to post-exit ROLE semantics (preserve ID)
+          await tx.capacityProfile.update({
+            where: { id: inhProfile.id },
+            data: {
+              ownerKind: 'NAMED_PERSON',
+              planningBasis: postExitRole.planningBasis as any,
+              source: postExitRole.source as any,
+              defaultPercent: postExitRole.defaultPercent,
+              startWeek: postExitRole.startWeek,
+              endWeek: postExitRole.endWeek,
+            },
+          })
+          // Replace segments with post-exit ROLE segment state
+          await tx.capacitySegment.deleteMany({
+            where: { capacityProfileId: inhProfile.id },
+          })
+          if (postExitRole.segments.length > 0) {
+            await tx.capacitySegment.createMany({
+              data: postExitRole.segments.map((seg: any) => ({
+                capacityProfileId: inhProfile.id,
+                startWeek: seg.startWeek,
+                endWeek: seg.endWeek,
+                capacityPercent: seg.capacityPercent,
+                source: seg.source as any,
+              })),
             })
           }
         }
+        // Write compatibility fields from profile projection
         await tx.namedResource.updateMany({
           where: { id: { in: [...inheritedIds] } },
           data: {
-            allocationMode: 'TIMELINE',
-            allocationPercent: 100,
-            allocationStartWeek: null,
-            allocationEndWeek: null,
-            allocationPct: 100,
-            startWeek: null,
-            endWeek: null,
+            allocationMode: roleLegacy.allocationMode,
+            allocationPercent: roleLegacy.allocationPercent ?? 100,
+            allocationStartWeek: roleLegacy.allocationStartWeek,
+            allocationEndWeek: roleLegacy.allocationEndWeek,
+            allocationPct: rolePct,
+            startWeek: roleLegacy.allocationStartWeek,
+            endWeek: roleLegacy.allocationEndWeek,
           },
         })
       }
     }
-    const buildInheritedNRCreateData = (name: string, nrCount: number) => ({
-      name: `${name} ${nrCount}`,
-      resourceTypeId: rt.id,
-      allocationMode: defaultAllocMode,
-      allocationPercent: defaultAllocPercent,
-      allocationPct: defaultAllocPct,
-      allocationStartWeek: defaultAllocStartWeek,
-      allocationEndWeek: defaultAllocEndWeek,
-      startWeek: defaultAllocStartWeek,
-      endWeek: defaultAllocEndWeek,
-    } as any)
-
-
+    // ── Post-exit state helpers ────────────────────────────────────────
+    const effectiveRole = postExitRole ?? (roleProfileRows.length > 0 ? roleProfileRows[0] : null)
+    let effectiveLegacyMode = { allocationMode: 'EFFORT' as string, allocationPercent: 100, allocationStartWeek: null as number | null, allocationEndWeek: null as number | null }
+    let effectiveAllocPct = 100
+    if (effectiveRole) {
+      const effLegacy = projectCapacityProfileToLegacyAllocation({
+        planningBasis: (effectiveRole as any).planningBasis,
+        defaultPercent: (effectiveRole as any).defaultPercent,
+        startWeek: (effectiveRole as any).startWeek,
+        endWeek: (effectiveRole as any).endWeek,
+        segments: ((effectiveRole as any).segments ?? []).map((s: any) => ({
+          startWeek: s.startWeek, endWeek: s.endWeek,
+          capacityPercent: s.capacityPercent, source: s.source,
+        })),
+        source: (effectiveRole as any).source,
+      })
+      if (effLegacy) {
+        effectiveLegacyMode = {
+          allocationMode: effLegacy.allocationMode,
+          allocationPercent: effLegacy.allocationPercent ?? 100,
+          allocationStartWeek: effLegacy.allocationStartWeek,
+          allocationEndWeek: effLegacy.allocationEndWeek,
+        }
+        effectiveAllocPct = toLegacyAllocationPct(effLegacy.allocationPercent ?? 100)
+      }
+    }
     // ── Fail-closed: role profile must exist for count changes ──
-    // Normal paths always have a valid role profile (created during RT creation,
-    // maintained by PUT/PATCH capacity updates). If missing, the database has
-    // invalid persisted state that must be repaired via backfill tooling.
-    if (count !== currentCount && roleProfileRows.length === 0) {
+    if (count !== currentCount && !effectiveRole) {
       throw new CapacityIntegrityError(
         'Missing capacity profile for this resource type. ' +
         'Run the capacity profile backfill/repair workflow before retrying this operation.',
       )
     }
+
     // ── Count increase ─────────────────────────────────────────
     if (count > currentCount) {
       for (let n = currentCount + 1; n <= count; n++) {
         const nr = await tx.namedResource.create({
-          data: buildInheritedNRCreateData(rt.name, n),
+          data: {
+            name: `${rt.name} ${n}`,
+            resourceTypeId: rt.id,
+            allocationMode: effectiveLegacyMode.allocationMode,
+            allocationPercent: effectiveLegacyMode.allocationPercent,
+            allocationStartWeek: effectiveLegacyMode.allocationStartWeek,
+            allocationEndWeek: effectiveLegacyMode.allocationEndWeek,
+            allocationPct: effectiveAllocPct,
+            startWeek: effectiveLegacyMode.allocationStartWeek,
+            endWeek: effectiveLegacyMode.allocationEndWeek,
+          } as any,
         })
-        const roleProfile = roleProfileRows[0]
-        // Always create a NAMED_PERSON profile for each new inherited NR
-        // derived from the current role-level default profile state.
-        if (roleProfile) {
+        if (effectiveRole) {
+          const eff = effectiveRole as any
+          const segs = eff.segments
           await tx.capacityProfile.create({
             data: {
               ownerKind: 'NAMED_PERSON' as any,
               projectId: req.params.projectId as string,
               resourceTypeId: null,
               namedResourceId: nr.id,
-              planningBasis: roleProfile.planningBasis as any,
-              source: roleProfile.source as any,
-              defaultPercent: roleProfile.defaultPercent,
-              startWeek: roleProfile.startWeek,
-              endWeek: roleProfile.endWeek,
-              segments: roleProfile.segments && roleProfile.segments.length > 0
-                ? { create: roleProfile.segments.map((seg: any) => ({
+              planningBasis: eff.planningBasis as any,
+              source: eff.source as any,
+              defaultPercent: eff.defaultPercent,
+              startWeek: eff.startWeek,
+              endWeek: eff.endWeek,
+              segments: segs && segs.length > 0
+                ? { create: segs.map((seg: any) => ({
                     startWeek: seg.startWeek,
                     endWeek: seg.endWeek,
                     capacityPercent: seg.capacityPercent,
