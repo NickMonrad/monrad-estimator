@@ -7,6 +7,8 @@
  * CapacityIntegrityError when persisted state is missing, malformed,
  * ambiguous, cross-project, or wrong-owner-kind.
  *
+ * Validation rules are kept in sync with capacityProfileReplaceValidator.ts.
+ *
  * @see docs/domain/capacity-profile-source-of-truth-migration-plan.md
  */
 
@@ -14,31 +16,35 @@ import { CapacityIntegrityError } from './capacityIntegrityError.js'
 
 // ─── Accepted enum sets ──────────────────────────────────────────────────────
 
-const VALID_PLANNING_BASIS = new Set([
-  'DEMAND_FOLLOWING',
-  'AVAILABILITY_WINDOW',
-  'WHOLE_PROJECT_ALLOCATION',
-  'CAPACITY_PROFILE',
-])
+const VALID_PLANNING_BASIS: Record<string, true> = {
+  DEMAND_FOLLOWING: true,
+  AVAILABILITY_WINDOW: true,
+  WHOLE_PROJECT_ALLOCATION: true,
+  CAPACITY_PROFILE: true,
+}
 
-const VALID_SOURCES = new Set([
-  'FIXED',
-  'MANUAL',
-  'AVAILABILITY_WINDOW',
-  'SQUAD_PLANNER',
-  'IMPORTED',
-  'DERIVED',
-  'LEGACY',
-])
+const VALID_SOURCES: Record<string, true> = {
+  FIXED: true,
+  MANUAL: true,
+  AVAILABILITY_WINDOW: true,
+  SQUAD_PLANNER: true,
+  IMPORTED: true,
+  DERIVED: true,
+  LEGACY: true,
+}
 
-const VALID_OWNER_KINDS = new Set(['ROLE', 'NAMED_PERSON', 'PLANNED_RESOURCE'])
+const VALID_OWNER_KINDS: Record<string, true> = {
+  ROLE: true,
+  NAMED_PERSON: true,
+  PLANNED_RESOURCE: true,
+}
 
 // ─── Input ───────────────────────────────────────────────────────────────────
 
 export interface OwnerProfileQuery {
   tx: any
   projectId: string
-  /** Expected owner kind: 'ROLE' for RT-owned, 'NAMED_PERSON' or 'PLANNED_RESOURCE' for NR-owned. */
+  /** Expected owner kind. */
   ownerKind: string
   /** ResourceType ID (for ROLE) or NamedResource ID (for NAMED_PERSON/PLANNED_RESOURCE). */
   ownerId: string
@@ -79,10 +85,6 @@ function isFiniteNumber(v: unknown): v is number {
 
 function isNonNegativeInteger(v: unknown): v is number {
   return isFiniteNumber(v) && Number.isInteger(v) && v >= 0
-}
-
-function isPositivePercent(v: unknown): v is number {
-  return isFiniteNumber(v) && v > 0 && v <= 100
 }
 
 // ─── Main loader ─────────────────────────────────────────────────────────────
@@ -141,7 +143,7 @@ export async function loadAndValidateOwnerProfile(
     )
   }
 
-  if (!VALID_OWNER_KINDS.has(profile.ownerKind)) {
+  if (!VALID_OWNER_KINDS[profile.ownerKind]) {
     throw new CapacityIntegrityError(
       `Capacity profile ${profile.id} has invalid owner kind "${profile.ownerKind}". ` +
       'Run the capacity profile backfill/repair workflow before retrying this operation.',
@@ -184,51 +186,115 @@ export async function loadAndValidateOwnerProfile(
   }
 
   // ── 4. Planning basis and source ───────────────────────────────────
-  if (!VALID_PLANNING_BASIS.has(profile.planningBasis)) {
+  if (!VALID_PLANNING_BASIS[profile.planningBasis]) {
     throw new CapacityIntegrityError(
-      `Capacity profile ${profile.id} has invalid planning basis "${profile.planningBasis}". ` +
-      'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      `Capacity profile ${profile.id} has invalid planning basis "${profile.planningBasis}".`,
     )
   }
 
-  if (!VALID_SOURCES.has(profile.source)) {
+  if (!VALID_SOURCES[profile.source]) {
     throw new CapacityIntegrityError(
-      `Capacity profile ${profile.id} has invalid source "${profile.source}". ` +
-      'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      `Capacity profile ${profile.id} has invalid source "${profile.source}".`,
     )
   }
 
-  // ── 5. Default percent ────────────────────────────────────────────
-  if (profile.defaultPercent !== null && !isPositivePercent(profile.defaultPercent)) {
-    throw new CapacityIntegrityError(
-      `Capacity profile ${profile.id} has invalid defaultPercent "${profile.defaultPercent}".`,
-    )
+  // ── 5. Default percent ─────────────────────────────────────────────
+  if (profile.defaultPercent !== null) {
+    if (!isFiniteNumber(profile.defaultPercent) || profile.defaultPercent < 0) {
+      throw new CapacityIntegrityError(
+        `Capacity profile ${profile.id} has invalid defaultPercent "${profile.defaultPercent}".`,
+      )
+    }
+    if (ownerKind !== 'ROLE' && profile.defaultPercent > 100) {
+      throw new CapacityIntegrityError(
+        `Capacity profile ${profile.id} has defaultPercent "${profile.defaultPercent}" > 100 for ${ownerKind}.`,
+      )
+    }
   }
 
   // ── 6. Window validation ───────────────────────────────────────────
-  if (profile.startWeek !== null && !isNonNegativeInteger(profile.startWeek)) {
+  let startWeek: number | null = profile.startWeek ?? null
+  let endWeek: number | null = profile.endWeek ?? null
+
+  if (startWeek !== null && !isNonNegativeInteger(startWeek)) {
     throw new CapacityIntegrityError(
       `Capacity profile ${profile.id} has non-integer startWeek "${profile.startWeek}".`,
     )
   }
-  if (profile.endWeek !== null && !isNonNegativeInteger(profile.endWeek)) {
+  if (endWeek !== null && !isNonNegativeInteger(endWeek)) {
     throw new CapacityIntegrityError(
       `Capacity profile ${profile.id} has non-integer endWeek "${profile.endWeek}".`,
     )
   }
-  if (profile.startWeek !== null && profile.endWeek !== null && profile.startWeek > profile.endWeek) {
+  if (startWeek !== null && endWeek !== null && startWeek > endWeek) {
     throw new CapacityIntegrityError(
-      `Capacity profile ${profile.id} has startWeek ${profile.startWeek} after endWeek ${profile.endWeek}.`,
+      `Capacity profile ${profile.id} has startWeek ${startWeek} after endWeek ${endWeek}.`,
     )
   }
 
-  // ── 7. Segments ────────────────────────────────────────────────────
-  const segments: ValidatedSegment[] = (profile.segments ?? []).map((seg: any) => {
-    if (!seg.id || !seg.capacityProfileId) {
+  // ── 7. Planning-basis-specific structural validation ───────────────
+  const planningBasis = profile.planningBasis
+  const segmentsRaw: any[] = profile.segments ?? []
+
+  if (planningBasis === 'DEMAND_FOLLOWING') {
+    if (segmentsRaw.length > 0) {
       throw new CapacityIntegrityError(
-        `Capacity profile ${profile.id} has a segment missing required id or capacityProfileId.`,
+        `DEMAND_FOLLOWING profile ${profile.id} must not have segments.`,
       )
     }
+    if (startWeek !== null) {
+      throw new CapacityIntegrityError(
+        `DEMAND_FOLLOWING profile ${profile.id} must not have startWeek.`,
+      )
+    }
+    if (endWeek !== null) {
+      throw new CapacityIntegrityError(
+        `DEMAND_FOLLOWING profile ${profile.id} must not have endWeek.`,
+      )
+    }
+  } else if (planningBasis === 'WHOLE_PROJECT_ALLOCATION') {
+    if (segmentsRaw.length > 0) {
+      throw new CapacityIntegrityError(
+        `WHOLE_PROJECT_ALLOCATION profile ${profile.id} must not have segments.`,
+      )
+    }
+    if (startWeek !== null) {
+      throw new CapacityIntegrityError(
+        `WHOLE_PROJECT_ALLOCATION profile ${profile.id} must not have startWeek.`,
+      )
+    }
+    if (endWeek !== null) {
+      throw new CapacityIntegrityError(
+        `WHOLE_PROJECT_ALLOCATION profile ${profile.id} must not have endWeek.`,
+      )
+    }
+  } else if (planningBasis === 'AVAILABILITY_WINDOW') {
+    if (segmentsRaw.length > 0) {
+      throw new CapacityIntegrityError(
+        `AVAILABILITY_WINDOW profile ${profile.id} must not have segments.`,
+      )
+    }
+  } else if (planningBasis === 'CAPACITY_PROFILE') {
+    if (startWeek !== null) {
+      throw new CapacityIntegrityError(
+        `CAPACITY_PROFILE profile ${profile.id} must not have startWeek.`,
+      )
+    }
+    if (endWeek !== null) {
+      throw new CapacityIntegrityError(
+        `CAPACITY_PROFILE profile ${profile.id} must not have endWeek.`,
+      )
+    }
+  }
+
+  // ── 8. Segment validation ──────────────────────────────────────────
+  const segments: ValidatedSegment[] = segmentsRaw.map((seg: any, idx: number) => {
+    if (!seg.id || !seg.capacityProfileId) {
+      throw new CapacityIntegrityError(
+        `Capacity profile ${profile.id} has a segment (index ${idx}) missing required id or capacityProfileId.`,
+      )
+    }
+
     if (!isNonNegativeInteger(seg.startWeek)) {
       throw new CapacityIntegrityError(
         `Capacity profile ${profile.id} segment ${seg.id} has invalid startWeek "${seg.startWeek}".`,
@@ -244,16 +310,25 @@ export async function loadAndValidateOwnerProfile(
         `Capacity profile ${profile.id} segment ${seg.id} has startWeek ${seg.startWeek} after endWeek ${seg.endWeek}.`,
       )
     }
-    if (!isPositivePercent(seg.capacityPercent)) {
+
+    // capacityPercent: finite non-negative; non-ROLE max 100
+    if (!isFiniteNumber(seg.capacityPercent) || seg.capacityPercent < 0) {
       throw new CapacityIntegrityError(
         `Capacity profile ${profile.id} segment ${seg.id} has invalid capacityPercent "${seg.capacityPercent}".`,
       )
     }
-    if (!VALID_SOURCES.has(seg.source)) {
+    if (ownerKind !== 'ROLE' && seg.capacityPercent > 100) {
+      throw new CapacityIntegrityError(
+        `Capacity profile ${profile.id} segment ${seg.id} has capacityPercent ${seg.capacityPercent} > 100 for ${ownerKind}.`,
+      )
+    }
+
+    if (!VALID_SOURCES[seg.source]) {
       throw new CapacityIntegrityError(
         `Capacity profile ${profile.id} segment ${seg.id} has invalid source "${seg.source}".`,
       )
     }
+
     return {
       id: seg.id,
       capacityProfileId: seg.capacityProfileId,
@@ -264,16 +339,29 @@ export async function loadAndValidateOwnerProfile(
     }
   })
 
-  // ── 8. Overlap check ──────────────────────────────────────────────
-  if (segments.length > 1) {
-    const sorted = [...segments].sort((a, b) => a.startWeek - b.startWeek)
-    for (let i = 1; i < sorted.length; i++) {
-      if (sorted[i].startWeek <= sorted[i - 1].endWeek) {
+  // ── 9. Overlap and duplicate detection (inclusive overlap) ─────────
+  if (segments.length >= 2) {
+    const sorted = [...segments].sort((a, b) => a.startWeek - b.startWeek || a.endWeek - b.endWeek)
+
+    const seenRanges = new Set<string>()
+    let priorEnd = -1
+
+    for (const seg of sorted) {
+      const rangeKey = `${seg.startWeek}-${seg.endWeek}`
+      if (seenRanges.has(rangeKey)) {
         throw new CapacityIntegrityError(
-          `Capacity profile ${profile.id} has overlapping segments: ` +
-          `segment "${sorted[i - 1].id}" (W${sorted[i - 1].startWeek}-W${sorted[i - 1].endWeek}) ` +
-          `overlaps with "${sorted[i].id}" (W${sorted[i].startWeek}-W${sorted[i].endWeek}).`,
+          `Capacity profile ${profile.id} segment ${seg.id}: duplicate range [${seg.startWeek}, ${seg.endWeek}].`,
         )
+      }
+      seenRanges.add(rangeKey)
+
+      if (seg.startWeek <= priorEnd) {
+        throw new CapacityIntegrityError(
+          `Capacity profile ${profile.id} segment ${seg.id} (W${seg.startWeek}-W${seg.endWeek}) overlaps with prior segment ending W${priorEnd}.`,
+        )
+      }
+      if (seg.endWeek > priorEnd) {
+        priorEnd = seg.endWeek
       }
     }
   }
@@ -293,8 +381,8 @@ export async function loadAndValidateOwnerProfile(
     planningBasis: profile.planningBasis,
     source: profile.source,
     defaultPercent: profile.defaultPercent,
-    startWeek: profile.startWeek,
-    endWeek: profile.endWeek,
+    startWeek,
+    endWeek,
     segments,
   }
 }

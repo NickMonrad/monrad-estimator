@@ -377,7 +377,7 @@ describe('resource type manual scheduling regression', () => {
           findMany: vi.fn().mockImplementation((args: any) => {
             // Return role profile for role-profile queries (guard/reload pass), [] for NR-profile queries
             if (args?.where?.namedResourceId?.in) return Promise.resolve([])
-            return Promise.resolve([{ id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'CAPACITY_PROFILE', source: 'FIXED', defaultPercent: 25, startWeek: 4, endWeek: 8, projectId: 'proj-1', segments: [] }])
+            return Promise.resolve([{ id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'CAPACITY_PROFILE', source: 'FIXED', defaultPercent: 25, startWeek: null, endWeek: null, projectId: 'proj-1', segments: [] }])
           }),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
           create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
