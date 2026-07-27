@@ -174,11 +174,30 @@ describe('named-resource capacity profile write', () => {
       capacityProfile: {
         findMany: vi.fn().mockImplementation((args: any) => {
           const where = args?.where ?? {}
+          // ROLE profile query
           if (where.resourceTypeId === 'rt-1' && where.namedResourceId === null) {
             return Promise.resolve([{
               id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
               namedResourceId: null, planningBasis: 'AVAILABILITY_WINDOW',
               source: 'AVAILABILITY_WINDOW', defaultPercent: 100,
+              startWeek: null, endWeek: null, projectId: 'proj-1', segments: [],
+            } as never])
+          }
+          // NR profile query: match by namedResourceId string
+          const nrId = where.namedResourceId
+          if (nrId && typeof nrId === 'string' && nrId === 'nr-1') {
+            return Promise.resolve([{
+              id: 'cp-nr-1', ownerKind: 'NAMED_PERSON', resourceTypeId: null,
+              namedResourceId: 'nr-1', planningBasis: 'DEMAND_FOLLOWING',
+              source: 'FIXED', defaultPercent: 100,
+              startWeek: null, endWeek: null, projectId: 'proj-1', segments: [],
+            } as never])
+          }
+          if (where.namedResourceId?.in?.includes?.('nr-1')) {
+            return Promise.resolve([{
+              id: 'cp-nr-1', ownerKind: 'NAMED_PERSON', resourceTypeId: null,
+              namedResourceId: 'nr-1', planningBasis: 'DEMAND_FOLLOWING',
+              source: 'FIXED', defaultPercent: 100,
               startWeek: null, endWeek: null, projectId: 'proj-1', segments: [],
             } as never])
           }
@@ -195,6 +214,7 @@ describe('named-resource capacity profile write', () => {
       .delete('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
       .set('Authorization', authHeader)
 
+    console.log('DELETE status:', res.status, 'body:', JSON.stringify(res.body))
     expect(res.status).toBe(204)
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
     expect(deleteFn).toHaveBeenCalled()

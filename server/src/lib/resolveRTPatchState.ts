@@ -172,11 +172,10 @@ export async function resolveRTPatchState(
     const nrProfiles = rawNRProfiles.filter((p: any) => p.namedResourceId === nr.id)
 
     if (nrProfiles.length === 0) {
-      // No profile for this NR — allowed only if it matches inheritance rules.
-      // The classifier will treat it as inherited if its legacy fields match the
-      // role default, or explicit if they differ. We skip strict validation for
-      // profile-less NRs because there's nothing to validate.
-      continue
+      throw new CapacityIntegrityError(
+        `Missing capacity profile for named resource ${nr.id}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
     }
 
     if (nrProfiles.length > 1) {

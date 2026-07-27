@@ -245,6 +245,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const defaultAllocEndWeek = isCapacityPlan ? null : state.roleDefault.allocationEndWeek
     const defaultAllocPct = toLegacyAllocationPct(defaultAllocPercent)
     const inheritedIds = new Set(state.classification.inheritedNRIds)
+    let roleProfileRows = state.roleProfileRows
     // ── CAPACITY_PLAN exit (before count logic) ────────────────
     if (isCapacityPlan) {
       // 1. Upsert the role-owned profile with manual-scheduling defaults
@@ -256,8 +257,31 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       // 2. Transition the role-level compatibility fields
       await exitCapacityPlanRoleOnly(rt.id, tx)
 
-      // 3. Update only inherited NR compatibility fields to manual-scheduling defaults
+      // 3. Update inherited NR profiles and compatibility fields
       if (inheritedIds.size > 0) {
+        for (const inhId of inheritedIds) {
+          // Find the validated NR profile from state
+          const inhProfile = state.nrProfileRows.find(
+            (np: any) => np.namedResourceId === inhId,
+          )
+          if (inhProfile) {
+            // Update profile to post-exit inherited state (preserve ID)
+            await tx.capacityProfile.update({
+              where: { id: inhProfile.id },
+              data: {
+                ownerKind: 'NAMED_PERSON',
+                planningBasis: 'DEMAND_FOLLOWING' as any,
+                source: 'FIXED' as any,
+                defaultPercent: 100,
+                endWeek: null,
+              },
+            })
+            // Clear any planner segments from inherited profiles
+            await tx.capacitySegment.deleteMany({
+              where: { capacityProfileId: inhProfile.id },
+            })
+          }
+        }
         await tx.namedResource.updateMany({
           where: { id: { in: [...inheritedIds] } },
           data: {
@@ -271,25 +295,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           },
         })
       }
-      // Explicit, custom, segmented, planned NRs are left untouched
     }
-
-    let roleProfileRows = state.roleProfileRows
-    if (isCapacityPlan) {
-      // Reload the post-exit ROLE profile through strict validation
-      const postExitProfile = await loadAndValidateOwnerProfile({
-        tx,
-        projectId: req.params.projectId as string,
-        ownerKind: 'ROLE',
-        ownerId: rt.id,
-      })
-      roleProfileRows = [{
-        ...postExitProfile,
-        segments: postExitProfile.segments,
-      } as any]
-    }
-
-    // ── Helper to create the full compatibility shape ───────────
     const buildInheritedNRCreateData = (name: string, nrCount: number) => ({
       name: `${name} ${nrCount}`,
       resourceTypeId: rt.id,
