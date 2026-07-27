@@ -245,7 +245,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const defaultAllocEndWeek = isCapacityPlan ? null : state.roleDefault.allocationEndWeek
     const defaultAllocPct = toLegacyAllocationPct(defaultAllocPercent)
     const inheritedIds = new Set(state.classification.inheritedNRIds)
-    let roleProfileRows = state.roleProfileRows
+    const roleProfileRows = state.roleProfileRows
     // ── CAPACITY_PLAN exit (before count logic) ────────────────
     if (isCapacityPlan) {
       // 1. Upsert the role-owned profile with manual-scheduling defaults
