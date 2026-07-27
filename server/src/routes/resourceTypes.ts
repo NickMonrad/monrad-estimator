@@ -154,8 +154,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     else { capacityPayload.allocationStartWeek = profileAllocStartWeek }
     if ('allocationEndWeek' in req.body) { capacityPayload.allocationEndWeek = allocationEndWeek ?? null }
     else { capacityPayload.allocationEndWeek = profileAllocEndWeek }
-
-    const state = await resolveRTPatchState(tx, existing.id, existing)
+    const state = await resolveRTPatchState(tx, existing.id, existing, req.params.projectId as string)
     const schedulingState = resolveRoleSchedulingState(state)
     const inheritedIds = new Set(state.classification.inheritedNRIds)
 
@@ -232,8 +231,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
 
   const { updated, warnings } = await prisma.$transaction(async tx => {
-    // ── Load authoritative state via shared helper ─────────────
-    const state = await resolveRTPatchState(tx, rt.id, rt)
+    const state = await resolveRTPatchState(tx, rt.id, rt, req.params.projectId as string)
 
     const currentCount = state.namedResources.length
     const nextWarnings: string[] = []
@@ -276,17 +274,19 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       // Explicit, custom, segmented, planned NRs are left untouched
     }
 
-    // ── Reload role profile after CAPACITY_PLAN exit ──────────
-    // If we exited CAPACITY_PLAN, state.roleProfileRows[0] is stale (still has
-    // pre-exit CAPACITY_PROFILE/SQUAD_PLANNER values). Re-fetch the authoritative
-    // role profile so subsequent count-increase creates NR profiles with the
-    // post-exit manual scheduling state, not stale planner state.
     let roleProfileRows = state.roleProfileRows
     if (isCapacityPlan) {
-      roleProfileRows = await tx.capacityProfile.findMany({
-        where: { resourceTypeId: rt.id, namedResourceId: null, ownerKind: 'ROLE' },
-        include: { segments: true },
-      }) ?? []
+      // Reload the post-exit ROLE profile through strict validation
+      const postExitProfile = await loadAndValidateOwnerProfile({
+        tx,
+        projectId: req.params.projectId as string,
+        ownerKind: 'ROLE',
+        ownerId: rt.id,
+      })
+      roleProfileRows = [{
+        ...postExitProfile,
+        segments: postExitProfile.segments,
+      } as any]
     }
 
     // ── Helper to create the full compatibility shape ───────────
@@ -362,7 +362,15 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       for (const nr of reversed) {
         if (removed >= targetRemove) break
         if (inheritedIds.has(nr.id)) {
-          await tx.capacityProfile.deleteMany({ where: { namedResourceId: nr.id } })
+          // Find the exact profile for this NR to delete by ID, not by owner
+          const nrProfile = state.nrProfileRows.find(
+            (p: any) => p.namedResourceId === nr.id,
+          )
+          if (nrProfile) {
+            await tx.capacityProfile.delete({ where: { id: nrProfile.id } })
+          } else {
+            await tx.capacityProfile.deleteMany({ where: { namedResourceId: nr.id } })
+          }
           await tx.namedResource.delete({ where: { id: nr.id } })
           deletedIds.add(nr.id)
           removed++

@@ -5,9 +5,7 @@ import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityProfileWrites.js'
-import type { PrismaTransactionClient } from '../lib/squadPlannerProfileWriter.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
-import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
 
 const router = Router({ mergeParams: true })
@@ -39,48 +37,6 @@ class ProfileManagedCapacityError extends Error {
 function isProfileManagedCapacityError(error: unknown): error is ProfileManagedCapacityError {
   return error instanceof ProfileManagedCapacityError
 }
-
-/**
- * Assert that a capacity-bearing update is safe for the existing profile.
- *
- * A named resource is protected from scalar capacity mutation when its
- * CapacityProfile has any of:
- * - one or more CapacitySegment rows (segmented profile)
- * - planningBasis = 'capacityProfile' (weekly-profile even without segments)
- * - ownerKind = 'PLANNED_RESOURCE' (managed by Squad Planner)
- *
- * Multiple conflicting profiles also fail closed — we cannot determine
- * which profile is authoritative, so scalar mutation is refused.
- *
- * Throws ProfileManagedCapacityError.
- */
-async function assertCapacityNotProtected(
-  tx: PrismaTransactionClient,
-  namedResourceId: string,
-  projectId: string,
-): Promise<void> {
-  const profiles = await tx.capacityProfile.findMany({
-    where: { namedResourceId, projectId },
-    include: { segments: { select: { id: true, startWeek: true, endWeek: true } } },
-    orderBy: { createdAt: 'asc' },
-  }) as Array<{ id: string; planningBasis: string | null; ownerKind: string | null; segments: Array<{ id: string }> }>
-
-  if (profiles.length > 1) {
-    throw new ProfileManagedCapacityError('This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.')
-  }
-
-  const profile = profiles[0]
-  if (!profile) return
-
-  const hasSegments = profile.segments.length > 0
-  const isProtectedPlanningBasis = profile.planningBasis === 'CAPACITY_PROFILE'
-  const isPlannedResource = profile.ownerKind === 'PLANNED_RESOURCE'
-  if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
-    throw new ProfileManagedCapacityError('This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.')
-  }
-}
-
-
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
   (tx ?? prisma).project.update({
     where: { id: projectId },
@@ -250,7 +206,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rt = await verifyResourceType(rtId, projectId)
   if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
 
-  // Verify the named resource belongs to this resource type
   const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
 
@@ -280,96 +235,88 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     has('startWeek') ||
     has('endWeek')
 
-  /** Non-window allocation modes — when explicitly set, stale window fields must be suppressed. */
-  const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
-  const isExplicitNonWindow = has('allocationMode') && allocationMode !== undefined && allocationMode !== null && NON_WINDOW_MODES.has(allocationMode)
-
-  const capacityPayload: NamedResourceCapacityPayload = {
-    allocationMode: has('allocationMode')
-      ? allocationMode
-      : hasCapacityInput
-        ? undefined          // let helper infer TIMELINE from startWeek/endWeek
-        : existing.allocationMode,  // preserve existing mode
-
-    allocationPercent: has('allocationPercent')
-      ? allocationPercent
-      : has('allocationPct')
-        ? undefined
-        : existing.allocationPercent,
-
-    allocationPct: has('allocationPct') ? allocationPct : existing.allocationPct,
-
-    // When allocationMode is explicitly a non-window mode (EFFORT, FULL_PROJECT, CAPACITY_PLAN),
-    // suppress stale window fields regardless of what the NR previously had.
-    // This prevents the projection from misinterpreting historical windows as TIMELINE intent.
-    allocationStartWeek: isExplicitNonWindow
-      ? null
-      : has('allocationStartWeek')
-        ? allocationStartWeek
-        : has('startWeek')
-          ? startWeek
-          : existing.allocationStartWeek,
-
-    allocationEndWeek: isExplicitNonWindow
-      ? null
-      : has('allocationEndWeek')
-        ? allocationEndWeek
-        : has('endWeek')
-          ? endWeek
-          : existing.allocationEndWeek,
-
-    startWeek: has('startWeek')
-      ? startWeek
-      : has('allocationStartWeek')
-        ? allocationStartWeek
-        : existing.startWeek,
-
-    endWeek: isExplicitNonWindow
-      ? null
-      : has('endWeek') ? endWeek : existing.endWeek,
-  }
   try {
     const resource = await prisma.$transaction(async tx => {
-      // Guard runs inside the transaction, before any write.
-      // If the profile is protected, ProfileManagedCapacityError escapes the transaction.
-      if (hasCapacityInput) {
-        await assertCapacityNotProtected(tx, id, projectId)
-      }
+      // ── 1. Load and validate the exact authoritative NR profile ──
+      const nrProfile = await loadAndValidateOwnerProfile({
+        tx,
+        projectId,
+        ownerKind: 'NAMED_PERSON',
+        ownerId: id,
+      })
 
-      // Write non-capacity fields first
-      await tx.namedResource.update({ where: { id }, data: nrData })
-      let updated
       if (hasCapacityInput) {
-        // Capacity fields provided — profile-first write + project back to legacy
-        const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
-        updated = await tx.namedResource.update({
+        // ── 2. Reject protected profiles ──────────────────────────
+        const hasSegments = nrProfile.segments.length > 0
+        const isProtectedPlanningBasis = nrProfile.planningBasis === 'CAPACITY_PROFILE'
+        const isPlannedResource = nrProfile.ownerKind === 'PLANNED_RESOURCE'
+        if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
+          throw new ProfileManagedCapacityError(
+            'This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.',
+          )
+        }
+
+        // ── 3. Derive defaults from the validated profile ─────────
+        const profileAllocMode = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? 'TIMELINE' :
+          nrProfile.planningBasis === 'DEMAND_FOLLOWING' ? 'EFFORT' :
+          nrProfile.planningBasis === 'AVAILABILITY_WINDOW' ? 'TIMELINE' :
+          nrProfile.planningBasis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT' :
+          'EFFORT'
+        const profileAllocPercent = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? 100 : (nrProfile.defaultPercent ?? 100)
+        const profileAllocStartWeek = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? null : nrProfile.startWeek
+        const profileAllocEndWeek = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? null : nrProfile.endWeek
+
+        // ── 4. Apply only explicitly supplied request fields ──────
+        const mode = has('allocationMode') ? allocationMode : profileAllocMode
+        const percent = has('allocationPercent') ? allocationPercent : (has('allocationPct') ? allocationPct : profileAllocPercent)
+        const compatStartWeek = has('allocationStartWeek') ? allocationStartWeek : (has('startWeek') ? startWeek : profileAllocStartWeek)
+        const compatEndWeek = has('allocationEndWeek') ? allocationEndWeek : (has('endWeek') ? endWeek : profileAllocEndWeek)
+        const nrStartWeek = has('startWeek') ? startWeek : (has('allocationStartWeek') ? allocationStartWeek : profileAllocStartWeek)
+        const nrEndWeek = has('endWeek') ? endWeek : (has('allocationEndWeek') ? allocationEndWeek : profileAllocEndWeek)
+
+        // Non-window mode suppresses stale windows
+        const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
+        const isNonWindow = mode && NON_WINDOW_MODES.has(mode)
+
+        // ── 5. Update the existing profile in place (preserve ID) ─
+        await tx.capacityProfile.update({
+          where: { id: nrProfile.id },
+          data: {
+            ownerKind: 'NAMED_PERSON',
+            defaultPercent: percent,
+            startWeek: isNonWindow ? null : nrStartWeek,
+            endWeek: isNonWindow ? null : nrEndWeek,
+          },
+        })
+
+        // Replace segments — for scalar updates, clear any existing segments
+        await tx.capacitySegment.deleteMany({
+          where: { capacityProfileId: nrProfile.id },
+        })
+
+        // ── 6. Write compatibility fields atomically ─────────────
+        await tx.namedResource.update({
           where: { id },
           data: {
-            allocationMode: projection.allocationMode,
-            allocationPercent: projection.allocationPercent ?? 100,
-            allocationPct: projection.allocationPercent ?? 100,
-            allocationStartWeek: projection.allocationStartWeek,
-            allocationEndWeek: projection.allocationEndWeek,
-            startWeek: projection.allocationStartWeek,
-            endWeek: projection.allocationEndWeek,
+            ...nrData,
+            allocationMode: mode,
+            allocationPercent: percent,
+            allocationPct: Math.round(percent),
+            allocationStartWeek: isNonWindow ? null : compatStartWeek,
+            allocationEndWeek: isNonWindow ? null : compatEndWeek,
+            startWeek: isNonWindow ? null : nrStartWeek,
+            endWeek: isNonWindow ? null : nrEndWeek,
           },
         })
       } else {
-        // No capacity changes — profile must already exist
-        const existingProfiles = await tx.capacityProfile.findMany({
-          where: { namedResourceId: id, projectId },
-          select: { id: true },
-        })
-        if (existingProfiles.length === 0) {
-          throw new CapacityIntegrityError(
-            'Missing capacity profile for this named resource. ' +
-            'Run the capacity profile backfill/repair workflow before retrying this operation.',
-          )
-        }
-        updated = await tx.namedResource.findFirst({ where: { id } })
-        if (!updated) throw new Error('NamedResource not found after update')
+        // ── Non-capacity PUT: profile already validated above ────
+        // Only update non-capacity fields
+        await tx.namedResource.update({ where: { id }, data: nrData })
       }
+
       await clearWeeklyDemandCache(projectId, tx)
+      const updated = await tx.namedResource.findFirst({ where: { id } })
+      if (!updated) throw new Error('NamedResource not found after update')
       return updated
     })
     res.json(resource)
@@ -397,61 +344,72 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
   const { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek, startWeek, endWeek } = req.body
 
-  const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
   const hasPatch = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
-  const isExplicitNonWindowPatch = hasPatch('allocationMode') && allocationMode !== undefined && allocationMode !== null && NON_WINDOW_MODES.has(allocationMode)
+  const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
 
-  const capacityPayload: NamedResourceCapacityPayload = {
-    allocationMode: hasPatch('allocationMode') ? allocationMode : existing.allocationMode,
-
-    allocationPercent: hasPatch('allocationPercent') ? allocationPercent : existing.allocationPercent,
-
-    allocationPct: existing.allocationPct,
-
-    // Non-window mode suppresses stale window fields
-    allocationStartWeek: isExplicitNonWindowPatch
-      ? null
-      : hasPatch('allocationStartWeek')
-        ? allocationStartWeek
-        : hasPatch('startWeek')
-          ? startWeek
-          : existing.allocationStartWeek,
-
-    allocationEndWeek: isExplicitNonWindowPatch
-      ? null
-      : hasPatch('allocationEndWeek')
-        ? allocationEndWeek
-        : hasPatch('endWeek')
-          ? endWeek
-          : existing.allocationEndWeek,
-
-    startWeek: hasPatch('startWeek')
-      ? startWeek
-      : hasPatch('allocationStartWeek')
-        ? allocationStartWeek
-        : existing.startWeek,
-
-    endWeek: hasPatch('endWeek') ? endWeek : existing.endWeek,
-  }
   try {
     const resource = await prisma.$transaction(async tx => {
-      // Guard runs inside transaction, before any write.
-      // PATCH is always a capacity operation.
-      await assertCapacityNotProtected(tx, id, projectId)
+      // ── 1. Load and validate the exact authoritative NR profile ──
+      const nrProfile = await loadAndValidateOwnerProfile({
+        tx,
+        projectId,
+        ownerKind: 'NAMED_PERSON',
+        ownerId: id,
+      })
 
-      // Profile-first write + project back to legacy
-      const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, id, rtId, capacityPayload)
-      // Write projected legacy fields as compatibility
+      // ── 2. Reject protected profiles ─────────────────────────────
+      const hasSegments = nrProfile.segments.length > 0
+      const isProtectedPlanningBasis = nrProfile.planningBasis === 'CAPACITY_PROFILE'
+      const isPlannedResource = nrProfile.ownerKind === 'PLANNED_RESOURCE'
+      if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
+        throw new ProfileManagedCapacityError(
+          'This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.',
+        )
+      }
+
+      // ── 3. Derive defaults from the validated profile ────────────
+      const profileAllocMode = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? 'TIMELINE' :
+        nrProfile.planningBasis === 'DEMAND_FOLLOWING' ? 'EFFORT' :
+        nrProfile.planningBasis === 'AVAILABILITY_WINDOW' ? 'TIMELINE' :
+        nrProfile.planningBasis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT' :
+        'EFFORT'
+      const profileAllocPercent = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? 100 : (nrProfile.defaultPercent ?? 100)
+      const profileAllocStartWeek = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? null : nrProfile.startWeek
+      const profileAllocEndWeek = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? null : nrProfile.endWeek
+
+      // ── 4. Apply only explicitly supplied request fields ─────────
+      const mode = hasPatch('allocationMode') ? allocationMode : profileAllocMode
+      const percent = hasPatch('allocationPercent') ? allocationPercent : profileAllocPercent
+      const compatStartWeek = hasPatch('allocationStartWeek') ? allocationStartWeek : (hasPatch('startWeek') ? startWeek : profileAllocStartWeek)
+      const compatEndWeek = hasPatch('allocationEndWeek') ? allocationEndWeek : (hasPatch('endWeek') ? endWeek : profileAllocEndWeek)
+      const nrStartWeek = hasPatch('startWeek') ? startWeek : (hasPatch('allocationStartWeek') ? allocationStartWeek : profileAllocStartWeek)
+      const nrEndWeek = hasPatch('endWeek') ? endWeek : (hasPatch('allocationEndWeek') ? allocationEndWeek : profileAllocEndWeek)
+
+      // Non-window mode suppresses stale windows
+      const isNonWindow = mode && NON_WINDOW_MODES.has(mode)
+
+      // ── 5. Update the existing profile in place (preserve ID) ────
+      await tx.capacityProfile.update({
+        where: { id: nrProfile.id },
+        data: {
+          ownerKind: 'NAMED_PERSON',
+          defaultPercent: percent,
+          startWeek: isNonWindow ? null : nrStartWeek,
+          endWeek: isNonWindow ? null : nrEndWeek,
+        },
+      })
+
+      // ── 6. Write compatibility fields atomically ─────────────────
       const updated = await tx.namedResource.update({
         where: { id },
         data: {
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 100,
-          allocationPct: projection.allocationPercent ?? 100,
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
-          startWeek: projection.allocationStartWeek,
-          endWeek: projection.allocationEndWeek,
+          allocationMode: mode,
+          allocationPercent: percent,
+          allocationPct: Math.round(percent),
+          allocationStartWeek: isNonWindow ? null : compatStartWeek,
+          allocationEndWeek: isNonWindow ? null : compatEndWeek,
+          startWeek: isNonWindow ? null : nrStartWeek,
+          endWeek: isNonWindow ? null : nrEndWeek,
         },
       })
 

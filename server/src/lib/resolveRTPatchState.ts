@@ -14,10 +14,11 @@
  * @see docs/domain/capacity-profile-source-of-truth-migration-plan.md
  */
 
-import { resolveRoleDefaultForMutation } from './resolveRoleDefaultForMutation.js'
-import type { ResolvedRoleDefault, RoleProfileLike } from './resolveRoleDefaultForMutation.js'
+import type { ResolvedRoleDefault } from './resolveRoleDefaultForMutation.js'
 import { classifyNRsForRoleUpdate } from './classifyNRsForRoleUpdate.js'
 import type { NRToClassify, NRProfileState, ClassificationResult } from './classifyNRsForRoleUpdate.js'
+import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
+import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 
 // ─── Input shape ─────────────────────────────────────────────────────────────
 
@@ -115,42 +116,56 @@ export async function resolveRTPatchState(
   tx: any,
   rtId: string,
   resourceType: ResourceTypeRecord,
+  projectId: string,
 ): Promise<RTPatchState> {
-  // ── 1. Load named resources ──────────────────────────────────────────
+  // ── 1. Validate exactly one authoritative ROLE profile ──────────────
+  const roleProfile = await loadAndValidateOwnerProfile({
+    tx,
+    projectId,
+    ownerKind: 'ROLE',
+    ownerId: rtId,
+  })
+
+  // ── 2. Project the validated profile to legacy-compatible values ─────
+  const projection = projectCapacityProfileToLegacyAllocation({
+    planningBasis: roleProfile.planningBasis,
+    defaultPercent: roleProfile.defaultPercent,
+    startWeek: roleProfile.startWeek,
+    endWeek: roleProfile.endWeek,
+    segments: roleProfile.segments.map(s => ({
+      startWeek: s.startWeek,
+      endWeek: s.endWeek,
+      capacityPercent: s.capacityPercent,
+      source: s.source,
+    })),
+    source: roleProfile.source,
+  })
+
+  const roleDefault: ResolvedRoleDefault = {
+    allocationMode: projection?.allocationMode ?? 'EFFORT',
+    allocationPercent: projection?.allocationPercent ?? 100,
+    allocationStartWeek: projection?.allocationStartWeek ?? null,
+    allocationEndWeek: projection?.allocationEndWeek ?? null,
+    source: 'PROFILE',
+    lossy: projection?.lossy ?? false,
+    lossReason: (projection as any)?.lossReason,
+  }
+
+  // ── 3. Load named resources with their profiles ──────────────────────
   const namedResources: NamedResourceRecord[] = (await tx.namedResource.findMany({
     where: { resourceTypeId: rtId },
     orderBy: { createdAt: 'asc' },
   })) ?? []
-  if (!Array.isArray(namedResources)) {
-    throw new Error(
-      `resolveRTPatchState: tx.namedResource.findMany returned non-array for RT ${rtId}: ${typeof namedResources}`,
-    )
-  }
 
-  // ── 2. Load NR capacity profiles with segments ──────────────────────
   const nrProfileRows: CapacityProfileRecord[] = (await tx.capacityProfile.findMany({
     where: {
       namedResourceId: { in: namedResources.map((nr: any) => nr.id) },
+      projectId,
     },
     include: { segments: true },
   })) ?? []
 
-  const roleProfileRows: CapacityProfileRecord[] = (await tx.capacityProfile.findMany({
-    where: {
-      resourceTypeId: rtId,
-      namedResourceId: null,
-      ownerKind: 'ROLE',
-    },
-    include: { segments: true },
-  })) ?? []
-
-  // ── 4. Resolve authoritative role default ────────────────────────────
-  const roleDefault = resolveRoleDefaultForMutation({
-    resourceType,
-    roleProfiles: roleProfileRows as unknown as RoleProfileLike[],
-  })
-
-  // Build the old-role-default shape for the classifier
+  // ── 4. Build old-role-default for classifier ─────────────────────────
   const oldRoleDefault = {
     allocationMode: roleDefault.allocationMode,
     allocationPercent: roleDefault.allocationPercent,
@@ -169,7 +184,7 @@ export async function resolveRTPatchState(
     resourceType: resourceType as unknown as ResourceTypeRecord,
     namedResources,
     nrProfileRows,
-    roleProfileRows,
+    roleProfileRows: [roleProfile as unknown as CapacityProfileRecord],
     roleDefault,
     classification,
   }

@@ -48,8 +48,6 @@ export interface OwnerProfileQuery {
   ownerKind: string
   /** ResourceType ID (for ROLE) or NamedResource ID (for NAMED_PERSON/PLANNED_RESOURCE). */
   ownerId: string
-  /** Whether segments must be non-empty (default false). */
-  requireSegments?: boolean
   /** Include segment rows in the returned result (default true). */
   includeSegments?: boolean
 }
@@ -99,8 +97,7 @@ function isNonNegativeInteger(v: unknown): v is number {
 export async function loadAndValidateOwnerProfile(
   query: OwnerProfileQuery,
 ): Promise<ValidatedOwnerProfile> {
-  const { tx, projectId, ownerKind, ownerId, requireSegments = false, includeSegments = true } = query
-
+  const { tx, projectId, ownerKind, ownerId, includeSegments = true } = query
   // ── 1. Build entity-appropriate where ──────────────────────────────
   const where: Record<string, unknown> = { projectId }
 
@@ -168,9 +165,10 @@ export async function loadAndValidateOwnerProfile(
       )
     }
   } else {
-    if (profile.ownerKind !== 'NAMED_PERSON' && profile.ownerKind !== 'PLANNED_RESOURCE') {
+    if (profile.ownerKind !== ownerKind) {
       throw new CapacityIntegrityError(
-        `Expected NAMED_PERSON/PLANNED_RESOURCE capacity profile for named resource ${ownerId} but found "${profile.ownerKind}" kind.`,
+        `Expected ${ownerKind} capacity profile for named resource ${ownerId} but found "${profile.ownerKind}" kind. ` +
+        'Run the capacity profile audit/repair workflow before retrying this operation.',
       )
     }
     if (profile.namedResourceId !== ownerId) {
@@ -212,9 +210,8 @@ export async function loadAndValidateOwnerProfile(
     }
   }
 
-  // ── 6. Window validation ───────────────────────────────────────────
-  let startWeek: number | null = profile.startWeek ?? null
-  let endWeek: number | null = profile.endWeek ?? null
+  const startWeek: number | null = profile.startWeek ?? null
+  const endWeek: number | null = profile.endWeek ?? null
 
   if (startWeek !== null && !isNonNegativeInteger(startWeek)) {
     throw new CapacityIntegrityError(
@@ -366,9 +363,10 @@ export async function loadAndValidateOwnerProfile(
     }
   }
 
-  if (requireSegments && segments.length === 0) {
+  // CAPACITY_PROFILE intrinsically requires at least one segment
+  if (planningBasis === 'CAPACITY_PROFILE' && segments.length === 0) {
     throw new CapacityIntegrityError(
-      `Capacity profile ${profile.id} has no segments but segments are required.`,
+      `CAPACITY_PROFILE profile ${profile.id} has no segments but segments are required.`,
     )
   }
 

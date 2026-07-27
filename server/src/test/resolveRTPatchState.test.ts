@@ -47,7 +47,7 @@ function makeProfile(id: string, overrides: Record<string, any> = {}) {
   return {
     id,
     projectId: 'proj-1',
-    resourceTypeId: null,
+    resourceTypeId: 'rt-1',
     namedResourceId: null,
     ownerKind: 'ROLE' as const,
     planningBasis: 'DEMAND_FOLLOWING',
@@ -84,13 +84,14 @@ describe('resolveRTPatchState', () => {
 
   // Helper: override tx.capacityProfile.findMany for role-profile and/or NR-profile queries
   const setRoleProfiles = (profiles: any[]) => {
+    tx._roleProfiles = profiles
     tx.capacityProfile.findMany = vi.fn().mockImplementation((args: any) => {
       // If querying by namedResourceId.in → NR profiles
       if (args?.where?.namedResourceId?.in) {
         return Promise.resolve(tx._nrProfiles ?? [])
       }
       // Otherwise → role profiles (resourceTypeId match, namedResourceId null)
-      return Promise.resolve(profiles)
+      return Promise.resolve(tx._roleProfiles)
     })
   }
 
@@ -98,7 +99,7 @@ describe('resolveRTPatchState', () => {
     tx._nrProfiles = profiles
     tx.capacityProfile.findMany = vi.fn().mockImplementation((args: any) => {
       if (args?.where?.namedResourceId?.in) {
-        return Promise.resolve(profiles)
+        return Promise.resolve(tx._nrProfiles)
       }
       return Promise.resolve(tx._roleProfiles ?? [])
     })
@@ -128,7 +129,7 @@ describe('resolveRTPatchState', () => {
         makeNR('nr-2', { allocationMode: 'EFFORT', allocationPercent: 70 }),
       ])
 
-      const state = await resolveRTPatchState(tx, 'rt-1', makeRT())
+      const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
 
       // Role default is PROFILE → EFFORT/70/null/null
       expect(state.roleDefault.source).toBe('PROFILE')
@@ -154,7 +155,7 @@ describe('resolveRTPatchState', () => {
         makeNR('nr-1', { allocationMode: 'TIMELINE', allocationPercent: 100 }),
       ])
 
-      const state = await resolveRTPatchState(tx, 'rt-1', makeRT())
+      const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
 
       // nr-1 matches RT legacy (TIMELINE/100) but NOT role default (EFFORT/70)
       expect(state.classification.explicitNRIds).toContain('nr-1')
@@ -180,7 +181,7 @@ describe('resolveRTPatchState', () => {
         makeNR('nr-1', { allocationMode: 'EFFORT', allocationPercent: 70 }),
       ])
 
-      const state = await resolveRTPatchState(tx, 'rt-1', makeRT())
+      const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
 
       // Has explicit NR profile (segments non-empty) → protected
       expect(state.classification.explicitNRIds).toContain('nr-1')
@@ -210,7 +211,7 @@ describe('resolveRTPatchState', () => {
         }),
       ])
 
-      const state = await resolveRTPatchState(tx, 'rt-1', makeRT())
+      const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
 
       // Has profile-first profile → protected
       expect(state.classification.explicitNRIds).toContain('nr-2')
@@ -234,7 +235,7 @@ describe('resolveRTPatchState', () => {
         makeNR('nr-3', { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25 }),
       ])
 
-      const state = await resolveRTPatchState(tx, 'rt-1', makeRT())
+      const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
 
       // PLANNED_RESOURCE → protected
       expect(state.classification.explicitNRIds).toContain('nr-3')
@@ -250,7 +251,7 @@ describe('resolveRTPatchState', () => {
         makeNR('nr-1', { allocationMode: 'EFFORT', allocationPercent: 70 }),
       ])
 
-      const state = await resolveRTPatchState(tx, 'rt-1', makeRT())
+      const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
 
       expect(state.classification.inheritedNRIds).toContain('nr-1')
       expect(state.classification.explicitNRIds).not.toContain('nr-1')
@@ -266,7 +267,7 @@ describe('resolveRTPatchState', () => {
         makeNR('nr-1', { allocationMode: 'TIMELINE', allocationPercent: 100 }),
       ])
 
-      const state = await resolveRTPatchState(tx, 'rt-1', makeRT())
+      const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
 
       expect(state.classification.explicitNRIds).toContain('nr-1')
       expect(state.classification.inheritedNRIds).not.toContain('nr-1')

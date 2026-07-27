@@ -445,19 +445,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       capacityProfile: {
         findFirst: (args: any) => findOne(store().capacityProfiles, args?.where ?? {}),
         findMany: (args: any) => {
-          let results = findMany('capacityProfiles', args ?? {})
-
-          // Auto-create a synthetic role profile when queries for a non-existent
-          // ROLE profile. This keeps profile-first routes functional.
-          if (results.length === 0 && args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
-            const rtId = args.where.resourceTypeId
-            const rt = store().resourceTypes.find((r: any) => r.id === rtId)
-            if (rt) {
-              ensureRoleProfiles()
-              results = findMany('capacityProfiles', args ?? {})
-            }
-          }
-
+          const results = findMany('capacityProfiles', args ?? {})
           if (args?.include?.segments) {
             return results.map((cp: any) => ({
               ...cp,
@@ -468,6 +456,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
           }
           return results
         },
+        create: (args: any) => createIn('capacityProfiles', args.data ?? args),
         update: (args: any) => {
           const idx = store().capacityProfiles.findIndex((r: any) => r.id === args.where.id)
           if (idx >= 0) {
@@ -573,45 +562,6 @@ beforeEach(() => {
   storeRef.current = createStore()
 })
 
-// Ensure every RT has a synthetic role profile for profile-first routes.
-// Tests that set up specific profile state via addPersistedProfile override this.
-// Tests testing missing-profile scenarios should add RTs without addResourceType.
-function ensureRoleProfiles() {
-  for (const rt of storeRef.current.resourceTypes) {
-    const hasProfile = storeRef.current.capacityProfiles.some(
-      (cp: any) => cp.resourceTypeId === rt.id && cp.namedResourceId === null,
-    )
-    if (!hasProfile) {
-      const now = new Date()
-      storeRef.current.capacityProfiles.push({
-        id: `cp-role-auto-${rt.id}`,
-        projectId: rt.projectId,
-        resourceTypeId: rt.id,
-        namedResourceId: null,
-        ownerKind: 'ROLE',
-        planningBasis: rt.allocationMode === 'CAPACITY_PLAN' ? 'CAPACITY_PROFILE' :
-          rt.allocationMode === 'TIMELINE' ? 'AVAILABILITY_WINDOW' :
-          rt.allocationMode === 'FULL_PROJECT' ? 'WHOLE_PROJECT_ALLOCATION' :
-          'DEMAND_FOLLOWING',
-        source: rt.allocationMode === 'CAPACITY_PLAN' ? 'SQUAD_PLANNER' :
-          rt.allocationMode === 'TIMELINE' ? 'AVAILABILITY_WINDOW' :
-          'FIXED',
-        defaultPercent: rt.allocationPercent ?? 100,
-        startWeek: rt.allocationMode === 'TIMELINE' ? (rt.allocationStartWeek ?? null) : null,
-        endWeek: rt.allocationMode === 'TIMELINE' ? (rt.allocationEndWeek ?? null) : null,
-        createdAt: now,
-        updatedAt: now,
-        segments: [],
-      })
-    }
-  }
-}
-function getCapacityProfiles() {
-  return request(app)
-    .get(`/api/projects/${projectId}/capacity-profiles`)
-    .set('Authorization', authHeader)
-}
-
 // ─── Initial-state helpers ──────────────────────────────────────────────────
 
 function addResourceType(
@@ -636,9 +586,34 @@ function addResourceType(
     ...overrides,
   }
   storeRef.current.resourceTypes.push(rt)
+  // Create a canonical ROLE profile matching the RT's compatibility fields
+  const roleProfile = {
+    id: `cp-role-${id}`,
+    projectId,
+    resourceTypeId: id,
+    namedResourceId: null,
+    ownerKind: 'ROLE',
+    planningBasis: rt.allocationMode === 'CAPACITY_PLAN' ? 'CAPACITY_PROFILE' :
+      rt.allocationMode === 'TIMELINE' ? 'AVAILABILITY_WINDOW' :
+      rt.allocationMode === 'FULL_PROJECT' ? 'WHOLE_PROJECT_ALLOCATION' :
+      'DEMAND_FOLLOWING',
+    source: rt.allocationMode === 'CAPACITY_PLAN' ? 'SQUAD_PLANNER' :
+      rt.allocationMode === 'TIMELINE' ? 'AVAILABILITY_WINDOW' :
+      'FIXED',
+    defaultPercent: rt.allocationPercent ?? 100,
+    startWeek: rt.allocationMode === 'TIMELINE' ? (rt.allocationStartWeek ?? null) : null,
+    endWeek: rt.allocationMode === 'TIMELINE' ? (rt.allocationEndWeek ?? null) : null,
+    createdAt: now,
+    updatedAt: now,
+  }
+  storeRef.current.capacityProfiles.push(roleProfile)
   return rt
 }
-
+function getCapacityProfiles() {
+  return request(app)
+    .get(`/api/projects/${projectId}/capacity-profiles`)
+    .set('Authorization', authHeader)
+}
 function addNamedResource(
   id: string,
   name: string,
@@ -670,6 +645,22 @@ function addNamedResource(
       (n: any) => n.resourceTypeId === rt,
     ).length
   }
+  // Create a canonical NAMED_PERSON profile matching the NR's current state
+  const nrProfile = {
+    id: `cp-nr-${id}`,
+    projectId,
+    resourceTypeId: null,
+    namedResourceId: id,
+    ownerKind: 'NAMED_PERSON',
+    planningBasis: 'DEMAND_FOLLOWING',
+    source: 'FIXED',
+    defaultPercent: nr.allocationPercent ?? 100,
+    startWeek: null,
+    endWeek: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+  storeRef.current.capacityProfiles.push(nrProfile)
   return nr
 }
 
@@ -693,10 +684,19 @@ function addPersistedProfile(
     updatedAt: now,
     ...overrides,
   }
-  storeRef.current.capacityProfiles.push(profile)
+  // Replace any existing profile for the same owner to avoid duplicates
+  const existingIdx = storeRef.current.capacityProfiles.findIndex(
+    (cp: any) =>
+      (profile.resourceTypeId && cp.resourceTypeId === profile.resourceTypeId && cp.namedResourceId === null) ||
+      (profile.namedResourceId && cp.namedResourceId === profile.namedResourceId),
+  )
+  if (existingIdx >= 0) {
+    storeRef.current.capacityProfiles[existingIdx] = profile
+  } else {
+    storeRef.current.capacityProfiles.push(profile)
+  }
   return profile
 }
-
 function addEpic(
   id: string,
   name: string,

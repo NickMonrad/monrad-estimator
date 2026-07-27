@@ -121,9 +121,11 @@ describeIf('profile-first runtime cutover (#364)', () => {
       })
       expect(profile).toBeDefined()
       expect(profile!.ownerKind).toBe('ROLE')
-      expect(profile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(profile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(profile!.source).toBe('AVAILABILITY_WINDOW')
       expect(profile!.defaultPercent).toBe(100)
-      expect(VALID_SOURCES).toContain(profile!.source)
+      expect(profile!.startWeek).toBeNull()
+      expect(profile!.endWeek).toBeNull()
       expect(profile!.namedResourceId).toBeNull()
     }
   })
@@ -142,14 +144,26 @@ describeIf('profile-first runtime cutover (#364)', () => {
     const roleProfile = await prisma.capacityProfile.findFirst({
       where: { resourceTypeId: newRtId, namedResourceId: null, projectId },
     })
-    expect(roleProfile).toBeDefined()
-    expect(roleProfile!.source).toBe('FIXED')
-    expect(roleProfile!.planningBasis).toBe('DEMAND_FOLLOWING')
-
+    expect(roleProfile!.source).toBe('AVAILABILITY_WINDOW')
+    expect(roleProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(roleProfile!.defaultPercent).toBe(100)
+    expect(roleProfile!.startWeek).toBeNull()
+    expect(roleProfile!.endWeek).toBeNull()
     const nrs = await prisma.namedResource.findMany({ where: { resourceTypeId: newRtId } })
     expect(nrs.length).toBe(1)
     const nrProfileCount = await countProfiles('NAMED_PERSON', nrs[0].id)
     expect(nrProfileCount).toBe(1)
+    const nrProfile = await prisma.capacityProfile.findFirst({
+      where: { namedResourceId: nrs[0].id, projectId },
+    })
+    expect(nrProfile).toBeDefined()
+    expect(nrProfile!.ownerKind).toBe('NAMED_PERSON')
+    expect(nrProfile!.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(nrProfile!.source).toBe('FIXED')
+    expect(nrProfile!.defaultPercent).toBe(100)
+    expect(nrProfile!.startWeek).toBeNull()
+    expect(nrProfile!.endWeek).toBeNull()
+    expect(nrProfile!.resourceTypeId).toBeNull()
   })
 
   it('3. preserves profile ID after scalar capacity update', async () => {
