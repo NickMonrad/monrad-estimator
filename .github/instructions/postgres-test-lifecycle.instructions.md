@@ -62,6 +62,6 @@ For each candidate:
 
 Never delete containers by prefix without inspecting each exact target.
 
-The local E2E runner owns migration, cleanup, seed, dynamic ports, API/Vite startup, Playwright execution, child-process shutdown, and disposable-container removal. It terminates the process tree before removing the container. Do not manually start, kill, or reuse development servers around that runner.
+The local E2E runner owns migration, cleanup, seed, dynamic ports, API/Vite startup, Playwright execution, child-process shutdown, and disposable-container removal. Before removing the container it terminates the complete process tree: on POSIX with `SIGTERM` and escalation to `SIGKILL` after the grace period, and on Windows with `taskkill /T /F`. The container is force-removed after success or failure. Do not manually start, kill, or reuse development servers around that runner.
 
 If a required lifecycle or database prerequisite is unavailable, report the exact blocker and do not redirect the suite to persistent data.
