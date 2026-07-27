@@ -15,6 +15,7 @@
  */
 
 import type { ResolvedRoleDefault } from './resolveRoleDefaultForMutation.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
 import { classifyNRsForRoleUpdate } from './classifyNRsForRoleUpdate.js'
 import type { NRToClassify, NRProfileState, ClassificationResult } from './classifyNRsForRoleUpdate.js'
 import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
@@ -157,7 +158,7 @@ export async function resolveRTPatchState(
     orderBy: { createdAt: 'asc' },
   })) ?? []
 
-  const nrProfileRows: CapacityProfileRecord[] = (await tx.capacityProfile.findMany({
+  const rawNRProfiles: CapacityProfileRecord[] = (await tx.capacityProfile.findMany({
     where: {
       namedResourceId: { in: namedResources.map((nr: any) => nr.id) },
       projectId,
@@ -165,7 +166,46 @@ export async function resolveRTPatchState(
     include: { segments: true },
   })) ?? []
 
-  // ── 4. Build old-role-default for classifier ─────────────────────────
+  // ── 4. Validate every NR profile through strict validation ────────────
+  const nrProfileRows: CapacityProfileRecord[] = []
+  for (const nr of namedResources) {
+    const nrProfiles = rawNRProfiles.filter((p: any) => p.namedResourceId === nr.id)
+
+    if (nrProfiles.length === 0) {
+      // No profile for this NR — allowed only if it matches inheritance rules.
+      // The classifier will treat it as inherited if its legacy fields match the
+      // role default, or explicit if they differ. We skip strict validation for
+      // profile-less NRs because there's nothing to validate.
+      continue
+    }
+
+    if (nrProfiles.length > 1) {
+      throw new CapacityIntegrityError(
+        `Multiple capacity profiles exist for named resource ${nr.id}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
+
+    const p = nrProfiles[0]
+    const profileOwnerKind = p.ownerKind as string
+    if (profileOwnerKind !== 'NAMED_PERSON' && profileOwnerKind !== 'PLANNED_RESOURCE') {
+      throw new CapacityIntegrityError(
+        `Capacity profile ${p.id} has invalid owner kind "${profileOwnerKind}".`,
+      )
+    }
+
+    // Validate through the strict loader — will throw if malformed
+    await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: profileOwnerKind,
+      ownerId: nr.id,
+    })
+
+    nrProfileRows.push(p)
+  }
+
+  // ── 5. Build old-role-default for classifier ─────────────────────────
   const oldRoleDefault = {
     allocationMode: roleDefault.allocationMode,
     allocationPercent: roleDefault.allocationPercent,
@@ -173,7 +213,7 @@ export async function resolveRTPatchState(
     allocationEndWeek: roleDefault.allocationEndWeek,
   }
 
-  // ── 5. Classify NRs ──────────────────────────────────────────────────
+  // ── 6. Classify NRs ──────────────────────────────────────────────────
   const classification = classifyNRsForRoleUpdate(
     namedResources as unknown as NRToClassify[],
     nrProfileRows as unknown as NRProfileState[],

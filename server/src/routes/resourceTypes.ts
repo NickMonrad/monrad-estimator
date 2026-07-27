@@ -362,15 +362,17 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       for (const nr of reversed) {
         if (removed >= targetRemove) break
         if (inheritedIds.has(nr.id)) {
-          // Find the exact profile for this NR to delete by ID, not by owner
+          // Find the exact profile for this NR to delete by ID
           const nrProfile = state.nrProfileRows.find(
             (p: any) => p.namedResourceId === nr.id,
           )
-          if (nrProfile) {
-            await tx.capacityProfile.delete({ where: { id: nrProfile.id } })
-          } else {
-            await tx.capacityProfile.deleteMany({ where: { namedResourceId: nr.id } })
+          if (!nrProfile) {
+            throw new CapacityIntegrityError(
+              `Cannot delete named resource ${nr.id}: no validated capacity profile found. ` +
+              'Run the capacity profile backfill/repair workflow before retrying this operation.',
+            )
           }
+          await tx.capacityProfile.delete({ where: { id: nrProfile.id } })
           await tx.namedResource.delete({ where: { id: nr.id } })
           deletedIds.add(nr.id)
           removed++

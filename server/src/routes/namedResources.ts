@@ -6,8 +6,8 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityProfileWrites.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
+import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
-
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
@@ -197,7 +197,6 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 }))
 
 
-
 router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
   const project = await ownedProject(projectId, req.userId!)
@@ -235,22 +234,62 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     has('startWeek') ||
     has('endWeek')
 
+  // ── Mapping tables ───────────────────────────────────────────────────
+  const ALLOCATION_MODE_TO_PLANNING_BASIS: Record<string, string> = {
+    'EFFORT': 'DEMAND_FOLLOWING',
+    'TIMELINE': 'AVAILABILITY_WINDOW',
+    'FULL_PROJECT': 'WHOLE_PROJECT_ALLOCATION',
+  }
+  function deriveProfileSource(mode: string | null | undefined): string {
+    if (mode === 'TIMELINE') return 'AVAILABILITY_WINDOW'
+    if (mode === 'CAPACITY_PLAN') return 'SQUAD_PLANNER'
+    return 'FIXED'
+  }
+
   try {
     const resource = await prisma.$transaction(async tx => {
-      // ── 1. Load and validate the exact authoritative NR profile ──
+      // ── 0. Load existing profile rows to determine exact owner kind ─
+      const existingProfiles = await tx.capacityProfile.findMany({
+        where: { namedResourceId: id, projectId },
+        select: { id: true, ownerKind: true },
+      })
+      if (existingProfiles.length === 0) {
+        throw new CapacityIntegrityError(
+          'Missing capacity profile for this named resource. ' +
+          'Run the capacity profile backfill/repair workflow before retrying this operation.',
+        )
+      }
+      if (existingProfiles.length > 1) {
+        throw new CapacityIntegrityError(
+          'Multiple capacity profiles exist for this named resource. ' +
+          'Run the capacity profile backfill/repair workflow before retrying this operation.',
+        )
+      }
+      const actualOwnerKind = existingProfiles[0].ownerKind as string
+      if (actualOwnerKind !== 'NAMED_PERSON' && actualOwnerKind !== 'PLANNED_RESOURCE') {
+        throw new CapacityIntegrityError(
+          `Capacity profile has invalid owner kind "${actualOwnerKind}".`,
+        )
+      }
+
+      // ── 1. Validate the exact authoritative profile ───────────────
       const nrProfile = await loadAndValidateOwnerProfile({
         tx,
         projectId,
-        ownerKind: 'NAMED_PERSON',
+        ownerKind: actualOwnerKind,
         ownerId: id,
       })
 
       if (hasCapacityInput) {
         // ── 2. Reject protected profiles ──────────────────────────
+        if (actualOwnerKind !== 'NAMED_PERSON') {
+          throw new ProfileManagedCapacityError(
+            'This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.',
+          )
+        }
         const hasSegments = nrProfile.segments.length > 0
         const isProtectedPlanningBasis = nrProfile.planningBasis === 'CAPACITY_PROFILE'
-        const isPlannedResource = nrProfile.ownerKind === 'PLANNED_RESOURCE'
-        if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
+        if (hasSegments || isProtectedPlanningBasis) {
           throw new ProfileManagedCapacityError(
             'This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.',
           )
@@ -278,23 +317,27 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
         const isNonWindow = mode && NON_WINDOW_MODES.has(mode)
 
-        // ── 5. Update the existing profile in place (preserve ID) ─
+        // ── 5. Determine authoritative profile basis from mode ────
+        const planningBasis = ALLOCATION_MODE_TO_PLANNING_BASIS[mode] ?? 'DEMAND_FOLLOWING'
+        const source = deriveProfileSource(mode)
+
         await tx.capacityProfile.update({
           where: { id: nrProfile.id },
           data: {
-            ownerKind: 'NAMED_PERSON',
+            ownerKind: actualOwnerKind,
+            planningBasis: planningBasis as any,
+            source: source as any,
             defaultPercent: percent,
             startWeek: isNonWindow ? null : nrStartWeek,
             endWeek: isNonWindow ? null : nrEndWeek,
           },
         })
-
         // Replace segments — for scalar updates, clear any existing segments
         await tx.capacitySegment.deleteMany({
           where: { capacityProfileId: nrProfile.id },
         })
 
-        // ── 6. Write compatibility fields atomically ─────────────
+        // ── 7. Write compatibility fields atomically ─────────────
         await tx.namedResource.update({
           where: { id },
           data: {
@@ -309,8 +352,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           },
         })
       } else {
-        // ── Non-capacity PUT: profile already validated above ────
-        // Only update non-capacity fields
+        // ── Non-capacity PUT: allow both NAMED_PERSON and PLANNED_RESOURCE ──
         await tx.namedResource.update({ where: { id }, data: nrData })
       }
 
@@ -331,7 +373,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     throw error
   }
 }))
-// PATCH /projects/:projectId/resource-types/:rtId/named-resources/:id
 router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
   const project = await ownedProject(projectId, req.userId!)
@@ -347,21 +388,61 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const hasPatch = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
   const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
 
+  // ── Mapping tables ───────────────────────────────────────────────────
+  const ALLOCATION_MODE_TO_PLANNING_BASIS: Record<string, string> = {
+    'EFFORT': 'DEMAND_FOLLOWING',
+    'TIMELINE': 'AVAILABILITY_WINDOW',
+    'FULL_PROJECT': 'WHOLE_PROJECT_ALLOCATION',
+  }
+  function deriveProfileSource(mode: string | null | undefined): string {
+    if (mode === 'TIMELINE') return 'AVAILABILITY_WINDOW'
+    if (mode === 'CAPACITY_PLAN') return 'SQUAD_PLANNER'
+    return 'FIXED'
+  }
+
   try {
     const resource = await prisma.$transaction(async tx => {
-      // ── 1. Load and validate the exact authoritative NR profile ──
+      // ── 0. Load existing profile rows to determine exact owner kind ─
+      const existingProfiles = await tx.capacityProfile.findMany({
+        where: { namedResourceId: id, projectId },
+        select: { id: true, ownerKind: true },
+      })
+      if (existingProfiles.length === 0) {
+        throw new CapacityIntegrityError(
+          'Missing capacity profile for this named resource. ' +
+          'Run the capacity profile backfill/repair workflow before retrying this operation.',
+        )
+      }
+      if (existingProfiles.length > 1) {
+        throw new CapacityIntegrityError(
+          'Multiple capacity profiles exist for this named resource. ' +
+          'Run the capacity profile backfill/repair workflow before retrying this operation.',
+        )
+      }
+      const actualOwnerKind = existingProfiles[0].ownerKind as string
+      if (actualOwnerKind !== 'NAMED_PERSON' && actualOwnerKind !== 'PLANNED_RESOURCE') {
+        throw new CapacityIntegrityError(
+          `Capacity profile has invalid owner kind "${actualOwnerKind}".`,
+        )
+      }
+
+      // ── 1. Validate the exact authoritative profile ───────────────
       const nrProfile = await loadAndValidateOwnerProfile({
         tx,
         projectId,
-        ownerKind: 'NAMED_PERSON',
+        ownerKind: actualOwnerKind,
         ownerId: id,
       })
 
       // ── 2. Reject protected profiles ─────────────────────────────
+      if (actualOwnerKind !== 'NAMED_PERSON') {
+        throw new ProfileManagedCapacityError(
+          'This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.',
+        )
+      }
       const hasSegments = nrProfile.segments.length > 0
       const isProtectedPlanningBasis = nrProfile.planningBasis === 'CAPACITY_PROFILE'
-      const isPlannedResource = nrProfile.ownerKind === 'PLANNED_RESOURCE'
-      if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
+      if (hasSegments || isProtectedPlanningBasis) {
         throw new ProfileManagedCapacityError(
           'This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.',
         )
@@ -388,18 +469,22 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       // Non-window mode suppresses stale windows
       const isNonWindow = mode && NON_WINDOW_MODES.has(mode)
 
-      // ── 5. Update the existing profile in place (preserve ID) ────
+      // ── 5. Determine authoritative profile basis from mode ────────
+      const planningBasis = ALLOCATION_MODE_TO_PLANNING_BASIS[mode] ?? 'DEMAND_FOLLOWING'
+      const source = deriveProfileSource(mode)
+
       await tx.capacityProfile.update({
         where: { id: nrProfile.id },
         data: {
-          ownerKind: 'NAMED_PERSON',
+          ownerKind: actualOwnerKind,
+          planningBasis: planningBasis as any,
+          source: source as any,
           defaultPercent: percent,
           startWeek: isNonWindow ? null : nrStartWeek,
           endWeek: isNonWindow ? null : nrEndWeek,
         },
       })
-
-      // ── 6. Write compatibility fields atomically ─────────────────
+      // ── 7. Write compatibility fields atomically ─────────────────
       const updated = await tx.namedResource.update({
         where: { id },
         data: {
@@ -443,7 +528,39 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
 
   await prisma.$transaction(async tx => {
-    // ── Require exactly one valid ROLE profile ─────────────────────
+    // ── Validate the NR's authority profile before any write ─────
+    const existingProfiles = await tx.capacityProfile.findMany({
+      where: { namedResourceId: id, projectId },
+      select: { id: true, ownerKind: true },
+    })
+    if (existingProfiles.length === 0) {
+      throw new CapacityIntegrityError(
+        'Missing capacity profile for this named resource. ' +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
+    if (existingProfiles.length > 1) {
+      throw new CapacityIntegrityError(
+        'Multiple capacity profiles exist for this named resource. ' +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
+    const actualOwnerKind = existingProfiles[0].ownerKind as string
+    if (actualOwnerKind !== 'NAMED_PERSON' && actualOwnerKind !== 'PLANNED_RESOURCE') {
+      throw new CapacityIntegrityError(
+        `Capacity profile has invalid owner kind "${actualOwnerKind}".`,
+      )
+    }
+
+    // Validate through strict loader — allows both NAMED_PERSON and PLANNED_RESOURCE
+    await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: actualOwnerKind,
+      ownerId: id,
+    })
+
+    // ── Require exactly one valid ROLE profile ──────────────────
     const roleProfile = await loadAndValidateOwnerProfile({
       tx,
       projectId,

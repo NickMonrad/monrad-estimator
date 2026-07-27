@@ -86,22 +86,30 @@ describe('resolveRTPatchState', () => {
   const setRoleProfiles = (profiles: any[]) => {
     tx._roleProfiles = profiles
     tx.capacityProfile.findMany = vi.fn().mockImplementation((args: any) => {
-      // If querying by namedResourceId.in → NR profiles
-      if (args?.where?.namedResourceId?.in) {
+      const where = args?.where ?? {}
+      // ROLE profile query: resourceTypeId set, namedResourceId === null, no namedResourceId.in
+      if (where.resourceTypeId && where.namedResourceId === null && !where.namedResourceId?.in) {
+        return Promise.resolve(tx._roleProfiles)
+      }
+      // NR profile query: namedResourceId.in present OR namedResourceId is a string
+      if (where.namedResourceId?.in || (where.namedResourceId && typeof where.namedResourceId === 'string')) {
         return Promise.resolve(tx._nrProfiles ?? [])
       }
-      // Otherwise → role profiles (resourceTypeId match, namedResourceId null)
-      return Promise.resolve(tx._roleProfiles)
+      return Promise.resolve([])
     })
   }
 
   const setNRProfiles = (profiles: any[]) => {
     tx._nrProfiles = profiles
     tx.capacityProfile.findMany = vi.fn().mockImplementation((args: any) => {
-      if (args?.where?.namedResourceId?.in) {
+      const where = args?.where ?? {}
+      if (where.resourceTypeId && where.namedResourceId === null && !where.namedResourceId?.in) {
+        return Promise.resolve(tx._roleProfiles ?? [])
+      }
+      if (where.namedResourceId?.in || (where.namedResourceId && typeof where.namedResourceId === 'string')) {
         return Promise.resolve(tx._nrProfiles)
       }
-      return Promise.resolve(tx._roleProfiles ?? [])
+      return Promise.resolve([])
     })
   }
 
@@ -154,36 +162,30 @@ describe('resolveRTPatchState', () => {
       tx.namedResource.findMany = vi.fn().mockResolvedValue([
         makeNR('nr-1', { allocationMode: 'TIMELINE', allocationPercent: 100 }),
       ])
-
       const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
-
-      // nr-1 matches RT legacy (TIMELINE/100) but NOT role default (EFFORT/70)
       expect(state.classification.explicitNRIds).toContain('nr-1')
       expect(state.classification.inheritedNRIds).not.toContain('nr-1')
     })
   })
 
   describe('segmented NR is protected', () => {
-    it('NR with segmented profile is explicit even when legacy fields match role default', async () => {
+    it('NR with segmented CAPACITY_PROFILE profile is explicit', async () => {
       setRoleProfiles([
         makeProfile('cp-role', { planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 70 }),
       ])
       setNRProfiles([
         makeNRProfile('cp-nr-1', 'nr-1', {
-          planningBasis: 'AVAILABILITY_WINDOW',
+          planningBasis: 'CAPACITY_PROFILE',
           defaultPercent: 90,
-          startWeek: 3,
-          endWeek: 8,
-          segments: [{ id: 'seg-1', capacityProfileId: 'cp-nr-1', startWeek: 3, endWeek: 8, capacityPercent: 90, source: 'AVAILABILITY_WINDOW' }],
+          startWeek: null,
+          endWeek: null,
+          segments: [{ id: 'seg-1', capacityProfileId: 'cp-nr-1', startWeek: 3, endWeek: 8, capacityPercent: 90, source: 'MANUAL' }],
         }),
       ])
       tx.namedResource.findMany = vi.fn().mockResolvedValue([
         makeNR('nr-1', { allocationMode: 'EFFORT', allocationPercent: 70 }),
       ])
-
       const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
-
-      // Has explicit NR profile (segments non-empty) → protected
       expect(state.classification.explicitNRIds).toContain('nr-1')
     })
   })
@@ -197,6 +199,7 @@ describe('resolveRTPatchState', () => {
         makeNRProfile('cp-nr-2', 'nr-2', {
           planningBasis: 'AVAILABILITY_WINDOW',
           defaultPercent: 80,
+          segments: [],
         }),
       ])
       tx.namedResource.findMany = vi.fn().mockResolvedValue([
@@ -210,10 +213,7 @@ describe('resolveRTPatchState', () => {
           endWeek: null,
         }),
       ])
-
       const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
-
-      // Has profile-first profile → protected
       expect(state.classification.explicitNRIds).toContain('nr-2')
     })
   })
@@ -226,18 +226,18 @@ describe('resolveRTPatchState', () => {
       setNRProfiles([
         makeNRProfile('cp-nr-3', 'nr-3', {
           ownerKind: 'PLANNED_RESOURCE',
-          planningBasis: 'CAPACITY_PLAN',
-          source: 'SQUAD_PLANNER',
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'MANUAL',
           defaultPercent: null,
+          startWeek: null,
+          endWeek: null,
+          segments: [],
         }),
       ])
       tx.namedResource.findMany = vi.fn().mockResolvedValue([
-        makeNR('nr-3', { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25 }),
+        makeNR('nr-3', { allocationMode: 'TIMELINE', allocationPercent: 25 }),
       ])
-
       const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
-
-      // PLANNED_RESOURCE → protected
       expect(state.classification.explicitNRIds).toContain('nr-3')
     })
   })
@@ -250,9 +250,7 @@ describe('resolveRTPatchState', () => {
       tx.namedResource.findMany = vi.fn().mockResolvedValue([
         makeNR('nr-1', { allocationMode: 'EFFORT', allocationPercent: 70 }),
       ])
-
       const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
-
       expect(state.classification.inheritedNRIds).toContain('nr-1')
       expect(state.classification.explicitNRIds).not.toContain('nr-1')
     })
@@ -266,9 +264,7 @@ describe('resolveRTPatchState', () => {
       tx.namedResource.findMany = vi.fn().mockResolvedValue([
         makeNR('nr-1', { allocationMode: 'TIMELINE', allocationPercent: 100 }),
       ])
-
       const state = await resolveRTPatchState(tx, 'rt-1', makeRT(), 'proj-1')
-
       expect(state.classification.explicitNRIds).toContain('nr-1')
       expect(state.classification.inheritedNRIds).not.toContain('nr-1')
     })
