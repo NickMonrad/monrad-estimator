@@ -1,10 +1,10 @@
 ---
-applyTo: "client/**"
+applyTo: "client/src/**/*.tsx,client/src/**/*.css"
 ---
 
 # Client UI and Accessibility Instructions
 
-These rules apply to React client work. They extend `.github/instructions/project.instructions.md`.
+These rules apply to React UI and styling work. They extend `.github/instructions/project.instructions.md`.
 
 ## UI conventions
 
@@ -32,4 +32,4 @@ Prefer toast or inline feedback over `alert()`. Do not silently ignore failed wr
 
 ## Testing
 
-Add focused component or hook tests for changed UI behaviour and relevant failure states. Use Playwright only when the browser-visible contract, navigation, permissions, persistence, or a critical cross-domain workflow requires it; then follow `.github/instructions/playwright.instructions.md`.
+Add focused component tests for changed UI behaviour and relevant failure states. Use Playwright only when the browser-visible contract, navigation, permissions, persistence, or a critical cross-domain workflow requires it; then follow `.github/instructions/playwright.instructions.md`.
