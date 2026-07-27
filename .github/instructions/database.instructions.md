@@ -31,6 +31,7 @@ The repository backup tooling must:
 - allow `MONRAD_ENV_FILE` as a test/developer override for the environment-file path
 - fail clearly when Docker, `pg_dump`, credentials, or the configured database are unavailable
 - pass authority and query-string database passwords through `PGPASSWORD` in host mode rather than process arguments
+- fail before invoking `pg_dump` when authority and query-string password representations conflict or are ambiguous
 - remove query-string password fields without reserialising unrelated libpq query options
 - report only the backup mode, executable, and exit/spawn status on failure; never print a credential-bearing `DATABASE_URL`
 - finalise verified dumps with an exclusive no-overwrite operation so concurrent runs cannot replace an existing backup
