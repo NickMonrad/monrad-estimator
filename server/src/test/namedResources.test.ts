@@ -163,7 +163,19 @@ describe('named-resource capacity profile write', () => {
 
     const tx = {
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: vi.fn().mockImplementation((args: any) => {
+          const where = args?.where ?? {}
+          // ROLE profile query
+          if (where.resourceTypeId === 'rt-1' && where.namedResourceId === null) {
+            return Promise.resolve([{
+              id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
+              namedResourceId: null, planningBasis: 'AVAILABILITY_WINDOW',
+              source: 'AVAILABILITY_WINDOW', defaultPercent: 100,
+              startWeek: null, endWeek: null, projectId: 'proj-1', segments: [],
+            } as never])
+          }
+          return Promise.resolve([])
+        }),
       },
       namedResource: { delete: deleteFn, count: countFn },
       resourceType: { update: updateFn },
@@ -199,7 +211,18 @@ describe('named-resource capacity profile write', () => {
 
     const tx = {
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: vi.fn().mockImplementation((args: any) => {
+          const where = args?.where ?? {}
+          if (where.resourceTypeId === 'rt-1' && where.namedResourceId === null) {
+            return Promise.resolve([{
+              id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
+              namedResourceId: null, planningBasis: 'AVAILABILITY_WINDOW',
+              source: 'AVAILABILITY_WINDOW', defaultPercent: 100,
+              startWeek: null, endWeek: null, projectId: 'proj-1', segments: [],
+            } as never])
+          }
+          return Promise.resolve([])
+        }),
       },
       namedResource: { delete: deleteFn, count: countFn },
       resourceType: { update: updateFn },
@@ -217,6 +240,7 @@ describe('named-resource capacity profile write', () => {
     expect(countFn).toHaveBeenCalled()
     expect(updateFn).toHaveBeenCalled()
   })
+
   it('PUT non-capacity fails closed when no profile exists', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
@@ -242,7 +266,6 @@ describe('named-resource capacity profile write', () => {
     expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 })
-
 describe('named-resource capacity guard', () => {
   async function setupProtectedProfile(profiles: any[]) {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)

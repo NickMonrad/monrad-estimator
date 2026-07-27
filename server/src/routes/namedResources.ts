@@ -8,6 +8,7 @@ import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityP
 import type { PrismaTransactionClient } from '../lib/squadPlannerProfileWriter.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
+import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -144,42 +145,39 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   const resource = await prisma.$transaction(async tx => {
-    // ── Load authoritative role profile ─────────────────────────
-    const roleProfiles = await tx.capacityProfile.findMany({
-      where: { resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE' },
-      include: { segments: true },
+    // ── Load authoritative role profile via validator ──────────────
+    const roleProfile = await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: 'ROLE',
+      ownerId: rtId,
     })
-    if (roleProfiles.length === 0) {
-      // Normal paths always have a valid role profile. If missing, the database has
-      // invalid persisted state that must be repaired via backfill tooling.
-      throw new CapacityIntegrityError(
-        'Missing capacity profile for this resource type. ' +
-        'Run the capacity profile backfill/repair workflow before retrying this operation.',
-      )
-    }
-    if (roleProfiles.length > 1) {
-      throw new CapacityIntegrityError(
-        `Multiple capacity profiles exist for resource type ${rtId}. ` +
-        'Run the capacity profile backfill/repair workflow before retrying this operation.',
-      )
-    }
-    const roleProfile = roleProfiles[0]
+
     const isCapacityPlan = roleProfile.planningBasis === 'CAPACITY_PROFILE'
+
+    if (isCapacityPlan) {
+      await exitCapacityPlanForManualScheduling(rt.id, tx)
+      // Reload the post-exit role profile
+      const postExitProfile = await loadAndValidateOwnerProfile({
+        tx,
+        projectId,
+        ownerKind: 'ROLE',
+        ownerId: rtId,
+      })
+      Object.assign(roleProfile, postExitProfile)
+    }
+
     // Derive inherited defaults from the authoritative role profile
     const roleAllocationMode = isCapacityPlan ? 'TIMELINE' : (
       roleProfile.planningBasis === 'DEMAND_FOLLOWING' ? 'EFFORT' :
       roleProfile.planningBasis === 'AVAILABILITY_WINDOW' ? 'TIMELINE' :
       roleProfile.planningBasis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT' :
-      'EFFORT'
+      'TIMELINE' as string
     )
     const roleAllocationPercent = isCapacityPlan ? 100 : (roleProfile.defaultPercent ?? 100)
     const roleAllocationStartWeek = isCapacityPlan ? null : roleProfile.startWeek
     const roleAllocationEndWeek = isCapacityPlan ? null : roleProfile.endWeek
     const inheritAllocation = roleAllocationMode !== 'EFFORT'
-
-    if (isCapacityPlan) {
-      await exitCapacityPlanForManualScheduling(rt.id, tx)
-    }
 
     // Create NR with non-capacity fields first
     const created = await tx.namedResource.create({
@@ -487,12 +485,15 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
 
   await prisma.$transaction(async tx => {
-    // ── Load authoritative role profile ─────────────────────────
-    const roleProfiles = await tx.capacityProfile.findMany({
-      where: { resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE' },
-      take: 1,
+    // ── Require exactly one valid ROLE profile ─────────────────────
+    const roleProfile = await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: 'ROLE',
+      ownerId: rtId,
     })
-    const isCapacityPlan = roleProfiles.length > 0 && roleProfiles[0].planningBasis === 'CAPACITY_PROFILE'
+
+    const isCapacityPlan = roleProfile.planningBasis === 'CAPACITY_PROFILE'
     if (isCapacityPlan) {
       await exitCapacityPlanForManualScheduling(rt.id, tx)
     }

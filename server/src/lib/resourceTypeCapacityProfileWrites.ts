@@ -14,6 +14,7 @@
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
 import { CapacityIntegrityError } from './capacityIntegrityError.js'
+import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
 
 // ─── Mapping tables (legacy → profile) ───────────────────────────────────────
 
@@ -95,8 +96,7 @@ export async function upsertRTProfileAndProjectLegacy(
     endWeek: allocationEndWeek,
     segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number; source: string }>,
   }
-
-  // ── 2. Persist role-owned CapacityProfile (update in place if exists) ─
+  // ── 2. Load and validate existing profile, or create ─────────────────
   const existingProfiles = await tx.capacityProfile.findMany({
     where: { resourceTypeId: rtId, namedResourceId: null, projectId },
     select: { id: true },
@@ -112,12 +112,19 @@ export async function upsertRTProfileAndProjectLegacy(
   const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
 
   if (existingId) {
+    // Validate existing profile before update
+    const validated = await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: 'ROLE',
+      ownerId: rtId,
+    })
     // Update in place — preserve profile ID
     await tx.capacitySegment.deleteMany({
-      where: { capacityProfileId: existingId },
+      where: { capacityProfileId: validated.id },
     })
     await tx.capacityProfile.update({
-      where: { id: existingId },
+      where: { id: validated.id },
       data: {
         ownerKind: 'ROLE',
         planningBasis,

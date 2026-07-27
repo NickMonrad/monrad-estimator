@@ -65,7 +65,6 @@ export interface CapacityProfileRecord {
 
 export interface SchedulingState {
   isCapacityPlan: boolean
-  source: 'PROFILE' | 'LEGACY'
 }
 
 /**
@@ -78,16 +77,14 @@ export interface SchedulingState {
  * 3. No role profile → fall back to ResourceType.allocationMode
  */
 export function resolveRoleSchedulingState(state: RTPatchState): SchedulingState {
-  if (state.roleDefault.source === 'PROFILE' && state.roleProfileRows.length > 0) {
+  if (state.roleProfileRows.length > 0) {
     const pp = state.roleProfileRows[0]
-    // Check both UPPER_SNAKE (Prisma enum) and camelCase (TS internal) forms
     const isCp = pp.planningBasis === 'CAPACITY_PROFILE' || pp.planningBasis === 'capacityProfile'
-    return { isCapacityPlan: isCp, source: 'PROFILE' }
+    return { isCapacityPlan: isCp }
   }
-  return {
-    isCapacityPlan: state.resourceType.allocationMode === 'CAPACITY_PLAN',
-    source: 'LEGACY',
-  }
+  // Runtime path: no profile → not capacity plan (route-level fail-closed
+  // guards catch missing profiles before any mutation)
+  return { isCapacityPlan: false }
 }
 
 // ─── Return type ─────────────────────────────────────────────────────────────

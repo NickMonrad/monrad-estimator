@@ -61,15 +61,15 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     })
     await tx.resourceType.update({ where: { id: created.id }, data: { count: 1 } })
 
-    // Create authoritative ROLE profile with demand-following default
+    // Create authoritative ROLE profile with availability-window default (matches TIMELINE/100 compat)
     await tx.capacityProfile.create({
       data: {
         ownerKind: 'ROLE',
         projectId: project.id,
         resourceTypeId: created.id,
         namedResourceId: null,
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,

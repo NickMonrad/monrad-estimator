@@ -743,19 +743,27 @@ describe('named-resource auto-name race safety', () => {
         resourceType: { update: vi.fn().mockResolvedValue({}) },
         project: { update: vi.fn().mockResolvedValue({}) },
         capacityProfile: {
-          findMany: vi.fn().mockResolvedValue([{
-            id: 'cp-role-1',
-            ownerKind: 'ROLE',
-            resourceTypeId: rtId,
-            namedResourceId: null,
-            planningBasis: 'DEMAND_FOLLOWING',
-            source: 'FIXED',
-            defaultPercent: 100,
-            startWeek: null,
-            endWeek: null,
-            projectId,
-            segments: [],
-          } as never]),
+          findMany: vi.fn().mockImplementation((args: any) => {
+            const where = args?.where ?? {}
+            // ROLE profile query
+            if (where.resourceTypeId === rtId && where.namedResourceId === null) {
+              return Promise.resolve([{
+                id: 'cp-role-1',
+                ownerKind: 'ROLE',
+                resourceTypeId: rtId,
+                namedResourceId: null,
+                planningBasis: 'DEMAND_FOLLOWING',
+                source: 'FIXED',
+                defaultPercent: 100,
+                startWeek: null,
+                endWeek: null,
+                projectId,
+                segments: [],
+              } as never])
+            }
+            // NR profile query: return [] for new NRs (no profile yet)
+            return Promise.resolve([])
+          }),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
           create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
           update: vi.fn(),

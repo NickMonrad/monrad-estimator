@@ -13,6 +13,7 @@
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
 import { CapacityIntegrityError } from './capacityIntegrityError.js'
+import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
 
 // ─── Mapping tables (legacy → profile) ───────────────────────────────────────
 
@@ -114,7 +115,8 @@ export async function upsertNRProfileAndProjectLegacy(
     segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number; source: string }>,
   }
 
-  // ── 2. Persist CapacityProfile (update in place if exists) ────────────
+  // ── 2. Load and validate existing profile, or create ─────────────────
+  const expectedOwnerKind = options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'
   const existingProfiles = await tx.capacityProfile.findMany({
     where: { namedResourceId: nrId, projectId },
     select: { id: true },
@@ -130,14 +132,21 @@ export async function upsertNRProfileAndProjectLegacy(
   const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
 
   if (existingId) {
+    // Validate existing profile before update
+    const validated = await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: expectedOwnerKind,
+      ownerId: nrId,
+    })
     // Update in place — preserve profile ID, replace segments
     await tx.capacitySegment.deleteMany({
-      where: { capacityProfileId: existingId },
+      where: { capacityProfileId: validated.id },
     })
     await tx.capacityProfile.update({
-      where: { id: existingId },
+      where: { id: validated.id },
       data: {
-        ownerKind: options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
+        ownerKind: expectedOwnerKind,
         planningBasis,
         source,
         defaultPercent: percent,
@@ -155,7 +164,7 @@ export async function upsertNRProfileAndProjectLegacy(
     }
     await tx.capacityProfile.create({
       data: {
-        ownerKind: options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
+        ownerKind: expectedOwnerKind,
         projectId,
         resourceTypeId: null,
         namedResourceId: nrId,
