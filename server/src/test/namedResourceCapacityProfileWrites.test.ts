@@ -380,3 +380,45 @@ describe('duplicate profile detection', () => {
     ).rejects.toThrow('Multiple capacity profiles exist')
   })
 })
+
+describe('creation-projection parity', () => {
+  it('AVAILABILITY_WINDOW/100 ROLE profile projects to TIMELINE/100 compatibility', async () => {
+    const tx = mockTx() as any
+    const result = await upsertRTProfileAndProjectLegacy(
+      tx, projectId, 'rt-proj-1',
+      { allocationMode: 'TIMELINE', allocationPercent: 100 },
+      { allowCreate: true },
+    )
+
+    expect(result.allocationMode).toBe('TIMELINE')
+    expect(result.allocationPercent).toBe(100)
+    expect(result.allocationStartWeek).toBeNull()
+    expect(result.allocationEndWeek).toBeNull()
+
+    const profile = tx._store.capacityProfiles[0]
+    expect(profile.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(profile.defaultPercent).toBe(100)
+    expect(profile.startWeek).toBeNull()
+    expect(profile.endWeek).toBeNull()
+  })
+
+  it('DEMAND_FOLLOWING/100 NAMED_PERSON profile projects to EFFORT/100 compatibility', async () => {
+    const tx = mockTx() as any
+    const result = await upsertNRProfileAndProjectLegacy(
+      tx, projectId, 'nr-proj-1', 'rt-proj-1',
+      { allocationMode: 'EFFORT', allocationPercent: 100 },
+      { allowCreate: true },
+    )
+
+    expect(result.allocationMode).toBe('EFFORT')
+    expect(result.allocationPercent).toBe(100)
+    expect(result.allocationStartWeek).toBeNull()
+    expect(result.allocationEndWeek).toBeNull()
+
+    const profile = tx._store.capacityProfiles[0]
+    expect(profile.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(profile.defaultPercent).toBe(100)
+    expect(profile.startWeek).toBeNull()
+    expect(profile.endWeek).toBeNull()
+  })
+})
