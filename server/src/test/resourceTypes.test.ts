@@ -44,46 +44,39 @@ describe('resource type manual scheduling regression', () => {
         }),
       },
       capacityProfile: {
-        findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
+        findMany: vi.fn().mockImplementation((args: any) => {
+          const where = args?.where ?? {}
           // Role-profile lookup: resourceTypeId set, namedResourceId null
-          if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
-            // Return a validated ROLE profile with CAPACITY_PROFILE basis
+          if (where.resourceTypeId && where.namedResourceId === null) {
             return Promise.resolve([{
-              id: 'cp-role-1',
-              ownerKind: 'ROLE',
-              resourceTypeId: 'rt-1',
-              namedResourceId: null,
-              planningBasis: 'CAPACITY_PROFILE',
-              source: 'SQUAD_PLANNER',
-              defaultPercent: 25,
-              startWeek: null,
-              endWeek: null,
-              projectId: 'proj-1',
+              id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
+              namedResourceId: null, planningBasis: 'CAPACITY_PROFILE',
+              source: 'SQUAD_PLANNER', defaultPercent: 25,
+              startWeek: null, endWeek: null, projectId: 'proj-1',
               segments: [{ id: 'seg-role-1', capacityProfileId: 'cp-role-1', startWeek: 0, endWeek: 10, capacityPercent: 25, source: 'SQUAD_PLANNER' }],
             } as never])
           }
-          // NR profile classification: return 3 provenance rows (custom, segmented, planned)
-          if (args?.where?.namedResourceId?.in) {
-            return Promise.resolve([
-              {
-                id: 'cp-cust-1', namedResourceId: 'nr-cust-1',
-                ownerKind: 'NAMED_PERSON', segments: [],
-                legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 3, allocationEndWeek: 7, startWeek: null, endWeek: null },
-              } as never,
-              {
-                id: 'cp-seg-1', namedResourceId: 'nr-seg-1',
-                ownerKind: 'NAMED_PERSON',
-                segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN' }],
-                legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
-              } as never,
-              {
-                id: 'cp-plan-1', namedResourceId: 'nr-plan-1',
-                ownerKind: 'PLANNED_RESOURCE', segments: [],
-                legacy: null,
-              } as never,
-            ])
+          // NR profile query by explicit namedResourceId string (from loadAndValidateOwnerProfile)
+          const nrId = where.namedResourceId
+          if (nrId && typeof nrId === 'string') {
+            const nrProfiles = [
+              { id: 'cp-inh-1', namedResourceId: 'nr-inh-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 25, startWeek: null, endWeek: null, segments: [], legacy: { allocationMode: 'EFFORT', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null } },
+              { id: 'cp-cust-1', namedResourceId: 'nr-cust-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'AVAILABILITY_WINDOW', source: 'FIXED', defaultPercent: 50, startWeek: 3, endWeek: 7, segments: [] },
+              { id: 'cp-seg-1', namedResourceId: 'nr-seg-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: null, startWeek: null, endWeek: null, segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN' }] },
+              { id: 'cp-plan-1', namedResourceId: 'nr-plan-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'PLANNED_RESOURCE', planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL', defaultPercent: null, startWeek: null, endWeek: null, segments: [] },
+            ]
+            return Promise.resolve(nrProfiles.filter((p: any) => p.namedResourceId === nrId))
           }
-          // Default: empty
+          // NR profile batch query by in-array (from resolveRTPatchState)
+          if (where.namedResourceId?.in) {
+            const nrProfiles = [
+              { id: 'cp-inh-1', namedResourceId: 'nr-inh-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 25, startWeek: null, endWeek: null, segments: [], legacy: { allocationMode: 'EFFORT', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null } },
+              { id: 'cp-cust-1', namedResourceId: 'nr-cust-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'AVAILABILITY_WINDOW', source: 'FIXED', defaultPercent: 50, startWeek: 3, endWeek: 7, segments: [] },
+              { id: 'cp-seg-1', namedResourceId: 'nr-seg-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: null, startWeek: null, endWeek: null, segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN' }] },
+              { id: 'cp-plan-1', namedResourceId: 'nr-plan-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'PLANNED_RESOURCE', planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL', defaultPercent: null, startWeek: null, endWeek: null, segments: [] },
+            ]
+            return Promise.resolve(nrProfiles.filter((p: any) => where.namedResourceId.in.includes(p.namedResourceId)))
+          }
           return Promise.resolve([])
         }),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
