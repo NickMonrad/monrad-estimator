@@ -3,7 +3,7 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { upsertNRProfileAndProjectLegacy } from '../lib/namedResourceCapacityProfileWrites.js'
+import { upsertNRProfileAndProjectLegacy, mapScalarModeToProfile } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityProfileWrites.js'
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
@@ -233,17 +233,10 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     has('allocationEndWeek') ||
     has('startWeek') ||
     has('endWeek')
-
-  // ── Mapping tables ───────────────────────────────────────────────────
-  const ALLOCATION_MODE_TO_PLANNING_BASIS: Record<string, string> = {
-    'EFFORT': 'DEMAND_FOLLOWING',
-    'TIMELINE': 'AVAILABILITY_WINDOW',
-    'FULL_PROJECT': 'WHOLE_PROJECT_ALLOCATION',
-  }
-  function deriveProfileSource(mode: string | null | undefined): string {
-    if (mode === 'TIMELINE') return 'AVAILABILITY_WINDOW'
-    if (mode === 'CAPACITY_PLAN') return 'SQUAD_PLANNER'
-    return 'FIXED'
+  // ── Pre-validate allocation mode ─────────────────────────────────────────
+  if (has('allocationMode') && allocationMode !== undefined && allocationMode !== null && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode as string)) {
+    res.status(400).json({ error: `Invalid allocationMode "${allocationMode}". Supported modes: EFFORT, TIMELINE, FULL_PROJECT.` })
+    return
   }
 
   try {
@@ -313,13 +306,9 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         const nrStartWeek = has('startWeek') ? startWeek : (has('allocationStartWeek') ? allocationStartWeek : profileAllocStartWeek)
         const nrEndWeek = has('endWeek') ? endWeek : (has('allocationEndWeek') ? allocationEndWeek : profileAllocEndWeek)
 
-        // Non-window mode suppresses stale windows
-        const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
-        const isNonWindow = mode && NON_WINDOW_MODES.has(mode)
-
         // ── 5. Determine authoritative profile basis from mode ────
-        const planningBasis = ALLOCATION_MODE_TO_PLANNING_BASIS[mode] ?? 'DEMAND_FOLLOWING'
-        const source = deriveProfileSource(mode)
+        const { planningBasis, source, isNonWindow } = mapScalarModeToProfile(mode)
+
 
         await tx.capacityProfile.update({
           where: { id: nrProfile.id },
@@ -386,18 +375,11 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek, startWeek, endWeek } = req.body
 
   const hasPatch = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
-  const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT', 'CAPACITY_PLAN'])
 
-  // ── Mapping tables ───────────────────────────────────────────────────
-  const ALLOCATION_MODE_TO_PLANNING_BASIS: Record<string, string> = {
-    'EFFORT': 'DEMAND_FOLLOWING',
-    'TIMELINE': 'AVAILABILITY_WINDOW',
-    'FULL_PROJECT': 'WHOLE_PROJECT_ALLOCATION',
-  }
-  function deriveProfileSource(mode: string | null | undefined): string {
-    if (mode === 'TIMELINE') return 'AVAILABILITY_WINDOW'
-    if (mode === 'CAPACITY_PLAN') return 'SQUAD_PLANNER'
-    return 'FIXED'
+  // ── Pre-validate allocation mode ─────────────────────────────────────────
+  if (hasPatch('allocationMode') && allocationMode !== undefined && allocationMode !== null && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode as string)) {
+    res.status(400).json({ error: `Invalid allocationMode "${allocationMode}". Supported modes: EFFORT, TIMELINE, FULL_PROJECT.` })
+    return
   }
 
   try {
@@ -466,12 +448,8 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       const nrStartWeek = hasPatch('startWeek') ? startWeek : (hasPatch('allocationStartWeek') ? allocationStartWeek : profileAllocStartWeek)
       const nrEndWeek = hasPatch('endWeek') ? endWeek : (hasPatch('allocationEndWeek') ? allocationEndWeek : profileAllocEndWeek)
 
-      // Non-window mode suppresses stale windows
-      const isNonWindow = mode && NON_WINDOW_MODES.has(mode)
-
       // ── 5. Determine authoritative profile basis from mode ────────
-      const planningBasis = ALLOCATION_MODE_TO_PLANNING_BASIS[mode] ?? 'DEMAND_FOLLOWING'
-      const source = deriveProfileSource(mode)
+      const { planningBasis, source, isNonWindow } = mapScalarModeToProfile(mode)
 
       await tx.capacityProfile.update({
         where: { id: nrProfile.id },

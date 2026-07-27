@@ -194,3 +194,38 @@ function planningBasisToCamel(value: string): string {
 function sourceToCamel(value: string): string {
   return value.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
 }
+
+// ─── Exported scalar mode helpers for PUT/PATCH routes ─────────────────────
+
+/**
+ * Map a scalar allocation mode to its authoritative profile semantics.
+ *
+ * Valid modes: EFFORT → DEMAND_FOLLOWING/FIXED, TIMELINE → AVAILABILITY_WINDOW,
+ * FULL_PROJECT → WHOLE_PROJECT_ALLOCATION.
+ *
+ * Throws an error for CAPACITY_PLAN (not settable via scalar API) and
+ * unknown/unsupported modes.
+ *
+ * Returns the authoritative planning basis, source and non-window flag.
+ */
+export function mapScalarModeToProfile(mode: string): {
+  planningBasis: string
+  source: string
+  isNonWindow: boolean
+} {
+  // Reject CAPACITY_PLAN — scalar NamedResource endpoint is not for capacity-plan management
+  if (mode === 'CAPACITY_PLAN') {
+    throw new Error('CAPACITY_PLAN mode cannot be set on a named resource through scalar capacity fields.')
+  }
+
+  const planningBasis = ALLOCATION_MODE_TO_PLANNING_BASIS[mode]
+  if (!planningBasis) {
+    throw new Error(`Invalid allocation mode "${mode}". Supported modes: EFFORT, TIMELINE, FULL_PROJECT.`)
+  }
+
+  const source = deriveProfileSource(mode)
+  const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT'])
+  const isNonWindow = NON_WINDOW_MODES.has(mode)
+
+  return { planningBasis, source, isNonWindow }
+}
