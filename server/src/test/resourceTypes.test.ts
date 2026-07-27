@@ -47,6 +47,7 @@ describe('resource type manual scheduling regression', () => {
         findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
           // Role-profile lookup: resourceTypeId set, namedResourceId null
           if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
+            // Return a validated ROLE profile with CAPACITY_PROFILE basis
             return Promise.resolve([{
               id: 'cp-role-1',
               ownerKind: 'ROLE',
@@ -58,7 +59,7 @@ describe('resource type manual scheduling regression', () => {
               startWeek: null,
               endWeek: null,
               projectId: 'proj-1',
-              segments: [],
+              segments: [{ id: 'seg-role-1', capacityProfileId: 'cp-role-1', startWeek: 0, endWeek: 10, capacityPercent: 25, source: 'SQUAD_PLANNER' }],
             } as never])
           }
           // NR profile classification: return 3 provenance rows (custom, segmented, planned)
