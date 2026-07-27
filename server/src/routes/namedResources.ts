@@ -241,7 +241,10 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (has('allocationPercent') && has('allocationPct') && allocationPct !== allocationPercent) {
     res.status(400).json({ error: 'allocationPercent and allocationPct must represent the same value.' }); return
   }
-  // ── Pre-validate allocation mode ─────────────────────────────────────────
+  // ── Pricing-model validation ───────────────────────────────────────────
+  if (has('pricingModel') && pricingModel !== undefined && pricingModel !== null && !VALID_PRICING_MODELS.includes(pricingModel as string)) {
+    res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
+  }
   if (has('allocationMode') && allocationMode !== undefined && allocationMode !== null && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode as string)) {
     res.status(400).json({ error: `Invalid allocationMode "${allocationMode}". Supported modes: EFFORT, TIMELINE, FULL_PROJECT.` })
     return
@@ -487,14 +490,13 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         nrProfile.planningBasis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT' :
         'EFFORT'
       const profileAllocPercent = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? 100 : (nrProfile.defaultPercent ?? 100)
-      const profileAllocStartWeek = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? null : nrProfile.startWeek
-      const profileAllocEndWeek = nrProfile.planningBasis === 'CAPACITY_PROFILE' ? null : nrProfile.endWeek
 
       // ── 4. Apply only explicitly supplied request fields ─────────
       const mode = hasPatch('allocationMode') ? allocationMode : profileAllocMode
-      const percent = hasPatch('allocationPercent') ? allocationPercent : profileAllocPercent
-      const nrStartWeek = hasPatch('startWeek') ? startWeek : (hasPatch('allocationStartWeek') ? allocationStartWeek : profileAllocStartWeek)
-      const nrEndWeek = hasPatch('endWeek') ? endWeek : (hasPatch('allocationEndWeek') ? allocationEndWeek : profileAllocEndWeek)
+      const percent = hasPatch('allocationPercent') ? allocationPercent :
+        hasPatch('allocationPct') ? allocationPct : profileAllocPercent
+      const nrStartWeek = hasPatch('startWeek') ? startWeek : (hasPatch('allocationStartWeek') ? allocationStartWeek : nrProfile.startWeek)
+      const nrEndWeek = hasPatch('endWeek') ? endWeek : (hasPatch('allocationEndWeek') ? allocationEndWeek : nrProfile.endWeek)
 
       // ── 5. Determine authoritative profile basis from mode ────────
       const { planningBasis, source, isNonWindow } = mapScalarModeToProfile(mode)
