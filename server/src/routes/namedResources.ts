@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto'
 import { Router, Response } from 'express'
-import { AllocationMode } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
@@ -144,17 +143,41 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
   }
 
-  // If RT's allocationMode is not EFFORT, copy the RT's allocation settings as defaults for the new NR
-  const rtAllocationMode = rt.allocationMode === 'CAPACITY_PLAN'
-    ? 'TIMELINE'
-    : rt.allocationMode as AllocationMode
-  const rtAllocationPercent = rt.allocationMode === 'CAPACITY_PLAN' ? 100 : (rt.allocationPercent ?? 100)
-  const rtAllocationStartWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationStartWeek ?? null)
-  const rtAllocationEndWeek = rt.allocationMode === 'CAPACITY_PLAN' ? null : (rt.allocationEndWeek ?? null)
-  const inheritAllocation = rtAllocationMode !== 'EFFORT'
-
   const resource = await prisma.$transaction(async tx => {
-    if (rt.allocationMode === 'CAPACITY_PLAN') {
+    // ── Load authoritative role profile ─────────────────────────
+    const roleProfiles = await tx.capacityProfile.findMany({
+      where: { resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE' },
+      include: { segments: true },
+    })
+    if (roleProfiles.length === 0) {
+      // Normal paths always have a valid role profile. If missing, the database has
+      // invalid persisted state that must be repaired via backfill tooling.
+      throw new CapacityIntegrityError(
+        'Missing capacity profile for this resource type. ' +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
+    if (roleProfiles.length > 1) {
+      throw new CapacityIntegrityError(
+        `Multiple capacity profiles exist for resource type ${rtId}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
+    const roleProfile = roleProfiles[0]
+    const isCapacityPlan = roleProfile.planningBasis === 'CAPACITY_PROFILE'
+    // Derive inherited defaults from the authoritative role profile
+    const roleAllocationMode = isCapacityPlan ? 'TIMELINE' : (
+      roleProfile.planningBasis === 'DEMAND_FOLLOWING' ? 'EFFORT' :
+      roleProfile.planningBasis === 'AVAILABILITY_WINDOW' ? 'TIMELINE' :
+      roleProfile.planningBasis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT' :
+      'EFFORT'
+    )
+    const roleAllocationPercent = isCapacityPlan ? 100 : (roleProfile.defaultPercent ?? 100)
+    const roleAllocationStartWeek = isCapacityPlan ? null : roleProfile.startWeek
+    const roleAllocationEndWeek = isCapacityPlan ? null : roleProfile.endWeek
+    const inheritAllocation = roleAllocationMode !== 'EFFORT'
+
+    if (isCapacityPlan) {
       await exitCapacityPlanForManualScheduling(rt.id, tx)
     }
 
@@ -169,32 +192,32 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       },
     })
 
-    // Build capacity payload: explicit request fields win, fall back to inherited RT defaults
+    // Build capacity payload: explicit request fields win, fall back to inherited role defaults
     const hasPost = (k: string) => Object.prototype.hasOwnProperty.call(req.body, k)
     const capacityPayload: NamedResourceCapacityPayload = {
-      allocationMode: hasPost('allocationMode') ? req.body.allocationMode : (inheritAllocation ? rtAllocationMode : undefined),
+      allocationMode: hasPost('allocationMode') ? req.body.allocationMode : (inheritAllocation ? roleAllocationMode : undefined),
       allocationPercent: hasPost('allocationPercent')
         ? req.body.allocationPercent
         : hasPost('allocationPct')
           ? undefined
-          : (inheritAllocation ? rtAllocationPercent : undefined),
+          : (inheritAllocation ? roleAllocationPercent : undefined),
       allocationPct: hasPost('allocationPct') ? req.body.allocationPct : undefined,
       allocationStartWeek: hasPost('allocationStartWeek')
         ? req.body.allocationStartWeek
         : hasPost('startWeek')
           ? undefined
-          : (inheritAllocation ? rtAllocationStartWeek : undefined),
+          : (inheritAllocation ? roleAllocationStartWeek : undefined),
       allocationEndWeek: hasPost('allocationEndWeek')
         ? req.body.allocationEndWeek
         : hasPost('endWeek')
           ? undefined
-          : (inheritAllocation ? rtAllocationEndWeek : undefined),
+          : (inheritAllocation ? roleAllocationEndWeek : undefined),
       startWeek: hasPost('startWeek') ? req.body.startWeek : undefined,
       endWeek: hasPost('endWeek') ? req.body.endWeek : undefined,
     }
 
     // Profile-first write + project back to legacy
-    const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, created.id, rtId, capacityPayload)
+    const projection = await upsertNRProfileAndProjectLegacy(tx, projectId, created.id, rtId, capacityPayload, { allowCreate: true })
 
     // Write projected legacy fields as compatibility
     const updated = await tx.namedResource.update({
@@ -214,12 +237,11 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
     await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
 
-
     return updated
   })
-
   res.status(201).json(resource)
 }))
+
 
 
 router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -465,7 +487,13 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
 
   await prisma.$transaction(async tx => {
-    if (rt.allocationMode === 'CAPACITY_PLAN') {
+    // ── Load authoritative role profile ─────────────────────────
+    const roleProfiles = await tx.capacityProfile.findMany({
+      where: { resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE' },
+      take: 1,
+    })
+    const isCapacityPlan = roleProfiles.length > 0 && roleProfiles[0].planningBasis === 'CAPACITY_PROFILE'
+    if (isCapacityPlan) {
       await exitCapacityPlanForManualScheduling(rt.id, tx)
     }
 

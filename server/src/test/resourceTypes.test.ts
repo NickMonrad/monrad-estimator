@@ -44,7 +44,23 @@ describe('resource type manual scheduling regression', () => {
         }),
       },
       capacityProfile: {
-        findMany: vi.fn().mockImplementation((args: { where?: { namedResourceId?: { in?: string[] } } }) => {
+        findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
+          // Role-profile lookup: resourceTypeId set, namedResourceId null
+          if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
+            return Promise.resolve([{
+              id: 'cp-role-1',
+              ownerKind: 'ROLE',
+              resourceTypeId: 'rt-1',
+              namedResourceId: null,
+              planningBasis: 'CAPACITY_PROFILE',
+              source: 'SQUAD_PLANNER',
+              defaultPercent: 25,
+              startWeek: null,
+              endWeek: null,
+              projectId: 'proj-1',
+              segments: [],
+            } as never])
+          }
           // NR profile classification: return 3 provenance rows (custom, segmented, planned)
           if (args?.where?.namedResourceId?.in) {
             return Promise.resolve([
@@ -66,7 +82,7 @@ describe('resource type manual scheduling regression', () => {
               } as never,
             ])
           }
-          // Role-profile upsert lookup: empty
+          // Default: empty
           return Promise.resolve([])
         }),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -78,8 +94,8 @@ describe('resource type manual scheduling regression', () => {
       },
       namedResource: {
         findMany: vi.fn().mockResolvedValue([
-          // NR 1: inherited — matches role CAPACITY_PLAN/25/4/8, no persisted profile
-          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+          // NR 1: inherited — matches role CAPACITY_PLAN/25 (no windows for CAPACITY_PROFILE), no persisted profile
+          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
           // NR 2: custom legacy — TIMELINE/50/W3-7, differs from role
           { id: 'nr-cust-1', allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 3, allocationEndWeek: 7, startWeek: null, endWeek: null },
           // NR 3: scalar match — matches role defaults, but has segmented profile
@@ -146,7 +162,24 @@ describe('resource type manual scheduling regression', () => {
         }),
       },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
+          if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
+            return Promise.resolve([{
+              id: 'cp-role-1',
+              ownerKind: 'ROLE',
+              resourceTypeId: 'rt-1',
+              namedResourceId: null,
+              planningBasis: 'CAPACITY_PROFILE',
+              source: 'SQUAD_PLANNER',
+              defaultPercent: 25,
+              startWeek: null,
+              endWeek: null,
+              projectId: 'proj-1',
+              segments: [],
+            } as never])
+          }
+          return Promise.resolve([])
+        }),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
         update: vi.fn(),
@@ -201,11 +234,10 @@ describe('resource type manual scheduling regression', () => {
           allocationMode: 'CAPACITY_PLAN',
           allocationPercent: 25,
           allocationPct: 25,
-          allocationStartWeek: 4,
-          allocationEndWeek: 8,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
           startWeek: null,
           endWeek: null,
-          pricingModel: 'ACTUAL_DAYS',
         },
       ],
     }
@@ -219,10 +251,27 @@ describe('resource type manual scheduling regression', () => {
           }),
         },
         capacityProfile: {
-          findMany: vi.fn().mockResolvedValue([]),
+          findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
+            if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
+              return Promise.resolve([{
+                id: 'cp-role-1',
+                ownerKind: 'ROLE',
+                resourceTypeId: 'rt-1',
+                namedResourceId: null,
+                planningBasis: 'CAPACITY_PROFILE',
+                source: 'SQUAD_PLANNER',
+                defaultPercent: 25,
+                startWeek: null,
+                endWeek: null,
+                projectId: 'proj-1',
+                segments: [],
+              } as never])
+            }
+            return Promise.resolve([])
+          }),
           create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
-        update: vi.fn(),
+          update: vi.fn(),
         },
         capacitySegment: {
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -388,6 +437,21 @@ describe('resource type manual scheduling regression', () => {
       resourceTypeId: 'rt-1',
     } as never)
     const exitTx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'cp-role-1',
+          ownerKind: 'ROLE',
+          resourceTypeId: 'rt-1',
+          namedResourceId: null,
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          projectId: 'proj-1',
+          segments: [],
+        } as never]),
+      },
       resourceType: {
         update: vi.fn().mockResolvedValue({ id: 'rt-1', allocationMode: 'TIMELINE' }),
       },
@@ -679,7 +743,19 @@ describe('named-resource auto-name race safety', () => {
         resourceType: { update: vi.fn().mockResolvedValue({}) },
         project: { update: vi.fn().mockResolvedValue({}) },
         capacityProfile: {
-          findMany: vi.fn().mockResolvedValue([]),
+          findMany: vi.fn().mockResolvedValue([{
+            id: 'cp-role-1',
+            ownerKind: 'ROLE',
+            resourceTypeId: rtId,
+            namedResourceId: null,
+            planningBasis: 'DEMAND_FOLLOWING',
+            source: 'FIXED',
+            defaultPercent: 100,
+            startWeek: null,
+            endWeek: null,
+            projectId,
+            segments: [],
+          } as never]),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
           create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
           update: vi.fn(),
@@ -753,7 +829,12 @@ describe('capacity profile profile-first writes (no sync)', () => {
     const tx = {
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Updated' }) },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
+          namedResourceId: null, planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED', defaultPercent: 100,
+          startWeek: null, endWeek: null, projectId: 'proj-1', segments: [],
+        } as never]),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
         update: vi.fn(),
@@ -768,8 +849,8 @@ describe('capacity profile profile-first writes (no sync)', () => {
       .put('/api/projects/proj-1/resource-types/rt-1')
       .set('Authorization', authHeader)
       .send({ allocationMode: 'TIMELINE', allocationPercent: 80 })
-    // Profile-first write helper creates role profile (no existing profile to delete)
-    expect(tx.capacityProfile.create).toHaveBeenCalled()
+    // Profile-first write helper updates role profile (existing profile found)
+    expect(tx.capacityProfile.update).toHaveBeenCalled()
     // Sync is NOT called after #364
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
@@ -901,7 +982,16 @@ describe('PATCH regression coverage', () => {
         update: vi.fn().mockImplementation(async ({ data }: { data?: object }) => ({ id: 'rt-1', ...(data ?? {}) })),
       },
       capacityProfile: {
-        findMany: vi.fn().mockImplementation((args: { where?: { namedResourceId?: { in?: string[] } } }) => {
+        findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
+          // Role-profile lookup
+          if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
+            return Promise.resolve([{
+              id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
+              namedResourceId: null, planningBasis: 'CAPACITY_PROFILE',
+              source: 'SQUAD_PLANNER', defaultPercent: 25,
+              startWeek: null, endWeek: null, projectId: 'proj-1', segments: [],
+            } as never])
+          }
           if (args?.where?.namedResourceId?.in) {
             return Promise.resolve([
               {
@@ -918,7 +1008,6 @@ describe('PATCH regression coverage', () => {
               } as never,
             ])
           }
-          // Role profile upsert lookup
           return Promise.resolve([])
         }),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -930,8 +1019,8 @@ describe('PATCH regression coverage', () => {
       },
       namedResource: {
         findMany: vi.fn().mockResolvedValue([
-          // NR1: inherited — matches CAPACITY_PLAN/25/4/8, no profile
-          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+          // NR1: inherited — matches CAPACITY_PLAN/25/null windows (CAPACITY_PROFILE), no profile
+          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
           // NR2: explicit — segmented profile
           { id: 'nr-seg-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
           // NR3: explicit — planned resource
@@ -1061,7 +1150,17 @@ describe('PATCH regression coverage', () => {
         update: vi.fn().mockImplementation(async ({ data }: { data?: object }) => ({ id: 'rt-1', ...(data ?? {}) })),
       },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
+          if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
+            return Promise.resolve([{
+              id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
+              namedResourceId: null, planningBasis: 'CAPACITY_PROFILE',
+              source: 'SQUAD_PLANNER', defaultPercent: 25,
+              startWeek: null, endWeek: null, projectId: 'proj-1', segments: [],
+            } as never])
+          }
+          return Promise.resolve([])
+        }),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
         update: vi.fn(),
@@ -1071,9 +1170,9 @@ describe('PATCH regression coverage', () => {
       },
       namedResource: {
         findMany: vi.fn().mockResolvedValue([
-          { id: 'nr-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+          { id: 'nr-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
         ]),
-        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        updateMany: vi.fn(),
       },
       project: { update: vi.fn() },
     }

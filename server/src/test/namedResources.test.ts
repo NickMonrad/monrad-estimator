@@ -162,6 +162,9 @@ describe('named-resource capacity profile write', () => {
     const projectUpdateFn = vi.fn()
 
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       namedResource: { delete: deleteFn, count: countFn },
       resourceType: { update: updateFn },
       project: { update: projectUpdateFn },
@@ -195,6 +198,9 @@ describe('named-resource capacity profile write', () => {
     const updateFn = vi.fn().mockResolvedValue({ id: 'rt-1' })
 
     const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       namedResource: { delete: deleteFn, count: countFn },
       resourceType: { update: updateFn },
       project: { update: vi.fn() },

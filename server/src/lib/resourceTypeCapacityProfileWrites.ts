@@ -40,6 +40,11 @@ export interface ResourceTypeCapacityPayload {
   allocationEndWeek?: number | null
 }
 
+export interface RTProfileWriteOptions {
+  /** Allow creating a new profile when none exists (default: false). */
+  allowCreate?: boolean
+}
+
 // ─── Main write helper ──────────────────────────────────────────────────────
 
 /**
@@ -59,6 +64,7 @@ export async function upsertRTProfileAndProjectLegacy(
   projectId: string,
   rtId: string,
   payload: ResourceTypeCapacityPayload,
+  options: RTProfileWriteOptions = {},
 ): Promise<LegacyAllocationProjection> {
   // ── 1. Normalise incoming fields ───────────────────────────────────────
   let allocationStartWeek = payload.allocationStartWeek ?? null
@@ -122,6 +128,13 @@ export async function upsertRTProfileAndProjectLegacy(
       },
     })
   } else {
+    // No existing profile — create only when allowCreate is set
+    if (!options.allowCreate) {
+      throw new CapacityIntegrityError(
+        `Missing capacity profile for resource type ${rtId}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
     await tx.capacityProfile.create({
       data: {
         ownerKind: 'ROLE',
@@ -136,13 +149,12 @@ export async function upsertRTProfileAndProjectLegacy(
       },
     })
   }
-
   // ── 3. Project back to legacy ──────────────────────────────────────────
   const projection = projectCapacityProfileToLegacyAllocation(profile)
-
   // The projection is always non-null because we always have a profile here.
   return projection!
 }
+
 
 /**
  * Build a capacity payload for the missing-profile case in non-capacity RT update.

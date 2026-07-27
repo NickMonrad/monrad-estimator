@@ -45,6 +45,8 @@ export interface NamedResourceCapacityPayload {
 export interface NRProfileWriteOptions {
   /** Whether the named resource is a synthetic/planned resource (true) or a named person (false/null/undefined). */
   synthetic?: boolean | null
+  /** Allow creating a new profile when none exists (default: false). */
+  allowCreate?: boolean
 }
 /**
  * ## Flow
@@ -144,6 +146,13 @@ export async function upsertNRProfileAndProjectLegacy(
       },
     })
   } else {
+    // No existing profile — create only when allowCreate is set
+    if (!options.allowCreate) {
+      throw new CapacityIntegrityError(
+        `Missing capacity profile for named resource ${nrId}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
     await tx.capacityProfile.create({
       data: {
         ownerKind: options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
@@ -158,16 +167,12 @@ export async function upsertNRProfileAndProjectLegacy(
       },
     })
   }
-
   // ── 3. Replace segments ────────────────────────────────────────────────
   // For simple legacy-style payloads there are no segments to create.
   // When segment arrays are added to the public API in a future phase,
   // they will be created here.
-
   // ── 4. Project back to legacy ──────────────────────────────────────────
   const projection = projectCapacityProfileToLegacyAllocation(profile)
-
-  // The projection is always non-null because we always have a profile here.
   return projection!
 }
 

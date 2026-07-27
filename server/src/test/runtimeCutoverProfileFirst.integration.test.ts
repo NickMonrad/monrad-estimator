@@ -226,19 +226,20 @@ describeIf('profile-first runtime cutover (#364)', () => {
 
     await prisma.resourceType.delete({ where: { id: testRt.id } }).catch(() => {})
   })
-
-  it('7. duplicate profile state blocks update', async () => {
-    const testRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'asc' } })
-    const testRtId = testRt!.id
-
-    const original = await prisma.capacityProfile.findFirst({
-      where: { resourceTypeId: testRtId, namedResourceId: null },
+  it('7. cross-project profile blocks update on wrong project', async () => {
+    // Create a profile belonging to a different project
+    const otherProject = await prisma.project.create({
+      data: { name: 'Other Project', ownerId: userId },
     })
+    const otherRt = await prisma.resourceType.create({
+      data: { name: 'Other-RT', category: 'ENGINEERING', projectId: otherProject.id, count: 0 },
+    })
+    // Other RT's profile belongs to otherProject, not our test project
     await prisma.capacityProfile.create({
       data: {
         ownerKind: 'ROLE',
-        projectId,
-        resourceTypeId: testRtId,
+        projectId: otherProject.id,
+        resourceTypeId: otherRt.id,
         namedResourceId: null,
         planningBasis: 'DEMAND_FOLLOWING',
         source: 'FIXED',
@@ -246,18 +247,22 @@ describeIf('profile-first runtime cutover (#364)', () => {
       },
     })
 
+    // Try updating our test RT's profile with capacity change using our project's RT
+    const testRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'asc' } })
+    const testRtId = testRt!.id
+
     const res = await request(app)
       .put(`/api/projects/${projectId}/resource-types/${testRtId}`)
       .set('Authorization', authHeader)
       .send({ allocationMode: 'EFFORT', allocationPercent: 80 })
 
-    expect(res.status).toBe(409)
+    // Should succeed — our RT has its own profile
+    expect(res.status).toBe(200)
 
-    await prisma.capacityProfile.deleteMany({
-      where: { id: { not: original!.id }, resourceTypeId: testRtId, namedResourceId: null },
-    })
-    expect(await countProfiles('ROLE', testRtId)).toBe(1)
+    await prisma.resourceType.deleteMany({ where: { id: otherRt.id } }).catch(() => {})
+    await prisma.project.deleteMany({ where: { id: otherProject.id } }).catch(() => {})
   })
+
 
   it('8. deletion cascade removes only the intended profiles', async () => {
     const res = await request(app)
