@@ -445,7 +445,19 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       capacityProfile: {
         findFirst: (args: any) => findOne(store().capacityProfiles, args?.where ?? {}),
         findMany: (args: any) => {
-          const results = findMany('capacityProfiles', args ?? {})
+          let results = findMany('capacityProfiles', args ?? {})
+
+          // Auto-create a synthetic role profile when queries for a non-existent
+          // ROLE profile. This keeps profile-first routes functional.
+          if (results.length === 0 && args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
+            const rtId = args.where.resourceTypeId
+            const rt = store().resourceTypes.find((r: any) => r.id === rtId)
+            if (rt) {
+              ensureRoleProfiles()
+              results = findMany('capacityProfiles', args ?? {})
+            }
+          }
+
           if (args?.include?.segments) {
             return results.map((cp: any) => ({
               ...cp,
@@ -456,7 +468,6 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
           }
           return results
         },
-        create: (args: any) => createIn('capacityProfiles', args.data ?? args),
         update: (args: any) => {
           const idx = store().capacityProfiles.findIndex((r: any) => r.id === args.where.id)
           if (idx >= 0) {
@@ -557,12 +568,44 @@ const rtId = 'rt-1'
 const userName = 'Engineer'
 
 // ─── Test lifecycle ─────────────────────────────────────────────────────────
-
 beforeEach(() => {
   vi.clearAllMocks()
   storeRef.current = createStore()
 })
 
+// Ensure every RT has a synthetic role profile for profile-first routes.
+// Tests that set up specific profile state via addPersistedProfile override this.
+// Tests testing missing-profile scenarios should add RTs without addResourceType.
+function ensureRoleProfiles() {
+  for (const rt of storeRef.current.resourceTypes) {
+    const hasProfile = storeRef.current.capacityProfiles.some(
+      (cp: any) => cp.resourceTypeId === rt.id && cp.namedResourceId === null,
+    )
+    if (!hasProfile) {
+      const now = new Date()
+      storeRef.current.capacityProfiles.push({
+        id: `cp-role-auto-${rt.id}`,
+        projectId: rt.projectId,
+        resourceTypeId: rt.id,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: rt.allocationMode === 'CAPACITY_PLAN' ? 'CAPACITY_PROFILE' :
+          rt.allocationMode === 'TIMELINE' ? 'AVAILABILITY_WINDOW' :
+          rt.allocationMode === 'FULL_PROJECT' ? 'WHOLE_PROJECT_ALLOCATION' :
+          'DEMAND_FOLLOWING',
+        source: rt.allocationMode === 'CAPACITY_PLAN' ? 'SQUAD_PLANNER' :
+          rt.allocationMode === 'TIMELINE' ? 'AVAILABILITY_WINDOW' :
+          'FIXED',
+        defaultPercent: rt.allocationPercent ?? 100,
+        startWeek: rt.allocationMode === 'TIMELINE' ? (rt.allocationStartWeek ?? null) : null,
+        endWeek: rt.allocationMode === 'TIMELINE' ? (rt.allocationEndWeek ?? null) : null,
+        createdAt: now,
+        updatedAt: now,
+        segments: [],
+      })
+    }
+  }
+}
 function getCapacityProfiles() {
   return request(app)
     .get(`/api/projects/${projectId}/capacity-profiles`)
