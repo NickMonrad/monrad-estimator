@@ -70,7 +70,7 @@ describe('loadAndValidateOwnerProfile', () => {
       expect(result.ownerKind).toBe('PLANNED_RESOURCE')
     })
 
-    it('rejects NAMED_PERSON when expected ROLE', async () => {
+    it('accepts ROLE when expected', async () => {
       const profile = makeValidProfile({
         resourceTypeId: 'rt-1', namedResourceId: null, ownerKind: 'ROLE',
       })

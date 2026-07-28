@@ -18,6 +18,13 @@ const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
     data: { weeklyDemandCache: {} },
   })
 
+let rtPatchFailureSeam: (() => void) | null = null
+
+/** Test-only transaction seam; production never installs a callback. */
+export function __setRTPatchFailureSeam(callback: (() => void) | null): void {
+  rtPatchFailureSeam = callback
+}
+
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -237,7 +244,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     const currentCount = state.namedResources.length
     const nextWarnings: string[] = []
 
-    // CAPACITY_PLAN state from authoritative role profile first, legacy fallback
+    // CAPACITY_PLAN state comes only from the validated ROLE profile.
     const schedulingState = resolveRoleSchedulingState(state)
     const isCapacityPlan = schedulingState.isCapacityPlan
     const inheritedIds = new Set(state.classification.inheritedNRIds)
@@ -413,6 +420,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       const updatedRt = await tx.resourceType.update({ where: { id: rt.id }, data: { count } })
       await clearWeeklyDemandCache(req.params.projectId as string, tx)
+      rtPatchFailureSeam?.()
       return { updated: updatedRt, warnings: nextWarnings }
     }
 

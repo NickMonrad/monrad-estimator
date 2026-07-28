@@ -24,6 +24,58 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+function roleProfile(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'cp-role-1',
+    projectId: 'proj-1',
+    resourceTypeId: 'rt-1',
+    namedResourceId: null,
+    ownerKind: 'ROLE',
+    planningBasis: 'DEMAND_FOLLOWING',
+    source: 'FIXED',
+    defaultPercent: 100,
+    startWeek: null,
+    endWeek: null,
+    segments: [],
+    legacy: {},
+    ...overrides,
+  }
+}
+
+function namedProfile(namedResourceId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: `cp-${namedResourceId}`,
+    projectId: 'proj-1',
+    resourceTypeId: null,
+    namedResourceId,
+    ownerKind: 'NAMED_PERSON',
+    planningBasis: 'DEMAND_FOLLOWING',
+    source: 'FIXED',
+    defaultPercent: 100,
+    startWeek: null,
+    endWeek: null,
+    segments: [],
+    legacy: {},
+    ...overrides,
+  }
+}
+
+function profileFinder(role: Record<string, unknown>, named: Array<Record<string, unknown>> = []) {
+  return vi.fn().mockImplementation((args: any) => {
+    const where = args?.where ?? {}
+    if (where.resourceTypeId && where.namedResourceId === null) {
+      return Promise.resolve([role])
+    }
+    if (typeof where.namedResourceId === 'string') {
+      return Promise.resolve(named.filter(profile => profile.namedResourceId === where.namedResourceId))
+    }
+    if (where.namedResourceId?.in) {
+      return Promise.resolve(named.filter(profile => where.namedResourceId.in.includes(profile.namedResourceId)))
+    }
+    return Promise.resolve([])
+  })
+}
+
 describe('resource type manual scheduling regression', () => {
   it('exits CAPACITY_PLAN when count is manually updated through the resource type route', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
@@ -210,6 +262,15 @@ describe('resource type manual scheduling regression', () => {
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
   it('rolls back PUT capacity-plan exit when named-resource updates fail', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: 'rt-1',
+      projectId: 'proj-1',
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 25,
+      allocationStartWeek: 4,
+      allocationEndWeek: 8,
+    } as never)
     const committedState = {
       resourceType: {
         id: 'rt-1',
@@ -227,10 +288,10 @@ describe('resource type manual scheduling regression', () => {
           allocationMode: 'CAPACITY_PLAN',
           allocationPercent: 25,
           allocationPct: 25,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
+          allocationStartWeek: 0,
+          allocationEndWeek: 10,
+          startWeek: 0,
+          endWeek: 10,
         },
       ],
     }
@@ -244,24 +305,22 @@ describe('resource type manual scheduling regression', () => {
           }),
         },
         capacityProfile: {
-          findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
-            if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
-              return Promise.resolve([{
-                id: 'cp-role-1',
-                ownerKind: 'ROLE',
-                resourceTypeId: 'rt-1',
-                namedResourceId: null,
-                planningBasis: 'CAPACITY_PROFILE',
+          findMany: profileFinder(
+            roleProfile({
+              planningBasis: 'CAPACITY_PROFILE',
+              source: 'SQUAD_PLANNER',
+              defaultPercent: 25,
+              segments: [{
+                id: 'seg-role-1',
+                capacityProfileId: 'cp-role-1',
+                startWeek: 0,
+                endWeek: 10,
+                capacityPercent: 25,
                 source: 'SQUAD_PLANNER',
-                defaultPercent: 25,
-                startWeek: null,
-                endWeek: null,
-                projectId: 'proj-1',
-                segments: [{ id: "seg-role-auto", capacityProfileId: "cp-role-auto", startWeek: 0, endWeek: 10, capacityPercent: 25, source: "SQUAD_PLANNER" }],
-              } as never])
-            }
-            return Promise.resolve([])
-          }),
+              }],
+            }),
+            [namedProfile('nr-1', { defaultPercent: 25 })],
+          ),
           create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
           update: vi.fn(),
@@ -367,11 +426,22 @@ describe('resource type manual scheduling regression', () => {
           delete: vi.fn(),
         },
         capacityProfile: {
-          findMany: vi.fn().mockImplementation((args: any) => {
-            // Return role profile for role-profile queries (guard/reload pass), [] for NR-profile queries
-            if (args?.where?.namedResourceId?.in) return Promise.resolve([])
-            return Promise.resolve([{ id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'CAPACITY_PROFILE', source: 'FIXED', defaultPercent: 25, startWeek: null, endWeek: null, projectId: 'proj-1', segments: [{ id: "seg-role-auto", capacityProfileId: "cp-role-auto", startWeek: 0, endWeek: 10, capacityPercent: 25, source: "SQUAD_PLANNER" }] }])
-          }),
+          findMany: profileFinder(
+            roleProfile({
+              planningBasis: 'CAPACITY_PROFILE',
+              source: 'SQUAD_PLANNER',
+              defaultPercent: 25,
+              segments: [{
+                id: 'seg-role-1',
+                capacityProfileId: 'cp-role-1',
+                startWeek: 0,
+                endWeek: 10,
+                capacityPercent: 25,
+                source: 'SQUAD_PLANNER',
+              }],
+            }),
+            [namedProfile('nr-1', { defaultPercent: 25 })],
+          ),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
           create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
           update: vi.fn(),
@@ -431,19 +501,21 @@ describe('resource type manual scheduling regression', () => {
     } as never)
     const exitTx = {
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([{
-          id: 'cp-role-1',
-          ownerKind: 'ROLE',
-          resourceTypeId: 'rt-1',
-          namedResourceId: null,
-          planningBasis: 'CAPACITY_PROFILE',
-          source: 'SQUAD_PLANNER',
-          defaultPercent: 100,
-          startWeek: null,
-          endWeek: null,
-          projectId: 'proj-1',
-          segments: [{ id: "seg-role-auto", capacityProfileId: "cp-role-auto", startWeek: 0, endWeek: 10, capacityPercent: 25, source: "SQUAD_PLANNER" }],
-        } as never]),
+        findMany: profileFinder(
+          roleProfile({
+            planningBasis: 'CAPACITY_PROFILE',
+            source: 'SQUAD_PLANNER',
+            segments: [{
+              id: 'seg-role-1',
+              capacityProfileId: 'cp-role-1',
+              startWeek: 0,
+              endWeek: 10,
+              capacityPercent: 100,
+              source: 'SQUAD_PLANNER',
+            }],
+          }),
+          [namedProfile('nr-2')],
+        ),
       },
       resourceType: {
         update: vi.fn().mockResolvedValue({ id: 'rt-1', allocationMode: 'TIMELINE' }),
@@ -539,6 +611,7 @@ describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
 
   it('returns 404 when the resource type belongs to another project (cross-tenant delete)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue(null)
     // findFirst returns null → route returns 404 before transaction
     const tx = {
       resourceType: { deleteMany: vi.fn() },
@@ -684,8 +757,13 @@ describe('weeklyDemandCache invalidation', () => {
 
   it('clears cache on DELETE after successful scoped delete', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: 'rt-1', projectId: 'proj-1', name: 'Role', count: 0,
+    } as never)
     const tx = {
       resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      capacityProfile: { findMany: profileFinder(roleProfile()) },
+      namedResource: { findMany: vi.fn().mockResolvedValue([]) },
       project: { update: vi.fn().mockResolvedValue({}) },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -706,6 +784,7 @@ describe('weeklyDemandCache invalidation', () => {
 
   it('does not clear cache when DELETE returns 404 (wrong project)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue(null)
     const tx = {
       resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       project: { update: vi.fn() },
@@ -881,7 +960,7 @@ describe('capacity profile profile-first writes (no sync)', () => {
         create: vi.fn().mockResolvedValue({ id: 'nr-new' }),
       },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([{ id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null, projectId: 'proj-1', segments: [] }]),
+        findMany: profileFinder(roleProfile(), [namedProfile('nr-1')]),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
         update: vi.fn(),
@@ -904,10 +983,15 @@ describe('capacity profile profile-first writes (no sync)', () => {
 
   it('DELETE does not call sync (cascade handles profiles)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: 'rt-1', projectId: 'proj-1', name: 'Role', count: 0,
+    } as never)
     const tx = {
       resourceType: {
         deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
+      capacityProfile: { findMany: profileFinder(roleProfile()) },
+      namedResource: { findMany: vi.fn().mockResolvedValue([]) },
       project: { update: vi.fn() },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -968,7 +1052,23 @@ describe('PATCH regression coverage', () => {
         create: vi.fn().mockResolvedValue({ id: 'nr-new' }),
       },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([{ id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'AVAILABILITY_WINDOW', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null, projectId: 'proj-1', segments: [] }]),
+        findMany: profileFinder(
+          roleProfile({
+            planningBasis: 'AVAILABILITY_WINDOW',
+            source: 'AVAILABILITY_WINDOW',
+          }),
+          [
+            namedProfile('nr-inh-1'),
+            namedProfile('nr-exp-1', {
+              planningBasis: 'AVAILABILITY_WINDOW',
+              source: 'MANUAL',
+              defaultPercent: 50,
+              startWeek: 10,
+              endWeek: 20,
+              legacy: null,
+            }),
+          ],
+        ),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
         update: vi.fn(),
       },
@@ -994,50 +1094,67 @@ describe('PATCH regression coverage', () => {
       allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
       allocationStartWeek: 4, allocationEndWeek: 8,
     } as never)
+    const role = roleProfile({
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+      defaultPercent: 25,
+      segments: [{
+        id: 'seg-role-1',
+        capacityProfileId: 'cp-role-1',
+        startWeek: 0,
+        endWeek: 10,
+        capacityPercent: 25,
+        source: 'SQUAD_PLANNER',
+      }],
+    })
+    const nrProfiles = [
+      namedProfile('nr-inh-1', { defaultPercent: 25 }),
+      namedProfile('nr-seg-1', {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: null,
+        segments: [{
+          id: 'seg-1',
+          capacityProfileId: 'cp-nr-seg-1',
+          startWeek: 2,
+          endWeek: 3,
+          capacityPercent: 100,
+          source: 'SQUAD_PLANNER',
+        }],
+      }),
+      namedProfile('nr-plan-1', {
+        ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'MANUAL',
+        defaultPercent: 25,
+        legacy: null,
+      }),
+    ]
     const tx = {
       resourceType: {
         update: vi.fn().mockImplementation(async ({ data }: { data?: object }) => ({ id: 'rt-1', ...(data ?? {}) })),
       },
       capacityProfile: {
-        findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
-          // Role-profile lookup
-          if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
-            return Promise.resolve([{
-              id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
-              namedResourceId: null, planningBasis: 'CAPACITY_PROFILE',
-              source: 'SQUAD_PLANNER', defaultPercent: 25,
-              startWeek: null, endWeek: null, projectId: 'proj-1', segments: [{ id: "seg-role-auto", capacityProfileId: "cp-role-auto", startWeek: 0, endWeek: 10, capacityPercent: 25, source: "SQUAD_PLANNER" }],
-            } as never])
-          }
-          if (args?.where?.namedResourceId?.in) {
-            return Promise.resolve([
-              {
-                id: 'cp-seg-1', namedResourceId: 'nr-seg-1',
-                ownerKind: 'NAMED_PERSON', segments: [
-                  { id: 'seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
-                ],
-                legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8 },
-              } as never,
-              {
-                id: 'cp-plan-1', namedResourceId: 'nr-plan-1',
-                ownerKind: 'PLANNED_RESOURCE', segments: [],
-                legacy: null,
-              } as never,
-            ])
-          }
-          return Promise.resolve([])
-        }),
+        findMany: profileFinder(role, nrProfiles),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
-        update: vi.fn(),
+        update: vi.fn().mockImplementation(async ({ where, data }: any) => {
+          const profile = [role, ...nrProfiles].find(item => item.id === where.id)
+          if (profile) Object.assign(profile, data)
+          return profile
+        }),
       },
       capacitySegment: {
-        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        deleteMany: vi.fn().mockImplementation(async ({ where }: any) => {
+          const profile = [role, ...nrProfiles].find(item => item.id === where.capacityProfileId)
+          if (profile) profile.segments = []
+          return { count: 0 }
+        }),
       },
       namedResource: {
         findMany: vi.fn().mockResolvedValue([
-          // NR1: inherited — matches CAPACITY_PLAN/25/null windows (CAPACITY_PROFILE), no profile
-          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+          // NR1: inherited — valid profile with legacy provenance, matching the ROLE projection
+          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 0, allocationEndWeek: 10, startWeek: 0, endWeek: 10 },
           // NR2: explicit — segmented profile
           { id: 'nr-seg-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
           // NR3: explicit — planned resource
@@ -1089,7 +1206,7 @@ describe('PATCH regression coverage', () => {
         findMany: vi.fn().mockResolvedValue([{ id: 'nr-1' }]),
       },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: profileFinder(roleProfile(), [namedProfile('nr-1')]),
         update: vi.fn(),
       },
       resourceType: { update: vi.fn() },
@@ -1125,9 +1242,26 @@ describe('PATCH regression coverage', () => {
         delete: vi.fn().mockResolvedValue({}),
       },
       capacityProfile: {
-        findMany: vi.fn().mockResolvedValue([{ id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null, projectId: 'proj-1', segments: [] }]),
-        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
-        update: vi.fn(),
+        findMany: profileFinder(
+          roleProfile(),
+          [
+            namedProfile('nr-exp-1', {
+              planningBasis: 'AVAILABILITY_WINDOW',
+              source: 'MANUAL',
+              defaultPercent: 50,
+              startWeek: 5,
+              endWeek: 10,
+              legacy: null,
+            }),
+            namedProfile('nr-old-inh'),
+            namedProfile('nr-exp-2', {
+              source: 'MANUAL',
+              defaultPercent: 75,
+              legacy: null,
+            }),
+          ],
+        ),
+        delete: vi.fn().mockResolvedValue({}),
       },
       resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 2 }) },
       project: { update: vi.fn() },
@@ -1162,32 +1296,44 @@ describe('PATCH regression coverage', () => {
       allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
       allocationStartWeek: 4, allocationEndWeek: 8,
     } as never)
+    const role = roleProfile({
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+      defaultPercent: 25,
+      segments: [{
+        id: 'seg-role-1',
+        capacityProfileId: 'cp-role-1',
+        startWeek: 0,
+        endWeek: 10,
+        capacityPercent: 25,
+        source: 'SQUAD_PLANNER',
+      }],
+    })
+    const inheritedProfile = namedProfile('nr-1', { defaultPercent: 25 })
     const tx = {
       resourceType: {
         update: vi.fn().mockImplementation(async ({ data }: { data?: object }) => ({ id: 'rt-1', ...(data ?? {}) })),
       },
       capacityProfile: {
-        findMany: vi.fn().mockImplementation((args: { where?: { resourceTypeId?: string; namedResourceId?: null | { in?: string[] } } }) => {
-          if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
-            return Promise.resolve([{
-              id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
-              namedResourceId: null, planningBasis: 'CAPACITY_PROFILE',
-              source: 'SQUAD_PLANNER', defaultPercent: 25,
-              startWeek: null, endWeek: null, projectId: 'proj-1', segments: [{ id: "seg-role-auto", capacityProfileId: "cp-role-auto", startWeek: 0, endWeek: 10, capacityPercent: 25, source: "SQUAD_PLANNER" }],
-            } as never])
-          }
-          return Promise.resolve([])
-        }),
+        findMany: profileFinder(role, [inheritedProfile]),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
-        update: vi.fn(),
+        update: vi.fn().mockImplementation(async ({ where, data }: any) => {
+          const profile = [role, inheritedProfile].find(item => item.id === where.id)
+          if (profile) Object.assign(profile, data)
+          return profile
+        }),
       },
       capacitySegment: {
-        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        deleteMany: vi.fn().mockImplementation(async ({ where }: any) => {
+          const profile = [role, inheritedProfile].find(item => item.id === where.capacityProfileId)
+          if (profile) profile.segments = []
+          return { count: 0 }
+        }),
       },
       namedResource: {
         findMany: vi.fn().mockResolvedValue([
-          { id: 'nr-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+          { id: 'nr-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 0, allocationEndWeek: 10, startWeek: 0, endWeek: 10 },
         ]),
         updateMany: vi.fn(),
       },
@@ -1222,7 +1368,7 @@ describe('PATCH regression coverage', () => {
 
   })
 
-  it('PATCH reduction preserves NR with duplicate profiles when second profile is explicit', async () => {
+  it('PATCH reduction rejects duplicate NamedResource authority before deletion', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
       id: 'rt-1', projectId: 'proj-1', name: 'Developer',
@@ -1232,25 +1378,36 @@ describe('PATCH regression coverage', () => {
     const tx = {
       namedResource: {
         findMany: vi.fn().mockResolvedValue([
-          // nr-inh: inherited — no profile, matches TIMELINE/100/null/null
           { id: 'nr-inh', name: 'Dev 1', allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null, createdAt: new Date('2026-01-01') },
-          // nr-dupe: two profiles — first sync-derived matching, second segmented authoritative
           { id: 'nr-dupe', name: 'Dev 2', allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null, createdAt: new Date('2026-02-01') },
         ]),
         delete: vi.fn().mockResolvedValue({}),
       },
       capacityProfile: {
-        findMany: vi.fn().mockImplementation((args: { where?: { namedResourceId?: string } }) => {
-          if (args?.where?.namedResourceId) {
-            return Promise.resolve([
-              // Profile 1: sync-derived (populated legacy, matches old default)
-              { id: 'cp-sync', namedResourceId: 'nr-dupe', ownerKind: 'NAMED_PERSON', segments: [], legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null } } as never,
-              // Profile 2: segmented authoritative (non-empty segments)
-              { id: 'cp-seg', namedResourceId: 'nr-dupe', ownerKind: 'NAMED_PERSON', segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'EFFORT' }], legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null } } as never,
-            ])
-          }
-          return Promise.resolve([{ id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'AVAILABILITY_WINDOW', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null, projectId: 'proj-1', segments: [] }])
-        }),
+        findMany: profileFinder(
+          roleProfile({
+            planningBasis: 'AVAILABILITY_WINDOW',
+            source: 'AVAILABILITY_WINDOW',
+          }),
+          [
+            namedProfile('nr-inh'),
+            namedProfile('nr-dupe', { id: 'cp-sync' }),
+            namedProfile('nr-dupe', {
+              id: 'cp-seg',
+              planningBasis: 'CAPACITY_PROFILE',
+              source: 'SQUAD_PLANNER',
+              defaultPercent: null,
+              segments: [{
+                id: 'seg-1',
+                capacityProfileId: 'cp-seg',
+                startWeek: 2,
+                endWeek: 3,
+                capacityPercent: 100,
+                source: 'SQUAD_PLANNER',
+              }],
+            }),
+          ],
+        ),
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         update: vi.fn(),
       },
@@ -1264,18 +1421,9 @@ describe('PATCH regression coverage', () => {
       .set('Authorization', authHeader)
       .send({ count: 1 })
 
-    expect(res.status).toBe(200)
-
-    // nr-inh is inherited (no profile, matches old default) → deleted
-    expect(tx.namedResource.delete).toHaveBeenCalledWith({ where: { id: 'nr-inh' } })
-
-    // nr-dupe has two profiles; first matches old default but second is segmented → explicit
-    // Under first-profile-wins this would be misclassified as inherited and deleted.
-    // With grouped-profile checking, the explicit second profile protects it.
-    expect(tx.namedResource.delete).not.toHaveBeenCalledWith({ where: { id: 'nr-dupe' } })
-    expect(tx.namedResource.delete).toHaveBeenCalledTimes(1)
-
-    // Persisted count reflects the actual remaining resources (1 NR left)
-    expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 1 } }))
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
+    expect(tx.namedResource.delete).not.toHaveBeenCalled()
+    expect(tx.resourceType.update).not.toHaveBeenCalled()
   })
 })

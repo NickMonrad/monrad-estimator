@@ -48,8 +48,6 @@ export interface OwnerProfileQuery {
   ownerKind: string
   /** ResourceType ID (for ROLE) or NamedResource ID (for NAMED_PERSON/PLANNED_RESOURCE). */
   ownerId: string
-  /** Include segment rows in the returned result (default true). */
-  includeSegments?: boolean
 }
 
 export interface ValidatedOwnerProfile {
@@ -97,7 +95,7 @@ function isNonNegativeInteger(v: unknown): v is number {
 export async function loadAndValidateOwnerProfile(
   query: OwnerProfileQuery,
 ): Promise<ValidatedOwnerProfile> {
-  const { tx, projectId, ownerKind, ownerId, includeSegments = true } = query
+  const { tx, projectId, ownerKind, ownerId } = query
   // ── 1. Build entity-appropriate where ──────────────────────────────
   const where: Record<string, unknown> = { projectId }
 
@@ -109,9 +107,10 @@ export async function loadAndValidateOwnerProfile(
     where.resourceTypeId = null
   }
 
-  const profiles: any[] = includeSegments
-    ? await tx.capacityProfile.findMany({ where, include: { segments: true } })
-    : await tx.capacityProfile.findMany({ where })
+  const profiles: any[] = await tx.capacityProfile.findMany({
+    where,
+    include: { segments: true },
+  })
 
   // ── 2. Count check ─────────────────────────────────────────────────
   if (profiles.length === 0) {

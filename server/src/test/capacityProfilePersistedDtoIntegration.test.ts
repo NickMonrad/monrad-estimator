@@ -359,6 +359,52 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       if (idx >= 0) arr.splice(idx, 1)
     }
 
+    function deleteProfilesById(profileIds: Set<string>): void {
+      store().capacitySegments = store().capacitySegments.filter(
+        (segment: any) => !profileIds.has(segment.capacityProfileId),
+      )
+      store().capacityProfiles = store().capacityProfiles.filter(
+        (profile: any) => !profileIds.has(profile.id),
+      )
+    }
+
+    function deleteNamedResource(id: string): void {
+      const profileIds = new Set<string>(
+        store().capacityProfiles
+          .filter((profile: any) => profile.namedResourceId === id)
+          .map((profile: any) => profile.id),
+      )
+      deleteProfilesById(profileIds)
+      deleteOne('namedResources', { id })
+    }
+
+    function deleteResourceTypes(where: any): { count: number } {
+      const resourceTypes = filter(store().resourceTypes, where)
+      const resourceTypeIds = new Set<string>(resourceTypes.map((resourceType: any) => resourceType.id))
+      const namedResourceIds = new Set<string>(
+        store().namedResources
+          .filter((resource: any) => resourceTypeIds.has(resource.resourceTypeId))
+          .map((resource: any) => resource.id),
+      )
+      const profileIds = new Set<string>(
+        store().capacityProfiles
+          .filter((profile: any) =>
+            resourceTypeIds.has(profile.resourceTypeId) ||
+            namedResourceIds.has(profile.namedResourceId),
+          )
+          .map((profile: any) => profile.id),
+      )
+
+      deleteProfilesById(profileIds)
+      store().namedResources = store().namedResources.filter(
+        (resource: any) => !namedResourceIds.has(resource.id),
+      )
+      store().resourceTypes = store().resourceTypes.filter(
+        (resourceType: any) => !resourceTypeIds.has(resourceType.id),
+      )
+      return { count: resourceTypes.length }
+    }
+
     const client = {
       project: {
         findFirst: (args: any) => {
@@ -390,12 +436,14 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
           return null
         },
         updateMany: (args: any) => {
-          for (const r of filter(store().resourceTypes, args.where)) {
+          const matches = filter(store().resourceTypes, args.where)
+          for (const r of matches) {
             const idx = store().resourceTypes.findIndex((x: any) => x.id === r.id)
             if (idx >= 0) Object.assign(store().resourceTypes[idx], args.data)
           }
-          return { count: filter(store().resourceTypes, args.where).length }
+          return { count: matches.length }
         },
+        deleteMany: (args: any) => deleteResourceTypes(args.where ?? {}),
       },
       namedResource: {
         findFirst: (args: any) => findOne(store().namedResources, args?.where ?? {}),
@@ -420,7 +468,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
           for (const d of args.data ?? []) createIn('namedResources', d)
           return { count: (args.data ?? []).length }
         },
-        delete: (args: any) => { deleteOne('namedResources', args.where ?? args); return {} },
+        delete: (args: any) => { deleteNamedResource((args.where ?? args).id); return {} },
         count: (args: any) => filter(store().namedResources, args?.where ?? {}).length,
       },
       capacityPlan: {
@@ -465,8 +513,16 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
           }
           return null
         },
-        delete: (args: any) => { deleteOne('capacityProfiles', args.where ?? args); return {} },
-        deleteMany: (args: any) => deleteWhere('capacityProfiles', args.where ?? {}),
+        delete: (args: any) => {
+          const profile = findOne(store().capacityProfiles, args.where ?? args)
+          if (profile) deleteProfilesById(new Set([profile.id]))
+          return {}
+        },
+        deleteMany: (args: any) => {
+          const profiles = filter(store().capacityProfiles, args.where ?? {})
+          deleteProfilesById(new Set(profiles.map((profile: any) => profile.id)))
+          return { count: profiles.length }
+        },
       },
       capacitySegment: {
         deleteMany: (args: any) => deleteWhere('capacitySegments', args.where ?? {}),
@@ -569,6 +625,7 @@ function addResourceType(
   name: string,
   count = 1,
   overrides: Record<string, any> = {},
+  profileOverrides: Record<string, any> | null = {},
 ) {
   const now = new Date()
   const rt = {
@@ -586,27 +643,35 @@ function addResourceType(
     ...overrides,
   }
   storeRef.current.resourceTypes.push(rt)
-  // Create a canonical ROLE profile matching the RT's compatibility fields
-  const roleProfile = {
-    id: `cp-role-${id}`,
-    projectId,
-    resourceTypeId: id,
-    namedResourceId: null,
-    ownerKind: 'ROLE',
-    planningBasis: rt.allocationMode === 'CAPACITY_PLAN' ? 'CAPACITY_PROFILE' :
-      rt.allocationMode === 'TIMELINE' ? 'AVAILABILITY_WINDOW' :
-      rt.allocationMode === 'FULL_PROJECT' ? 'WHOLE_PROJECT_ALLOCATION' :
-      'DEMAND_FOLLOWING',
-    source: rt.allocationMode === 'CAPACITY_PLAN' ? 'SQUAD_PLANNER' :
-      rt.allocationMode === 'TIMELINE' ? 'AVAILABILITY_WINDOW' :
-      'FIXED',
-    defaultPercent: rt.allocationPercent ?? 100,
-    startWeek: rt.allocationMode === 'TIMELINE' ? (rt.allocationStartWeek ?? null) : null,
-    endWeek: rt.allocationMode === 'TIMELINE' ? (rt.allocationEndWeek ?? null) : null,
-    createdAt: now,
-    updatedAt: now,
+
+  if (profileOverrides !== null) {
+    const { segments = [], ...profileFields } = profileOverrides
+    const roleProfile = {
+      id: `cp-role-${id}`,
+      projectId,
+      resourceTypeId: id,
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      legacy: {},
+      createdAt: now,
+      updatedAt: now,
+      ...profileFields,
+    }
+    storeRef.current.capacityProfiles.push(roleProfile)
+    for (const [index, segment] of segments.entries()) {
+      storeRef.current.capacitySegments.push({
+        id: segment.id ?? `cs-role-${id}-${index + 1}`,
+        capacityProfileId: roleProfile.id,
+        ...segment,
+      })
+    }
   }
-  storeRef.current.capacityProfiles.push(roleProfile)
+
   return rt
 }
 function getCapacityProfiles() {
@@ -619,6 +684,7 @@ function addNamedResource(
   name: string,
   rt: string,
   overrides: Record<string, any> = {},
+  profileOverrides: Record<string, any> | null = {},
 ) {
   const now = new Date()
   const nr = {
@@ -645,22 +711,35 @@ function addNamedResource(
       (n: any) => n.resourceTypeId === rt,
     ).length
   }
-  // Create a canonical NAMED_PERSON profile matching the NR's current state
-  const nrProfile = {
-    id: `cp-nr-${id}`,
-    projectId,
-    resourceTypeId: null,
-    namedResourceId: id,
-    ownerKind: 'NAMED_PERSON',
-    planningBasis: 'DEMAND_FOLLOWING',
-    source: 'FIXED',
-    defaultPercent: nr.allocationPercent ?? 100,
-    startWeek: null,
-    endWeek: null,
-    createdAt: now,
-    updatedAt: now,
+
+  if (profileOverrides !== null) {
+    const { segments = [], ...profileFields } = profileOverrides
+    const nrProfile = {
+      id: `cp-nr-${id}`,
+      projectId,
+      resourceTypeId: null,
+      namedResourceId: id,
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      legacy: {},
+      createdAt: now,
+      updatedAt: now,
+      ...profileFields,
+    }
+    storeRef.current.capacityProfiles.push(nrProfile)
+    for (const [index, segment] of segments.entries()) {
+      storeRef.current.capacitySegments.push({
+        id: segment.id ?? `cs-nr-${id}-${index + 1}`,
+        capacityProfileId: nrProfile.id,
+        ...segment,
+      })
+    }
   }
-  storeRef.current.capacityProfiles.push(nrProfile)
+
   return nr
 }
 
@@ -864,6 +943,12 @@ describe('persisted capacity-profile DTO integration', () => {
         allocationPercent: 50,
         allocationStartWeek: 2,
         allocationEndWeek: 10,
+      }, {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 50,
+        startWeek: 2,
+        endWeek: 10,
       })
 
       const patchRes = await request(app)
@@ -1016,7 +1101,7 @@ describe('persisted capacity-profile DTO integration', () => {
     })
 
     it('returns legacy-derived DTO when no persisted profiles exist', async () => {
-      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' })
+      addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' }, null)
 
       const getRes = await getCapacityProfiles()
       expect(getRes.status).toBe(200)
@@ -1132,12 +1217,9 @@ describe('persisted capacity-profile DTO integration', () => {
         source: 'FIXED',
         defaultPercent: 100,
       })
-      addPersistedProfile('cp-dupe-2', {
-        resourceTypeId: rtId,
-        ownerKind: 'ROLE',
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 100,
+      storeRef.current.capacityProfiles.push({
+        ...storeRef.current.capacityProfiles.find((profile: any) => profile.id === 'cp-dupe-1'),
+        id: 'cp-dupe-2',
       })
 
       const getRes = await getCapacityProfiles()
@@ -1737,6 +1819,12 @@ describe('persisted capacity-profile DTO integration', () => {
         allocationMode: 'EFFORT',
         allocationPercent: 100,
         pricingModel: 'ACTUAL_DAYS',
+      }, {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
       })
       // Add backlog + timeline so Resource Profile route produces a row
       addEpic('epic-win', 'Win Epic')
@@ -1801,11 +1889,11 @@ describe('persisted capacity-profile DTO integration', () => {
         resourceTypeId: null,
         namedResourceId: segNrId,
         ownerKind: 'NAMED_PERSON',
-        planningBasis: 'AVAILABILITY_WINDOW',
-        source: 'AVAILABILITY_WINDOW',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
         defaultPercent: 75,
-        startWeek: 2,
-        endWeek: 10,
+        startWeek: null,
+        endWeek: null,
       })
       storeRef.current.capacitySegments.push(
         { id: 'seg-clean-1', capacityProfileId: 'cp-seg-clean', startWeek: 2, endWeek: 5, capacityPercent: 75, source: 'AVAILABILITY_WINDOW', createdAt: new Date(), updatedAt: new Date() },
@@ -1825,7 +1913,7 @@ describe('persisted capacity-profile DTO integration', () => {
       // Old profile and segments preserved
       const oldProfile = storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-seg-clean')
       expect(oldProfile).toBeDefined()
-      expect(oldProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(oldProfile!.planningBasis).toBe('CAPACITY_PROFILE')
       expect(oldProfile!.defaultPercent).toBe(75)
 
       const segments = storeRef.current.capacitySegments.filter(
@@ -1871,6 +1959,16 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,
+      })
+      storeRef.current.capacitySegments.push({
+        id: 'seg-cap-plan',
+        capacityProfileId: 'cp-cap-plan',
+        startWeek: 0,
+        endWeek: 10,
+        capacityPercent: 100,
+        source: 'SQUAD_PLANNER',
+        createdAt: new Date(),
+        updatedAt: new Date(),
       })
       // Add backlog + timeline so Resource Profile route produces a row
       addEpic('epic-cp', 'CapPlan Epic')
@@ -1929,8 +2027,8 @@ describe('persisted capacity-profile DTO integration', () => {
         planningBasis: 'DEMAND_FOLLOWING',
         source: 'FIXED',
         defaultPercent: 100,
-        startWeek: 2,
-        endWeek: 10,
+        startWeek: null,
+        endWeek: null,
       })
       // Add backlog + timeline so Resource Profile route produces a row
       addEpic('epic-hist', 'Hist Epic')
@@ -2100,11 +2198,11 @@ describe('persisted capacity-profile DTO integration', () => {
         resourceTypeId: null,
         namedResourceId: segNrId,
         ownerKind: 'NAMED_PERSON',
-        planningBasis: 'AVAILABILITY_WINDOW',
-        source: 'AVAILABILITY_WINDOW',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
         defaultPercent: 75,
-        startWeek: 2,
-        endWeek: 10,
+        startWeek: null,
+        endWeek: null,
       })
       storeRef.current.capacitySegments.push(
         { id: 'seg-rs-1', capacityProfileId: 'cp-rename-seg', startWeek: 2, endWeek: 5, capacityPercent: 75, source: 'AVAILABILITY_WINDOW', createdAt: new Date(), updatedAt: new Date() },
@@ -2125,7 +2223,7 @@ describe('persisted capacity-profile DTO integration', () => {
         (p: any) => p.id === 'cp-rename-seg',
       )
       expect(profile).toBeDefined()
-      expect(profile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(profile!.planningBasis).toBe('CAPACITY_PROFILE')
 
       // All segments still exist
       const remainingSegments = storeRef.current.capacitySegments.filter(
@@ -2152,6 +2250,12 @@ describe('persisted capacity-profile DTO integration', () => {
         startWeek: 3,
         endWeek: 9,
         pricingModel: 'ACTUAL_DAYS',
+      }, {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 50,
+        startWeek: 3,
+        endWeek: 9,
       })
       addEpic('epic-pc', 'PatchClear Epic')
       addFeature('feat-pc', 'PatchClear Feature', 'epic-pc')
@@ -2187,6 +2291,12 @@ describe('persisted capacity-profile DTO integration', () => {
         startWeek: 4,
         endWeek: 8,
         pricingModel: 'PRO_RATA',
+      }, {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 50,
+        startWeek: 4,
+        endWeek: 8,
       })
       addEpic('epic-po', 'PatchOmit Epic')
       addFeature('feat-po', 'PatchOmit Feature', 'epic-po')
@@ -2207,7 +2317,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.allocationEndWeek).toBe(8)
     })
 
-    it('non-capacity PUT creates TIMELINE profile with preserved window when missing', async () => {
+    it('non-capacity PUT preserves a valid TIMELINE profile over stale compatibility', async () => {
       const mtRtId = 'rt-miss-tl'
       const mtNrId = 'nr-miss-tl'
       addResourceType(mtRtId, 'MissTL RT', 1)
@@ -2219,6 +2329,12 @@ describe('persisted capacity-profile DTO integration', () => {
         startWeek: 4,
         endWeek: 9,
         pricingModel: 'ACTUAL_DAYS',
+      }, {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 60,
+        startWeek: 4,
+        endWeek: 9,
       })
       // No backlog/timeline — not checking Resource Profile response
 
@@ -2234,7 +2350,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.allocationStartWeek).toBe(4)
       expect(res.body.allocationEndWeek).toBe(9)
 
-      // New profile created with TIMELINE semantics
+      // Existing authoritative profile remains unchanged
       const profile = storeRef.current.capacityProfiles.find(
         (p: any) => p.namedResourceId === mtNrId,
       )
@@ -2246,7 +2362,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(profile!.defaultPercent).toBe(60)
     })
 
-    it('non-capacity PUT creates EFFORT profile with null windows when missing', async () => {
+    it('non-capacity PUT preserves EFFORT authority over stale compatibility windows', async () => {
       const meRtId = 'rt-miss-eff'
       const meNrId = 'nr-miss-eff'
       addResourceType(meRtId, 'MissEff RT', 1)
@@ -2272,7 +2388,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.allocationStartWeek).toBe(3)
       expect(res.body.allocationEndWeek).toBe(8)
 
-      // New profile created with null windows (stale windows suppressed)
+      // Existing authoritative profile keeps valid null windows
       const profile = storeRef.current.capacityProfiles.find(
         (p: any) => p.namedResourceId === meNrId,
       )
@@ -2282,6 +2398,121 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(profile!.endWeek).toBeNull()
       expect(profile!.defaultPercent).toBe(100)
     })
+
+    it('PUT applies one capacity field to authoritative profile state and repairs stale compatibility', async () => {
+      const rtId = 'rt-put-stale-authority'
+      const nrId = 'nr-put-stale-authority'
+      const profileId = `cp-nr-${nrId}`
+      addResourceType(rtId, 'PUT Stale Authority', 1)
+      addNamedResource(nrId, 'PUT Person', rtId, {
+        allocationMode: 'EFFORT',
+        allocationPercent: 20,
+        allocationPct: 20,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+      }, {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 4,
+        endWeek: 12,
+      })
+
+      const res = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationPercent: 80 })
+
+      expect(res.status).toBe(200)
+      const profile = storeRef.current.capacityProfiles.find((item: any) => item.namedResourceId === nrId)
+      expect(profile).toMatchObject({
+        id: profileId,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: 80,
+        startWeek: 4,
+        endWeek: 12,
+      })
+      expect(storeRef.current.namedResources.find((item: any) => item.id === nrId)).toMatchObject({
+        allocationMode: 'TIMELINE',
+        allocationPercent: 80,
+        allocationPct: 80,
+        allocationStartWeek: 4,
+        allocationEndWeek: 12,
+        startWeek: 4,
+        endWeek: 12,
+      })
+    })
+
+    it('PATCH applies one capacity field to authoritative profile state and repairs stale compatibility', async () => {
+      const rtId = 'rt-patch-stale-authority'
+      const nrId = 'nr-patch-stale-authority'
+      const profileId = `cp-nr-${nrId}`
+      addResourceType(rtId, 'PATCH Stale Authority', 1)
+      addNamedResource(nrId, 'PATCH Person', rtId, {
+        allocationMode: 'EFFORT',
+        allocationPercent: 20,
+        allocationPct: 20,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+      }, {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 4,
+        endWeek: 12,
+      })
+
+      const res = await request(app)
+        .patch(`/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`)
+        .set('Authorization', authHeader)
+        .send({ allocationEndWeek: 14 })
+
+      expect(res.status).toBe(200)
+      const profile = storeRef.current.capacityProfiles.find((item: any) => item.namedResourceId === nrId)
+      expect(profile).toMatchObject({
+        id: profileId,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 4,
+        endWeek: 14,
+      })
+      expect(storeRef.current.namedResources.find((item: any) => item.id === nrId)).toMatchObject({
+        allocationMode: 'TIMELINE',
+        allocationPercent: 75,
+        allocationPct: 75,
+        allocationStartWeek: 4,
+        allocationEndWeek: 14,
+        startWeek: 4,
+        endWeek: 14,
+      })
+    })
+
+    it.each(['put', 'patch'] as const)(
+      'non-capacity %s fails closed when the exact NamedResource profile is missing',
+      async method => {
+        const rtId = `rt-nr-missing-${method}`
+        const nrId = `nr-missing-${method}`
+        addResourceType(rtId, `Missing ${method} RT`, 1)
+        addNamedResource(nrId, `Missing ${method} person`, rtId, {}, null)
+        expect(storeRef.current.capacityProfiles.some((profile: any) => profile.namedResourceId === nrId))
+          .toBe(false)
+        const before = JSON.parse(JSON.stringify(storeRef.current))
+
+        const response = await request(app)[method](
+          `/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+        )
+          .set('Authorization', authHeader)
+          .send({ name: 'must not be written' })
+
+        expect(response.status).toBe(409)
+        expect(response.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
+        expect(JSON.parse(JSON.stringify(storeRef.current))).toEqual(before)
+      },
+    )
   })
 
   describe('9. ResourceType profile-first write integration', () => {
@@ -2376,9 +2607,15 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.allocationEndWeek).toBe(9)
     })
 
-    it('non-capacity RT update creates TIMELINE profile when missing', async () => {
+    it('non-capacity RT update preserves explicit TIMELINE authority over stale compatibility', async () => {
       const rtId = 'rt-role-4'
-      addResourceType(rtId, 'Role RT 4', 1, { allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 4, allocationEndWeek: 8 })
+      addResourceType(rtId, 'Role RT 4', 1, { allocationMode: 'TIMELINE', allocationPercent: 60, allocationStartWeek: 4, allocationEndWeek: 8 }, {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 60,
+        startWeek: 4,
+        endWeek: 8,
+      })
 
       const res = await request(app)
         .put(`/api/projects/${projectId}/resource-types/${rtId}`)
@@ -2389,7 +2626,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.name).toBe('Renamed Role')
       expect(res.body.allocationMode).toBe('TIMELINE')
 
-      // Profile-first write creates AVAILABILITY_WINDOW with preserved window
+      // Existing authoritative profile remains unchanged
       const profile = storeRef.current.capacityProfiles.find(
         (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
       )
@@ -2399,7 +2636,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(profile!.endWeek).toBe(8)
     })
 
-    it('non-capacity RT update creates EFFORT profile when missing', async () => {
+    it('non-capacity RT update preserves explicit EFFORT authority', async () => {
       const rtId = 'rt-role-5'
       addResourceType(rtId, 'Role RT 5', 1, { allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: 2, allocationEndWeek: 6 })
 
@@ -2412,7 +2649,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.name).toBe('Renamed Role')
       expect(res.body.allocationMode).toBe('EFFORT')
 
-      // Profile-first write creates DEMAND_FOLLOWING profile.
+      // Existing DEMAND_FOLLOWING profile remains authoritative.
       const profile = storeRef.current.capacityProfiles.find(
         (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
       )
@@ -2512,8 +2749,8 @@ describe('persisted capacity-profile DTO integration', () => {
       addResourceType(rtId, 'B1 Role 3', 1, { allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: 2, allocationEndWeek: 6 })
       addPersistedProfile('cp-b1-3', {
         resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
-        planningBasis: 'DEMAND_FOLLOWING', source: 'DEMAND_FOLLOWING',
-        defaultPercent: 100, startWeek: 2, endWeek: 6,
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+        defaultPercent: 100, startWeek: null, endWeek: null,
       })
 
       const res = await request(app)
@@ -2533,8 +2770,8 @@ describe('persisted capacity-profile DTO integration', () => {
       addResourceType(rtId, 'B1 Role 4', 1, { allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 12 })
       addPersistedProfile('cp-b1-4', {
         resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
-        planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'WHOLE_PROJECT_ALLOCATION',
-        defaultPercent: 100, startWeek: 1, endWeek: 12,
+        planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'FIXED',
+        defaultPercent: 100, startWeek: null, endWeek: null,
       })
 
       const res = await request(app)
@@ -2558,14 +2795,14 @@ describe('persisted capacity-profile DTO integration', () => {
       // differ from the legacy fields (to prove preservation, not rewrite).
       addPersistedProfile('cp-b2-1', {
         resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
-        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER',
         defaultPercent: 90, startWeek: null, endWeek: null,
       })
       // Manually add segments (addPersistedProfile doesn't create segments)
       const now = new Date()
       storeRef.current.capacitySegments.push(
-        { id: 'seg-b2-1a', capacityProfileId: 'cp-b2-1', startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
-        { id: 'seg-b2-1b', capacityProfileId: 'cp-b2-1', startWeek: 5, endWeek: 8, capacityPercent: 80, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+        { id: 'seg-b2-1a', capacityProfileId: 'cp-b2-1', startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: now, updatedAt: now },
+        { id: 'seg-b2-1b', capacityProfileId: 'cp-b2-1', startWeek: 5, endWeek: 8, capacityPercent: 80, source: 'SQUAD_PLANNER', createdAt: now, updatedAt: now },
       )
 
       const res = await request(app)
@@ -2614,13 +2851,13 @@ describe('persisted capacity-profile DTO integration', () => {
       })
       addPersistedProfile('cp-nr-b3-1', {
         resourceTypeId: null, namedResourceId: 'nr-b3-1', ownerKind: 'NAMED_PERSON',
-        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER',
         defaultPercent: 60, startWeek: null, endWeek: null,
       })
       const now = new Date()
       storeRef.current.capacitySegments.push(
-        { id: 'seg-b3-1a', capacityProfileId: 'cp-nr-b3-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
-        { id: 'seg-b3-1b', capacityProfileId: 'cp-nr-b3-1', startWeek: 4, endWeek: 4, capacityPercent: 50, source: 'CAPACITY_PLAN', createdAt: now, updatedAt: now },
+        { id: 'seg-b3-1a', capacityProfileId: 'cp-nr-b3-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: now, updatedAt: now },
+        { id: 'seg-b3-1b', capacityProfileId: 'cp-nr-b3-1', startWeek: 4, endWeek: 4, capacityPercent: 50, source: 'SQUAD_PLANNER', createdAt: now, updatedAt: now },
       )
 
       // Capacity PUT on the RT
@@ -2660,12 +2897,12 @@ describe('persisted capacity-profile DTO integration', () => {
       })
       addPersistedProfile('cp-nr-b3-2', {
         resourceTypeId: null, namedResourceId: 'nr-b3-2', ownerKind: 'NAMED_PERSON',
-        planningBasis: 'CAPACITY_PROFILE', source: 'CAPACITY_PLAN',
+        planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER',
         defaultPercent: 60, startWeek: null, endWeek: null,
       })
       const now2 = new Date()
       storeRef.current.capacitySegments.push(
-        { id: 'seg-b3-2a', capacityProfileId: 'cp-nr-b3-2', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: now2, updatedAt: now2 },
+        { id: 'seg-b3-2a', capacityProfileId: 'cp-nr-b3-2', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: now2, updatedAt: now2 },
       )
 
       // Non-capacity PUT on the RT
@@ -2697,7 +2934,12 @@ describe('persisted capacity-profile DTO integration', () => {
 
     it('count-only exit from CAPACITY_PLAN without NRs writes TIMELINE role profile', async () => {
       const rtId = 'rt-cp-1'
-      addResourceType(rtId, 'Role CP1', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 })
+      addResourceType(rtId, 'Role CP1', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 }, {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [{ startWeek: 1, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+      })
 
       const res = await request(app)
         .put(`/api/projects/${projectId}/resource-types/${rtId}`)
@@ -2722,7 +2964,12 @@ describe('persisted capacity-profile DTO integration', () => {
 
     it('count-only exit from CAPACITY_PLAN with NRs writes TIMELINE role profile', async () => {
       const rtId = 'rt-cp-2'
-      addResourceType(rtId, 'Role CP2', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 })
+      addResourceType(rtId, 'Role CP2', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 }, {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [{ startWeek: 1, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+      })
       addNamedResource('nr-cp-2a', 'Person A', rtId, {
         allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
         allocationStartWeek: 1, allocationEndWeek: 10,
@@ -2761,7 +3008,7 @@ describe('persisted capacity-profile DTO integration', () => {
       addPersistedProfile('cp-stale-3', {
         resourceTypeId: rtId, namedResourceId: null, ownerKind: 'ROLE',
         planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER',
-        defaultPercent: 90, startWeek: 3, endWeek: 8,
+        defaultPercent: 90, startWeek: null, endWeek: null,
       })
       const now3 = new Date()
       storeRef.current.capacitySegments.push(
@@ -2782,7 +3029,11 @@ describe('persisted capacity-profile DTO integration', () => {
 
       expect(res.status).toBe(200)
       expect(res.body.allocationMode).toBe('TIMELINE')
-      expect(storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-stale-3')).toBeUndefined()
+      expect(storeRef.current.capacityProfiles.find((p: any) => p.id === 'cp-stale-3')).toMatchObject({
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100,
+      })
 
       const roleProfiles = storeRef.current.capacityProfiles.filter(
         (p: any) => p.resourceTypeId === rtId && p.namedResourceId === null,
@@ -2800,7 +3051,12 @@ describe('persisted capacity-profile DTO integration', () => {
       // update but the RT legacy fields reflect the exit default. This is accepted
       // because the exit semantics always produce TIMELINE+100+null windows.
       const rtId = 'rt-cp-4'
-      addResourceType(rtId, 'Role CP4', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 })
+      addResourceType(rtId, 'Role CP4', 0, { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: 1, allocationEndWeek: 10 }, {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [{ startWeek: 1, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+      })
       addNamedResource('nr-cp-4a', 'Person 4', rtId, {
         allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
         allocationStartWeek: 1, allocationEndWeek: 10,
@@ -2827,6 +3083,23 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(roleProfiles[0].planningBasis).toBe('AVAILABILITY_WINDOW')
       // Profile uses the exit value (100), not the request value (60)
       expect(roleProfiles[0].defaultPercent).toBe(100)
+    })
+
+    it('non-capacity RT PUT fails closed when the ROLE profile is missing', async () => {
+      const rtId = 'rt-role-missing'
+      addResourceType(rtId, 'Missing ROLE authority', 0, {}, null)
+      expect(storeRef.current.capacityProfiles.some((profile: any) => profile.resourceTypeId === rtId))
+        .toBe(false)
+      const before = JSON.parse(JSON.stringify(storeRef.current))
+
+      const response = await request(app)
+        .put(`/api/projects/${projectId}/resource-types/${rtId}`)
+        .set('Authorization', authHeader)
+        .send({ name: 'must not be written' })
+
+      expect(response.status).toBe(409)
+      expect(response.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
+      expect(JSON.parse(JSON.stringify(storeRef.current))).toEqual(before)
     })
   })
 
@@ -2889,9 +3162,8 @@ describe('persisted capacity-profile DTO integration', () => {
       const putNonCapB = await request(app)
         .put(`/api/projects/${projectId}/resource-types/${rtBId}`)
         .set('Authorization', authHeader)
-        .send({ name: 'RT B Renamed' })
+        .send({ name: 'RT B renamed' })
       expect(putNonCapB.status).toBe(200)
-      // RT A profiles and segments unchanged
       const afterNonCap = snapshotA()
       expect(JSON.stringify(beforeA.profiles)).toBe(JSON.stringify(afterNonCap.profiles))
       expect(JSON.stringify(beforeA.segments)).toBe(JSON.stringify(afterNonCap.segments))
@@ -2916,9 +3188,14 @@ describe('persisted capacity-profile DTO integration', () => {
         allocationPercent: 25,
         allocationStartWeek: 4,
         allocationEndWeek: 8,
+      }, {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 25,
+        segments: [{ startWeek: 4, endWeek: 8, capacityPercent: 25, source: 'SQUAD_PLANNER' }],
       })
 
-      // Inherited NR: matches CAPACITY_PLAN/25/W4-W8, no profile
+      // Inherited NR: valid profile plus compatibility matching the old ROLE projection
       addNamedResource(nrInhId, 'Patch Inherited', rtId, {
         allocationMode: 'CAPACITY_PLAN',
         allocationPercent: 25,
@@ -2938,18 +3215,18 @@ describe('persisted capacity-profile DTO integration', () => {
       addPersistedProfile('cp-seg-1', {
         namedResourceId: nrExpSegId,
         ownerKind: 'NAMED_PERSON',
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'EFFORT',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
         defaultPercent: 50,
-        startWeek: 3,
-        endWeek: 7,
+        startWeek: null,
+        endWeek: null,
         // Populated legacy field ensures protection derives from segments, not null-legacy
         legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8 },
       })
       const segNow = new Date()
       storeRef.current.capacitySegments.push(
-        { id: 'seg-explicit-1', capacityProfileId: 'cp-seg-1', startWeek: 3, endWeek: 5, capacityPercent: 100, source: 'EFFORT', createdAt: segNow, updatedAt: segNow },
-        { id: 'seg-explicit-2', capacityProfileId: 'cp-seg-1', startWeek: 6, endWeek: 7, capacityPercent: 50, source: 'EFFORT', createdAt: segNow, updatedAt: segNow },
+        { id: 'seg-explicit-1', capacityProfileId: 'cp-seg-1', startWeek: 3, endWeek: 5, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: segNow, updatedAt: segNow },
+        { id: 'seg-explicit-2', capacityProfileId: 'cp-seg-1', startWeek: 6, endWeek: 7, capacityPercent: 50, source: 'SQUAD_PLANNER', createdAt: segNow, updatedAt: segNow },
       )
 
       // Explicit NR: PLANNED_RESOURCE profile (backfilled)
@@ -2963,8 +3240,8 @@ describe('persisted capacity-profile DTO integration', () => {
       addPersistedProfile('cp-plan-1', {
         namedResourceId: nrExpPlanned,
         ownerKind: 'PLANNED_RESOURCE',
-        planningBasis: 'CAPACITY_PLAN',
-        source: 'CAPACITY_PLAN',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
         defaultPercent: 100,
       })
     })
@@ -2989,7 +3266,7 @@ describe('persisted capacity-profile DTO integration', () => {
         (p: any) => p.namedResourceId === nrExpSegId,
       )
       expect(segProfile).toBeDefined()
-      expect(segProfile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(segProfile!.planningBasis).toBe('CAPACITY_PROFILE')
       expect(segProfile!.defaultPercent).toBe(50)
 
       // Planned NR profile unchanged
@@ -3075,7 +3352,7 @@ describe('persisted capacity-profile DTO integration', () => {
         (p: any) => p.namedResourceId === nrExpSegId,
       )
       expect(segProfile).toBeDefined()
-      expect(segProfile!.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(segProfile!.planningBasis).toBe('CAPACITY_PROFILE')
       expect(segProfile!.defaultPercent).toBe(50)
 
       // ── Segments preserved byte-for-byte ────────────────────────────
@@ -3306,22 +3583,19 @@ describe('persisted capacity-profile DTO integration', () => {
   describe('12. Non-CAPACITY_PLAN role route integration', () => {
     const rtId = 'ncp-rt'
     const roleProfileId = 'ncp-role-pro'
-    const roleSeg1 = 'ncp-role-seg-1'
-    const roleSeg2 = 'ncp-role-seg-2'
-    const roleSeg3 = 'ncp-role-seg-3'
 
     beforeEach(() => {
       storeRef.current = createStore()
 
-      // ResourceType compatibility (stale — kept for legacy fallback)
+      // Deliberately stale ResourceType compatibility; the profile is authoritative.
       addResourceType(rtId, 'Non-CP RT', 2, {
         allocationMode: 'TIMELINE',
         allocationPercent: 72,
         allocationStartWeek: 1,
         allocationEndWeek: 12,
-      })
+      }, null)
 
-      // Role-owned non-CAPACITY_PLAN profile with segments (AVAILABILITY_WINDOW)
+      // Role-owned non-CAPACITY_PLAN scalar profile (AVAILABILITY_WINDOW)
       const now = new Date()
       storeRef.current.capacityProfiles.push({
         id: roleProfileId,
@@ -3338,11 +3612,6 @@ describe('persisted capacity-profile DTO integration', () => {
         createdAt: now,
         updatedAt: now,
       })
-      storeRef.current.capacitySegments.push(
-        { id: roleSeg1, capacityProfileId: roleProfileId, startWeek: 1, endWeek: 4, capacityPercent: 50, source: 'AVAILABILITY_WINDOW', createdAt: now, updatedAt: now },
-        { id: roleSeg2, capacityProfileId: roleProfileId, startWeek: 5, endWeek: 8, capacityPercent: 75, source: 'AVAILABILITY_WINDOW', createdAt: now, updatedAt: now },
-        { id: roleSeg3, capacityProfileId: roleProfileId, startWeek: 9, endWeek: 12, capacityPercent: 100, source: 'AVAILABILITY_WINDOW', createdAt: now, updatedAt: now },
-      )
 
       // Inherited NR: matches authoritative role default projection (TIMELINE/75/W1-W12)
       addNamedResource('ncp-nr-inh', 'Inherited', rtId, {
@@ -3355,7 +3624,7 @@ describe('persisted capacity-profile DTO integration', () => {
       addNamedResource(expNrId, 'Explicit', rtId, {
         allocationMode: 'TIMELINE', allocationPercent: 72, allocationPct: 72,
         allocationStartWeek: 1, allocationEndWeek: 12,
-      })
+      }, null)
       storeRef.current.capacityProfiles.push({
         id: 'ncp-exp-pro',
         projectId,
@@ -3365,6 +3634,7 @@ describe('persisted capacity-profile DTO integration', () => {
         source: 'FIXED',
         defaultPercent: 60,
         startWeek: null,
+        resourceTypeId: null,
         endWeek: null,
         legacy: { allocationMode: 'EFFORT', allocationPercent: 60, allocationPct: 60 },
         createdAt: now,
@@ -3373,7 +3643,7 @@ describe('persisted capacity-profile DTO integration', () => {
     })
 
     // ── Blocker 4: Multi-segment clone test ─────────────────────────────
-    it('non-CAPACITY_PLAN count increase clones role segments to new NR', async () => {
+    it('non-CAPACITY_PLAN count increase clones scalar role authority to new NRs', async () => {
       const res = await request(app)
         .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
         .set('Authorization', authHeader)
@@ -3394,17 +3664,6 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(rp.startWeek).toBe(1)
       expect(rp.endWeek).toBe(12)
 
-      // ── Role segment IDs unchanged ────────────────────────────────
-      const roleSegs = storeRef.current.capacitySegments
-        .filter((s: any) => s.capacityProfileId === roleProfileId)
-        .sort((a: any, b: any) => a.startWeek - b.startWeek)
-      expect(roleSegs.length).toBe(3)
-      expect(roleSegs[0].id).toBe(roleSeg1)
-      expect(roleSegs[0].capacityPercent).toBe(50)
-      expect(roleSegs[1].id).toBe(roleSeg2)
-      expect(roleSegs[1].capacityPercent).toBe(75)
-      expect(roleSegs[2].id).toBe(roleSeg3)
-      expect(roleSegs[2].capacityPercent).toBe(100)
 
       // ── New NR exists ─────────────────────────────────────────────
       const allNRs = storeRef.current.namedResources.filter((nr: any) => nr.resourceTypeId === rtId)
@@ -3439,33 +3698,9 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(nrp.startWeek).toBe(1)
       expect(nrp.endWeek).toBe(12)
 
-      // ── Cloned segments ───────────────────────────────────────────
-      const clonedSegs = storeRef.current.capacitySegments
-        .filter((s: any) => s.capacityProfileId === nrp.id)
-        .sort((a: any, b: any) => a.startWeek - b.startWeek)
-      expect(clonedSegs[0].capacityPercent).toBe(50)
-      expect(clonedSegs[0].startWeek).toBe(1)
-      expect(clonedSegs[0].endWeek).toBe(4)
-      expect(clonedSegs[1].capacityPercent).toBe(75)
-      expect(clonedSegs[1].startWeek).toBe(5)
-      expect(clonedSegs[1].endWeek).toBe(8)
-      expect(clonedSegs[2].capacityPercent).toBe(100)
-      expect(clonedSegs[2].startWeek).toBe(9)
-      expect(clonedSegs[2].endWeek).toBe(12)
-
-      // All cloned segment IDs differ from role segment IDs
-      expect(clonedSegs[0].id).not.toBe(roleSeg1)
-      expect(clonedSegs[1].id).not.toBe(roleSeg2)
-      expect(clonedSegs[2].id).not.toBe(roleSeg3)
-
-      // Every cloned segment references the cloned NR profile
-      clonedSegs.forEach((s: any) => expect(s.capacityProfileId).toBe(nrp.id))
 
 
-      // ── GET returns clone as named-person owned (legacy fallback, no segments) ──
-      // Note: legacy mapper skips role profiles when NRs exist, and the
-      // cloned profile has segments that cause reconciliation fallback,
-      // so segments are not included in the legacy-derived DTO.
+      // ── GET returns clone as named-person owned ───────────────────
       const getRes = await request(app)
         .get(`/api/projects/${projectId}/capacity-profiles`)
         .set('Authorization', authHeader)
@@ -3516,23 +3751,6 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(rp.startWeek).toBe(1)
       expect(rp.endWeek).toBe(12)
 
-      // Role segments unchanged
-      const roleSegs = storeRef.current.capacitySegments
-        .filter((s: any) => s.capacityProfileId === roleProfileId)
-        .sort((a: any, b: any) => a.startWeek - b.startWeek)
-      expect(roleSegs.length).toBe(3)
-      expect(roleSegs[0].id).toBe(roleSeg1)
-      expect(roleSegs[0].capacityPercent).toBe(50)
-      expect(roleSegs[0].startWeek).toBe(1)
-      expect(roleSegs[0].endWeek).toBe(4)
-      expect(roleSegs[1].id).toBe(roleSeg2)
-      expect(roleSegs[1].capacityPercent).toBe(75)
-      expect(roleSegs[1].startWeek).toBe(5)
-      expect(roleSegs[1].endWeek).toBe(8)
-      expect(roleSegs[2].id).toBe(roleSeg3)
-      expect(roleSegs[2].capacityPercent).toBe(100)
-      expect(roleSegs[2].startWeek).toBe(9)
-      expect(roleSegs[2].endWeek).toBe(12)
 
       // No duplicate role profile
       expect(
@@ -3581,7 +3799,7 @@ describe('persisted capacity-profile DTO integration', () => {
       addResourceType(rtId, 'Effort70 RT', 1, {
         allocationMode: 'TIMELINE',
         allocationPercent: 100,
-      })
+      }, null)
       addNamedResource('eff70-nr-1', 'Existing E70', rtId, {
         allocationMode: 'EFFORT', allocationPercent: 70, allocationPct: 70,
       })
@@ -3666,7 +3884,7 @@ describe('persisted capacity-profile DTO integration', () => {
         allocationPercent: 100,
         allocationStartWeek: 1,
         allocationEndWeek: 12,
-      })
+      }, null)
       addNamedResource('drift-a-nr-1', 'Drift A NR', rtId, {
         allocationMode: 'EFFORT', allocationPercent: 70, allocationPct: 70,
       })
@@ -3731,7 +3949,7 @@ describe('persisted capacity-profile DTO integration', () => {
       addResourceType(rtId, 'Drift B', 1, {
         allocationMode: 'EFFORT',
         allocationPercent: 100,
-      })
+      }, null)
       addNamedResource('drift-b-nr-1', 'Drift B NR', rtId, {
         allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100,
         allocationStartWeek: 2, allocationEndWeek: 4,
@@ -3744,7 +3962,7 @@ describe('persisted capacity-profile DTO integration', () => {
         namedResourceId: null,
         ownerKind: 'ROLE',
         planningBasis: 'CAPACITY_PROFILE',
-        source: 'CAPACITY_PLAN',
+        source: 'SQUAD_PLANNER',
         defaultPercent: 90,
         startWeek: null,
         endWeek: null,
@@ -3753,7 +3971,7 @@ describe('persisted capacity-profile DTO integration', () => {
         updatedAt: new Date(),
       })
       storeRef.current.capacitySegments.push(
-        { id: 'drift-b-seg-1', capacityProfileId: roleProfileId, startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'CAPACITY_PLAN', createdAt: new Date(), updatedAt: new Date() },
+        { id: 'drift-b-seg-1', capacityProfileId: roleProfileId, startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER', createdAt: new Date(), updatedAt: new Date() },
       )
 
       // PATCH same count (count=1) to trigger CAPACITY_PLAN detection
@@ -3799,7 +4017,7 @@ describe('persisted capacity-profile DTO integration', () => {
       addResourceType(rtId, 'Auth CP RT', 2, {
         allocationMode: 'EFFORT',
         allocationPercent: 100,
-      })
+      }, null)
 
       // Authoritative role profile: CAPACITY_PROFILE with multiple segments
       const now = new Date()
@@ -3833,17 +4051,18 @@ describe('persisted capacity-profile DTO integration', () => {
       addNamedResource(protNrId, 'Protected CP', rtId, {
         allocationMode: 'TIMELINE', allocationPercent: 60, allocationPct: 60,
         allocationStartWeek: 3, allocationEndWeek: 6,
-      })
+      }, null)
       storeRef.current.capacityProfiles.push({
         id: protProfId,
         projectId,
         namedResourceId: protNrId,
+        resourceTypeId: null,
         ownerKind: 'NAMED_PERSON',
-        planningBasis: 'AVAILABILITY_WINDOW',
+        planningBasis: 'CAPACITY_PROFILE',
         source: 'MANUAL',
         defaultPercent: 60,
-        startWeek: 3,
-        endWeek: 6,
+        startWeek: null,
+        endWeek: null,
         legacy: null,
         createdAt: now,
         updatedAt: now,
@@ -3970,7 +4189,7 @@ describe('persisted capacity-profile DTO integration', () => {
 
       addResourceType(rtId, 'CPGet RT', 1, {
         allocationMode: 'EFFORT', allocationPercent: 70,
-      })
+      }, null)
       addNamedResource('cp-get-nr-1', 'CPGet Existing', rtId, {
         allocationMode: 'EFFORT', allocationPercent: 70, allocationPct: 70,
       })
@@ -4049,8 +4268,8 @@ describe('persisted capacity-profile DTO integration', () => {
       })
       addPersistedProfile(guardCpId, {
         namedResourceId: guardNrId, ownerKind: 'NAMED_PERSON',
-        planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL',
-        defaultPercent: 50, startWeek: 2, endWeek: 8,
+        planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL',
+        defaultPercent: 50, startWeek: null, endWeek: null,
       })
       storeRef.current.capacitySegments.push(
         { id: 'cseg-guard-a', capacityProfileId: guardCpId, startWeek: 2, endWeek: 4, capacityPercent: 100, source: 'MANUAL', createdAt: new Date(), updatedAt: new Date() },
@@ -4124,7 +4343,7 @@ describe('persisted capacity-profile DTO integration', () => {
       // Profile unchanged
       const profile = storeRef.current.capacityProfiles.find((p: any) => p.id === guardCpId)
       expect(profile.defaultPercent).toBe(50)
-      expect(profile.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(profile.planningBasis).toBe('CAPACITY_PROFILE')
       expect(profile.ownerKind).toBe('NAMED_PERSON')
       // Segments unchanged (count and order)
       const segments = storeRef.current.capacitySegments.filter((s: any) => s.capacityProfileId === guardCpId)
@@ -4203,7 +4422,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(after).toEqual(before)
     })
 
-    it('capacity PUT on segmentless CAPACITY_PROFILE named person returns 409', async () => {
+    it('capacity PUT on segmentless CAPACITY_PROFILE named person fails intrinsic validation', async () => {
       const capProfNrId = 'nr-capacity-profile-1'
       const capProfCpId = 'cp-capacity-profile-1'
 
@@ -4224,7 +4443,7 @@ describe('persisted capacity-profile DTO integration', () => {
         .send({ allocationPercent: 80, startWeek: 1 })
 
       expect(res.status).toBe(409)
-      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+      expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
 
       const after = JSON.parse(JSON.stringify(storeRef.current))
       expect(after).toEqual(before)

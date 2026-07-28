@@ -5,8 +5,8 @@
  *
  * This is the single source of truth for the PATCH route's pre-mutation view:
  *   - Named resources and their capacity profiles (with segments)
- *   - The role-owned CapacityProfile, if present
- *   - Authoritative role default (profile first, legacy fallback)
+ *   - The required role-owned CapacityProfile
+ *   - Authoritative role default projected only from that profile
  *   - Inherited vs explicit NR classification
  *
  * @see classifyNRsForRoleUpdate.ts for classification rules
@@ -70,13 +70,9 @@ export interface SchedulingState {
 }
 
 /**
- * Determine whether the ResourceType is in CAPACITY_PLAN scheduling mode,
- * using the authoritative role-owned CapacityProfile first.
- *
- * Precedence:
- * 1. If a role-owned profile exists with CAPACITY_PROFILE planning basis → capacity plan
- * 2. Other role profile → NOT capacity plan (even if stale RT fields say CAPACITY_PLAN)
- * 3. No role profile → fall back to ResourceType.allocationMode
+ * Determine whether the ResourceType is in CAPACITY_PLAN scheduling mode from
+ * the required authoritative role-owned profile. Compatibility columns are
+ * never consulted.
  */
 export function resolveRoleSchedulingState(state: RTPatchState): SchedulingState {
   if (state.roleProfileRows.length > 0) {
@@ -84,8 +80,8 @@ export function resolveRoleSchedulingState(state: RTPatchState): SchedulingState
     const isCp = pp.planningBasis === 'CAPACITY_PROFILE' || pp.planningBasis === 'capacityProfile'
     return { isCapacityPlan: isCp }
   }
-  // Runtime path: no profile → not capacity plan (route-level fail-closed
-  // guards catch missing profiles before any mutation)
+  // Defensive only: resolveRTPatchState rejects a missing ROLE profile before
+  // this helper is called.
   return { isCapacityPlan: false }
 }
 
