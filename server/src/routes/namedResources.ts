@@ -293,7 +293,9 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const resource = await prisma.$transaction(async tx => {
       // ── 1. Validate the exact authoritative profile ───────────────
-      const nrProfile = await loadNamedResourceOwnerProfile(tx, projectId, id, 'NAMED_PERSON')
+      // For capacity updates, require NAMED_PERSON (mutable owner kind).
+      // For non-capacity updates, discover and allow any valid NR owner kind.
+      const nrProfile = await loadNamedResourceOwnerProfile(tx, projectId, id, hasCapacityInput ? 'NAMED_PERSON' as const : undefined)
 
       if (hasCapacityInput) {
         // ── 2. Reject protected profiles ──────────────────────────
@@ -364,7 +366,9 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           },
         })
       } else {
-        // Non-capacity writes still require valid NAMED_PERSON authority.
+        // Non-capacity writes update only the requested non-capacity fields
+        // while preserving the valid authoritative profile (NAMED_PERSON or
+        // PLANNED_RESOURCE). The profile and all segments remain untouched.
         await tx.namedResource.update({ where: { id }, data: nrData })
       }
 

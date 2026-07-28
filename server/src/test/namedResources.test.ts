@@ -411,6 +411,36 @@ describe('named-resource capacity guard', () => {
       expect(res.status).toBe(200)
       expect(tx.namedResource.update).toHaveBeenCalled()
     })
+
+    it('allows name-only PUT for PLANNED_RESOURCE profile', async () => {
+      const tx = await setupTx([makeNRProfile({ ownerKind: 'PLANNED_RESOURCE' })])
+
+      const res = await request(app)
+        .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+        .set('Authorization', authHeader)
+        .send({ name: 'Planned Resource Renamed' })
+
+      expect(res.status).toBe(200)
+      expect(tx.capacityProfile.update).not.toHaveBeenCalled()
+      expect(tx.namedResource.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { name: 'Planned Resource Renamed' } }),
+      )
+    })
+
+    it('allows pricing-only PUT for PLANNED_RESOURCE profile', async () => {
+      const tx = await setupTx([makeNRProfile({ ownerKind: 'PLANNED_RESOURCE' })])
+
+      const res = await request(app)
+        .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+        .set('Authorization', authHeader)
+        .send({ pricingModel: 'PRO_RATA' })
+
+      expect(res.status).toBe(200)
+      expect(tx.capacityProfile.update).not.toHaveBeenCalled()
+      expect(tx.namedResource.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ pricingModel: 'PRO_RATA' }) }),
+      )
+    })
   it('PATCH applies allocationPct-only updates to the authoritative profile', async () => {
     const tx = await setupTx([makeNRProfile({ defaultPercent: 25 })])
 
