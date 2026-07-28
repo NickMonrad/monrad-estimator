@@ -50,6 +50,10 @@ const PLANNING_BASIS_TO_ALLOCATION_MODE: Record<string, LegacyAllocationMode> = 
   AVAILABILITY_WINDOW: 'TIMELINE',
   WHOLE_PROJECT_ALLOCATION: 'FULL_PROJECT',
   CAPACITY_PROFILE: 'CAPACITY_PLAN',
+  demandFollowing: 'EFFORT',
+  availabilityWindow: 'TIMELINE',
+  wholeProjectAllocation: 'FULL_PROJECT',
+  capacityProfile: 'CAPACITY_PLAN',
 }
 
 function planningBasisToAllocationMode(basis: string): LegacyAllocationMode {
