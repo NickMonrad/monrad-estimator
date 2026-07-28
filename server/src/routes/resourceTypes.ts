@@ -397,6 +397,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
               defaultPercent: eff.defaultPercent,
               startWeek: eff.startWeek,
               endWeek: eff.endWeek,
+              legacy: {},
               segments: segs && segs.length > 0
                 ? { create: segs.map((seg: any) => ({
                     startWeek: seg.startWeek,
@@ -481,17 +482,70 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const rt = await prisma.resourceType.findFirst({
+    where: { id: req.params.id as string, projectId: req.params.projectId as string },
+  })
+  if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
+
   const count = await prisma.$transaction(async tx => {
+    // ── Validate exact ROLE profile before deletion ─────────────
+    await loadAndValidateOwnerProfile({
+      tx,
+      projectId: req.params.projectId as string,
+      ownerKind: 'ROLE',
+      ownerId: req.params.id as string,
+    })
+
+    // ── Load and validate every NamedResource profile ───────────
+    const nrs = await tx.namedResource.findMany({
+      where: { resourceTypeId: req.params.id as string },
+    })
+
+    for (const nr of nrs) {
+      const nrProfiles = await tx.capacityProfile.findMany({
+        where: { namedResourceId: nr.id, resourceTypeId: null, projectId: req.params.projectId as string },
+      })
+
+      if (nrProfiles.length === 0) {
+        throw new CapacityIntegrityError(
+          `Missing capacity profile for named resource ${nr.id}. ` +
+          'Run the capacity profile backfill/repair workflow before retrying this operation.',
+        )
+      }
+      if (nrProfiles.length > 1) {
+        throw new CapacityIntegrityError(
+          `Multiple capacity profiles exist for named resource ${nr.id}.`,
+        )
+      }
+
+      const profileOwnerKind = nrProfiles[0].ownerKind as string
+      if (profileOwnerKind !== 'NAMED_PERSON' && profileOwnerKind !== 'PLANNED_RESOURCE') {
+        throw new CapacityIntegrityError(
+          `Capacity profile ${nrProfiles[0].id} has invalid owner kind "${profileOwnerKind}".`,
+        )
+      }
+
+      await loadAndValidateOwnerProfile({
+        tx,
+        projectId: req.params.projectId as string,
+        ownerKind: profileOwnerKind,
+        ownerId: nr.id,
+      })
+    }
+
+    // ── All profiles validated — proceed with delete ──────────
     const deleted = await tx.resourceType.deleteMany({
       where: { id: req.params.id as string, projectId: req.params.projectId as string },
     })
+
     if (deleted.count > 0) {
       await clearWeeklyDemandCache(req.params.projectId as string, tx)
     }
     return deleted.count
   })
-  if (count === 0) { res.status(404).json({ error: 'Resource type not found' }); return }
 
+  if (count === 0) { res.status(404).json({ error: 'Resource type not found' }); return }
   res.json({ message: 'Deleted' })
 }))
 

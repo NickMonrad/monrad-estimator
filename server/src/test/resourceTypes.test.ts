@@ -503,8 +503,25 @@ describe('resource type manual scheduling regression', () => {
 describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
   it('deletes a resource type scoped to the project', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: 'rt-1', projectId: 'proj-1', name: 'Role', count: 1,
+    } as never)
     const tx = {
       resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      capacityProfile: {
+        findMany: vi.fn().mockImplementation((args: any) => {
+          if (args?.where?.resourceTypeId && args?.where?.namedResourceId === null) {
+            return Promise.resolve([{
+              id: 'cp-role-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
+              namedResourceId: null, planningBasis: 'DEMAND_FOLLOWING',
+              source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null,
+              projectId: 'proj-1', segments: [],
+            }])
+          }
+          return Promise.resolve([])
+        }),
+      },
+      namedResource: { findMany: vi.fn().mockResolvedValue([]) },
       project: { update: vi.fn().mockResolvedValue({}) },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -515,18 +532,18 @@ describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ message: 'Deleted' })
-    // Delete must be scoped to the project, not a bare primary-key delete
     expect(tx.resourceType.deleteMany).toHaveBeenCalledWith({
       where: { id: 'rt-1', projectId: 'proj-1' },
     })
   })
 
   it('returns 404 when the resource type belongs to another project (cross-tenant delete)', async () => {
-    // Caller owns proj-1, but rt-99 lives in another tenant's project, so the
-    // project-scoped deleteMany affects 0 rows.
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    // findFirst returns null → route returns 404 before transaction
     const tx = {
-      resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      resourceType: { deleteMany: vi.fn() },
+      capacityProfile: { findMany: vi.fn() },
+      namedResource: { findMany: vi.fn() },
       project: { update: vi.fn() },
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
@@ -537,9 +554,8 @@ describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
 
     expect(res.status).toBe(404)
     expect(res.body).toEqual({ error: 'Resource type not found' })
-    expect(tx.resourceType.deleteMany).toHaveBeenCalledWith({
-      where: { id: 'rt-99', projectId: 'proj-1' },
-    })
+    // Transaction never ran — no resourceType or cache operations
+    expect(tx.resourceType.deleteMany).not.toHaveBeenCalled()
   })
 })
 
