@@ -62,7 +62,7 @@ describe('resource type manual scheduling regression', () => {
             const nrProfiles = [
               { id: 'cp-inh-1', namedResourceId: 'nr-inh-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 25, startWeek: null, endWeek: null, segments: [], legacy: { allocationMode: 'EFFORT', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null } },
               { id: 'cp-cust-1', namedResourceId: 'nr-cust-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'AVAILABILITY_WINDOW', source: 'FIXED', defaultPercent: 50, startWeek: 3, endWeek: 7, segments: [] },
-              { id: 'cp-seg-1', namedResourceId: 'nr-seg-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: null, startWeek: null, endWeek: null, segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN' }] },
+              { id: 'cp-seg-1', namedResourceId: 'nr-seg-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: null, startWeek: null, endWeek: null, segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' }] },
               { id: 'cp-plan-1', namedResourceId: 'nr-plan-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'PLANNED_RESOURCE', planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL', defaultPercent: null, startWeek: null, endWeek: null, segments: [] },
             ]
             return Promise.resolve(nrProfiles.filter((p: any) => p.namedResourceId === nrId))
@@ -72,7 +72,7 @@ describe('resource type manual scheduling regression', () => {
             const nrProfiles = [
               { id: 'cp-inh-1', namedResourceId: 'nr-inh-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 25, startWeek: null, endWeek: null, segments: [], legacy: { allocationMode: 'EFFORT', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null } },
               { id: 'cp-cust-1', namedResourceId: 'nr-cust-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'AVAILABILITY_WINDOW', source: 'FIXED', defaultPercent: 50, startWeek: 3, endWeek: 7, segments: [] },
-              { id: 'cp-seg-1', namedResourceId: 'nr-seg-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: null, startWeek: null, endWeek: null, segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN' }] },
+              { id: 'cp-seg-1', namedResourceId: 'nr-seg-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: null, startWeek: null, endWeek: null, segments: [{ id: 'seg-1', capacityProfileId: 'cp-seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' }] },
               { id: 'cp-plan-1', namedResourceId: 'nr-plan-1', projectId: 'proj-1', resourceTypeId: null, ownerKind: 'PLANNED_RESOURCE', planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL', defaultPercent: null, startWeek: null, endWeek: null, segments: [] },
             ]
             return Promise.resolve(nrProfiles.filter((p: any) => where.namedResourceId.in.includes(p.namedResourceId)))
@@ -88,14 +88,13 @@ describe('resource type manual scheduling regression', () => {
       },
       namedResource: {
         findMany: vi.fn().mockResolvedValue([
-          // NR 1: inherited — matches role CAPACITY_PLAN/25 (no windows for CAPACITY_PROFILE), no persisted profile
-          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
-          // NR 2: custom legacy — TIMELINE/50/W3-7, differs from role
+          { id: 'nr-inh-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 0, allocationEndWeek: 10, startWeek: 0, endWeek: 10 },
+          // NR 2: custom — TIMELINE/50/W3-7, differs from role
           { id: 'nr-cust-1', allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: 100, allocationStartWeek: 3, allocationEndWeek: 7, startWeek: null, endWeek: null },
-          // NR 3: scalar match — matches role defaults, but has segmented profile
-          { id: 'nr-seg-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
-          // NR 4: scalar match — matches role defaults, but has PLANNED_RESOURCE profile
-          { id: 'nr-plan-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8, startWeek: null, endWeek: null },
+          // NR 3: CAPACITY_PROFILE with segments (protected)
+          { id: 'nr-seg-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+          // NR 4: PLANNED_RESOURCE (protected)
+          { id: 'nr-plan-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
         ]),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
@@ -999,7 +998,7 @@ describe('PATCH regression coverage', () => {
               {
                 id: 'cp-seg-1', namedResourceId: 'nr-seg-1',
                 ownerKind: 'NAMED_PERSON', segments: [
-                  { id: 'seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'CAPACITY_PLAN' },
+                  { id: 'seg-1', startWeek: 2, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
                 ],
                 legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8 },
               } as never,

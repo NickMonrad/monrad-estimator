@@ -46,10 +46,10 @@ export interface CapacityProfileLike {
 // ─── Mapping table: planning basis → allocation mode ─────────────────────────
 
 const PLANNING_BASIS_TO_ALLOCATION_MODE: Record<string, LegacyAllocationMode> = {
-  demandFollowing: 'EFFORT',
-  availabilityWindow: 'TIMELINE',
-  wholeProjectAllocation: 'FULL_PROJECT',
-  capacityProfile: 'CAPACITY_PLAN',
+  DEMAND_FOLLOWING: 'EFFORT',
+  AVAILABILITY_WINDOW: 'TIMELINE',
+  WHOLE_PROJECT_ALLOCATION: 'FULL_PROJECT',
+  CAPACITY_PROFILE: 'CAPACITY_PLAN',
 }
 
 function planningBasisToAllocationMode(basis: string): LegacyAllocationMode {
