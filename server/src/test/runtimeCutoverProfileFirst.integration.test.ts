@@ -352,8 +352,13 @@ describeIf('profile-first runtime cutover (#364)', () => {
   })
 
   it('9. count increase creates NAMED_PERSON profiles from authoritative ROLE state', async () => {
-    const testRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'asc' } })
-    const testRtId = testRt!.id
+    const testRt = await createRuntimeResourceType('Count Increase RT')
+    const testRtId = testRt.id as string
+    const existingNrs = await prisma.namedResource.findMany({
+      where: { resourceTypeId: testRtId },
+      select: { id: true },
+    })
+    const existingNrIds = new Set(existingNrs.map(nr => nr.id))
     const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
       where: { resourceTypeId: testRtId, namedResourceId: null, projectId },
     })
@@ -371,7 +376,10 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })
     expect(nrs.length).toBe(3)
 
-    for (const nr of nrs) {
+    const createdNrs = nrs.filter(nr => !existingNrIds.has(nr.id))
+    expect(createdNrs).toHaveLength(3 - existingNrs.length)
+
+    for (const nr of createdNrs) {
       const nrProfile = await prisma.capacityProfile.findFirst({
         where: { namedResourceId: nr.id, resourceTypeId: null, projectId },
       })
