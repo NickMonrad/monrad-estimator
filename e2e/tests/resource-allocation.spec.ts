@@ -318,7 +318,7 @@ async function seedSegmentedNamedPerson(page: Page, projectId: string, rtId: str
     // resourceTypeId must be NULL for NAMED_PERSON (enforced by CHECK constraint)
     await client.query(
       'INSERT INTO "CapacityProfile" (id, "projectId", "resourceTypeId", "namedResourceId", "ownerKind", "planningBasis", "source", "defaultPercent", "startWeek", "endWeek", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
-      [profileId, projectId, null, nrId, 'NAMED_PERSON', 'AVAILABILITY_WINDOW', 'MANUAL', 60, 3, 6, now, now],
+      [profileId, projectId, null, nrId, 'NAMED_PERSON', 'CAPACITY_PROFILE', 'MANUAL', 60, null, null, now, now],
     )
 
     // Two ordered CapacitySegment rows with deterministic IDs

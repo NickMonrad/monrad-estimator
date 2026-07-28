@@ -554,6 +554,15 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           defaultPercent: 100,
           startWeek: null,
           endWeek: null,
+          legacy: {
+            allocationMode: 'TIMELINE',
+            allocationPercent: 100,
+            allocationPct: 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            startWeek: null,
+            endWeek: null,
+          },
         },
       })
     }
