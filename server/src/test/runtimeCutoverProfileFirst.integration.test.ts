@@ -1121,7 +1121,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     const deleteNr = await request(app)
       .delete(`/api/projects/${projectId}/resource-types/${targetRt.id}/named-resources/${targetNr.id}`)
       .set('Authorization', authHeader)
-    expect(deleteNr.status).toBe(200)
+    expect(deleteNr.status).toBe(204)
     expect(await prisma.namedResource.findUnique({ where: { id: targetNr.id } })).toBeNull()
     expect(await prisma.capacityProfile.findUnique({ where: { id: targetNrProfile.id } })).toBeNull()
     expect(await prisma.capacitySegment.findUnique({ where: { id: targetNrSegment.id } })).toBeNull()

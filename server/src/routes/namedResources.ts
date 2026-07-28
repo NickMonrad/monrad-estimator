@@ -8,6 +8,7 @@ import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityP
 import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
+import type { OwnerProfileQuery } from '../lib/ownerProfileLoader.js'
 import { toLegacyAllocationPct } from '../lib/resolveRoleDefaultForMutation.js'
 import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 const router = Router({ mergeParams: true })
@@ -44,6 +45,30 @@ const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
     where: { id: projectId },
     data: { weeklyDemandCache: {} },
   })
+async function loadNamedResourceOwnerProfile(
+  tx: OwnerProfileQuery['tx'],
+  projectId: string,
+  namedResourceId: string,
+) {
+  const profiles = await tx.capacityProfile.findMany({
+    where: { projectId, namedResourceId, resourceTypeId: null },
+  })
+  const ownerKind = profiles[0]?.ownerKind
+  if (profiles.some((profile: { ownerKind: string }) => (
+    profile.ownerKind !== 'NAMED_PERSON' && profile.ownerKind !== 'PLANNED_RESOURCE'
+  ))) {
+    throw new CapacityIntegrityError(
+      `Named resource ${namedResourceId} has a capacity profile with the wrong owner kind. ` +
+      'Repair the profile before retrying this operation.',
+    )
+  }
+  return loadAndValidateOwnerProfile({
+    tx,
+    projectId,
+    ownerKind: ownerKind as 'NAMED_PERSON' | 'PLANNED_RESOURCE',
+    ownerId: namedResourceId,
+  })
+}
 
 // GET /projects/:projectId/resource-types/:rtId/named-resources
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -241,8 +266,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (has('allocationPercent') && has('allocationPct') && allocationPct !== allocationPercent) {
     res.status(400).json({ error: 'allocationPercent and allocationPct must represent the same value.' }); return
   }
-  // ── Pricing-model validation ───────────────────────────────────────────
-  if (has('pricingModel') && pricingModel !== undefined && pricingModel !== null && !VALID_PRICING_MODELS.includes(pricingModel as string)) {
+  if (has('pricingModel') && !VALID_PRICING_MODELS.includes(pricingModel as string)) {
     res.status(400).json({ error: `pricingModel must be one of: ${VALID_PRICING_MODELS.join(', ')}` }); return
   }
   if (has('allocationMode') && allocationMode !== undefined && allocationMode !== null && !['EFFORT', 'TIMELINE', 'FULL_PROJECT'].includes(allocationMode as string)) {
@@ -268,18 +292,14 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const resource = await prisma.$transaction(async tx => {
       // ── 1. Validate the exact authoritative profile ───────────────
-      const nrProfile = await loadAndValidateOwnerProfile({
-        tx,
-        projectId,
-        ownerKind: 'NAMED_PERSON',
-        ownerId: id,
-      })
+      const nrProfile = await loadNamedResourceOwnerProfile(tx, projectId, id)
 
       if (hasCapacityInput) {
         // ── 2. Reject protected profiles ──────────────────────────
         const hasSegments = nrProfile.segments.length > 0
         const isProtectedPlanningBasis = nrProfile.planningBasis === 'CAPACITY_PROFILE'
-        if (hasSegments || isProtectedPlanningBasis) {
+        const isPlannedResource = nrProfile.ownerKind === 'PLANNED_RESOURCE'
+        if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
           throw new ProfileManagedCapacityError(
             'This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.',
           )
@@ -308,7 +328,6 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         await tx.capacityProfile.update({
           where: { id: nrProfile.id },
           data: {
-            ownerKind: 'NAMED_PERSON',
             planningBasis: planningBasis as any,
             source: source as any,
             defaultPercent: percent,
@@ -409,17 +428,12 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const resource = await prisma.$transaction(async tx => {
       // ── 1. Validate the exact authoritative profile ───────────────
-      const nrProfile = await loadAndValidateOwnerProfile({
-        tx,
-        projectId,
-        ownerKind: 'NAMED_PERSON',
-        ownerId: id,
-      })
+      const nrProfile = await loadNamedResourceOwnerProfile(tx, projectId, id)
 
-      // ── 2. Reject protected profiles ─────────────────────────────
       const hasSegments = nrProfile.segments.length > 0
       const isProtectedPlanningBasis = nrProfile.planningBasis === 'CAPACITY_PROFILE'
-      if (hasSegments || isProtectedPlanningBasis) {
+      const isPlannedResource = nrProfile.ownerKind === 'PLANNED_RESOURCE'
+      if (hasSegments || isProtectedPlanningBasis || isPlannedResource) {
         throw new ProfileManagedCapacityError(
           'This resource has a protected weekly capacity profile and cannot be updated through scalar capacity fields.',
         )
@@ -446,7 +460,6 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       await tx.capacityProfile.update({
         where: { id: nrProfile.id },
         data: {
-          ownerKind: 'NAMED_PERSON',
           planningBasis: planningBasis as any,
           source: source as any,
           defaultPercent: percent,

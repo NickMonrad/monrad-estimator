@@ -411,6 +411,73 @@ describe('named-resource capacity guard', () => {
       expect(res.status).toBe(200)
       expect(tx.namedResource.update).toHaveBeenCalled()
     })
+  it('PATCH applies allocationPct-only updates to the authoritative profile', async () => {
+    const tx = await setupTx([makeNRProfile({ defaultPercent: 25 })])
+
+    const res = await request(app)
+      .patch('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ allocationPct: 40 })
+
+    expect(res.status).toBe(200)
+    expect(tx.capacityProfile.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'cp-1' },
+        data: expect.objectContaining({ defaultPercent: 40 }),
+      }),
+    )
+    expect(tx.namedResource.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          allocationPercent: 40,
+          allocationPct: 40,
+        }),
+      }),
+    )
+  })
+
+  it.each(['ACTUAL_DAYS', 'PRO_RATA'])('accepts PUT pricing model %s', async pricingModel => {
+    const tx = await setupTx([makeNRProfile()])
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ pricingModel })
+
+    expect(res.status).toBe(200)
+    expect(tx.namedResource.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ pricingModel }) }),
+    )
+  })
+
+  it('rejects unsupported PUT pricing models before any transaction write', async () => {
+    const tx = await setupTx([makeNRProfile()])
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ pricingModel: 'MONTHLY' })
+
+    expect(res.status).toBe(400)
+    expect(tx.capacityProfile.update).not.toHaveBeenCalled()
+    expect(tx.namedResource.update).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
+  })
+
+  it('rejects scalar PUT updates for PLANNED_RESOURCE profiles', async () => {
+    const tx = await setupTx([makeNRProfile({ ownerKind: 'PLANNED_RESOURCE' })])
+
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ allocationPercent: 40 })
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+    expect(tx.capacityProfile.update).not.toHaveBeenCalled()
+    expect(tx.namedResource.update).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
+  })
   })
 })
 
