@@ -241,8 +241,10 @@ describeIf('profile-first runtime cutover (#364)', () => {
   })
 
   it('4. preserves NAMED_PERSON profile ID after scalar update', async () => {
-    const firstRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'asc' } })
-    const nr = await prisma.namedResource.findFirst({ where: { resourceTypeId: firstRt!.id } })
+    const nr = await prisma.namedResource.findFirst({
+      where: { resourceType: { projectId } },
+      orderBy: { id: 'asc' },
+    })
     expect(nr).toBeDefined()
     nrId = nr!.id
 
@@ -250,7 +252,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     expect(beforeId).toBeTruthy()
 
     await request(app)
-      .put(`/api/projects/${projectId}/resource-types/${firstRt!.id}/named-resources/${nrId}`)
+      .put(`/api/projects/${projectId}/resource-types/${nr!.resourceTypeId}/named-resources/${nrId}`)
       .set('Authorization', authHeader)
       .send({ allocationMode: 'EFFORT', allocationPercent: 50 })
 
