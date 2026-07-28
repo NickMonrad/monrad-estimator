@@ -20,6 +20,7 @@ vi.mock('../lib/prisma.js', async (importOriginal) => {
 })
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import { PrismaPg } from '@prisma/adapter-pg'
@@ -44,6 +45,7 @@ const PROJ_NAME = 'Runtime Cutover #364'
 
 let projectId: string
 let nrId: string
+let globalTypeId: string
 
 // ─── Setup ──────────────────────────────────────────────────────────
 
@@ -56,6 +58,14 @@ beforeAll(async () => {
     create: { email: USER_EMAIL, name: 'Test User', password: 'test-password' },
     update: {},
   })
+  const globalType = await prisma.globalResourceType.create({
+    data: {
+      name: `Runtime Cutover Role ${randomUUID()}`,
+      category: 'ENGINEERING',
+      defaultHoursPerDay: 7.6,
+    },
+  })
+  globalTypeId = globalType.id
   userId = user.id
   token = jwt.sign({ userId }, process.env.JWT_SECRET ?? 'test-secret')
   authHeader = `Bearer ${token}`
@@ -64,6 +74,9 @@ beforeAll(async () => {
 afterAll(async () => {
   if (projectId) {
     await prisma.project.delete({ where: { id: projectId } }).catch(() => {})
+  }
+  if (globalTypeId) {
+    await prisma.globalResourceType.delete({ where: { id: globalTypeId } }).catch(() => {})
   }
   await prisma.user.delete({ where: { email: USER_EMAIL } }).catch(() => {})
   await prisma.$disconnect()
