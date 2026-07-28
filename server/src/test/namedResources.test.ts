@@ -464,7 +464,7 @@ describe('named-resource capacity guard', () => {
     expect(tx.project.update).not.toHaveBeenCalled()
   })
 
-  it('rejects scalar PUT updates for PLANNED_RESOURCE profiles', async () => {
+  it('rejects scalar PUT updates for PLANNED_RESOURCE profiles as wrong-kind state', async () => {
     const tx = await setupTx([makeNRProfile({ ownerKind: 'PLANNED_RESOURCE' })])
 
     const res = await request(app)
@@ -473,7 +473,8 @@ describe('named-resource capacity guard', () => {
       .send({ allocationPercent: 40 })
 
     expect(res.status).toBe(409)
-    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
+    expect(res.body.error).toMatch(/Expected NAMED_PERSON.*found.*PLANNED_RESOURCE/)
     expect(tx.capacityProfile.update).not.toHaveBeenCalled()
     expect(tx.namedResource.update).not.toHaveBeenCalled()
     expect(tx.project.update).not.toHaveBeenCalled()

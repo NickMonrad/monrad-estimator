@@ -49,6 +49,7 @@ async function loadNamedResourceOwnerProfile(
   tx: OwnerProfileQuery['tx'],
   projectId: string,
   namedResourceId: string,
+  expectedOwnerKind?: 'NAMED_PERSON' | 'PLANNED_RESOURCE',
 ) {
   const profiles = await tx.capacityProfile.findMany({
     where: { projectId, namedResourceId, resourceTypeId: null },
@@ -65,7 +66,7 @@ async function loadNamedResourceOwnerProfile(
   return loadAndValidateOwnerProfile({
     tx,
     projectId,
-    ownerKind: ownerKind as 'NAMED_PERSON' | 'PLANNED_RESOURCE',
+    ownerKind: expectedOwnerKind ?? ownerKind as 'NAMED_PERSON' | 'PLANNED_RESOURCE',
     ownerId: namedResourceId,
   })
 }
@@ -292,7 +293,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const resource = await prisma.$transaction(async tx => {
       // ── 1. Validate the exact authoritative profile ───────────────
-      const nrProfile = await loadNamedResourceOwnerProfile(tx, projectId, id)
+      const nrProfile = await loadNamedResourceOwnerProfile(tx, projectId, id, 'NAMED_PERSON')
 
       if (hasCapacityInput) {
         // ── 2. Reject protected profiles ──────────────────────────
@@ -428,7 +429,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
     const resource = await prisma.$transaction(async tx => {
       // ── 1. Validate the exact authoritative profile ───────────────
-      const nrProfile = await loadNamedResourceOwnerProfile(tx, projectId, id)
+      const nrProfile = await loadNamedResourceOwnerProfile(tx, projectId, id, 'NAMED_PERSON')
 
       const hasSegments = nrProfile.segments.length > 0
       const isProtectedPlanningBasis = nrProfile.planningBasis === 'CAPACITY_PROFILE'
