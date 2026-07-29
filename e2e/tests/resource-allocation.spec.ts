@@ -646,7 +646,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(patHBox!.x + patHBox!.width).toBeLessThanOrEqual(avHBox!.x + 1)
 
     // Contextual help scrollWidth <= clientWidth (no overflow)
-    const helpText = rowLoc.getByText(/Work is assigned only when demand exists/i)
+    const helpText = rowLoc.getByText(/Assigned only when scheduled work requires this resource|Work is assigned only when demand exists/i)
     await expectElementToFit(helpText)
 
     // Row has no horizontal overflow
@@ -702,7 +702,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(patHBox!.x + patHBox!.width).toBeLessThanOrEqual(avHBox!.x + 1)
 
     // Contextual help fits
-    const helpText = rowLoc.getByText(/Work is assigned only when demand exists/i)
+    const helpText = rowLoc.getByText(/Assigned only when scheduled work requires this resource|Work is assigned only when demand exists/i)
     await expectElementToFit(helpText)
 
     // Row fits
@@ -738,7 +738,12 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
 
     await page.setViewportSize(VP_390)
 
-    const rtsResponse = await page.request.get(`${API_BASE}/api/projects/${projectId}/resource-types`)
+    const authToken = await page.evaluate(() => window.localStorage.getItem('token'))
+    expect(authToken).toBeTruthy()
+    const rtsResponse = await page.request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-types`,
+      { headers: { Authorization: `Bearer ${authToken}` } },
+    )
     expect(rtsResponse.ok(), 'resource type discovery failed').toBeTruthy()
     const rts = await rtsResponse.json() as Array<{ id: string; name: string }>
     const techLead = rts.find(rt => rt.name === 'Tech Lead')
@@ -827,7 +832,12 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     await quickSchedule(page)
     await expect(page.getByText(/\d+ features scheduled/i)).toBeVisible({ timeout: 15_000 })
 
-    const rtsResponse = await page.request.get(`${API_BASE}/api/projects/${projectId}/resource-types`)
+    const authToken = await page.evaluate(() => window.localStorage.getItem('token'))
+    expect(authToken).toBeTruthy()
+    const rtsResponse = await page.request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-types`,
+      { headers: { Authorization: `Bearer ${authToken}` } },
+    )
     expect(rtsResponse.ok(), 'resource type discovery failed').toBeTruthy()
     const rts = await rtsResponse.json() as Array<{ id: string; name: string }>
     const techLead = rts.find(rt => rt.name === 'Tech Lead')
