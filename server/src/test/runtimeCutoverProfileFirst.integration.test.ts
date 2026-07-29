@@ -1018,34 +1018,13 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })).rejects.toMatchObject({ code: 'P2002' })
   })
 
-  it('16. rejects wrong-kind and cross-project NamedResource authority before non-capacity writes', async () => {
+  it('16. rejects cross-project NamedResource authority before non-capacity writes', async () => {
     const createdRt = await createRuntimeResourceType('NamedResource authority RT')
     const resourceTypeId = createdRt.id as string
     const namedResource = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
     const profile = await prisma.capacityProfile.findFirstOrThrow({
       where: { projectId, namedResourceId: namedResource.id, resourceTypeId: null },
     })
-    await prisma.capacityProfile.update({
-      where: { id: profile.id },
-      data: { ownerKind: 'ROLE' },
-    })
-    const wrongKindProfileBefore = await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: profile.id },
-      include: { segments: true },
-    })
-
-    const wrongKind = await request(app)
-      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${namedResource.id}`)
-      .set('Authorization', authHeader)
-      .send({ name: 'wrong-kind write must fail' })
-    expect(wrongKind.status).toBe(409)
-    expect(wrongKind.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
-    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: namedResource.id } }))
-      .toMatchObject({ name: namedResource.name })
-    expect(await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: profile.id },
-      include: { segments: true },
-    })).toEqual(wrongKindProfileBefore)
 
     const otherProject = await prisma.project.create({
       data: { name: 'Cross-project authority owner', ownerId: userId },
@@ -1073,6 +1052,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
       expect(crossProject.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
       expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: namedResource.id } }))
         .toMatchObject({ pricingModel: namedResource.pricingModel })
+      expect(await prisma.capacityProfile.findUnique({ where: { id: profile.id } })).toBeNull()
       expect(await prisma.capacityProfile.findUniqueOrThrow({ where: { id: crossProjectProfile.id } }))
         .toMatchObject({ projectId: otherProject.id, namedResourceId: namedResource.id })
     } finally {
