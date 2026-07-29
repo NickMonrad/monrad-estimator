@@ -646,7 +646,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(patHBox!.x + patHBox!.width).toBeLessThanOrEqual(avHBox!.x + 1)
 
     // Contextual help scrollWidth <= clientWidth (no overflow)
-    const helpText = rowLoc.getByText(/Available at the selected percentage/i)
+    const helpText = rowLoc.getByText(/Work is assigned only when demand exists/i)
     await expectElementToFit(helpText)
 
     // Row has no horizontal overflow
@@ -702,7 +702,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(patHBox!.x + patHBox!.width).toBeLessThanOrEqual(avHBox!.x + 1)
 
     // Contextual help fits
-    const helpText = rowLoc.getByText(/Available at the selected percentage/i)
+    const helpText = rowLoc.getByText(/Work is assigned only when demand exists/i)
     await expectElementToFit(helpText)
 
     // Row fits
@@ -738,7 +738,13 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
 
     await page.setViewportSize(VP_390)
 
-    const nrTestId = await addNamedResourceSimple(page)
+    const rtsResponse = await page.request.get(`${API_BASE}/api/projects/${projectId}/resource-types`)
+    expect(rtsResponse.ok(), 'resource type discovery failed').toBeTruthy()
+    const rts = await rtsResponse.json() as Array<{ id: string; name: string }>
+    const techLead = rts.find(rt => rt.name === 'Tech Lead')
+    expect(techLead, 'Expected seeded Tech Lead resource type').toBeDefined()
+    const { nrId } = await seedSegmentedNamedPerson(page, projectId, techLead!.id, 'Responsive Alice')
+    const nrTestId = `named-resource-row-${nrId}`
     const rowLoc = page.getByTestId(nrTestId)
 
     // Mobile inline labels visible
@@ -747,17 +753,8 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     await expect(rowLoc.getByText('Avail from:')).toBeVisible()
     await expect(rowLoc.getByText('Avail to:')).toBeVisible()
 
-    // Switch to CAPACITY_PLAN to check View Resource Profile button
-    const nrSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
-    await expect(nrSelect).toBeVisible()
-    const patchResp = page.waitForResponse(
-      resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
-      { timeout: 10_000 },
-    )
-    await nrSelect.selectOption('CAPACITY_PLAN')
-    await patchResp
 
-    // Re-acquire select after PATCH settles
+    // Re-acquire the select after the profile-backed row is rendered.
     const mobileSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
     await expect(mobileSelect).toBeVisible()
     await expect(mobileSelect).toHaveValue('CAPACITY_PLAN')
@@ -830,18 +827,15 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     await quickSchedule(page)
     await expect(page.getByText(/\d+ features scheduled/i)).toBeVisible({ timeout: 15_000 })
 
-    const nrTestId = await addNamedResourceSimple(page)
+    const rtsResponse = await page.request.get(`${API_BASE}/api/projects/${projectId}/resource-types`)
+    expect(rtsResponse.ok(), 'resource type discovery failed').toBeTruthy()
+    const rts = await rtsResponse.json() as Array<{ id: string; name: string }>
+    const techLead = rts.find(rt => rt.name === 'Tech Lead')
+    expect(techLead, 'Expected seeded Tech Lead resource type').toBeDefined()
+    const { nrId } = await seedSegmentedNamedPerson(page, projectId, techLead!.id, 'Capacity Plan Alice')
+    const nrTestId = `named-resource-row-${nrId}`
     const rowLoc = page.getByTestId(nrTestId)
 
-    // Switch to CAPACITY_PLAN
-    const nrSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
-    await expect(nrSelect).toBeVisible()
-    const patchResp = page.waitForResponse(
-      resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
-      { timeout: 10_000 },
-    )
-    await nrSelect.selectOption('CAPACITY_PLAN')
-    await patchResp
 
     // ── Desktop (default viewport) ──
     // Varies by week help text visible

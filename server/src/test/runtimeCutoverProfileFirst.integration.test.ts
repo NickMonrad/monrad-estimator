@@ -1027,7 +1027,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })
     await prisma.capacityProfile.update({
       where: { id: profile.id },
-      data: { ownerKind: 'PLANNED_RESOURCE' },
+      data: { ownerKind: 'ROLE' },
     })
     const wrongKindProfileBefore = await prisma.capacityProfile.findUniqueOrThrow({
       where: { id: profile.id },

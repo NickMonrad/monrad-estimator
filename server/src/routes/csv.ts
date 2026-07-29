@@ -503,7 +503,23 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
   ]
   for (const rtName of newRtNames) {
     const newRt = await prisma.resourceType.create({
-      data: { name: rtName, category: 'ENGINEERING', count: 1, projectId },
+      data: {
+        name: rtName,
+        category: 'ENGINEERING',
+        count: 1,
+        projectId,
+        capacityProfiles: {
+          create: {
+            projectId,
+            ownerKind: 'ROLE',
+            planningBasis: 'AVAILABILITY_WINDOW',
+            source: 'AVAILABILITY_WINDOW',
+            defaultPercent: 100,
+            startWeek: null,
+            endWeek: null,
+          },
+        },
+      },
       select: { id: true, name: true, hoursPerDay: true },
     })
     rtByName.set(rtName.toLowerCase(), newRt)

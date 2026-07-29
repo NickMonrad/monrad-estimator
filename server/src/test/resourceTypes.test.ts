@@ -632,6 +632,78 @@ describe('DELETE /api/projects/:projectId/resource-types/:id', () => {
   })
 })
 
+  async function runDeleteWithProfiles(
+    roleProfiles: Array<Record<string, unknown>>,
+    namedProfiles: Array<Record<string, unknown>> = [],
+    namedResources: Array<{ id: string }> = [],
+  ) {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({
+      id: 'rt-1',
+      projectId: 'proj-1',
+      name: 'Role',
+      count: namedResources.length,
+    } as never)
+
+    const tx = {
+      capacityProfile: {
+        findMany: vi.fn().mockImplementation((args: any) => {
+          const where = args?.where ?? {}
+          if (where.resourceTypeId && where.namedResourceId === null) return Promise.resolve(roleProfiles)
+          if (typeof where.namedResourceId === 'string') {
+            return Promise.resolve(namedProfiles.filter(profile => profile.namedResourceId === where.namedResourceId))
+          }
+          return Promise.resolve([])
+        }),
+      },
+      namedResource: { findMany: vi.fn().mockResolvedValue(namedResources) },
+      resourceType: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      project: { update: vi.fn().mockResolvedValue({}) },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .delete('/api/projects/proj-1/resource-types/rt-1')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
+    expect(tx.resourceType.deleteMany).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
+  }
+
+  it('fails closed when the ROLE profile is missing', async () => {
+    await runDeleteWithProfiles([])
+  })
+
+  it('fails closed when duplicate ROLE profiles exist', async () => {
+    await runDeleteWithProfiles([roleProfile(), roleProfile({ id: 'cp-role-2' })])
+  })
+
+  it('fails closed when the ROLE profile has the wrong owner kind', async () => {
+    await runDeleteWithProfiles([roleProfile({ ownerKind: 'NAMED_PERSON' })])
+  })
+
+  it('fails closed when a NamedResource profile is missing', async () => {
+    await runDeleteWithProfiles([roleProfile()], [], [{ id: 'nr-1' }])
+  })
+
+  it('fails closed when duplicate NamedResource profiles exist', async () => {
+    await runDeleteWithProfiles(
+      [roleProfile()],
+      [namedProfile('nr-1'), namedProfile('nr-1', { id: 'cp-nr-duplicate' })],
+      [{ id: 'nr-1' }],
+    )
+  })
+
+  it('fails closed when a NamedResource profile has the wrong owner kind', async () => {
+    await runDeleteWithProfiles(
+      [roleProfile()],
+      [namedProfile('nr-1', { ownerKind: 'ROLE' })],
+      [{ id: 'nr-1' }],
+    )
+  })
+
 describe('weeklyDemandCache invalidation', () => {
 
   it('clears cache on POST resource type creation', async () => {

@@ -91,7 +91,55 @@ describe('POST /api/projects/:projectId/backlog/import-csv', () => {
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
     expect(prisma.$transaction).not.toHaveBeenCalled()
   })
+  it('creates a ROLE capacity profile for CSV-created resource types', async () => {
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.resourceType.create).mockResolvedValue({
+      id: 'rt-new',
+      name: 'Designer',
+      hoursPerDay: null,
+    } as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.$transaction).mockResolvedValueOnce({
+      epicsCreated: 0,
+      epicsUpdated: 0,
+      featuresCreated: 0,
+      featuresUpdated: 0,
+      storiesCreated: 0,
+      storiesUpdated: 0,
+      tasksCreated: 0,
+      tasksUpdated: 0,
+    } as never)
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/backlog/import-csv`)
+      .set('Authorization', authHeader)
+      .send({ rows: [{ resourceType: 'Designer', errors: [] }] })
+
+    expect(res.status).toBe(200)
+    expect(prisma.resourceType.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'Designer',
+        category: 'ENGINEERING',
+        count: 1,
+        projectId,
+        capacityProfiles: {
+          create: expect.objectContaining({
+            projectId,
+            ownerKind: 'ROLE',
+            planningBasis: 'AVAILABILITY_WINDOW',
+            source: 'AVAILABILITY_WINDOW',
+            defaultPercent: 100,
+            startWeek: null,
+            endWeek: null,
+          }),
+        },
+      }),
+      select: { id: true, name: true, hoursPerDay: true },
+    })
+  })
+
 })
+
 
 describe('POST /api/projects/:projectId/backlog/stage-csv', () => {
   beforeEach(() => {
