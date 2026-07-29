@@ -599,6 +599,13 @@ async function addNamedResourceSimple(page: Page): Promise<string> {
   const nrRow = counts.locator('[data-testid^="named-resource-row-"]').first()
   await expect(nrRow).toBeVisible({ timeout: 10_000 })
   const testId = await nrRow.getAttribute('data-testid')
+  const nrSelect = nrRow.locator('select[aria-label*="Availability pattern for"]')
+  const patchResp = page.waitForResponse(
+    resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
+    { timeout: 10_000 },
+  )
+  await nrSelect.selectOption('TIMELINE')
+  await patchResp
   expect(testId).toBeTruthy()
   return testId!
 }
@@ -750,7 +757,9 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(techLead, 'Expected seeded Tech Lead resource type').toBeDefined()
     const { nrId } = await seedSegmentedNamedPerson(page, projectId, techLead!.id, 'Responsive Alice')
     const nrTestId = `named-resource-row-${nrId}`
+    await page.reload()
     const rowLoc = page.getByTestId(nrTestId)
+    await expect(rowLoc).toBeVisible({ timeout: 15_000 })
 
     // Mobile inline labels visible
     await expect(rowLoc.getByText('Pattern:')).toBeVisible()
@@ -844,7 +853,9 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(techLead, 'Expected seeded Tech Lead resource type').toBeDefined()
     const { nrId } = await seedSegmentedNamedPerson(page, projectId, techLead!.id, 'Capacity Plan Alice')
     const nrTestId = `named-resource-row-${nrId}`
+    await page.reload()
     const rowLoc = page.getByTestId(nrTestId)
+    await expect(rowLoc).toBeVisible({ timeout: 15_000 })
 
 
     // ── Desktop (default viewport) ──
