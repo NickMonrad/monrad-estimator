@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, createProject, quickSchedule } from './helpers'
+import { login, createProject, quickSchedule, API_BASE } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'

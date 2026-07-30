@@ -2,58 +2,58 @@
  * capacityProfileTransferService.ts — Atomic ownership transfer from
  * Squad Planner to manual capacity management.
  *
- * Uses the repository's strict owner-profile validation contract before
- * any mutation. Every transferred profile (ROLE and PLANNED_RESOURCE) is
- * validated for exact project/FK shape, owner kind, planning basis, source,
- * default percentage, windows, segment structure, and segment source.
+ * ## Strict validation
  *
- * After transfer:
- * - Transferred PLANNED_RESOURCE profiles become zero-capacity identity
- *   placeholders (segments cleared, defaultPercent=0, null windows).
- *   The ROLE profile is the sole scheduling authority.
- * - Profile sources are updated to MANUAL (both profile and existing segments).
- * - Profile IDs and segment IDs are preserved.
- * - Zero-capacity PLANNED_RESOURCE placeholders are valid under the
- *   existing persisted profile validator (extended to accept MANUAL source).
- * - Protected NAMED_PERSON profiles remain untouched.
+ * Before any write, every owner (ROLE and each NamedResource) is loaded
+ * and strictly validated via `loadAndValidateOwnerProfile`. This checks
+ * project FK shape, owner kind, planning basis, source, percentages,
+ * windows, segment structure, segment sources, duplicates, and overlaps.
  *
- * ## Capacity-authority rule
+ * Validation of ALL owners completes before the first write.
  *
- * After transfer, the ROLE profile is the sole capacity representation.
- * PLANNED_RESOURCE profiles contribute identity only (not independent
- * scheduling capacity). This ensures:
- * - Effective scheduler capacity is identical before and after transfer.
- * - Role-level #363 manual edits flow through to Timeline.
- * - No double-counting between aggregate and per-resource capacity.
+ * ## Post-transfer capacity-authority rule
+ *
+ * After transfer, the ROLE profile (source=MANUAL, planningBasis=CAPACITY_PROFILE)
+ * is the role-level scheduling authority. Its subordinate PLANNED_RESOURCE
+ * profiles retain their identities and transferred segment data but must
+ * not independently contribute capacity while the manual ROLE profile is
+ * authoritative. See schedulerCapacityResolver.ts for the enforcement rule.
+ *
+ * ## Preservation guarantees
+ *
+ * - ROLE profile: source → MANUAL, segments preserved.
+ * - PLANNED_RESOURCE profiles: source → MANUAL, ALL segment IDs, boundaries,
+ *   percentages, and ordering preserved (canonical zero-capacity profiles
+ *   with zero segments remain valid zero-segment MANUAL state).
+ * - All profile IDs, resource IDs, owner kinds preserved.
+ * - Protected NAMED_PERSON profiles untouched.
  *
  * @module
  */
 
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import { validatePlannerOwnerState } from './squadPlannerProfileWriter.js'
+import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
 import type { PrismaClient } from '@prisma/client'
+
+/** Test-only failure seam — fires after all writes but before transaction commit. */
+export let __transferFailureSeam: (() => void) | null = null
+export function __setTransferFailureSeam(fn: (() => void) | null): void {
+  __transferFailureSeam = fn
+}
 
 /** Inferred Prisma transaction client type. */
 type TxClient = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0]
 
-// ─── Public types ────────────────────────────────────────────────────────────
-
 export interface TransferResult {
-  /** Number of profiles whose source was changed from SQUAD_PLANNER to MANUAL. */
   profilesTransferred: number
-  /** Number of planner-created PLANNED_RESOURCE profiles transferred. */
   plannedResourceProfilesTransferred: number
-  /** Whether the role-level profile was transferred. */
   roleProfileTransferred: boolean
-  /** IDs of profiles left untouched because they were not planner-owned. */
   protectedProfileIds: string[]
 }
 
-// ─── Error helper ────────────────────────────────────────────────────────────
-
 export class TransferError extends Error {
   public readonly status: number
-
   constructor(status: number, message: string) {
     super(message)
     this.name = 'TransferError'
@@ -61,36 +61,28 @@ export class TransferError extends Error {
   }
 }
 
-// ─── Transfer command ────────────────────────────────────────────────────────
+function asTransferError(err: unknown): TransferError {
+  if (err instanceof TransferError) return err
+  const message = err instanceof Error ? err.message : 'Transfer failed'
+  return new TransferError(409, message)
+}
 
 /**
  * Transfer a Squad Planner-managed role to manual capacity ownership.
+ * Atomic — completes entirely or rolls back completely.
  *
- * The transfer is atomic — it either completes for the entire role or
- * rolls back with no partial state.
- *
- * Pre-validation (before any write):
- * 1. Project ownership
- * 2. Resource type belongs to project
- * 3. Load ALL profiles for this role (ROLE + named resource profiles)
- * 4. Run the strict `validatePlannerOwnerState` check — any malformed,
- *    duplicate, or conflicting ownership blocks the transfer
- * 5. Classify each profile as planner-owned (to transfer) or protected (to skip)
- * 6. Validate profile FK shape, owner kind, planning basis, source, segments
+ * Pre-validation (before writes):
+ * 1. Project ownership + resource type verification
+ * 2. loadAndValidateOwnerProfile for the ROLE owner
+ * 3. loadAndValidateOwnerProfile for EVERY named-resource owner
+ * 4. validatePlannerOwnerState as additional planner-specific preflight
  *
  * Transfer (atomic):
- * 1. Update profile source to MANUAL
- * 2. Update all segment sources to MANUAL
+ * 1. Update ROLE profile source → MANUAL, update segment sources → MANUAL
+ * 2. Update each planner-created profile source → MANUAL, update segment sources → MANUAL
  * 3. Update legacy compatibility projections
- * 4. Update legacy metadata
+ * 4. Write legacy metadata
  * 5. Invalidate weekly demand cache
- *
- * @param tx              Prisma transaction client
- * @param projectId       Project ID
- * @param resourceTypeId  ResourceType ID (the role to transfer)
- * @param userId          Authenticated user ID (for ownership check)
- * @returns               TransferResult with counts of transferred profiles
- * @throws TransferError  On validation failure or conflicting state
  */
 export async function transferToManualCapacity(
   tx: TxClient,
@@ -146,50 +138,41 @@ export async function transferToManualCapacity(
     throw new TransferError(409, `No capacity profiles found for resource type "${resourceType.name}"`)
   }
 
-  // ── 3. STRICT PRE-VALIDATION — fail closed before any write ──────────
-  // Use the repository's existing strict planner-owner-state validator.
-  // This checks every profile for exact ownership shape, FK consistency,
-  // duplicate owners, planning basis, source validity, and segment structure.
-  const ownershipConflicts = await validatePlannerOwnerState(
-    tx,
-    projectId,
-    resourceTypeId,
-  )
-
-  if (ownershipConflicts.length > 0) {
-    const detail = ownershipConflicts
-      .map(c => c.namedResourceName ? `"${c.namedResourceName}"` : c.resourceTypeName)
-      .join(', ')
-    throw new TransferError(
-      409,
-      `Invalid planner ownership for resource type "${resourceType.name}": ${detail}. ` +
-      'Repair required before transfer.',
-    )
-  }
-
-  // ── 4. Classify profiles ─────────────────────────────────────────────
+  // ── 3. STRICT PRE-VALIDATION — loadAndValidateOwnerProfile for EVERY owner ──
+  // 3a. Find the ROLE profile
   const roleProfiles = allProfiles.filter(
     p => p.resourceTypeId === resourceTypeId && p.namedResourceId === null && p.ownerKind === 'ROLE',
   )
-  const resourceProfiles = allProfiles.filter(
-    p => p.namedResourceId !== null && namedResourceIds.includes(p.namedResourceId!),
-  )
-
   if (roleProfiles.length === 0) {
     throw new TransferError(409, `No role-level capacity profile found for resource type "${resourceType.name}"`)
   }
   if (roleProfiles.length > 1) {
     throw new TransferError(409, `Multiple role-level capacity profiles exist for resource type "${resourceType.name}" — repair required before transfer`)
   }
-
   const roleProfile = roleProfiles[0]
 
-  // Role profile must be Squad Planner-owned with valid structure
-  assertPlannerRoleProfile(roleProfile, resourceTypeId, resourceType.name)
+  // 3b. Strict validate the ROLE profile
+  try {
+    await loadAndValidateOwnerProfile({ tx, projectId, ownerKind: 'ROLE', ownerId: resourceTypeId })
+  } catch (err) {
+    throw asTransferError(err)
+  }
 
-  // Classify each resource profile
-  const plannerProfiles: typeof resourceProfiles = []
+  // 3c. The ROLE profile must be Squad Planner-owned
+  if (roleProfile.source !== 'SQUAD_PLANNER') {
+    throw new TransferError(
+      409,
+      `Role "${resourceType.name}" is not managed by Squad Planner. Current source: ${String(roleProfile.source)}. Only Squad Planner-managed roles can be transferred.`,
+    )
+  }
+
+  // 3d. Strict validate every NamedResource that has a profile
+  const resourceProfiles = allProfiles.filter(
+    p => p.namedResourceId !== null && namedResourceIds.includes(p.namedResourceId!),
+  )
   const protectedProfileIds: string[] = []
+  const plannerProfiles: typeof resourceProfiles = []
+  const seenNamedResourceIds = new Set<string>()
 
   for (const profile of resourceProfiles) {
     if (!profile.namedResourceId) {
@@ -197,19 +180,7 @@ export async function transferToManualCapacity(
       continue
     }
 
-    const classification = classifyTransferProfile(profile)
-
-    if (classification === 'planner_created' || classification === 'legacy_planner') {
-      plannerProfiles.push(profile)
-    } else {
-      protectedProfileIds.push(profile.id)
-    }
-  }
-
-  // ── 5. Validate no duplicate named-resource ownership ────────────────
-  const seenNamedResourceIds = new Set<string>()
-  for (const profile of resourceProfiles) {
-    if (!profile.namedResourceId) continue
+    // Reject duplicate named-resource owners
     if (seenNamedResourceIds.has(profile.namedResourceId)) {
       throw new TransferError(
         409,
@@ -217,11 +188,42 @@ export async function transferToManualCapacity(
       )
     }
     seenNamedResourceIds.add(profile.namedResourceId)
+
+    const expectedOwnerKind = profile.ownerKind as 'NAMED_PERSON' | 'PLANNED_RESOURCE'
+    if (expectedOwnerKind !== 'NAMED_PERSON' && expectedOwnerKind !== 'PLANNED_RESOURCE') {
+      throw new TransferError(409, `Profile ${profile.id} has invalid ownerKind "${String(profile.ownerKind)}"`)
+    }
+
+    // Strict validate via the owner-profile loader
+    try {
+      await loadAndValidateOwnerProfile({ tx, projectId, ownerKind: expectedOwnerKind, ownerId: profile.namedResourceId })
+    } catch (err) {
+      throw asTransferError(err)
+    }
+
+    const classification = classifyTransferProfile(profile)
+    if (classification === 'planner_created' || classification === 'legacy_planner') {
+      plannerProfiles.push(profile)
+    } else {
+      protectedProfileIds.push(profile.id)
+    }
   }
 
-  // ── 6. Perform the transfer ──────────────────────────────────────────
+  // 3e. Planner-specific ownership conflict preflight
+  const ownershipConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId)
+  if (ownershipConflicts.length > 0) {
+    const detail = ownershipConflicts
+      .map(c => c.namedResourceName ? `"${c.namedResourceName}"` : c.resourceTypeName)
+      .join(', ')
+    throw new TransferError(
+      409,
+      `Invalid planner ownership for resource type "${resourceType.name}": ${detail}. Repair required before transfer.`,
+    )
+  }
 
-  // 6a. Transfer role-level profile and its segments
+  // ── All pre-validation complete. Writes below are inside the transaction. ──
+
+  // ── 4. Transfer ROLE profile and its segments ─────────────────────────
   await tx.capacityProfile.update({
     where: { id: roleProfile.id },
     data: { source: 'MANUAL' },
@@ -234,45 +236,22 @@ export async function transferToManualCapacity(
     })
   }
 
-  // ── 6b. Transfer planner-created resource profiles -> zero-capacity identity placeholders
-  //
-  // After transfer, the ROLE profile is the sole scheduling authority.
-  // PLANNED_RESOURCE profiles retain their identity (profile IDs, owner kind
-  // PLANNED_RESOURCE) but are converted to zero-capacity placeholders:
-  // segments cleared, defaultPercent=0, null windows.
-  //
-  // This ensures:
-  // - scheduler capacity is represented exactly once (via ROLE segments);
-  // - role-level #363 manual edits flow through to Timeline;
-  // - planned placeholder identities are preserved;
-  // - no double-counting between aggregate and per-resource capacity.
-  //
-  // Canonical zero-capacity planned-resource state:
-  //   ownerKind=PLANNED_RESOURCE, source=MANUAL, planningBasis=CAPACITY_PROFILE
-  //   defaultPercent=0, startWeek=null, endWeek=null, segments=[]
+  // ── 5. Transfer planner-created resource profiles and their segments ──
   for (const profile of plannerProfiles) {
     await tx.capacityProfile.update({
       where: { id: profile.id },
-      data: {
-        source: 'MANUAL',
-        defaultPercent: 0,
-        startWeek: null,
-        endWeek: null,
-      },
+      data: { source: 'MANUAL' },
     })
-    // Delete existing segments so they don't contribute independent capacity
-    await tx.capacitySegment.deleteMany({
-      where: { capacityProfileId: profile.id },
-    })
+    if (profile.segments && profile.segments.length > 0) {
+      const segmentIds = profile.segments.map(s => s.id)
+      await tx.capacitySegment.updateMany({
+        where: { id: { in: segmentIds } },
+        data: { source: 'MANUAL' },
+      })
+    }
   }
 
-  // ── 7. Update legacy compatibility projections ───────────────────────
-  // The ROLE profile is the sole capacity authority. Its segments project
-  // to ResourceType legacy fields for backward compatibility.
-  //
-  // PLANNED_RESOURCE profiles are now zero-capacity placeholders (segments
-  // cleared, defaultPercent=0). Their NamedResource legacy fields reflect
-  // zero capacity and do not contribute to scheduler capacity.
+  // ── 6. Update legacy compatibility projections ───────────────────────
   const roleSegments = roleProfile.segments ?? []
   const roleProjection = projectCapacityProfileToLegacyAllocation({
     planningBasis: 'capacityProfile',
@@ -281,12 +260,9 @@ export async function transferToManualCapacity(
     startWeek: roleProfile.startWeek,
     endWeek: roleProfile.endWeek,
     segments: roleSegments.map(s => ({
-      startWeek: s.startWeek,
-      endWeek: s.endWeek,
-      capacityPercent: s.capacityPercent,
+      startWeek: s.startWeek, endWeek: s.endWeek, capacityPercent: s.capacityPercent,
     })),
   })
-
   if (roleProjection) {
     await tx.resourceType.update({
       where: { id: resourceTypeId },
@@ -299,70 +275,58 @@ export async function transferToManualCapacity(
     })
   }
 
-  // 7b. Zero-capacity projection for transferred planned-resource profiles
   for (const profile of plannerProfiles) {
     if (!profile.namedResourceId) continue
 
-    // These profiles are now zero-capacity placeholders.
-    // Project the zero-capacity state to NamedResource legacy fields.
-    const zeroProjection = projectCapacityProfileToLegacyAllocation({
-      planningBasis: 'capacityProfile',
-      source: 'manual',
-      defaultPercent: 0,
-      startWeek: null,
-      endWeek: null,
-      segments: [],
-    })
-
-    if (zeroProjection) {
-      await tx.namedResource.update({
-        where: { id: profile.namedResourceId },
-        data: {
-          allocationMode: zeroProjection.allocationMode,
-          allocationPercent: 0,
-          allocationPct: 0,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
-        },
-      })
-    }
-  }
-
-  // ── 8. Update legacy metadata on transferred profiles ────────────────
-  await writeTransferLegacyMetadata(tx, roleProfile, roleProjection, roleSegments)
-
-  for (const profile of plannerProfiles) {
-    if (!profile.namedResourceId) continue
-    // Zero-capacity legacy metadata for transferred planned resources
-    await tx.capacityProfile.update({
-      where: { id: profile.id },
+    // Transferred planned resources project to zero legacy capacity.
+    // The ROLE profile is the scheduling authority; planned-resource
+    // legacy fields must not contribute independent capacity.
+    await tx.namedResource.update({
+      where: { id: profile.namedResourceId },
       data: {
-        legacy: {
-          version: 1,
-          writer: 'transfer-to-manual',
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 0,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          lossy: false,
-        } satisfies Record<string, unknown> as any,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 0,
+        allocationPct: 0,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
       },
     })
   }
 
-  // ── 9. Invalidate weekly demand cache ───────────────────────────────
+  // ── 7. Update legacy metadata on transferred profiles ────────────────
+  await writeTransferLegacyMetadata(tx, roleProfile, roleProjection, roleSegments)
+  for (const profile of plannerProfiles) {
+    if (!profile.namedResourceId) continue
+    const segs = profile.segments ?? []
+    const proj = projectCapacityProfileToLegacyAllocation({
+      planningBasis: 'capacityProfile',
+      source: 'manual',
+      defaultPercent: profile.defaultPercent,
+      startWeek: profile.startWeek,
+      endWeek: profile.endWeek,
+      segments: segs.map(s => ({
+        startWeek: s.startWeek, endWeek: s.endWeek, capacityPercent: s.capacityPercent,
+      })),
+    })
+    if (proj) await writeTransferLegacyMetadata(tx, profile, proj, segs)
+  }
+
+  // ── 8. Invalidate weekly demand cache ────────────────────────────────
   await tx.project.update({
     where: { id: projectId },
     data: { weeklyDemandCache: {} },
   })
 
+  // Test-only failure seam (fires after all writes, before commit)
+  if (__transferFailureSeam) {
+    __transferFailureSeam()
+  }
+
   return {
     profilesTransferred: 1 + plannerProfiles.length,
-    plannedResourceProfilesTransferred: plannerProfiles.filter(
-      p => p.ownerKind === 'PLANNED_RESOURCE',
-    ).length,
+    plannedResourceProfilesTransferred: plannerProfiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE').length,
     roleProfileTransferred: true,
     protectedProfileIds,
   }
@@ -372,95 +336,28 @@ export async function transferToManualCapacity(
 
 type ProfileClassification = 'planner_created' | 'legacy_planner' | 'protected'
 
-/**
- * Classify a named-resource capacity profile for transfer eligibility.
- *
- * - `planner_created`:  PLANNED_RESOURCE + SQUAD_PLANNER + CAPACITY_PROFILE
- * - `legacy_planner`:   NAMED_PERSON + SQUAD_PLANNER + CAPACITY_PROFILE
- * - `protected`:        Everything else (MANUAL, FIXED, NAMED_PERSON, etc.)
- */
-function classifyTransferProfile(
-  profile: {
-    ownerKind: string
-    source: string
-    planningBasis: string
-    namedResourceId: string | null
-    resourceTypeId: string | null
-  },
-): ProfileClassification {
+function classifyTransferProfile(profile: {
+  ownerKind: string; source: string; planningBasis: string
+  namedResourceId: string | null; resourceTypeId: string | null
+}): ProfileClassification {
   if (!profile.namedResourceId) return 'protected'
-
-  // Squad Planner-created PLANNED_RESOURCE profiles
   if (
     profile.ownerKind === 'PLANNED_RESOURCE'
     && profile.source === 'SQUAD_PLANNER'
     && profile.planningBasis === 'CAPACITY_PROFILE'
     && profile.resourceTypeId === null
-  ) {
-    return 'planner_created'
-  }
-
-  // Legacy Squad Planner-created NAMED_PERSON profiles
+  ) return 'planner_created'
   if (
     profile.ownerKind === 'NAMED_PERSON'
     && profile.source === 'SQUAD_PLANNER'
     && profile.planningBasis === 'CAPACITY_PROFILE'
     && profile.resourceTypeId === null
-  ) {
-    return 'legacy_planner'
-  }
-
+  ) return 'legacy_planner'
   return 'protected'
-}
-
-// ─── Role profile assertion ─────────────────────────────────────────────────
-
-/**
- * Assert that a ROLE profile has the exact expected Squad Planner shape.
- */
-function assertPlannerRoleProfile(
-  profile: {
-    ownerKind: string
-    source: string
-    planningBasis: string
-    resourceTypeId: string | null
-    namedResourceId: string | null
-  },
-  expectedResourceTypeId: string,
-  resourceTypeName: string,
-): void {
-  if (profile.ownerKind !== 'ROLE') {
-    throw new TransferError(
-      409,
-      `Role "${resourceTypeName}" role-level profile has invalid owner kind: expected ROLE, got ${String(profile.ownerKind)}`,
-    )
-  }
-  if (profile.source !== 'SQUAD_PLANNER') {
-    const sourceLabel = String(profile.source)
-    throw new TransferError(
-      409,
-      `Role "${resourceTypeName}" is not managed by Squad Planner. Current source: ${sourceLabel}. Only Squad Planner-managed roles can be transferred.`,
-    )
-  }
-  if (profile.planningBasis !== 'CAPACITY_PROFILE') {
-    throw new TransferError(
-      409,
-      `Role "${resourceTypeName}" role-level profile has invalid planning basis: expected CAPACITY_PROFILE, got ${String(profile.planningBasis)}`,
-    )
-  }
-  if (profile.resourceTypeId !== expectedResourceTypeId || profile.namedResourceId !== null) {
-    throw new TransferError(
-      409,
-      `Role "${resourceTypeName}" role-level profile has malformed foreign key ownership`,
-    )
-  }
 }
 
 // ─── Legacy metadata writer ─────────────────────────────────────────────────
 
-/**
- * Write transfer legacy metadata to a single profile.
- */
 async function writeTransferLegacyMetadata(
   tx: TxClient,
   profile: { id: string; defaultPercent?: number | null; startWeek?: number | null; endWeek?: number | null },

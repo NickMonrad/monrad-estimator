@@ -280,6 +280,28 @@ export async function resolveSchedulerCapacity(
     const namedResources: SchedulerNamedResource[] = rtNamedResources.map((nr: any) => {
       const nrProfile = profileMap.namedResourceProfiles.get(nr.id)
 
+      // After Squad Planner → manual transfer (issue #411):
+      // The ROLE profile is the sole scheduling authority. Transferred
+      // PLANNED_RESOURCE profiles retain their identity and segment data
+      // but must not contribute independent capacity while a valid MANUAL
+      // ROLE CAPACITY_PROFILE exists. Skip their profile segments and
+      // fall through to legacy compatibility fields.
+      const isTransferredPlannedResource = nrProfile?.resourceIdentity === 'PLANNED_RESOURCE' &&
+        nrProfile?.source === 'manual' &&
+        nrProfile?.resolutionSource === 'PROFILE' &&
+        roleProfile?.source === 'manual' &&
+        roleProfile?.planningBasis === 'capacityProfile' &&
+        roleProfileValid
+
+      if (isTransferredPlannedResource) {
+        // Fall through to legacy — the ROLE profile is the authority.
+        // Legacy fields were updated during transfer to reflect the
+        // Squad Planner state, maintaining capacity parity.
+        legacyCount++
+        nrSources.set(nr.id, 'LEGACY')
+        return buildLegacyNR(nr)
+      }
+
       // Profile-first: valid persisted profile
       if (nrProfile && nrProfile.resolutionSource === 'PROFILE') {
         const segments = profileDataToSchedulerSegments(nrProfile)
