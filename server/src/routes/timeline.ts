@@ -289,7 +289,9 @@ function buildResponse(
   const namedResourcesList = resourceTypes
     .filter(rt => rtNamesWithHours.has(rt.name))
     .flatMap(rt => (
-      namedResourceAssignments.get(rt.id)?.namedResources.map(namedResource => ({
+      namedResourceAssignments.get(rt.id)?.namedResources
+        .filter(nr => !(nr.synthetic && nr.id.endsWith('-role')))
+        .map(namedResource => ({
         id: namedResource.id,
         resourceTypeId: rt.id,
         resourceTypeName: rt.name,
@@ -397,7 +399,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const rtNameById = new Map(model.resourceTypeFacts.map(rt => [rt.id, rt.name]))
 
   const namedResourcesList = Array.from(model.namedResourceAssignments.entries()).flatMap(([rtId, assignment]) =>
-    assignment.namedResources.map(nr => ({
+    assignment.namedResources
+      .filter(nr => !(nr.synthetic && nr.id.endsWith('-role')))
+      .map(nr => ({
       id: nr.id,
       resourceTypeId: rtId,
       resourceTypeName: rtNameById.get(rtId) ?? '',
