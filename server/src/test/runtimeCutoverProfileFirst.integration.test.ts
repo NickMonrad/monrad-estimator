@@ -1828,9 +1828,9 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .set('Authorization', authHeader)
       .send({
         rows: [
-          { type: 'Epic', epic: 'CSV Planner Epic', errors: [], epicStatus: 'active' },
+          { type: 'Epic', epic: 'CSV Planner Epic', errors: [], epicStatus: true },
           { type: 'Feature', epic: 'CSV Planner Epic', feature: 'CSV Planner Feature', errors: [] },
-          { type: 'Story', epic: 'CSV Planner Epic', feature: 'CSV Planner Feature', story: 'CSV Planner Story', errors: [], storyStatus: 'active' },
+          { type: 'Story', epic: 'CSV Planner Epic', feature: 'CSV Planner Feature', story: 'CSV Planner Story', errors: [], storyStatus: true },
           { type: 'Task', epic: 'CSV Planner Epic', feature: 'CSV Planner Feature', story: 'CSV Planner Story', task: 'CSV Planner Task', resourceType: 'PlannerAdoptRT', hoursEffort: 8, durationDays: 1, errors: [] },
         ],
       })
