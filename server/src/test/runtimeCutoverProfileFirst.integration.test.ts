@@ -1842,6 +1842,14 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })
     const csvRtId = csvRt.id
 
+    // CSV import creates the RT but does not auto-create a default NR.
+    // Create one so the squad planner has a resource to plan for.
+    const nrResponse = await request(app)
+      .post(`/api/projects/${projectId}/resource-types/${csvRtId}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({})
+    expect(nrResponse.status).toBe(201)
+
     // Prove complete legacy provenance payload
     const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
       where: { projectId, resourceTypeId: csvRtId, namedResourceId: null },
