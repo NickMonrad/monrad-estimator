@@ -893,5 +893,36 @@ test.describe('Switch to manual capacity', () => {
     await expect(editorFinal.getByTestId('cp-seg-pct-0')).toHaveValue('50')
     await editorFinal.getByTestId('cp-cancel-btn').click()
     await expect(editorFinal).not.toBeVisible({ timeout: 5_000 })
+
+    // ── Navigate to Timeline and verify the edited capacity is reflected ──
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // Verify the timeline page loads without errors (capacity change propagated)
+    // The Developer resource type's capacity determines the schedule.
+    await expect(page.getByRole('button', { name: /Update timeline/i }).first()).toBeVisible({ timeout: 10_000 })
+
+    // ── Navigate back to Resource Profile and confirm still editable ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const devRowAfterNav = page.locator('tr').filter({ hasText: /Developer/i }).first()
+    await expect(devRowAfterNav).toBeVisible({ timeout: 15_000 })
+
+    // Confirm the role has not reverted to Squad Planner ownership
+    await expect(devRowAfterNav.getByTitle('Click to edit capacity profile')).toBeVisible({ timeout: 10_000 })
+    await expect(devRowAfterNav.getByText('Squad Planner')).not.toBeVisible()
+
+    // Open editor to confirm the edit survived navigation
+    await devRowAfterNav.getByTitle('Click to edit capacity profile').click()
+    const editorAfterNav = page.getByRole('dialog', { name: /edit capacity profile/i })
+    await expect(editorAfterNav).toBeVisible({ timeout: 8_000 })
+    await expect(editorAfterNav.getByTestId('cp-seg-pct-0')).toHaveValue('50')
+    await editorAfterNav.getByTestId('cp-cancel-btn').click()
+    await expect(editorAfterNav).not.toBeVisible({ timeout: 5_000 })
   })
 })

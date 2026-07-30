@@ -177,8 +177,18 @@ describe('loadAndValidateOwnerProfile', () => {
       })).rejects.toThrow(/no segments but segments are required/)
     })
 
-    it('4. rejects non-SQUAD_PLANNER source', async () => {
+    it('4. accepts canonical MANUAL source (transferred state)', async () => {
       const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, source: 'MANUAL' })])
+      const result = await loadAndValidateOwnerProfile({
+        tx, projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE', ownerId: 'nr-surplus',
+      })
+      expect(result.source).toBe('MANUAL')
+      expect(result.defaultPercent).toBe(0)
+      expect(result.segments).toEqual([])
+    })
+
+    it('4b. rejects non-SQUAD_PLANNER non-MANUAL source', async () => {
+      const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, source: 'FIXED' })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE', ownerId: 'nr-surplus',
       })).rejects.toThrow(/no segments but segments are required/)

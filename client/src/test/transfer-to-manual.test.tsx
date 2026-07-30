@@ -427,4 +427,172 @@ describe('Switch to manual capacity', () => {
     // At least one "Varies by week" element is shown (the editable badge)
     expect(screen.getAllByText('Varies by week').length).toBeGreaterThanOrEqual(1)
   })
+
+  describe('Dialog focus and keyboard lifecycle', () => {
+    function renderPlannerRole() {
+      const row = {
+        ...baseRow,
+        capacityProfile: {
+          id: 'cp-role-focus',
+          ownerKind: 'role' as const,
+          planningBasis: 'capacityProfile' as const,
+          source: 'squadPlanner' as const,
+          resolutionSource: 'PROFILE' as const,
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 11,
+          segments: [{ startWeek: 0, endWeek: 3, capacityPercent: 100 }],
+        },
+        namedResources: [],
+      }
+      return renderWithProviders(
+        <ResourceProfileTab
+          {...createProps({
+            profile: { ...baseProfile, resourceRows: [row] },
+            filteredResourceRows: [row],
+          })}
+          projectId="project-1"
+        />,
+      )
+    }
+
+    function openDialog() {
+      fireEvent.click(screen.getByTitle(/Transfer this role/))
+    }
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+    })
+
+    it('confirms confirm button receives initial focus when dialog opens', () => {
+      renderPlannerRole()
+      openDialog()
+
+      const dialog = screen.getByRole('dialog')
+      expect(dialog).toBeInTheDocument()
+
+      // The confirm button (primary action) should have focus
+      const confirmButton = within(dialog).getByRole('button', { name: /Switch to manual capacity/i })
+      expect(confirmButton).toHaveFocus()
+    })
+
+    it('sets accessible name via aria-labelledby linked to visible title', () => {
+      renderPlannerRole()
+      openDialog()
+
+      const dialog = screen.getByRole('dialog')
+      expect(dialog).toHaveAttribute('aria-labelledby', 'transfer-dialog-title')
+      const title = document.getElementById('transfer-dialog-title')
+      expect(title).toBeInTheDocument()
+      expect(title).toHaveTextContent('Switch to manual capacity?')
+    })
+
+    it('closes dialog on Escape when no mutation pending', () => {
+      renderPlannerRole()
+      openDialog()
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(vi.mocked(api.transferToManualCapacity)).not.toHaveBeenCalled()
+    })
+
+    it('restores focus to trigger button after cancel', () => {
+      renderPlannerRole()
+      const triggerButton = screen.getByTitle(/Transfer this role/)
+      triggerButton.focus()
+      openDialog()
+
+      // Cancel
+      const cancelButton = within(screen.getByRole('dialog')).getByText('Cancel')
+      fireEvent.click(cancelButton)
+
+      // Focus should return to trigger
+      expect(triggerButton).toHaveFocus()
+    })
+
+    it('prevents backdrop click dismissal while pending', async () => {
+      const mockTransfer = vi.mocked(api.transferToManualCapacity)
+      const { promise } = Promise.withResolvers<api.TransferToManualResult>()
+      mockTransfer.mockImplementation(() => promise)
+
+      renderPlannerRole()
+      openDialog()
+
+      // Confirm to start mutation
+      const dialog = screen.getByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: /Switch to manual capacity/i }))
+
+      // Wait for pending state
+      await waitFor(() => {
+        expect(within(dialog).getByText('Transferring…')).toBeDisabled()
+      })
+
+      // Backdrop click should NOT close while pending
+      fireEvent.click(dialog)
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    it('prevents Escape dismissal while pending', async () => {
+      const mockTransfer = vi.mocked(api.transferToManualCapacity)
+      const { promise } = Promise.withResolvers<api.TransferToManualResult>()
+      mockTransfer.mockImplementation(() => promise)
+
+      renderPlannerRole()
+      openDialog()
+
+      // Confirm to start mutation
+      const dialog = screen.getByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: /Switch to manual capacity/i }))
+
+      // Wait for pending state
+      await waitFor(() => {
+        expect(within(dialog).getByText('Transferring…')).toBeDisabled()
+      })
+
+      // Escape should NOT close while pending
+      fireEvent.keyDown(dialog, { key: 'Escape' })
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    it('retains dialog with actionable error after failed mutation', async () => {
+      const mockTransfer = vi.mocked(api.transferToManualCapacity)
+      mockTransfer.mockRejectedValue(new Error('Role is not managed by Squad Planner'))
+
+      renderPlannerRole()
+      openDialog()
+
+      const dialog = screen.getByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: /Switch to manual capacity/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/Role is not managed by Squad Planner/)).toBeInTheDocument()
+      })
+      // Dialog remains open with error
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    it('closes dialog after successful mutation', async () => {
+      const mockTransfer = vi.mocked(api.transferToManualCapacity)
+      mockTransfer.mockResolvedValue({
+        transferred: true,
+        result: {
+          profilesTransferred: 1,
+          plannedResourceProfilesTransferred: 0,
+          roleProfileTransferred: true,
+          protectedProfileIds: [],
+        },
+      })
+
+      renderPlannerRole()
+      openDialog()
+
+      const dialog = screen.getByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: /Switch to manual capacity/i }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      })
+    })
+  })
 })

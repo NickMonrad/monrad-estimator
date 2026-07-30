@@ -367,10 +367,12 @@ export async function loadAndValidateOwnerProfile(
   // Squad Planner intentionally persists surplus resources with
   // planningBasis=CAPACITY_PROFILE, defaultPercent=0, source=SQUAD_PLANNER,
   // null windows, and zero segments.
+  // After transfer to manual, the equivalent state with source=MANUAL
+  // is also valid (issue #411).
   if (planningBasis === 'CAPACITY_PROFILE' && segments.length === 0) {
     const isCanonicalZero = (
       ownerKind === 'PLANNED_RESOURCE' &&
-      profile.source === 'SQUAD_PLANNER' &&
+      (profile.source === 'SQUAD_PLANNER' || profile.source === 'MANUAL') &&
       profile.defaultPercent === 0 &&
       startWeek === null &&
       endWeek === null

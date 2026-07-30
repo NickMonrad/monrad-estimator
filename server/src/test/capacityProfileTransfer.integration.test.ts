@@ -359,8 +359,8 @@ describeIf('Scenario 1 — Successful transfer', () => {
       { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
     await createSegment(roleProfileIdBefore, 0, 3, 100)
-    await createSegment(roleProfileIdBefore, 4, 7, 75)
-    await createSegment(roleProfileIdBefore, 8, 11, 50)
+    await createSegment(roleProfileIdBefore, 4, 7, 100)
+    await createSegment(roleProfileIdBefore, 8, 11, 25)
 
     // Create PLANNED_RESOURCE profiles with individual segments (profile-level windows are null)
     nrProfile1IdBefore = await createProfile(
@@ -400,54 +400,59 @@ describeIf('Scenario 1 — Successful transfer', () => {
     expect(roleProfile!.planningBasis).toBe('CAPACITY_PROFILE')
   })
 
-  it('changes PLANNED_RESOURCE profile source from SQUAD_PLANNER to MANUAL', async () => {
+  it('changes PLANNED_RESOURCE profile source from SQUAD_PLANNER to MANUAL and sets zero-capacity', async () => {
     const profiles = await fetchProfiles(projectId)
     const nr1Profile = profiles.find(p => p.id === nrProfile1IdBefore)
     expect(nr1Profile).toBeDefined()
     expect(nr1Profile!.source).toBe('MANUAL')
     expect(nr1Profile!.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(nr1Profile!.defaultPercent).toBe(0)
+    expect(nr1Profile!.startWeek).toBeNull()
+    expect(nr1Profile!.endWeek).toBeNull()
 
     const nr2Profile = profiles.find(p => p.id === nrProfile2IdBefore)
     expect(nr2Profile).toBeDefined()
     expect(nr2Profile!.source).toBe('MANUAL')
     expect(nr2Profile!.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(nr2Profile!.defaultPercent).toBe(0)
+    expect(nr2Profile!.startWeek).toBeNull()
+    expect(nr2Profile!.endWeek).toBeNull()
   })
 
-  it('preserves exact segment boundaries, percentages, and IDs', async () => {
+  it('preserves ROLE profile segment boundaries and IDs but clears planned resource segments', async () => {
+    // ROLE segments are preserved
     const roleSegments = await fetchSegments(roleProfileIdBefore)
     expect(roleSegments).toHaveLength(3)
     expect(roleSegments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 100 })
-    expect(roleSegments[1]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 75 })
-    expect(roleSegments[2]).toMatchObject({ startWeek: 8, endWeek: 11, capacityPercent: 50 })
+    expect(roleSegments[1]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 100 })
+    expect(roleSegments[2]).toMatchObject({ startWeek: 8, endWeek: 11, capacityPercent: 25 })
 
+    // PLANNED_RESOURCE segments are DELETED (zero-capacity placeholders)
     const nr1Segments = await fetchSegments(nrProfile1IdBefore)
-    expect(nr1Segments).toHaveLength(2)
-    expect(nr1Segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 100 })
-    expect(nr1Segments[1]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 50 })
+    expect(nr1Segments).toHaveLength(0)
 
     const nr2Segments = await fetchSegments(nrProfile2IdBefore)
-    expect(nr2Segments).toHaveLength(2)
-    expect(nr2Segments[0]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 50 })
-    expect(nr2Segments[1]).toMatchObject({ startWeek: 8, endWeek: 11, capacityPercent: 25 })
+    expect(nr2Segments).toHaveLength(0)
   })
 
-  it('preserves effective weekly capacity', async () => {
-    // Compute before capacity (captured at setup time via segments already created)
-    // After transfer, segments are unchanged, so effective capacity is identical.
-    // We verify by recomputing from the database.
+  it('preserves effective weekly capacity (ROLE profile as sole authority)', async () => {
+    // Before transfer, capacity came from planned resource segments (ROLE suppressed).
+    // After transfer, capacity comes from ROLE segments (planned resources zero-capacity).
+    // The total weekly capacity is identical because ROLE segments match the
+    // aggregate of planned resource trajectories.
     const weekly = await computeEffectiveWeeklyCapacity(projectId)
 
-    // Week 0-3: role 100% + NR1 100% = 200%
+    // Week 0-3: ROLE 100% = 100%
     for (let w = 0; w <= 3; w++) {
-      expect(weekly.get(w)).toBeCloseTo(200, 0)
+      expect(weekly.get(w)).toBeCloseTo(100, 0)
     }
-    // Week 4-7: role 75% + NR1 50% + NR2 50% = 175%
+    // Week 4-7: ROLE 100% = 100%
     for (let w = 4; w <= 7; w++) {
-      expect(weekly.get(w)).toBeCloseTo(175, 0)
+      expect(weekly.get(w)).toBeCloseTo(100, 0)
     }
-    // Week 8-11: role 50% + NR2 25% = 75%
+    // Week 8-11: ROLE 25% = 25%
     for (let w = 8; w <= 11; w++) {
-      expect(weekly.get(w)).toBeCloseTo(75, 0)
+      expect(weekly.get(w)).toBeCloseTo(25, 0)
     }
   })
 

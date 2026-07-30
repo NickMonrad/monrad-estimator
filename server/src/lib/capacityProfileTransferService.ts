@@ -8,11 +8,23 @@
  * default percentage, windows, segment structure, and segment source.
  *
  * After transfer:
- * - Profile AND segment sources are updated to MANUAL.
+ * - Transferred PLANNED_RESOURCE profiles become zero-capacity identity
+ *   placeholders (segments cleared, defaultPercent=0, null windows).
+ *   The ROLE profile is the sole scheduling authority.
+ * - Profile sources are updated to MANUAL (both profile and existing segments).
  * - Profile IDs and segment IDs are preserved.
- * - Segment boundaries, percentages, ordering are preserved.
- * - Zero-capacity PLANNED_RESOURCE placeholders remain valid.
+ * - Zero-capacity PLANNED_RESOURCE placeholders are valid under the
+ *   existing persisted profile validator (extended to accept MANUAL source).
  * - Protected NAMED_PERSON profiles remain untouched.
+ *
+ * ## Capacity-authority rule
+ *
+ * After transfer, the ROLE profile is the sole capacity representation.
+ * PLANNED_RESOURCE profiles contribute identity only (not independent
+ * scheduling capacity). This ensures:
+ * - Effective scheduler capacity is identical before and after transfer.
+ * - Role-level #363 manual edits flow through to Timeline.
+ * - No double-counting between aggregate and per-resource capacity.
  *
  * @module
  */
@@ -222,22 +234,45 @@ export async function transferToManualCapacity(
     })
   }
 
-  // 6b. Transfer planner-created resource profiles and their segments
+  // ── 6b. Transfer planner-created resource profiles -> zero-capacity identity placeholders
+  //
+  // After transfer, the ROLE profile is the sole scheduling authority.
+  // PLANNED_RESOURCE profiles retain their identity (profile IDs, owner kind
+  // PLANNED_RESOURCE) but are converted to zero-capacity placeholders:
+  // segments cleared, defaultPercent=0, null windows.
+  //
+  // This ensures:
+  // - scheduler capacity is represented exactly once (via ROLE segments);
+  // - role-level #363 manual edits flow through to Timeline;
+  // - planned placeholder identities are preserved;
+  // - no double-counting between aggregate and per-resource capacity.
+  //
+  // Canonical zero-capacity planned-resource state:
+  //   ownerKind=PLANNED_RESOURCE, source=MANUAL, planningBasis=CAPACITY_PROFILE
+  //   defaultPercent=0, startWeek=null, endWeek=null, segments=[]
   for (const profile of plannerProfiles) {
     await tx.capacityProfile.update({
       where: { id: profile.id },
-      data: { source: 'MANUAL' },
+      data: {
+        source: 'MANUAL',
+        defaultPercent: 0,
+        startWeek: null,
+        endWeek: null,
+      },
     })
-    if (profile.segments && profile.segments.length > 0) {
-      const segmentIds = profile.segments.map(s => s.id)
-      await tx.capacitySegment.updateMany({
-        where: { id: { in: segmentIds } },
-        data: { source: 'MANUAL' },
-      })
-    }
+    // Delete existing segments so they don't contribute independent capacity
+    await tx.capacitySegment.deleteMany({
+      where: { capacityProfileId: profile.id },
+    })
   }
 
   // ── 7. Update legacy compatibility projections ───────────────────────
+  // The ROLE profile is the sole capacity authority. Its segments project
+  // to ResourceType legacy fields for backward compatibility.
+  //
+  // PLANNED_RESOURCE profiles are now zero-capacity placeholders (segments
+  // cleared, defaultPercent=0). Their NamedResource legacy fields reflect
+  // zero capacity and do not contribute to scheduler capacity.
   const roleSegments = roleProfile.segments ?? []
   const roleProjection = projectCapacityProfileToLegacyAllocation({
     planningBasis: 'capacityProfile',
@@ -264,34 +299,32 @@ export async function transferToManualCapacity(
     })
   }
 
+  // 7b. Zero-capacity projection for transferred planned-resource profiles
   for (const profile of plannerProfiles) {
     if (!profile.namedResourceId) continue
 
-    const segs = profile.segments ?? []
-    const projection = projectCapacityProfileToLegacyAllocation({
+    // These profiles are now zero-capacity placeholders.
+    // Project the zero-capacity state to NamedResource legacy fields.
+    const zeroProjection = projectCapacityProfileToLegacyAllocation({
       planningBasis: 'capacityProfile',
       source: 'manual',
-      defaultPercent: profile.defaultPercent,
-      startWeek: profile.startWeek,
-      endWeek: profile.endWeek,
-      segments: segs.map(s => ({
-        startWeek: s.startWeek,
-        endWeek: s.endWeek,
-        capacityPercent: s.capacityPercent,
-      })),
+      defaultPercent: 0,
+      startWeek: null,
+      endWeek: null,
+      segments: [],
     })
 
-    if (projection) {
+    if (zeroProjection) {
       await tx.namedResource.update({
         where: { id: profile.namedResourceId },
         data: {
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 100,
-          allocationPct: Math.round(projection.allocationPercent ?? 100),
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
-          startWeek: projection.allocationStartWeek,
-          endWeek: projection.allocationEndWeek,
+          allocationMode: zeroProjection.allocationMode,
+          allocationPercent: 0,
+          allocationPct: 0,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
         },
       })
     }
@@ -302,22 +335,21 @@ export async function transferToManualCapacity(
 
   for (const profile of plannerProfiles) {
     if (!profile.namedResourceId) continue
-    const segs = profile.segments ?? []
-    const proj = projectCapacityProfileToLegacyAllocation({
-      planningBasis: 'capacityProfile',
-      source: 'manual',
-      defaultPercent: profile.defaultPercent,
-      startWeek: profile.startWeek,
-      endWeek: profile.endWeek,
-      segments: segs.map(s => ({
-        startWeek: s.startWeek,
-        endWeek: s.endWeek,
-        capacityPercent: s.capacityPercent,
-      })),
+    // Zero-capacity legacy metadata for transferred planned resources
+    await tx.capacityProfile.update({
+      where: { id: profile.id },
+      data: {
+        legacy: {
+          version: 1,
+          writer: 'transfer-to-manual',
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 0,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          lossy: false,
+        } satisfies Record<string, unknown> as any,
+      },
     })
-    if (proj) {
-      await writeTransferLegacyMetadata(tx, profile, proj, segs)
-    }
   }
 
   // ── 9. Invalidate weekly demand cache ───────────────────────────────
@@ -450,3 +482,4 @@ async function writeTransferLegacyMetadata(
       } satisfies Record<string, unknown> as any,
     },
   })
+}
