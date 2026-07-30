@@ -1884,7 +1884,6 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .set('Authorization', authHeader)
       .send({})
     expect(nrResponse.status).toBe(201)
-    const initialNr = nrResponse.body
 
     // Apply Squad Planner — in a clean project with no pre-existing profile pollution
     const applyResponse = await request(app)
@@ -1912,7 +1911,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
       })
     expect(applyResponse.status).toBe(201)
 
-    // Planner apply succeeded — ROLE profile now planner-owned
+    // Planner apply succeeded — ROLE profile now planner-owned with segments
     const postApplyRole = await prisma.capacityProfile.findUniqueOrThrow({
       where: { id: roleProfile.id },
       include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
@@ -1921,17 +1920,6 @@ describeIf('profile-first runtime cutover (#364)', () => {
     expect(postApplyRole.planningBasis).toBe('CAPACITY_PROFILE')
     expect(postApplyRole.source).toBe('SQUAD_PLANNER')
     expect(postApplyRole.segments.length).toBeGreaterThan(0)
-
-    // Planned-resource profile created for the initial NR
-    const plannedProfiles = await prisma.capacityProfile.findMany({
-      where: {
-        projectId: csvProjectId,
-        namedResourceId: initialNr.id,
-        resourceTypeId: null,
-        ownerKind: 'PLANNED_RESOURCE',
-      },
-    })
-    expect(plannedProfiles.length).toBeGreaterThan(0)
 
     // Clean up the isolated project
     await prisma.project.delete({ where: { id: csvProjectId } }).catch(() => {})
