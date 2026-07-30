@@ -290,7 +290,6 @@ function buildResponse(
     .filter(rt => rtNamesWithHours.has(rt.name))
     .flatMap(rt => (
       namedResourceAssignments.get(rt.id)?.namedResources
-        .filter(nr => !(nr.synthetic && nr.id.endsWith('-role')))
         .map(namedResource => ({
         id: namedResource.id,
         resourceTypeId: rt.id,
@@ -314,6 +313,13 @@ function buildResponse(
         synthetic: namedResource.synthetic,
       })) ?? []
     ))
+
+  // Sort: actual named resources first, role synthetics last
+  namedResourcesList.sort((a, b) => {
+    const aRole = a.synthetic && a.id.endsWith('-role') ? 1 : 0
+    const bRole = b.synthetic && b.id.endsWith('-role') ? 1 : 0
+    return aRole - bRole
+  })
 
   return {
     projectId: project.id,
@@ -400,7 +406,6 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const namedResourcesList = Array.from(model.namedResourceAssignments.entries()).flatMap(([rtId, assignment]) =>
     assignment.namedResources
-      .filter(nr => !(nr.synthetic && nr.id.endsWith('-role')))
       .map(nr => ({
       id: nr.id,
       resourceTypeId: rtId,
@@ -422,6 +427,12 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       synthetic: nr.synthetic,
     }))
   )
+  // Sort: actual named resources first, role synthetics last
+  namedResourcesList.sort((a, b) => {
+    const aRole = a.synthetic && a.id.endsWith('-role') ? 1 : 0
+    const bRole = b.synthetic && b.id.endsWith('-role') ? 1 : 0
+    return aRole - bRole
+  })
 
   const projectStartDate = model.startDate ? new Date(model.startDate) : null
   res.json({
