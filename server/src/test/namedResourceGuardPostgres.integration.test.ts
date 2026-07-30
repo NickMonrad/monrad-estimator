@@ -112,6 +112,35 @@ beforeAll(async () => {
   })
   defaultRtId = defaultRt.id
 
+  // Keep both ResourceTypes in valid profile-first state. The second row's
+  // compatibility mode is deliberately stale and is not runtime authority.
+  await prisma.capacityProfile.createMany({
+    data: [
+      {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+      },
+      {
+        projectId,
+        resourceTypeId: defaultRtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+      },
+    ],
+  })
+
   // Seed a distinguishable weeklyDemandCache value that cannot be mistaken
   // for the default empty object — proves rejected requests preserve it exactly.
   await prisma.project.update({
@@ -142,11 +171,11 @@ beforeAll(async () => {
       resourceTypeId: null,
       namedResourceId: segNr.id,
       ownerKind: 'NAMED_PERSON',
-      planningBasis: 'AVAILABILITY_WINDOW',
+      planningBasis: 'CAPACITY_PROFILE',
       source: 'MANUAL',
       defaultPercent: 60,
-      startWeek: 3,
-      endWeek: 6,
+      startWeek: null,
+      endWeek: null,
     },
   })
   segmentedProfileId = segProfile.id
@@ -442,7 +471,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
         allocationPercent: 80,
       })
     expect(res.status).toBe(409)
-    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
     expectRejectedStateUnchanged(before, after)
@@ -462,7 +491,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
       })
 
     expect(res.status).toBe(409)
-    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
     expectRejectedStateUnchanged(before, after)

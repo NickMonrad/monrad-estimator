@@ -1179,6 +1179,11 @@ export default function TimelinePage() {
                                   const mode = nr.allocationMode ?? 'EFFORT'
                                   const showStartEnd = mode === 'TIMELINE'
                                   const showPct = mode !== 'EFFORT' && mode !== 'CAPACITY_PLAN'
+                                  // Capacity-plan ownership is created by Squad Planner/profile writes,
+                                  // never by this scalar compatibility editor.
+                                  const modeOptions = mode === 'CAPACITY_PLAN'
+                                    ? ALLOCATION_MODE_OPTIONS
+                                    : ALLOCATION_MODE_OPTIONS.filter(opt => opt.value !== 'CAPACITY_PLAN')
                                   return (
                                     <div
                                       key={nr.id ?? `${rt.id}-${i}`}
@@ -1212,7 +1217,7 @@ export default function TimelinePage() {
                                               }}
                                               className="w-full text-xs border border-gray-200 dark:border-gray-600 rounded px-1 py-0 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300"
                                             >
-                                              {ALLOCATION_MODE_OPTIONS.map(opt => (
+                                              {modeOptions.map(opt => (
                                                 <option key={opt.value} value={opt.value}>{opt.label}</option>
                                               ))}
                                             </select>

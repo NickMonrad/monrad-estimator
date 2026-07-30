@@ -19,6 +19,7 @@ import {
   type CapacityProfileAdapterInput,
   type CapacityProfileResourceData,
 } from './capacityProfileResourceAdapter.js'
+import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import {
   materializeCapacityPlanResources,
   matchTrajectoriesToResources,
@@ -93,11 +94,43 @@ function profileDataToSchedulerSegments(
 /**
  * Build a single SchedulerNamedResource with profile segments from a
  * CapacityProfileResourceData.
+ *
+ * When profile data is available, the allocationMode is projected from the
+ * profile's planning basis (e.g. CAPACITY_PROFILE → CAPACITY_PLAN) rather
+ * than using the stale legacy NamedResource.allocationMode field.
  */
 function buildProfileBackedNR(
   nr: any,
   segments: SchedulerCapacitySegment[],
+  profile?: CapacityProfileResourceData | null,
 ): SchedulerNamedResource {
+  // Project allocation mode from profile when available; fall back to legacy
+  let allocationMode = nr.allocationMode ?? 'EFFORT'
+  let allocationPercent = nr.allocationPercent ?? 100
+  let allocationStartWeek: number | null = nr.allocationStartWeek ?? null
+  let allocationEndWeek: number | null = nr.allocationEndWeek ?? null
+
+  if (profile) {
+    const projection = projectCapacityProfileToLegacyAllocation({
+      planningBasis: profile.planningBasis,
+      source: profile.source,
+      defaultPercent: profile.defaultPercent,
+      startWeek: profile.startWeek,
+      endWeek: profile.endWeek,
+      segments: profile.segments.map(s => ({
+        startWeek: s.startWeek,
+        endWeek: s.endWeek,
+        capacityPercent: s.capacityPercent,
+      })),
+    })
+    if (projection) {
+      allocationMode = projection.allocationMode
+      allocationPercent = projection.allocationPercent ?? allocationPercent
+      allocationStartWeek = projection.allocationStartWeek
+      allocationEndWeek = projection.allocationEndWeek
+    }
+  }
+
   return {
     id: nr.id,
     name: nr.name,
@@ -106,10 +139,10 @@ function buildProfileBackedNR(
     startWeek: nr.startWeek ?? null,
     endWeek: nr.endWeek ?? null,
     allocationPct: nr.allocationPct,
-    allocationMode: nr.allocationMode ?? 'EFFORT',
-    allocationPercent: nr.allocationPercent ?? 100,
-    allocationStartWeek: nr.allocationStartWeek ?? null,
-    allocationEndWeek: nr.allocationEndWeek ?? null,
+    allocationMode,
+    allocationPercent,
+    allocationStartWeek,
+    allocationEndWeek,
     pricingModel: nr.pricingModel ?? undefined,
     capacitySegments: segments,
   }
@@ -253,7 +286,7 @@ export async function resolveSchedulerCapacity(
         profileBackedCount++
         profileBackedNamedResourceIds.push(nr.id)
         nrSources.set(nr.id, 'PROFILE')
-        return buildProfileBackedNR(nr, segments)
+        return buildProfileBackedNR(nr, segments, nrProfile)
       }
 
       // Capacity plan trajectory → per-resource segments
@@ -262,7 +295,7 @@ export async function resolveSchedulerCapacity(
         profileBackedCount++
         profileBackedNamedResourceIds.push(nr.id)
         nrSources.set(nr.id, 'ACTIVE_CAPACITY_PLAN')
-        return buildProfileBackedNR(nr, segments)
+        return buildProfileBackedNR(nr, segments, nrProfile)
       }
 
       // Legacy fallback — no valid profile

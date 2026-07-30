@@ -2,7 +2,6 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { loadExactCapacityProfiles } from '../lib/exactCapacityProfileReader.js'
 import { snapshotJsonValueToPrisma } from '../lib/projectSnapshotTypes.js'
 
@@ -526,21 +525,50 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     dayRate: gt.defaultDayRate ?? null,
   }))
 
-  const project = await prisma.project.create({
-    data: {
-      name,
-      description,
-      status: status ?? 'DRAFT',
-      hoursPerDay: hoursPerDay ?? 7.6,
-      bufferWeeks: bufferWeeks ?? 0,
-      customerId,
-      orgId,
-      ownerId: req.userId!,
-      resourceTypes: { create: seedTypes },
-    },
-    include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
+  const project = await prisma.$transaction(async tx => {
+    const p = await tx.project.create({
+      data: {
+        name,
+        description,
+        status: status ?? 'DRAFT',
+        hoursPerDay: hoursPerDay ?? 7.6,
+        bufferWeeks: bufferWeeks ?? 0,
+        customerId,
+        orgId,
+        ownerId: req.userId!,
+        resourceTypes: { create: seedTypes },
+      },
+      include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
+    })
+
+    // Create authoritative role-owned capacity profiles for each seeded resource type
+    for (const rt of p.resourceTypes) {
+      await tx.capacityProfile.create({
+        data: {
+          ownerKind: 'ROLE',
+          projectId: p.id,
+          resourceTypeId: rt.id,
+          namedResourceId: null,
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'AVAILABILITY_WINDOW',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          legacy: {
+            allocationMode: 'TIMELINE',
+            allocationPercent: 100,
+            allocationPct: null,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            startWeek: null,
+            endWeek: null,
+          },
+        },
+      })
+    }
+
+    return p
   })
-  await syncCapacityProfilesForProject(prisma, project.id)
   res.status(201).json(project)
 }))
 

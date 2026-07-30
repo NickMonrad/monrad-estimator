@@ -5,8 +5,8 @@
  *
  * This is the single source of truth for the PATCH route's pre-mutation view:
  *   - Named resources and their capacity profiles (with segments)
- *   - The role-owned CapacityProfile, if present
- *   - Authoritative role default (profile first, legacy fallback)
+ *   - The required role-owned CapacityProfile
+ *   - Authoritative role default projected only from that profile
  *   - Inherited vs explicit NR classification
  *
  * @see classifyNRsForRoleUpdate.ts for classification rules
@@ -14,10 +14,12 @@
  * @see docs/domain/capacity-profile-source-of-truth-migration-plan.md
  */
 
-import { resolveRoleDefaultForMutation } from './resolveRoleDefaultForMutation.js'
-import type { ResolvedRoleDefault, RoleProfileLike } from './resolveRoleDefaultForMutation.js'
+import type { ResolvedRoleDefault } from './resolveRoleDefaultForMutation.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
 import { classifyNRsForRoleUpdate } from './classifyNRsForRoleUpdate.js'
 import type { NRToClassify, NRProfileState, ClassificationResult } from './classifyNRsForRoleUpdate.js'
+import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
+import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 
 // ─── Input shape ─────────────────────────────────────────────────────────────
 
@@ -65,29 +67,22 @@ export interface CapacityProfileRecord {
 
 export interface SchedulingState {
   isCapacityPlan: boolean
-  source: 'PROFILE' | 'LEGACY'
 }
 
 /**
- * Determine whether the ResourceType is in CAPACITY_PLAN scheduling mode,
- * using the authoritative role-owned CapacityProfile first.
- *
- * Precedence:
- * 1. If a role-owned profile exists with CAPACITY_PROFILE planning basis → capacity plan
- * 2. Other role profile → NOT capacity plan (even if stale RT fields say CAPACITY_PLAN)
- * 3. No role profile → fall back to ResourceType.allocationMode
+ * Determine whether the ResourceType is in CAPACITY_PLAN scheduling mode from
+ * the required authoritative role-owned profile. Compatibility columns are
+ * never consulted.
  */
 export function resolveRoleSchedulingState(state: RTPatchState): SchedulingState {
-  if (state.roleDefault.source === 'PROFILE' && state.roleProfileRows.length > 0) {
+  if (state.roleProfileRows.length > 0) {
     const pp = state.roleProfileRows[0]
-    // Check both UPPER_SNAKE (Prisma enum) and camelCase (TS internal) forms
     const isCp = pp.planningBasis === 'CAPACITY_PROFILE' || pp.planningBasis === 'capacityProfile'
-    return { isCapacityPlan: isCp, source: 'PROFILE' }
+    return { isCapacityPlan: isCp }
   }
-  return {
-    isCapacityPlan: state.resourceType.allocationMode === 'CAPACITY_PLAN',
-    source: 'LEGACY',
-  }
+  // Defensive only: resolveRTPatchState rejects a missing ROLE profile before
+  // this helper is called.
+  return { isCapacityPlan: false }
 }
 
 // ─── Return type ─────────────────────────────────────────────────────────────
@@ -118,42 +113,94 @@ export async function resolveRTPatchState(
   tx: any,
   rtId: string,
   resourceType: ResourceTypeRecord,
+  projectId: string,
 ): Promise<RTPatchState> {
-  // ── 1. Load named resources ──────────────────────────────────────────
+  // ── 1. Validate exactly one authoritative ROLE profile ──────────────
+  const roleProfile = await loadAndValidateOwnerProfile({
+    tx,
+    projectId,
+    ownerKind: 'ROLE',
+    ownerId: rtId,
+  })
+
+  // ── 2. Project the validated profile to legacy-compatible values ─────
+  const projection = projectCapacityProfileToLegacyAllocation({
+    planningBasis: roleProfile.planningBasis,
+    defaultPercent: roleProfile.defaultPercent,
+    startWeek: roleProfile.startWeek,
+    endWeek: roleProfile.endWeek,
+    segments: roleProfile.segments.map(s => ({
+      startWeek: s.startWeek,
+      endWeek: s.endWeek,
+      capacityPercent: s.capacityPercent,
+      source: s.source,
+    })),
+    source: roleProfile.source,
+  })
+
+  const roleDefault: ResolvedRoleDefault = {
+    allocationMode: projection?.allocationMode ?? 'EFFORT',
+    allocationPercent: projection?.allocationPercent ?? 100,
+    allocationStartWeek: projection?.allocationStartWeek ?? null,
+    allocationEndWeek: projection?.allocationEndWeek ?? null,
+    source: 'PROFILE',
+    lossy: projection?.lossy ?? false,
+    lossReason: (projection as any)?.lossReason,
+  }
+
+  // ── 3. Load named resources with their profiles ──────────────────────
   const namedResources: NamedResourceRecord[] = (await tx.namedResource.findMany({
     where: { resourceTypeId: rtId },
     orderBy: { createdAt: 'asc' },
   })) ?? []
-  if (!Array.isArray(namedResources)) {
-    throw new Error(
-      `resolveRTPatchState: tx.namedResource.findMany returned non-array for RT ${rtId}: ${typeof namedResources}`,
-    )
-  }
 
-  // ── 2. Load NR capacity profiles with segments ──────────────────────
-  const nrProfileRows: CapacityProfileRecord[] = (await tx.capacityProfile.findMany({
+  const rawNRProfiles: CapacityProfileRecord[] = (await tx.capacityProfile.findMany({
     where: {
       namedResourceId: { in: namedResources.map((nr: any) => nr.id) },
+      projectId,
     },
     include: { segments: true },
   })) ?? []
 
-  const roleProfileRows: CapacityProfileRecord[] = (await tx.capacityProfile.findMany({
-    where: {
-      resourceTypeId: rtId,
-      namedResourceId: null,
-      ownerKind: 'ROLE',
-    },
-    include: { segments: true },
-  })) ?? []
+  // ── 4. Validate every NR profile through strict validation ────────────
+  const nrProfileRows: CapacityProfileRecord[] = []
+  for (const nr of namedResources) {
+    const nrProfiles = rawNRProfiles.filter((p: any) => p.namedResourceId === nr.id)
 
-  // ── 4. Resolve authoritative role default ────────────────────────────
-  const roleDefault = resolveRoleDefaultForMutation({
-    resourceType,
-    roleProfiles: roleProfileRows as unknown as RoleProfileLike[],
-  })
+    if (nrProfiles.length === 0) {
+      throw new CapacityIntegrityError(
+        `Missing capacity profile for named resource ${nr.id}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
 
-  // Build the old-role-default shape for the classifier
+    if (nrProfiles.length > 1) {
+      throw new CapacityIntegrityError(
+        `Multiple capacity profiles exist for named resource ${nr.id}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
+
+    const p = nrProfiles[0]
+    const profileOwnerKind = p.ownerKind as string
+    if (profileOwnerKind !== 'NAMED_PERSON' && profileOwnerKind !== 'PLANNED_RESOURCE') {
+      throw new CapacityIntegrityError(
+        `Capacity profile ${p.id} has invalid owner kind "${profileOwnerKind}".`,
+      )
+    }
+
+    // Validate through the strict loader — will throw if malformed
+    await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: profileOwnerKind,
+      ownerId: nr.id,
+    })
+
+    nrProfileRows.push(p)
+  }
+
+  // ── 5. Build old-role-default for classifier ─────────────────────────
   const oldRoleDefault = {
     allocationMode: roleDefault.allocationMode,
     allocationPercent: roleDefault.allocationPercent,
@@ -161,7 +208,7 @@ export async function resolveRTPatchState(
     allocationEndWeek: roleDefault.allocationEndWeek,
   }
 
-  // ── 5. Classify NRs ──────────────────────────────────────────────────
+  // ── 6. Classify NRs ──────────────────────────────────────────────────
   const classification = classifyNRsForRoleUpdate(
     namedResources as unknown as NRToClassify[],
     nrProfileRows as unknown as NRProfileState[],
@@ -172,7 +219,7 @@ export async function resolveRTPatchState(
     resourceType: resourceType as unknown as ResourceTypeRecord,
     namedResources,
     nrProfileRows,
-    roleProfileRows,
+    roleProfileRows: [roleProfile as unknown as CapacityProfileRecord],
     roleDefault,
     classification,
   }

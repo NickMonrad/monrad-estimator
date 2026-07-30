@@ -26,6 +26,7 @@
     "capacity-profiles:audit:repair": "tsx src/scripts/auditCapacityProfileOwnership.ts --repair-identical",
     "capacity-profiles:audit:repair:json": "tsx src/scripts/auditCapacityProfileOwnership.ts --repair-identical --json",
     "test:ownership-invariants-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileOwnershipInvariants.integration.test.ts",
+    "test:runtime-cutover-integration": "vitest run --config vitest.integration.config.ts src/test/runtimeCutoverProfileFirst.integration.test.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {
