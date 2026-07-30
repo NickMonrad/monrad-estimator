@@ -1822,9 +1822,17 @@ describeIf('profile-first runtime cutover (#364)', () => {
   }, 30000)
 
   it('27. CSV-created ResourceType accepted by Squad Planner adoption', async () => {
+    // Create a fresh project to isolate from pre-existing profile pollution
+    const cleanProject = await request(app)
+      .post('/api/projects')
+      .set('Authorization', authHeader)
+      .send({ name: 'CSV Planner Adoption Project' })
+    expect(cleanProject.status).toBe(201)
+    const csvProjectId = cleanProject.body.id
+
     // Import CSV to create a new ResourceType with correct ROLE provenance
     const importResponse = await request(app)
-      .post(`/api/projects/${projectId}/backlog/import-csv`)
+      .post(`/api/projects/${csvProjectId}/backlog/import-csv`)
       .set('Authorization', authHeader)
       .send({
         rows: [
@@ -1838,21 +1846,13 @@ describeIf('profile-first runtime cutover (#364)', () => {
 
     // Find the CSV-created ResourceType
     const csvRt = await prisma.resourceType.findFirstOrThrow({
-      where: { projectId, name: 'PlannerAdoptRT' },
+      where: { projectId: csvProjectId, name: 'PlannerAdoptRT' },
     })
     const csvRtId = csvRt.id
 
-    // CSV import creates the RT but does not auto-create a default NR.
-    // Create one so the squad planner has a resource to plan for.
-    const nrResponse = await request(app)
-      .post(`/api/projects/${projectId}/resource-types/${csvRtId}/named-resources`)
-      .set('Authorization', authHeader)
-      .send({})
-    expect(nrResponse.status).toBe(201)
-
     // Prove complete legacy provenance payload
     const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
-      where: { projectId, resourceTypeId: csvRtId, namedResourceId: null },
+      where: { projectId: csvProjectId, resourceTypeId: csvRtId, namedResourceId: null },
     })
     expect(roleProfile.ownerKind).toBe('ROLE')
     expect(roleProfile.planningBasis).toBe('AVAILABILITY_WINDOW')
@@ -1878,12 +1878,17 @@ describeIf('profile-first runtime cutover (#364)', () => {
       endWeek: null,
     })
 
-    // Fetch initial NR
-    const initialNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId: csvRtId } })
+    // Create a NR for the CSV-created RT (CSV import does not auto-create one)
+    const nrResponse = await request(app)
+      .post(`/api/projects/${csvProjectId}/resource-types/${csvRtId}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({})
+    expect(nrResponse.status).toBe(201)
+    const initialNr = nrResponse.body
 
-    // Apply Squad Planner to the CSV-created RT — proves it has valid mapper provenance
+    // Apply Squad Planner — in a clean project with no pre-existing profile pollution
     const applyResponse = await request(app)
-      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .post(`/api/projects/${csvProjectId}/squad-plan/apply`)
       .set('Authorization', authHeader)
       .send({
         name: 'CSV Adoption Test Plan',
@@ -1920,7 +1925,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     // Planned-resource profile created for the initial NR
     const plannedProfiles = await prisma.capacityProfile.findMany({
       where: {
-        projectId,
+        projectId: csvProjectId,
         namedResourceId: initialNr.id,
         resourceTypeId: null,
         ownerKind: 'PLANNED_RESOURCE',
@@ -1928,17 +1933,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })
     expect(plannedProfiles.length).toBeGreaterThan(0)
 
-    // Only the CSV-created RT was affected
-    const allRts = await prisma.resourceType.findMany({ where: { projectId } })
-    const otherRts = allRts.filter(rt => rt.id !== csvRtId)
-    for (const other of otherRts) {
-      const otherRole = await prisma.capacityProfile.findFirst({
-        where: { projectId, resourceTypeId: other.id, namedResourceId: null },
-      })
-      // Other RT profiles remain unchanged from initial AVAILABILITY_WINDOW
-      if (otherRole && otherRole.id !== roleProfile.id) {
-        expect(otherRole.planningBasis).not.toBe('CAPACITY_PROFILE')
-      }
-    }
+    // Clean up the isolated project
+    await prisma.project.delete({ where: { id: csvProjectId } }).catch(() => {})
   }, 30000)
 })
