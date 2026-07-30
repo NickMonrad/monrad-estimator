@@ -3,18 +3,27 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 import { exitCapacityPlanRoleOnly } from '../lib/capacityPlanExit.js'
-import { upsertRTProfileAndProjectLegacy, buildMissingRTProfilePayload } from '../lib/resourceTypeCapacityProfileWrites.js'
+import { upsertRTProfileAndProjectLegacy } from '../lib/resourceTypeCapacityProfileWrites.js'
 import { toLegacyAllocationPct } from '../lib/resolveRoleDefaultForMutation.js'
 import { resolveRTPatchState, resolveRoleSchedulingState } from '../lib/resolveRTPatchState.js'
 import { applyRoleDefaultToInheritedNRs } from '../lib/capacityProfileReplaceService.js'
+import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
+import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
+import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
   (tx ?? prisma).project.update({
     where: { id: projectId },
     data: { weeklyDemandCache: {} },
   })
+
+let rtPatchFailureSeam: (() => void) | null = null
+
+/** Test-only transaction seam; production never installs a callback. */
+export function __setRTPatchFailureSeam(callback: (() => void) | null): void {
+  rtPatchFailureSeam = callback
+}
 
 
 const router = Router({ mergeParams: true })
@@ -56,17 +65,65 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       },
     })
     // Auto-create a default named resource so the resource profile has a person ready to configure
-    await tx.namedResource.create({
+    const defaultNr = await tx.namedResource.create({
       data: { name: `${name} 1`, resourceTypeId: created.id },
     })
     await tx.resourceType.update({ where: { id: created.id }, data: { count: 1 } })
+
+    // Create authoritative ROLE profile with availability-window default (matches TIMELINE/100 compat)
+    await tx.capacityProfile.create({
+      data: {
+        ownerKind: 'ROLE',
+        projectId: project.id,
+        resourceTypeId: created.id,
+        namedResourceId: null,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        legacy: {
+          allocationMode: 'TIMELINE',
+          allocationPercent: 100,
+          allocationPct: null,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
+        },
+      },
+    })
+
+    // Create authoritative NAMED_PERSON profile for the default named resource
+    await tx.capacityProfile.create({
+      data: {
+        ownerKind: 'NAMED_PERSON',
+        projectId: project.id,
+        resourceTypeId: null,
+        namedResourceId: defaultNr.id,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        legacy: {
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationPct: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
+        },
+      },
+    })
+
     await clearWeeklyDemandCache(project.id, tx)
     return created
   })
   res.status(201).json(rt)
 }))
 
-// PUT /projects/:projectId/resource-types/:id
 router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
@@ -94,38 +151,38 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   // Non-capacity-only fields
   const data: Record<string, unknown> = { name, category, count, proposedName, hoursPerDay, dayRate }
   Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key] })
-  // ── Build capacity payload with hasOwnProperty semantics ────────────
-  const capacityPayload: Record<string, unknown> = {}
-  if ('allocationMode' in req.body) { capacityPayload.allocationMode = allocationMode }
-  if ('allocationPercent' in req.body) { capacityPayload.allocationPercent = allocationPercent }
-  if ('allocationStartWeek' in req.body) { capacityPayload.allocationStartWeek = allocationStartWeek ?? null }
-  if ('allocationEndWeek' in req.body) { capacityPayload.allocationEndWeek = allocationEndWeek ?? null }
-
-  // Fill omitted capacity fields from existing record
-  if (capacityPayload.allocationMode === undefined) { capacityPayload.allocationMode = existing.allocationMode }
-  if (capacityPayload.allocationPercent === undefined) { capacityPayload.allocationPercent = existing.allocationPercent }
-  if (capacityPayload.allocationStartWeek === undefined) { capacityPayload.allocationStartWeek = existing.allocationStartWeek }
-  if (capacityPayload.allocationEndWeek === undefined) { capacityPayload.allocationEndWeek = existing.allocationEndWeek }
-
-  // ── Shared sync-options builder (same ownership rules as PATCH) ─────
-  const putSyncOptions = (explicitNRIds: Iterable<string>) => {
-    const opts: Record<string, unknown> = {
-      scopeResourceTypeId: req.params.id as string,
-      preserveResourceTypeIds: [existing.id],
-    }
-    const ids = [...explicitNRIds]
-    if (ids.length > 0) {
-      opts.preserveNamedResourceIds = ids
-    }
-    return opts
-  }
 
   const rt = await prisma.$transaction(async tx => {
-    // ── Load authoritative state before any mutation ──────────────
-    const state = await resolveRTPatchState(tx, existing.id, existing)
+    // ── Load authoritative ROLE profile first ─────────────────────
+    const roleProfile = await loadAndValidateOwnerProfile({
+      tx,
+      projectId: req.params.projectId as string,
+      ownerKind: 'ROLE',
+      ownerId: req.params.id as string,
+    })
+
+    // Build capacity payload from profile-derived defaults (not from compatibility columns)
+    const profileAllocMode = roleProfile.planningBasis === 'CAPACITY_PROFILE' ? 'TIMELINE' :
+      roleProfile.planningBasis === 'DEMAND_FOLLOWING' ? 'EFFORT' :
+      roleProfile.planningBasis === 'AVAILABILITY_WINDOW' ? 'TIMELINE' :
+      roleProfile.planningBasis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT' :
+      'EFFORT'
+    const profileAllocPercent = roleProfile.planningBasis === 'CAPACITY_PROFILE' ? 100 : (roleProfile.defaultPercent ?? 100)
+    const profileAllocStartWeek = roleProfile.planningBasis === 'CAPACITY_PROFILE' ? null : roleProfile.startWeek
+    const profileAllocEndWeek = roleProfile.planningBasis === 'CAPACITY_PROFILE' ? null : roleProfile.endWeek
+
+    const capacityPayload: Record<string, unknown> = {}
+    if ('allocationMode' in req.body) { capacityPayload.allocationMode = allocationMode }
+    else { capacityPayload.allocationMode = profileAllocMode }
+    if ('allocationPercent' in req.body) { capacityPayload.allocationPercent = allocationPercent }
+    else { capacityPayload.allocationPercent = profileAllocPercent }
+    if ('allocationStartWeek' in req.body) { capacityPayload.allocationStartWeek = allocationStartWeek ?? null }
+    else { capacityPayload.allocationStartWeek = profileAllocStartWeek }
+    if ('allocationEndWeek' in req.body) { capacityPayload.allocationEndWeek = allocationEndWeek ?? null }
+    else { capacityPayload.allocationEndWeek = profileAllocEndWeek }
+    const state = await resolveRTPatchState(tx, existing.id, existing, req.params.projectId as string)
     const schedulingState = resolveRoleSchedulingState(state)
     const inheritedIds = new Set(state.classification.inheritedNRIds)
-    const explicitIds = new Set(state.classification.explicitNRIds)
 
     const shouldExitCapacityPlan =
       schedulingState.isCapacityPlan &&
@@ -134,17 +191,13 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
     let updated
 
-
     if (shouldExitCapacityPlan) {
       // ── Ownership-aware CAPACITY_PLAN exit ──────────────────
-      // 1. Write the manual role profile
       await upsertRTProfileAndProjectLegacy(
         tx, req.params.projectId as string, req.params.id as string,
         { allocationMode: 'TIMELINE', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
       )
-      // 2. Transition role-level compatibility fields only
       await exitCapacityPlanRoleOnly(existing.id, tx)
-      // 3. Update ONLY inherited NRs (ID-scoped)
       if (inheritedIds.size > 0) {
         await tx.namedResource.updateMany({
           where: { id: { in: [...inheritedIds] } },
@@ -159,26 +212,16 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
           },
         })
       }
-      // Explicit/custom/segmented/planned NRs are left untouched
-
       updated = await tx.resourceType.update({
         where: { id: req.params.id as string },
         data: { ...data, allocationMode: 'TIMELINE', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
       })
     } else if (hasCapacityInput) {
-      // ── Normal role-capacity PUT ─────────────────────────────
-      // 1. Write the new role-owned profile first
       const projection = await upsertRTProfileAndProjectLegacy(
         tx, req.params.projectId as string, req.params.id as string,
         capacityPayload,
       )
-      // 2. Apply role default to inherited NRs via profile-first helper
-      await applyRoleDefaultToInheritedNRs(
-        tx,
-        [...inheritedIds],
-        projection,
-      )
-      // Explicit/custom/segmented/planned NRs are left untouched
+      await applyRoleDefaultToInheritedNRs(tx, [...inheritedIds], projection)
 
       updated = await tx.resourceType.update({
         where: { id: req.params.id as string },
@@ -191,24 +234,13 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         },
       })
     } else {
-      // ── Non-capacity-only PUT ────────────────────────────────
-      // Ensure a role profile exists (created from existing RT fields)
-      const existingProfiles = await tx.capacityProfile.findMany({
-        where: { resourceTypeId: req.params.id as string, namedResourceId: null, projectId: req.params.projectId as string },
-        select: { id: true },
-      })
-      if (existingProfiles.length === 0) {
-        await upsertRTProfileAndProjectLegacy(tx, req.params.projectId as string, req.params.id as string,
-          buildMissingRTProfilePayload(existing))
-      }
+      // Non-capacity-only PUT — profile was already validated by loader above
       updated = await tx.resourceType.update({
         where: { id: req.params.id as string },
         data,
       })
     }
-
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
-    await syncCapacityProfilesForProject(tx, req.params.projectId as string, putSyncOptions(explicitIds))
     return updated
   })
   res.json(rt)
@@ -221,43 +253,21 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (count === undefined || typeof count !== 'number' || count < 0) {
     res.status(400).json({ error: 'count must be a non-negative number' }); return
   }
-
   const rt = await prisma.resourceType.findFirst({ where: { id: req.params.id as string, projectId: req.params.projectId as string } })
   if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
 
   const { updated, warnings } = await prisma.$transaction(async tx => {
-    // ── Load authoritative state via shared helper ─────────────
-    const state = await resolveRTPatchState(tx, rt.id, rt)
+    const state = await resolveRTPatchState(tx, rt.id, rt, req.params.projectId as string)
 
     const currentCount = state.namedResources.length
     const nextWarnings: string[] = []
 
-    // CAPACITY_PLAN state from authoritative role profile first, legacy fallback
+    // CAPACITY_PLAN state comes only from the validated ROLE profile.
     const schedulingState = resolveRoleSchedulingState(state)
     const isCapacityPlan = schedulingState.isCapacityPlan
-    const defaultAllocMode = isCapacityPlan ? 'TIMELINE' : state.roleDefault.allocationMode
-    const defaultAllocPercent = isCapacityPlan ? 100 : state.roleDefault.allocationPercent
-    const defaultAllocStartWeek = isCapacityPlan ? null : state.roleDefault.allocationStartWeek
-    const defaultAllocEndWeek = isCapacityPlan ? null : state.roleDefault.allocationEndWeek
-    const defaultAllocPct = toLegacyAllocationPct(defaultAllocPercent)
-
     const inheritedIds = new Set(state.classification.inheritedNRIds)
-    const preserveIds = new Set(state.classification.explicitNRIds)
-
-    // ── Shared sync-options builder ────────────────────────────
-    const patchSyncOptions = (preserveNamedResourceIds: Iterable<string>) => {
-      const opts: Record<string, unknown> = {
-        scopeResourceTypeId: req.params.id as string,
-        preserveResourceTypeIds: [rt.id],
-      }
-      const ids = [...preserveNamedResourceIds]
-      if (ids.length > 0) {
-        opts.preserveNamedResourceIds = ids
-      }
-      return opts
-    }
-
-    // ── CAPACITY_PLAN exit (before count logic) ────────────────
+    const roleProfileRows = state.roleProfileRows
+    let postExitRole: any = null
     if (isCapacityPlan) {
       // 1. Upsert the role-owned profile with manual-scheduling defaults
       await upsertRTProfileAndProjectLegacy(
@@ -267,83 +277,168 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       // 2. Transition the role-level compatibility fields
       await exitCapacityPlanRoleOnly(rt.id, tx)
+      // 3. Strictly reload the post-exit ROLE profile
+      postExitRole = await loadAndValidateOwnerProfile({
+        tx,
+        projectId: req.params.projectId as string,
+        ownerKind: 'ROLE',
+        ownerId: rt.id,
+      })
 
-      // 3. Update only inherited NR compatibility fields to manual-scheduling defaults
+      // 4. Project the post-exit ROLE to legacy values
+      const roleLegacy = projectCapacityProfileToLegacyAllocation({
+        planningBasis: postExitRole.planningBasis,
+        defaultPercent: postExitRole.defaultPercent,
+        startWeek: postExitRole.startWeek,
+        endWeek: postExitRole.endWeek,
+        segments: postExitRole.segments.map((s: any) => ({
+          startWeek: s.startWeek,
+          endWeek: s.endWeek,
+          capacityPercent: s.capacityPercent,
+          source: s.source,
+        })),
+        source: postExitRole.source,
+      })
+      if (!roleLegacy) {
+        throw new Error('Failed to project post-exit role profile to legacy values')
+      }
+      const rolePct = toLegacyAllocationPct(roleLegacy.allocationPercent ?? 100)
+
+      // 5. Update inherited NR profiles to match post-exit ROLE semantics
       if (inheritedIds.size > 0) {
+        for (const inhId of inheritedIds) {
+          const inhProfile = state.nrProfileRows.find(
+            (np: any) => np.namedResourceId === inhId,
+          )
+          if (!inhProfile) {
+            throw new CapacityIntegrityError(
+              `Cannot update inherited named resource ${inhId}: validated profile not found.`,
+            )
+          }
+          // Update profile to post-exit ROLE semantics (preserve ID)
+          await tx.capacityProfile.update({
+            where: { id: inhProfile.id },
+            data: {
+              ownerKind: 'NAMED_PERSON',
+              planningBasis: postExitRole.planningBasis as any,
+              source: postExitRole.source as any,
+              defaultPercent: postExitRole.defaultPercent,
+              startWeek: postExitRole.startWeek,
+              endWeek: postExitRole.endWeek,
+            },
+          })
+          // Replace segments with post-exit ROLE segment state
+          await tx.capacitySegment.deleteMany({
+            where: { capacityProfileId: inhProfile.id },
+          })
+          if (postExitRole.segments.length > 0) {
+            await tx.capacitySegment.createMany({
+              data: postExitRole.segments.map((seg: any) => ({
+                capacityProfileId: inhProfile.id,
+                startWeek: seg.startWeek,
+                endWeek: seg.endWeek,
+                capacityPercent: seg.capacityPercent,
+                source: seg.source as any,
+              })),
+            })
+          }
+        }
+        // Write compatibility fields from profile projection
         await tx.namedResource.updateMany({
           where: { id: { in: [...inheritedIds] } },
           data: {
-            allocationMode: 'TIMELINE',
-            allocationPercent: 100,
-            allocationStartWeek: null,
-            allocationEndWeek: null,
-            allocationPct: 100,
-            startWeek: null,
-            endWeek: null,
+            allocationMode: roleLegacy.allocationMode,
+            allocationPercent: roleLegacy.allocationPercent ?? 100,
+            allocationStartWeek: roleLegacy.allocationStartWeek,
+            allocationEndWeek: roleLegacy.allocationEndWeek,
+            allocationPct: rolePct,
+            startWeek: roleLegacy.allocationStartWeek,
+            endWeek: roleLegacy.allocationEndWeek,
           },
         })
       }
-      // Explicit, custom, segmented, planned NRs are left untouched
     }
-
-    // ── Helper to create the full compatibility shape ───────────
-    const buildInheritedNRCreateData = (name: string, nrCount: number) => ({
-      name: `${name} ${nrCount}`,
-      resourceTypeId: rt.id,
-      allocationMode: defaultAllocMode,
-      allocationPercent: defaultAllocPercent,
-      allocationPct: defaultAllocPct,
-      allocationStartWeek: defaultAllocStartWeek,
-      allocationEndWeek: defaultAllocEndWeek,
-      startWeek: defaultAllocStartWeek,
-      endWeek: defaultAllocEndWeek,
-    } as any)
+    // ── Post-exit state helpers ────────────────────────────────────────
+    const effectiveRole = postExitRole ?? (roleProfileRows.length > 0 ? roleProfileRows[0] : null)
+    let effectiveLegacyMode = { allocationMode: 'EFFORT' as string, allocationPercent: 100, allocationStartWeek: null as number | null, allocationEndWeek: null as number | null }
+    let effectiveAllocPct = 100
+    if (effectiveRole) {
+      const effLegacy = projectCapacityProfileToLegacyAllocation({
+        planningBasis: (effectiveRole as any).planningBasis,
+        defaultPercent: (effectiveRole as any).defaultPercent,
+        startWeek: (effectiveRole as any).startWeek,
+        endWeek: (effectiveRole as any).endWeek,
+        segments: ((effectiveRole as any).segments ?? []).map((s: any) => ({
+          startWeek: s.startWeek, endWeek: s.endWeek,
+          capacityPercent: s.capacityPercent, source: s.source,
+        })),
+        source: (effectiveRole as any).source,
+      })
+      if (effLegacy) {
+        effectiveLegacyMode = {
+          allocationMode: effLegacy.allocationMode,
+          allocationPercent: effLegacy.allocationPercent ?? 100,
+          allocationStartWeek: effLegacy.allocationStartWeek,
+          allocationEndWeek: effLegacy.allocationEndWeek,
+        }
+        effectiveAllocPct = toLegacyAllocationPct(effLegacy.allocationPercent ?? 100)
+      }
+    }
+    // ── Fail-closed: role profile must exist for count changes ──
+    if (count !== currentCount && !effectiveRole) {
+      throw new CapacityIntegrityError(
+        'Missing capacity profile for this resource type. ' +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
 
     // ── Count increase ─────────────────────────────────────────
     if (count > currentCount) {
-      const shouldCloneRoleProfileForNewNR =
-        !isCapacityPlan &&
-        state.roleDefault.source === 'PROFILE' &&
-        state.roleProfileRows.length === 1 &&
-        state.roleProfileRows[0].segments.length > 0
-
       for (let n = currentCount + 1; n <= count; n++) {
         const nr = await tx.namedResource.create({
-          data: buildInheritedNRCreateData(rt.name, n),
+          data: {
+            name: `${rt.name} ${n}`,
+            resourceTypeId: rt.id,
+            allocationMode: effectiveLegacyMode.allocationMode,
+            allocationPercent: effectiveLegacyMode.allocationPercent,
+            allocationStartWeek: effectiveLegacyMode.allocationStartWeek,
+            allocationEndWeek: effectiveLegacyMode.allocationEndWeek,
+            allocationPct: effectiveAllocPct,
+            startWeek: effectiveLegacyMode.allocationStartWeek,
+            endWeek: effectiveLegacyMode.allocationEndWeek,
+          } as any,
         })
-
-        // Multi-segment role profile: clone segments to new NR
-        if (shouldCloneRoleProfileForNewNR) {
-          const roleProfile = state.roleProfileRows[0]
+        if (effectiveRole) {
+          const eff = effectiveRole as any
+          const segs = eff.segments
           await tx.capacityProfile.create({
             data: {
               ownerKind: 'NAMED_PERSON' as any,
               projectId: req.params.projectId as string,
-              // ← Blocker 4: NR-owned profile has resourceTypeId = null, not rt.id
               resourceTypeId: null,
               namedResourceId: nr.id,
-              planningBasis: roleProfile.planningBasis as any,
-              source: roleProfile.source as any,
-              defaultPercent: roleProfile.defaultPercent,
-              startWeek: roleProfile.startWeek,
-              endWeek: roleProfile.endWeek,
-              segments: {
-                create: roleProfile.segments.map((seg: any) => ({
-                  startWeek: seg.startWeek,
-                  endWeek: seg.endWeek,
-                  capacityPercent: seg.capacityPercent,
-                  source: seg.source as any,
-                })),
-              },
+              planningBasis: eff.planningBasis as any,
+              source: eff.source as any,
+              defaultPercent: eff.defaultPercent,
+              startWeek: eff.startWeek,
+              endWeek: eff.endWeek,
+              legacy: {},
+              segments: segs && segs.length > 0
+                ? { create: segs.map((seg: any) => ({
+                    startWeek: seg.startWeek,
+                    endWeek: seg.endWeek,
+                    capacityPercent: seg.capacityPercent,
+                    source: seg.source as any,
+                  })) }
+                : undefined,
             },
           })
-          preserveIds.add(nr.id)
         }
       }
 
       const updatedRt = await tx.resourceType.update({ where: { id: rt.id }, data: { count } })
       await clearWeeklyDemandCache(req.params.projectId as string, tx)
-      await syncCapacityProfilesForProject(tx, req.params.projectId as string, patchSyncOptions(preserveIds))
+      rtPatchFailureSeam?.()
       return { updated: updatedRt, warnings: nextWarnings }
     }
 
@@ -357,7 +452,17 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       for (const nr of reversed) {
         if (removed >= targetRemove) break
         if (inheritedIds.has(nr.id)) {
-          await tx.capacityProfile.deleteMany({ where: { namedResourceId: nr.id } })
+          // Find the exact profile for this NR to delete by ID
+          const nrProfile = state.nrProfileRows.find(
+            (p: any) => p.namedResourceId === nr.id,
+          )
+          if (!nrProfile) {
+            throw new CapacityIntegrityError(
+              `Cannot delete named resource ${nr.id}: no validated capacity profile found. ` +
+              'Run the capacity profile backfill/repair workflow before retrying this operation.',
+            )
+          }
+          await tx.capacityProfile.delete({ where: { id: nrProfile.id } })
           await tx.namedResource.delete({ where: { id: nr.id } })
           deletedIds.add(nr.id)
           removed++
@@ -383,7 +488,6 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
         )
       }
 
-      await syncCapacityProfilesForProject(tx, req.params.projectId as string, patchSyncOptions(preserveIds))
       return { updated: updatedRt, warnings: nextWarnings }
     }
 
@@ -394,7 +498,6 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
     const updatedRt = await tx.resourceType.update({ where: { id: rt.id }, data: { count } })
     await clearWeeklyDemandCache(req.params.projectId as string, tx)
-    await syncCapacityProfilesForProject(tx, req.params.projectId as string, patchSyncOptions(preserveIds))
     return { updated: updatedRt, warnings: nextWarnings }
   })
 
@@ -405,18 +508,70 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const rt = await prisma.resourceType.findFirst({
+    where: { id: req.params.id as string, projectId: req.params.projectId as string },
+  })
+  if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
+
   const count = await prisma.$transaction(async tx => {
+    // ── Validate exact ROLE profile before deletion ─────────────
+    await loadAndValidateOwnerProfile({
+      tx,
+      projectId: req.params.projectId as string,
+      ownerKind: 'ROLE',
+      ownerId: req.params.id as string,
+    })
+
+    // ── Load and validate every NamedResource profile ───────────
+    const nrs = await tx.namedResource.findMany({
+      where: { resourceTypeId: req.params.id as string },
+    })
+
+    for (const nr of nrs) {
+      const nrProfiles = await tx.capacityProfile.findMany({
+        where: { namedResourceId: nr.id, resourceTypeId: null, projectId: req.params.projectId as string },
+      })
+
+      if (nrProfiles.length === 0) {
+        throw new CapacityIntegrityError(
+          `Missing capacity profile for named resource ${nr.id}. ` +
+          'Run the capacity profile backfill/repair workflow before retrying this operation.',
+        )
+      }
+      if (nrProfiles.length > 1) {
+        throw new CapacityIntegrityError(
+          `Multiple capacity profiles exist for named resource ${nr.id}.`,
+        )
+      }
+
+      const profileOwnerKind = nrProfiles[0].ownerKind as string
+      if (profileOwnerKind !== 'NAMED_PERSON' && profileOwnerKind !== 'PLANNED_RESOURCE') {
+        throw new CapacityIntegrityError(
+          `Capacity profile ${nrProfiles[0].id} has invalid owner kind "${profileOwnerKind}".`,
+        )
+      }
+
+      await loadAndValidateOwnerProfile({
+        tx,
+        projectId: req.params.projectId as string,
+        ownerKind: profileOwnerKind,
+        ownerId: nr.id,
+      })
+    }
+
+    // ── All profiles validated — proceed with delete ──────────
     const deleted = await tx.resourceType.deleteMany({
       where: { id: req.params.id as string, projectId: req.params.projectId as string },
     })
+
     if (deleted.count > 0) {
       await clearWeeklyDemandCache(req.params.projectId as string, tx)
-      await syncCapacityProfilesForProject(tx, req.params.projectId as string)
     }
     return deleted.count
   })
-  if (count === 0) { res.status(404).json({ error: 'Resource type not found' }); return }
 
+  if (count === 0) { res.status(404).json({ error: 'Resource type not found' }); return }
   res.json({ message: 'Deleted' })
 }))
 

@@ -1079,3 +1079,71 @@ To restore data after repair:
 - Existing runtime duplicate and malformed-state validation in
   `persistedCapacityProfileValidation.ts` and `syncCapacityProfiles.ts`
   remains as defence in depth. It is not removed by this migration.
+
+---
+
+## #364 — Runtime cutover: profile-first authority in normal writes
+
+### Operational-only sync boundary
+
+`syncCapacityProfilesForProject` is now an **operational-only** helper available only through:
+
+- `server/src/lib/backfillCapacityProfiles.ts` — explicit backfill/repair command
+- `server/src/test/` — focused unit and integration tests for the sync logic
+
+Normal HTTP routes (`projects.ts`, `resourceTypes.ts`, `namedResources.ts`) no longer import or call `syncCapacityProfilesForProject`. An automated boundary test in `server/src/test/` verifies this.
+
+### Direct authoritative writes
+
+Each normal write path now directly creates, updates or deletes profiles only for the operation's approved owner scope:
+
+| Route | Operation | Authoritative write |
+|-------|-----------|-------------------|
+| `POST /api/projects` | Create project with seed RTs | Creates ROLE `DEMAND_FOLLOWING`/100% profile per seeded RT |
+| `POST /api/projects/:id/resource-types` | Create RT + default NR | Creates ROLE `DEMAND_FOLLOWING`/100% + NAMED_PERSON `DEMAND_FOLLOWING`/100% profiles |
+| `PUT /api/projects/:id/resource-types/:id` | Update RT (capacity) | `upsertRTProfileAndProjectLegacy` replaces role profile |
+| `PUT /api/projects/:id/resource-types/:id` | Update RT (non-capacity) | Fails closed if no role profile exists |
+| `PATCH /api/projects/:id/resource-types/:id` | Update RT count | Creates/deletes inherited NR profiles; preserves explicit/segmented/planned NR profiles |
+| `DELETE /api/projects/:id/resource-types/:id` | Delete RT | Schema cascade deletes RT-owned and NR-owned profiles |
+| `POST /api/projects/:id/resource-types/:rtId/named-resources` | Create NR | `upsertNRProfileAndProjectLegacy` creates NAMED_PERSON profile |
+| `PUT /api/projects/:id/resource-types/:rtId/named-resources/:id` | Update NR (capacity) | `upsertNRProfileAndProjectLegacy` replaces NR profile |
+| `PUT /api/projects/:id/resource-types/:rtId/named-resources/:id` | Update NR (non-capacity) | Fails closed if no profile exists |
+| `PATCH /api/projects/:id/resource-types/:rtId/named-resources/:id` | Update NR capacity | `upsertNRProfileAndProjectLegacy` replaces NR profile |
+| `DELETE /api/projects/:id/resource-types/:rtId/named-resources/:id` | Delete NR | Schema cascade deletes NR-owned profile |
+
+### Fail-closed validation
+
+Normal user-facing writes reject invalid persisted profile state before any write:
+
+- Missing profiles: `"Missing capacity profile for this resource type/named resource. Run the capacity profile backfill/repair workflow before retrying this operation."`
+- Duplicate/malformed/ambiguous state: rejected with actionable error directing to audit and backfill tooling
+- Transaction rollback on failure leaves all state (profiles, segments, compatibility fields, counts, cache) unchanged
+
+### Remaining intentional compatibility readers (post-#364)
+
+The following consumers still read legacy allocation fields (`allocationMode`, `allocationPercent`, `allocationStartWeek`, `allocationEndWeek`, `allocationPct`, `startWeek`, `endWeek`) as compatibility output. These fields are written as deterministic projections from the authoritative `CapacityProfile` state but are still read by unmigrated consumers. Removal is tracked by #403 and #404.
+
+| Consumer | Fields read | Profile DTO ready? | Removal issue |
+|---|---|---|---|
+| `scheduler.ts` | `ResourceType.count`, NR allocation fields | No | #403/#404 |
+| `timeline.ts` | RT/NR allocation fields | No | #403/#404 |
+| `projectPlanningModel.ts` | RT allocation fields | No | #403/#404 |
+| `leveller.ts` | RT/NR capacity constraints | No | #403/#404 |
+| `resourceProfile.ts` (route) | RT/NR allocation (display) | Yes (projected from profile) | #403 (response aliases) |
+| `useResourceProfileExport.ts` | NR legacy fields (backup) | Yes (prefers profile columns) | #403 |
+| `namedResources.ts` (DELETE response) | `allocation*` fields | Yes (projected) | #403 |
+| `resourceTypes.ts` (DELETE response) | `allocation*` fields | Yes (projected) | #403 |
+
+### Deployment sequence for #364
+
+1. **Database backup** — `npm run db:backup`
+2. **Ownership audit** — `npm run capacity-profiles:audit` (exit 0 = clean)
+3. **Resolution** — Fix any invalid, conflicting or missing profile state identified by the audit
+4. **Backfill repair** — `npm run capacity-profiles:backfill` to ensure all owners have valid profiles
+5. **Clean audit confirmation** — Re-run audit to confirm clean state
+6. **Application deployment** — Deploy the runtime cutover
+7. **Post-deployment validation** — Run focused smoke tests on project/resource creation, updates, count changes, and deletes
+
+### Rollback
+
+Rollback is application rollback only. This issue has no database schema migration. Compatibility fields remain available during rollback because they continue to be written as deterministic projections from profile state.

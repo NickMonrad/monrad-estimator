@@ -1351,4 +1351,50 @@ describeIf('Migration and constraint enforcement', () => {
       expect(afterCount).toBe(2)
     })
   })
+  afterAll(async () => {
+    // Leave the shared disposable database at the post-#361 schema expected by
+    // later integration suites in the same lifecycle.
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_key"')
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_key"')
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_resourceTypeId_idx"')
+    await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "CapacityProfile_namedResourceId_idx"')
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'chk_CapacityProfile_exactly_one_owner'
+        ) THEN
+          ALTER TABLE "CapacityProfile"
+            ADD CONSTRAINT "chk_CapacityProfile_exactly_one_owner"
+            CHECK (
+              ("resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
+              OR
+              ("resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+            );
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'chk_CapacityProfile_owner_kind_fk'
+        ) THEN
+          ALTER TABLE "CapacityProfile"
+            ADD CONSTRAINT "chk_CapacityProfile_owner_kind_fk"
+            CHECK (
+              ("ownerKind" = 'ROLE' AND "resourceTypeId" IS NOT NULL AND "namedResourceId" IS NULL)
+              OR
+              ("ownerKind" = 'NAMED_PERSON' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+              OR
+              ("ownerKind" = 'PLANNED_RESOURCE' AND "resourceTypeId" IS NULL AND "namedResourceId" IS NOT NULL)
+            );
+        END IF;
+      END $$;
+    `)
+    await prisma.$executeRawUnsafe(
+      'CREATE UNIQUE INDEX "CapacityProfile_resourceTypeId_key" ON "CapacityProfile"("resourceTypeId") WHERE "resourceTypeId" IS NOT NULL',
+    )
+    await prisma.$executeRawUnsafe(
+      'CREATE UNIQUE INDEX "CapacityProfile_namedResourceId_key" ON "CapacityProfile"("namedResourceId") WHERE "namedResourceId" IS NOT NULL',
+    )
+  })
+
 })

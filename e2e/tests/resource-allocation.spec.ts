@@ -318,7 +318,7 @@ async function seedSegmentedNamedPerson(page: Page, projectId: string, rtId: str
     // resourceTypeId must be NULL for NAMED_PERSON (enforced by CHECK constraint)
     await client.query(
       'INSERT INTO "CapacityProfile" (id, "projectId", "resourceTypeId", "namedResourceId", "ownerKind", "planningBasis", "source", "defaultPercent", "startWeek", "endWeek", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
-      [profileId, projectId, null, nrId, 'NAMED_PERSON', 'AVAILABILITY_WINDOW', 'MANUAL', 60, 3, 6, now, now],
+      [profileId, projectId, null, nrId, 'NAMED_PERSON', 'CAPACITY_PROFILE', 'MANUAL', 60, null, null, now, now],
     )
 
     // Two ordered CapacitySegment rows with deterministic IDs
@@ -599,6 +599,13 @@ async function addNamedResourceSimple(page: Page): Promise<string> {
   const nrRow = counts.locator('[data-testid^="named-resource-row-"]').first()
   await expect(nrRow).toBeVisible({ timeout: 10_000 })
   const testId = await nrRow.getAttribute('data-testid')
+  const nrSelect = nrRow.locator('select[aria-label*="Availability pattern for"]')
+  const patchResp = page.waitForResponse(
+    resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
+    { timeout: 10_000 },
+  )
+  await nrSelect.selectOption('TIMELINE')
+  await patchResp
   expect(testId).toBeTruthy()
   return testId!
 }
@@ -646,7 +653,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(patHBox!.x + patHBox!.width).toBeLessThanOrEqual(avHBox!.x + 1)
 
     // Contextual help scrollWidth <= clientWidth (no overflow)
-    const helpText = rowLoc.getByText(/Available at the selected percentage/i)
+    const helpText = rowLoc.getByText(/Assigned only when scheduled work requires this resource|Work is assigned only when demand exists/i)
     await expectElementToFit(helpText)
 
     // Row has no horizontal overflow
@@ -702,7 +709,7 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     expect(patHBox!.x + patHBox!.width).toBeLessThanOrEqual(avHBox!.x + 1)
 
     // Contextual help fits
-    const helpText = rowLoc.getByText(/Available at the selected percentage/i)
+    const helpText = rowLoc.getByText(/Assigned only when scheduled work requires this resource|Work is assigned only when demand exists/i)
     await expectElementToFit(helpText)
 
     // Row fits
@@ -738,8 +745,21 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
 
     await page.setViewportSize(VP_390)
 
-    const nrTestId = await addNamedResourceSimple(page)
+    const authToken = await page.evaluate(() => window.localStorage.getItem('token'))
+    expect(authToken).toBeTruthy()
+    const rtsResponse = await page.request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-types`,
+      { headers: { Authorization: `Bearer ${authToken}` } },
+    )
+    expect(rtsResponse.ok(), 'resource type discovery failed').toBeTruthy()
+    const rts = await rtsResponse.json() as Array<{ id: string; name: string }>
+    const techLead = rts.find(rt => rt.name === 'Tech Lead')
+    expect(techLead, 'Expected seeded Tech Lead resource type').toBeDefined()
+    const { nrId } = await seedSegmentedNamedPerson(page, projectId, techLead!.id, 'Responsive Alice')
+    const nrTestId = `named-resource-row-${nrId}`
+    await page.reload()
     const rowLoc = page.getByTestId(nrTestId)
+    await expect(rowLoc).toBeVisible({ timeout: 15_000 })
 
     // Mobile inline labels visible
     await expect(rowLoc.getByText('Pattern:')).toBeVisible()
@@ -747,17 +767,8 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     await expect(rowLoc.getByText('Avail from:')).toBeVisible()
     await expect(rowLoc.getByText('Avail to:')).toBeVisible()
 
-    // Switch to CAPACITY_PLAN to check View Resource Profile button
-    const nrSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
-    await expect(nrSelect).toBeVisible()
-    const patchResp = page.waitForResponse(
-      resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
-      { timeout: 10_000 },
-    )
-    await nrSelect.selectOption('CAPACITY_PLAN')
-    await patchResp
 
-    // Re-acquire select after PATCH settles
+    // Re-acquire the select after the profile-backed row is rendered.
     const mobileSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
     await expect(mobileSelect).toBeVisible()
     await expect(mobileSelect).toHaveValue('CAPACITY_PLAN')
@@ -830,18 +841,22 @@ test.describe('Responsive measurements — Timeline resource-counts', () => {
     await quickSchedule(page)
     await expect(page.getByText(/\d+ features scheduled/i)).toBeVisible({ timeout: 15_000 })
 
-    const nrTestId = await addNamedResourceSimple(page)
-    const rowLoc = page.getByTestId(nrTestId)
-
-    // Switch to CAPACITY_PLAN
-    const nrSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
-    await expect(nrSelect).toBeVisible()
-    const patchResp = page.waitForResponse(
-      resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
-      { timeout: 10_000 },
+    const authToken = await page.evaluate(() => window.localStorage.getItem('token'))
+    expect(authToken).toBeTruthy()
+    const rtsResponse = await page.request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-types`,
+      { headers: { Authorization: `Bearer ${authToken}` } },
     )
-    await nrSelect.selectOption('CAPACITY_PLAN')
-    await patchResp
+    expect(rtsResponse.ok(), 'resource type discovery failed').toBeTruthy()
+    const rts = await rtsResponse.json() as Array<{ id: string; name: string }>
+    const techLead = rts.find(rt => rt.name === 'Tech Lead')
+    expect(techLead, 'Expected seeded Tech Lead resource type').toBeDefined()
+    const { nrId } = await seedSegmentedNamedPerson(page, projectId, techLead!.id, 'Capacity Plan Alice')
+    const nrTestId = `named-resource-row-${nrId}`
+    await page.reload()
+    const rowLoc = page.getByTestId(nrTestId)
+    await expect(rowLoc).toBeVisible({ timeout: 15_000 })
+
 
     // ── Desktop (default viewport) ──
     // Varies by week help text visible

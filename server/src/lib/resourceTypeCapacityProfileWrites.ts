@@ -13,6 +13,8 @@
 
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
+import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
 
 // ─── Mapping tables (legacy → profile) ───────────────────────────────────────
 
@@ -39,6 +41,11 @@ export interface ResourceTypeCapacityPayload {
   allocationEndWeek?: number | null
 }
 
+export interface RTProfileWriteOptions {
+  /** Allow creating a new profile when none exists (default: false). */
+  allowCreate?: boolean
+}
+
 // ─── Main write helper ──────────────────────────────────────────────────────
 
 /**
@@ -58,6 +65,7 @@ export async function upsertRTProfileAndProjectLegacy(
   projectId: string,
   rtId: string,
   payload: ResourceTypeCapacityPayload,
+  options: RTProfileWriteOptions = {},
 ): Promise<LegacyAllocationProjection> {
   // ── 1. Normalise incoming fields ───────────────────────────────────────
   let allocationStartWeek = payload.allocationStartWeek ?? null
@@ -88,44 +96,72 @@ export async function upsertRTProfileAndProjectLegacy(
     endWeek: allocationEndWeek,
     segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number; source: string }>,
   }
-
-  // ── 2. Persist role-owned CapacityProfile ─────────────────────────────
-  // Delete any existing role-level profile for this RT first, then create new.
+  // ── 2. Load and validate existing profile, or create ─────────────────
   const existingProfiles = await tx.capacityProfile.findMany({
     where: { resourceTypeId: rtId, namedResourceId: null, projectId },
     select: { id: true },
   })
-  const existingProfileIds = existingProfiles.map((p: { id: string }) => p.id)
 
-  if (existingProfileIds.length > 0) {
-    await tx.capacitySegment.deleteMany({
-      where: { capacityProfileId: { in: existingProfileIds } },
-    })
-    await tx.capacityProfile.deleteMany({
-      where: { id: { in: existingProfileIds } },
-    })
+  if (existingProfiles.length > 1) {
+    throw new CapacityIntegrityError(
+      `Multiple capacity profiles exist for resource type ${rtId}. ` +
+      'Run the capacity profile backfill/repair workflow before retrying this operation.',
+    )
   }
 
-  await tx.capacityProfile.create({
-    data: {
-      ownerKind: 'ROLE',
-      projectId,
-      resourceTypeId: rtId,
-      namedResourceId: null,
-      planningBasis,
-      source,
-      defaultPercent: percent,
-      startWeek: allocationStartWeek,
-      endWeek: allocationEndWeek,
-    },
-  })
+  const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
 
+  if (existingId) {
+    // Validate existing profile before update
+    const validated = await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: 'ROLE',
+      ownerId: rtId,
+    })
+    // Update in place — preserve profile ID
+    await tx.capacitySegment.deleteMany({
+      where: { capacityProfileId: validated.id },
+    })
+    await tx.capacityProfile.update({
+      where: { id: validated.id },
+      data: {
+        ownerKind: 'ROLE',
+        planningBasis,
+        source,
+        defaultPercent: percent,
+        startWeek: allocationStartWeek,
+        endWeek: allocationEndWeek,
+      },
+    })
+  } else {
+    // No existing profile — create only when allowCreate is set
+    if (!options.allowCreate) {
+      throw new CapacityIntegrityError(
+        `Missing capacity profile for resource type ${rtId}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
+    await tx.capacityProfile.create({
+      data: {
+        ownerKind: 'ROLE',
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        planningBasis,
+        source,
+        defaultPercent: percent,
+        startWeek: allocationStartWeek,
+        endWeek: allocationEndWeek,
+      },
+    })
+  }
   // ── 3. Project back to legacy ──────────────────────────────────────────
   const projection = projectCapacityProfileToLegacyAllocation(profile)
-
   // The projection is always non-null because we always have a profile here.
   return projection!
 }
+
 
 /**
  * Build a capacity payload for the missing-profile case in non-capacity RT update.

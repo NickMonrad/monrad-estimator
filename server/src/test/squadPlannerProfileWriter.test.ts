@@ -521,6 +521,42 @@ describe('isValidMapperProvenance', () => {
     })).toBe(false)
   })
 
+  // ── Acceptance: project / ResourceType creation shapes ───────────────
+
+  it('accepts ROLE profile created by project creation (AVAILABILITY_WINDOW/TIMELINE with null allocationPct)', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 100, startWeek: null, endWeek: null,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+    })).toBe(true)
+  })
+
+  it('accepts ROLE profile created by ResourceType POST (AVAILABILITY_WINDOW/TIMELINE with null allocationPct)', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 100, startWeek: null, endWeek: null,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+    })).toBe(true)
+  })
+
+  it('rejects explicit/manual ROLE profile with source MANUAL', () => {
+    // A manually created profile with non-mapper source is not planner-adoptable.
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: 100, startWeek: null, endWeek: null,
+      source: 'MANUAL',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+    })).toBe(false)
+  })
+
 })
 
 // ─── Shared resource classification tests ──────────────────────────────────

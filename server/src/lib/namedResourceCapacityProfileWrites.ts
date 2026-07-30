@@ -12,6 +12,8 @@
 
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
+import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
 
 // ─── Mapping tables (legacy → profile) ───────────────────────────────────────
 
@@ -44,6 +46,8 @@ export interface NamedResourceCapacityPayload {
 export interface NRProfileWriteOptions {
   /** Whether the named resource is a synthetic/planned resource (true) or a named person (false/null/undefined). */
   synthetic?: boolean | null
+  /** Allow creating a new profile when none exists (default: false). */
+  allowCreate?: boolean
 }
 /**
  * ## Flow
@@ -111,48 +115,73 @@ export async function upsertNRProfileAndProjectLegacy(
     segments: [] as Array<{ startWeek: number; endWeek: number; capacityPercent: number; source: string }>,
   }
 
-  // ── 2. Persist CapacityProfile ─────────────────────────────────────────
-  // Delete any existing profile + segments for this NR first.
-  // Use explicit profile lookup + ID-based delete for compatibility with
-  // both Prisma's nested relation filters and the integration test store.
+  // ── 2. Load and validate existing profile, or create ─────────────────
+  const expectedOwnerKind = options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'
   const existingProfiles = await tx.capacityProfile.findMany({
     where: { namedResourceId: nrId, projectId },
     select: { id: true },
   })
-  const existingProfileIds = existingProfiles.map((p: { id: string }) => p.id)
 
-  if (existingProfileIds.length > 0) {
-    await tx.capacitySegment.deleteMany({
-      where: { capacityProfileId: { in: existingProfileIds } },
-    })
-    await tx.capacityProfile.deleteMany({
-      where: { id: { in: existingProfileIds } },
-    })
+  if (existingProfiles.length > 1) {
+    throw new CapacityIntegrityError(
+      `Multiple capacity profiles exist for named resource ${nrId}. ` +
+      'Run the capacity profile backfill/repair workflow before retrying this operation.',
+    )
   }
 
-  await tx.capacityProfile.create({
-    data: {
-      ownerKind: options.synthetic ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
-      projectId,
-      resourceTypeId: null,
-      namedResourceId: nrId,
-      planningBasis,
-      source,
-      defaultPercent: percent,
-      startWeek: allocationStartWeek,
-      endWeek: allocationEndWeek,
-    },
-  })
+  const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
 
+  if (existingId) {
+    // Validate existing profile before update
+    const validated = await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: expectedOwnerKind,
+      ownerId: nrId,
+    })
+    // Update in place — preserve profile ID, replace segments
+    await tx.capacitySegment.deleteMany({
+      where: { capacityProfileId: validated.id },
+    })
+    await tx.capacityProfile.update({
+      where: { id: validated.id },
+      data: {
+        ownerKind: expectedOwnerKind,
+        planningBasis,
+        source,
+        defaultPercent: percent,
+        startWeek: allocationStartWeek,
+        endWeek: allocationEndWeek,
+      },
+    })
+  } else {
+    // No existing profile — create only when allowCreate is set
+    if (!options.allowCreate) {
+      throw new CapacityIntegrityError(
+        `Missing capacity profile for named resource ${nrId}. ` +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
+    }
+    await tx.capacityProfile.create({
+      data: {
+        ownerKind: expectedOwnerKind,
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: nrId,
+        planningBasis,
+        source,
+        defaultPercent: percent,
+        startWeek: allocationStartWeek,
+        endWeek: allocationEndWeek,
+      },
+    })
+  }
   // ── 3. Replace segments ────────────────────────────────────────────────
   // For simple legacy-style payloads there are no segments to create.
   // When segment arrays are added to the public API in a future phase,
   // they will be created here.
-
   // ── 4. Project back to legacy ──────────────────────────────────────────
   const projection = projectCapacityProfileToLegacyAllocation(profile)
-
-  // The projection is always non-null because we always have a profile here.
   return projection!
 }
 
@@ -164,4 +193,39 @@ function planningBasisToCamel(value: string): string {
 
 function sourceToCamel(value: string): string {
   return value.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+}
+
+// ─── Exported scalar mode helpers for PUT/PATCH routes ─────────────────────
+
+/**
+ * Map a scalar allocation mode to its authoritative profile semantics.
+ *
+ * Valid modes: EFFORT → DEMAND_FOLLOWING/FIXED, TIMELINE → AVAILABILITY_WINDOW,
+ * FULL_PROJECT → WHOLE_PROJECT_ALLOCATION.
+ *
+ * Throws an error for CAPACITY_PLAN (not settable via scalar API) and
+ * unknown/unsupported modes.
+ *
+ * Returns the authoritative planning basis, source and non-window flag.
+ */
+export function mapScalarModeToProfile(mode: string): {
+  planningBasis: string
+  source: string
+  isNonWindow: boolean
+} {
+  // Reject CAPACITY_PLAN — scalar NamedResource endpoint is not for capacity-plan management
+  if (mode === 'CAPACITY_PLAN') {
+    throw new Error('CAPACITY_PLAN mode cannot be set on a named resource through scalar capacity fields.')
+  }
+
+  const planningBasis = ALLOCATION_MODE_TO_PLANNING_BASIS[mode]
+  if (!planningBasis) {
+    throw new Error(`Invalid allocation mode "${mode}". Supported modes: EFFORT, TIMELINE, FULL_PROJECT.`)
+  }
+
+  const source = deriveProfileSource(mode)
+  const NON_WINDOW_MODES = new Set(['EFFORT', 'FULL_PROJECT'])
+  const isNonWindow = NON_WINDOW_MODES.has(mode)
+
+  return { planningBasis, source, isNonWindow }
 }

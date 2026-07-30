@@ -515,7 +515,7 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(within(row!).getByPlaceholderText('W∞')).toHaveValue(12)
   })
 
-  it('switching to CAPACITY_PLAN preserves allocationPercent in API payload for server compatibility', async () => {
+  it('CAPACITY_PLAN is not available in dropdown when current mode is TIMELINE', async () => {
     setupWithNamedResource({
       allocationMode: 'TIMELINE',
       allocationPercent: 80,
@@ -525,23 +525,9 @@ describe('TimelinePage — named-resource allocation controls', () => {
     renderPage()
 
     const select = await screen.findByRole('combobox')
-    fireEvent.change(select, { target: { value: 'CAPACITY_PLAN' } })
-
-    await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-        expect.objectContaining({
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 80,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-        }),
-      )
-    })
-
-    await waitFor(() => {
-      expect(select).toHaveValue('CAPACITY_PLAN')
-    })
+    const options = Array.from(select.querySelectorAll('option'))
+    const optionValues = options.map(o => (o as HTMLOptionElement).value)
+    expect(optionValues).not.toContain('CAPACITY_PLAN')
   })
 
   it('start/end week inputs are disabled for non-TIMELINE rows', async () => {
@@ -693,7 +679,7 @@ describe('TimelinePage — named-resource allocation controls', () => {
     })
   })
 
-  it('sends exact payload with allocationPercent=100 when switching to CAPACITY_PLAN', async () => {
+  it('CAPACITY_PLAN is not available in dropdown when current mode is EFFORT', async () => {
     setupWithNamedResource({
       allocationMode: 'EFFORT',
       allocationPercent: 100,
@@ -704,20 +690,9 @@ describe('TimelinePage — named-resource allocation controls', () => {
 
     const select = await screen.findByRole('combobox')
     expect(select).toHaveValue('EFFORT')
-
-    fireEvent.change(select, { target: { value: 'CAPACITY_PLAN' } })
-
-    await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-        {
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 100,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-        },
-      )
-    })
+    const options = Array.from(select.querySelectorAll('option'))
+    const optionValues = options.map(o => (o as HTMLOptionElement).value)
+    expect(optionValues).not.toContain('CAPACITY_PLAN')
   })
 
   // ---------------------------------------------------------------------------
