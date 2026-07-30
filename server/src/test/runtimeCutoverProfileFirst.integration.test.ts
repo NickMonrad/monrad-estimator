@@ -27,6 +27,7 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
 import { app } from '../app.js'
 import { __setRTPatchFailureSeam } from '../routes/resourceTypes.js'
+import { exitCapacityPlanRoleProfile } from '../lib/capacityPlanExit.js'
 
 // ─── Guard ──────────────────────────────────────────────────────────
 
@@ -1192,4 +1193,313 @@ describeIf('profile-first runtime cutover (#364)', () => {
       orderBy: { id: 'asc' },
     })).toEqual(survivorProfilesBefore)
   })
+
+  it('18. named-resource POST exits CAPACITY_PLAN at the authoritative ROLE profile level', async () => {
+    const createdRt = await createRuntimeResourceType('POST CAPACITY_PLAN Exit RT')
+    const resourceTypeId = createdRt.id as string
+    const protectedNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
+    const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId, namedResourceId: null },
+    })
+
+    // Set ROLE profile to CAPACITY_PROFILE with segments
+    await prisma.capacityProfile.update({
+      where: { id: roleProfile.id },
+      data: {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 60,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    await prisma.capacitySegment.createMany({
+      data: [
+        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+        { capacityProfileId: roleProfile.id, startWeek: 4, endWeek: 5, capacityPercent: 0, source: 'SQUAD_PLANNER' },
+      ],
+    })
+    // Stale legacy RT fields (should be overwritten by projection)
+    await prisma.resourceType.update({
+      where: { id: resourceTypeId },
+      data: {
+        allocationMode: 'EFFORT',
+        allocationPercent: 20,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+    })
+
+    // Set existing NR to PLANNED_RESOURCE with CAPACITY_PROFILE (should be preserved)
+    const protectedProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, namedResourceId: protectedNr.id, resourceTypeId: null },
+    })
+    await prisma.capacityProfile.update({
+      where: { id: protectedProfile.id },
+      data: {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 40,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    await prisma.capacitySegment.createMany({
+      data: [
+        { capacityProfileId: protectedProfile.id, startWeek: 0, endWeek: 1, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+        { capacityProfileId: protectedProfile.id, startWeek: 2, endWeek: 3, capacityPercent: 0, source: 'SQUAD_PLANNER' },
+      ],
+    })
+
+    const protectedBefore = await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: protectedProfile.id },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })
+
+    // POST a new named resource — should trigger ROLE exit
+    const postResponse = await request(app)
+      .post(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({ name: 'Post Exit Person' })
+    expect(postResponse.status).toBe(201)
+    const createdNrId = postResponse.body.id as string
+
+    // Assert 1: ROLE profile was updated in place (ID preserved, planning changed)
+    const postExitRole = await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: roleProfile.id },
+      include: { segments: true },
+    })
+    expect(postExitRole).toMatchObject({
+      ownerKind: 'ROLE',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+    })
+    expect(postExitRole.segments).toHaveLength(0)
+
+    // Assert 2: ResourceType compatibility fields project correctly
+    const postExitRt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
+    expect(postExitRt).toMatchObject({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    // Assert 3: New NR has a valid NAMED_PERSON profile from post-exit ROLE defaults
+    const createdNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: createdNrId } })
+    expect(createdNr).toMatchObject({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+    const createdProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, namedResourceId: createdNrId, resourceTypeId: null },
+      include: { segments: true },
+    })
+    expect(createdProfile).toMatchObject({
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+    })
+    expect(createdProfile.segments).toHaveLength(0)
+
+    // Assert 4: Existing PLANNED_RESOURCE profile and segments are preserved
+    expect(await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: protectedProfile.id },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })).toEqual(protectedBefore)
+
+    // Assert 5: Count is correct
+    expect(await prisma.namedResource.count({ where: { resourceTypeId } })).toBe(2)
+    expect(postExitRt.count).toBe(2)
+
+    // Assert 6: Weekly cache was cleared
+    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
+    expect(project.weeklyDemandCache).toEqual({})
+  }, 30000)
+
+  it('19. named-resource DELETE exits CAPACITY_PLAN at the authoritative ROLE profile level', async () => {
+    const createdRt = await createRuntimeResourceType('DELETE CAPACITY_PLAN Exit RT')
+    const resourceTypeId = createdRt.id as string
+    const targetNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
+    const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId, namedResourceId: null },
+    })
+
+    // Set ROLE profile to CAPACITY_PROFILE with segments
+    await prisma.capacityProfile.update({
+      where: { id: roleProfile.id },
+      data: {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 60,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    await prisma.capacitySegment.createMany({
+      data: [
+        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+      ],
+    })
+    await prisma.resourceType.update({
+      where: { id: resourceTypeId },
+      data: {
+        allocationMode: 'EFFORT',
+        allocationPercent: 20,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+    })
+
+    // Add a second NR to verify count sync + protected owner preservation
+    const secondNrResponse = await request(app)
+      .post(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({ name: 'Survivor NR' })
+    expect(secondNrResponse.status).toBe(201)
+    const survivorNrId = secondNrResponse.body.id as string
+
+    // Capture survivor state before DELETE
+    const survivorBefore = await prisma.namedResource.findUniqueOrThrow({ where: { id: survivorNrId } })
+    const survivorProfileBefore = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, namedResourceId: survivorNrId, resourceTypeId: null },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })
+
+    // Reset ROLE to CAPACITY_PROFILE for the DELETE test
+    await prisma.capacityProfile.update({
+      where: { id: roleProfile.id },
+      data: {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 60,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    await prisma.capacitySegment.createMany({
+      data: [
+        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+      ],
+    })
+    await prisma.resourceType.update({
+      where: { id: resourceTypeId },
+      data: {
+        allocationMode: 'EFFORT',
+        allocationPercent: 20,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+    })
+
+    const deleteResponse = await request(app)
+      .delete(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${targetNr.id}`)
+      .set('Authorization', authHeader)
+    expect(deleteResponse.status).toBe(204)
+
+    // Assert 1: ROLE profile transitioned to AVAILABILITY_WINDOW
+    const postExitRole = await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: roleProfile.id },
+      include: { segments: true },
+    })
+    expect(postExitRole).toMatchObject({
+      ownerKind: 'ROLE',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+    })
+    expect(postExitRole.segments).toHaveLength(0)
+
+    // Assert 2: ResourceType compatibility fields projected correctly
+    const postExitRt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
+    expect(postExitRt).toMatchObject({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+
+    // Assert 3: Deleted NR and its profile are gone
+    expect(await prisma.namedResource.findUnique({ where: { id: targetNr.id } })).toBeNull()
+    const deletedProfile = await prisma.capacityProfile.findFirst({
+      where: { projectId, namedResourceId: targetNr.id, resourceTypeId: null },
+    })
+    expect(deletedProfile).toBeNull()
+
+    // Assert 4: Survivor NR and its profile preserved
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: survivorNrId } })).toEqual(survivorBefore)
+    expect(await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: survivorProfileBefore.id },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })).toEqual(survivorProfileBefore)
+
+    // Assert 5: Count is correct (1 remaining)
+    expect(postExitRt.count).toBe(1)
+
+    // Assert 6: Weekly cache was cleared
+    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
+    expect(project.weeklyDemandCache).toEqual({})
+  }, 30000)
+
+  it('20. exitCapacityPlanRoleProfile rolls back atomically within a failing transaction', async () => {
+    const testRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'asc' } })
+    const resourceTypeId = testRt!.id
+    const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId, namedResourceId: null },
+    })
+
+    // Set ROLE to CAPACITY_PROFILE with segments
+    await prisma.capacityProfile.update({
+      where: { id: roleProfile.id },
+      data: {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 60,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    await prisma.capacitySegment.createMany({
+      data: [
+        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+      ],
+    })
+    await prisma.resourceType.update({
+      where: { id: resourceTypeId },
+      data: {
+        allocationMode: 'EFFORT',
+        allocationPercent: 20,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      },
+    })
+
+    const before = await snapshotRuntimeState(resourceTypeId)
+
+    // Call the exit helper inside a transaction that will fail
+    try {
+      await prisma.$transaction(async tx => {
+        await exitCapacityPlanRoleProfile(tx, projectId, resourceTypeId)
+        throw new Error('seam: transaction rollback after exit')
+      })
+    } catch {
+      // Expected — no action
+    }
+
+    // Verify exact rollback: state equals pre-exit snapshot
+    expect(await snapshotRuntimeState(resourceTypeId)).toEqual(before)
+  }, 30000)
 })

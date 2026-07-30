@@ -5,7 +5,7 @@ import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { upsertNRProfileAndProjectLegacy, mapScalarModeToProfile } from '../lib/namedResourceCapacityProfileWrites.js'
 import type { NamedResourceCapacityPayload } from '../lib/namedResourceCapacityProfileWrites.js'
-import { exitCapacityPlanForManualScheduling } from '../lib/capacityPlanExit.js'
+import { exitCapacityPlanRoleProfile } from '../lib/capacityPlanExit.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
 import type { OwnerProfileQuery } from '../lib/ownerProfileLoader.js'
@@ -137,30 +137,21 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       ownerId: rtId,
     })
 
-    const isCapacityPlan = roleProfile.planningBasis === 'CAPACITY_PROFILE'
-
-    if (isCapacityPlan) {
-      await exitCapacityPlanForManualScheduling(rt.id, tx)
-      // Reload the post-exit role profile
-      const postExitProfile = await loadAndValidateOwnerProfile({
-        tx,
-        projectId,
-        ownerKind: 'ROLE',
-        ownerId: rtId,
-      })
-      Object.assign(roleProfile, postExitProfile)
-    }
+    // Exit CAPACITY_PLAN at the authoritative level (updates ROLE profile + projects to RT compat)
+    const effectiveRoleProfile = roleProfile.planningBasis === 'CAPACITY_PROFILE'
+      ? await exitCapacityPlanRoleProfile(tx, projectId, rtId)
+      : roleProfile
 
     // Derive inherited defaults from the authoritative role profile
-    const roleAllocationMode = isCapacityPlan ? 'TIMELINE' : (
-      roleProfile.planningBasis === 'DEMAND_FOLLOWING' ? 'EFFORT' :
-      roleProfile.planningBasis === 'AVAILABILITY_WINDOW' ? 'TIMELINE' :
-      roleProfile.planningBasis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT' :
+    const roleAllocationMode = (
+      effectiveRoleProfile.planningBasis === 'DEMAND_FOLLOWING' ? 'EFFORT' :
+      effectiveRoleProfile.planningBasis === 'AVAILABILITY_WINDOW' ? 'TIMELINE' :
+      effectiveRoleProfile.planningBasis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT' :
       'TIMELINE' as string
     )
-    const roleAllocationPercent = isCapacityPlan ? 100 : (roleProfile.defaultPercent ?? 100)
-    const roleAllocationStartWeek = isCapacityPlan ? null : roleProfile.startWeek
-    const roleAllocationEndWeek = isCapacityPlan ? null : roleProfile.endWeek
+    const roleAllocationPercent = effectiveRoleProfile.defaultPercent ?? 100
+    const roleAllocationStartWeek = effectiveRoleProfile.startWeek
+    const roleAllocationEndWeek = effectiveRoleProfile.endWeek
     const inheritAllocation = roleAllocationMode !== 'EFFORT'
 
     // Create NR with non-capacity fields first
@@ -568,9 +559,8 @@ router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       ownerId: rtId,
     })
 
-    const isCapacityPlan = roleProfile.planningBasis === 'CAPACITY_PROFILE'
-    if (isCapacityPlan) {
-      await exitCapacityPlanForManualScheduling(rt.id, tx)
+    if (roleProfile.planningBasis === 'CAPACITY_PROFILE') {
+      await exitCapacityPlanRoleProfile(tx, projectId, rt.id)
     }
 
     await tx.namedResource.delete({ where: { id } })

@@ -516,12 +516,16 @@ describe('resource type manual scheduling regression', () => {
           }),
           [namedProfile('nr-2')],
         ),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+        update: vi.fn().mockResolvedValue({ id: 'cp-role-1', planningBasis: 'AVAILABILITY_WINDOW' }),
+      },
+      capacitySegment: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       resourceType: {
         update: vi.fn().mockResolvedValue({ id: 'rt-1', allocationMode: 'TIMELINE' }),
       },
       namedResource: {
-        updateMany: vi.fn().mockResolvedValue({ count: 2 }),
         delete: vi.fn().mockResolvedValue({}),
         count: vi.fn().mockResolvedValue(1),
       },
@@ -540,6 +544,23 @@ describe('resource type manual scheduling regression', () => {
       .set('Authorization', authHeader)
 
     expect(res.status).toBe(204)
+    expect(exitTx.capacitySegment.deleteMany).toHaveBeenCalledWith({
+      where: { capacityProfileId: 'cp-role-1' },
+    })
+    expect(exitTx.capacityProfile.update).toHaveBeenCalledWith({
+      where: { id: 'cp-role-1' },
+      data: {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    expect(exitTx.project.update).toHaveBeenCalledWith({
+      where: { id: 'proj-1' },
+      data: { weeklyDemandCache: {} },
+    })
     expect(exitTx.resourceType.update).toHaveBeenCalledWith({
       where: { id: 'rt-1' },
       data: {
@@ -549,22 +570,8 @@ describe('resource type manual scheduling regression', () => {
         allocationEndWeek: null,
       },
     })
-    expect(exitTx.namedResource.updateMany).toHaveBeenCalledWith({
-      where: {
-        resourceTypeId: 'rt-1',
-        allocationMode: 'CAPACITY_PLAN',
-      },
-      data: {
-        allocationMode: 'TIMELINE',
-        allocationPercent: 100,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        allocationPct: 100,
-        startWeek: null,
-        endWeek: null,
-      },
-    })
     expect(exitTx.namedResource.delete).toHaveBeenCalledWith({ where: { id: 'nr-2' } })
+    expect(exitTx.namedResource.count).toHaveBeenCalledWith({ where: { resourceTypeId: 'rt-1' } })
     expect(exitTx.resourceType.update).toHaveBeenCalledWith({
       where: { id: 'rt-1' },
       data: { count: 1 },
