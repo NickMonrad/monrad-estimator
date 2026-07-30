@@ -116,3 +116,32 @@ export const applyOptimiserScenario = (
       staggerEpics: options.staggerEpics,
     })
     .then(r => r.data)
+
+// ---------------------------------------------------------------------------
+// Capacity Profile Transfer
+// ---------------------------------------------------------------------------
+
+export interface TransferToManualResult {
+  transferred: boolean
+  result: {
+    profilesTransferred: number
+    plannedResourceProfilesTransferred: number
+    roleProfileTransferred: boolean
+    protectedProfiles: string[]
+  }
+}
+
+/**
+ * Transfer a Squad Planner-managed role to manual capacity ownership.
+ * The role's capacity and segment boundaries are preserved; only the
+ * ownership source changes from SQUAD_PLANNER to MANUAL.
+ */
+export const transferToManualCapacity = (
+  projectId: string,
+  resourceTypeId: string,
+): Promise<TransferToManualResult> =>
+  api
+    .post<TransferToManualResult>(`/projects/${projectId}/capacity-profiles/transfer-to-manual`, {
+      resourceTypeId,
+    })
+    .then(r => r.data)
