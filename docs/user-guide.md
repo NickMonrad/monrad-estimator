@@ -225,6 +225,29 @@ Squad Planner generates or reviews a capacity profile. You can use it to model h
 
 > **Remember:** **Update timeline** is the normal action to refresh the schedule. Squad Planner and Starting Team Finder are tools for exploring and refining capacity settings, not for regenerating the timeline.
 
+### Switching from Squad Planner to manual capacity
+
+When a role is managed by Squad Planner, Resource Profile displays its capacity as read-only. The **Switch to manual capacity** action transfers ownership of the role from the Squad Planner to manual management.
+
+Transferring to manual:
+
+- Preserves the current capacity, segment boundaries, and effective weekly capacity.
+- Makes the role editable through the normal capacity profile editor in Resource Profile.
+- The role will no longer be automatically updated by later Squad Planner applications.
+- Planned placeholder resources remain planned resources (they are not converted to named people).
+- The transfer is one-way unless a future workflow deliberately re-establishes planner ownership.
+
+After transfer, the role supports all existing manual availability patterns:
+
+- **As needed** (demand-following)
+- **Fixed for whole project** (whole-project allocation)
+- **Fixed for selected weeks** (availability window)
+- **Varies by week** (segmented capacity profile)
+
+Editing the capacity after transfer follows the same workflow as any manually managed role. See [Capacity profiles](#capacity-profiles) below.
+
+> **Note:** A later Squad Planner apply will not silently reclaim or overwrite the transferred role. The apply will fail with a conflict identifying the affected role.
+
 ## Capacity profiles
 
 Capacity profiles are useful for modelling how staffing changes over time.

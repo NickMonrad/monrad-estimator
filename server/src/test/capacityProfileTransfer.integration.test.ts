@@ -353,26 +353,26 @@ describeIf('Scenario 1 — Successful transfer', () => {
     nr1Id = await createNamedResource(projectId, rtId, 'nr-transfer-s1-1', 'Transfer Engineer 1')
     nr2Id = await createNamedResource(projectId, rtId, 'nr-transfer-s1-2', 'Transfer Engineer 2')
 
-    // Create ROLE-level SQUAD_PLANNER profile with segments
+    // Create ROLE-level SQUAD_PLANNER profile with segments (profile-level windows are null for segmented CAPACITY_PROFILE)
     roleProfileIdBefore = await createProfile(
       projectId, 'cp-transfer-role-s1', 'ROLE', rtId, null,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: 0, endWeek: 11 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
     await createSegment(roleProfileIdBefore, 0, 3, 100)
     await createSegment(roleProfileIdBefore, 4, 7, 75)
     await createSegment(roleProfileIdBefore, 8, 11, 50)
 
-    // Create PLANNED_RESOURCE profiles with individual segments
+    // Create PLANNED_RESOURCE profiles with individual segments (profile-level windows are null)
     nrProfile1IdBefore = await createProfile(
       projectId, 'cp-transfer-nr1-s1', 'PLANNED_RESOURCE', null, nr1Id,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: 0, endWeek: 7 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
     await createSegment(nrProfile1IdBefore, 0, 3, 100)
     await createSegment(nrProfile1IdBefore, 4, 7, 50)
 
     nrProfile2IdBefore = await createProfile(
       projectId, 'cp-transfer-nr2-s1', 'PLANNED_RESOURCE', null, nr2Id,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 50, startWeek: 4, endWeek: 11 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 50, startWeek: null, endWeek: null },
     )
     await createSegment(nrProfile2IdBefore, 4, 7, 50)
     await createSegment(nrProfile2IdBefore, 8, 11, 25)
@@ -388,7 +388,7 @@ describeIf('Scenario 1 — Successful transfer', () => {
     expect(res.body.transferred).toBe(true)
     expect(res.body.result.roleProfileTransferred).toBe(true)
     expect(res.body.result.profilesTransferred).toBeGreaterThanOrEqual(2)
-    expect(res.body.result.protectedProfiles).toEqual([])
+    expect(res.body.result.protectedProfileIds).toEqual([])
   })
 
   it('changes role profile source from SQUAD_PLANNER to MANUAL', async () => {
@@ -511,7 +511,7 @@ describeIf('Scenario 2 — Protected named-person profiles unchanged', () => {
       .send({ resourceTypeId: rtId })
 
     expect(res.status).toBe(200)
-    expect(res.body.result.protectedProfiles).toContain('Alice')
+    expect(res.body.result.protectedProfileIds).toContain('cp-named-s2')
 
     const profiles = await fetchProfiles(projectId)
     const namedPersonProfile = profiles.find(p => p.id === namedPersonProfileId)
@@ -695,14 +695,14 @@ describeIf('Scenario 7 — Compatibility projection', () => {
 
     await createProfile(
       projectId, 'cp-role-s7', 'ROLE', rtId, null,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: 0, endWeek: 7 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
     await createSegment('cp-role-s7', 0, 3, 100)
     await createSegment('cp-role-s7', 4, 7, 50)
 
     await createProfile(
       projectId, 'cp-nr-s7', 'PLANNED_RESOURCE', null, nrId,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: 0, endWeek: 7 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
     await createSegment('cp-nr-s7', 0, 3, 100)
     await createSegment('cp-nr-s7', 4, 7, 50)
@@ -752,20 +752,20 @@ describeIf('Scenario 8 — Later Squad Planner apply blocked', () => {
     // Set up a planner-managed role with backlog
     await createEpicBacklog(projectId, rtId)
 
-    // Create planner profile
+    // Create planner profile (profile-level windows null — segments define windows)
     await createProfile(
       projectId, 'cp-role-s8', 'ROLE', rtId, null,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: 0, endWeek: 5 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
 
-    // Create planner resource profile
+    // Create planner resource profile (segmentless — null windows)
     const nrId = await createNamedResource(
       projectId, rtId, 'nr-s8', 'Planned 1',
       { allocationMode: 'CAPACITY_PLAN' },
     )
     await createProfile(
       projectId, 'cp-nr-s8', 'PLANNED_RESOURCE', null, nrId,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
   })
 

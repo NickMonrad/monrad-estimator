@@ -659,7 +659,7 @@ test.describe('Capacity profile editor — ROLE segments', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('Switch to manual capacity', () => {
-  test('transfer Squad Planner role to manual, edit capacity, verify Timeline sync', async ({ page }) => {
+  test('transfer Squad Planner role to manual, edit capacity, verify persistence', async ({ page, request }) => {
     test.setTimeout(180_000)
 
     const projectName = `E2E Transfer ${Date.now()}`
@@ -710,11 +710,24 @@ test.describe('Switch to manual capacity', () => {
       page.getByRole('button', { name: /sequential|parallel/i }).first(),
     ).toBeVisible({ timeout: 15_000 })
 
-    // ── Open Squad Planner drawer and apply ──
+    // ── Get auth token for API calls ──
+    // Reuse the helpers from the existing test pattern
+    const authToken = await page.evaluate(() => localStorage.getItem('auth_token'))
+    const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
+
+    // ── Determine resource type IDs via API ──
+    const projectResp = await request.get(`${API_BASE}/api/projects/${projectId}`, { headers: authHeaders })
+    expect(projectResp.ok()).toBeTruthy()
+    const projectData = await projectResp.json() as { resourceTypes: Array<{ id: string; name: string }> }
+    const devRt = projectData.resourceTypes.find(rt => rt.name === 'Developer')
+    expect(devRt).toBeDefined()
+
+    // ── Open Squad Planner drawer ──
     await page.getByRole('button', { name: /open squad planner/i }).click()
     const drawer = page.getByRole('dialog', { name: /squad planner/i })
     await expect(drawer).toBeVisible({ timeout: 5_000 })
 
+    // ── Generate capacity profile ──
     const generateBtn = drawer.getByRole('button', { name: /generate capacity profile/i })
     await expect(generateBtn).toBeVisible()
     const planResponse = page.waitForResponse(
@@ -723,12 +736,19 @@ test.describe('Switch to manual capacity', () => {
     )
     await generateBtn.click()
     await planResponse
+
+    // Wait for result KPIs
     await expect(drawer.getByText(/Peak/i)).toBeVisible({ timeout: 10_000 })
+    await expect(drawer.getByText(/Delivery/i)).toBeVisible()
+    await expect(drawer.getByText(/Planned squad cost/i)).toBeVisible()
 
     // ── Apply capacity profile ──
     const applyBtn = drawer.getByRole('button', { name: /apply capacity profile/i })
     await expect(applyBtn).toBeVisible()
+
+    // Accept confirm dialogs
     page.on('dialog', dialog => dialog.accept())
+
     const applyResponse = page.waitForResponse(
       resp => resp.url().includes('/squad-plan/apply') && resp.request().method() === 'POST',
       { timeout: 20_000 },
@@ -736,30 +756,49 @@ test.describe('Switch to manual capacity', () => {
     await applyBtn.click()
     const response = await applyResponse
     expect(response.status()).toBe(201)
+
+    // Drawer closes after successful apply
     await expect(drawer).not.toBeVisible({ timeout: 10_000 })
 
-    // ── Navigate to Resource Profile and verify planner-managed state ──
+    // ── Verify via API that Squad Planner profiles exist ──
+    const cpResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+      { headers: authHeaders },
+    )
+    expect(cpResp.ok()).toBeTruthy()
+    const cpData = await cpResp.json() as { capacityProfiles: Array<{ resourceTypeId: string | null; source: string }> }
+    const devPlannerProfiles = cpData.capacityProfiles.filter(
+      (p: { resourceTypeId: string | null; source: string }) => p.resourceTypeId === devRt!.id,
+    )
+    expect(devPlannerProfiles.length).toBeGreaterThan(0)
+    expect(devPlannerProfiles[0].source).toBe('squadPlanner')
+
+    // ── Verify via API that Resource Profile shows planner-managed state ──
+    const rpResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-profile`,
+      { headers: authHeaders },
+    )
+    expect(rpResp.ok()).toBeTruthy()
+    const rpData = await rpResp.json() as { resourceRows: Array<{ name: string; capacityProfile?: { source: string } }> }
+    const devRowAPI = rpData.resourceRows.find(r => r.name?.toLowerCase().includes('developer'))
+    expect(devRowAPI).toBeDefined()
+    expect(devRowAPI!.capacityProfile?.source).toBe('squadPlanner')
+
+    // ── Navigate to Resource Profile and verify UI state ──
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
     ).toBeVisible({ timeout: 10_000 })
 
-    // Find the Developer row — it should be Squad Planner-managed
+    // Find the Developer row
     const devRow = page.locator('tr').filter({ hasText: /Developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
 
-    // Should show "Open Squad Planner" for planner-managed roles
-    await expect(devRow.getByText('Open Squad Planner')).toBeVisible({ timeout: 10_000 })
-
-    // Should show "Squad Planner" source badge
+    // Verify Squad Planner source badge
     await expect(devRow.getByText('Squad Planner')).toBeVisible({ timeout: 5_000 })
 
-    // Should show the "Switch to manual capacity" button
+    // Verify the "Switch to manual capacity" button is visible
     await expect(devRow.getByTitle(/Transfer this role/)).toBeVisible({ timeout: 5_000 })
-
-    // Record the badge text (planned capacity description)
-    const badgeBefore = devRow.locator('button[title="Managed by Squad Planner"]')
-    const badgeTextBefore = await badgeBefore.textContent()
 
     // ── Transfer to manual capacity ──
     await devRow.getByTitle(/Transfer this role/).click()
@@ -777,7 +816,7 @@ test.describe('Switch to manual capacity', () => {
     const confirmDialog2 = page.getByRole('dialog', { name: /Switch to manual capacity/i })
     await expect(confirmDialog2).toBeVisible({ timeout: 5_000 })
 
-    // Wait for the transfer API call and dialog close
+    // Wait for the transfer API call
     const transferResponse = page.waitForResponse(
       resp => resp.url().includes('/capacity-profiles/transfer-to-manual') && resp.request().method() === 'POST',
       { timeout: 15_000 },
@@ -785,42 +824,33 @@ test.describe('Switch to manual capacity', () => {
     await confirmDialog2.getByRole('button', { name: /Switch to manual capacity/i }).click()
     const transferResp = await transferResponse
     expect(transferResp.status()).toBe(200)
-    await expect(confirmDialog2).not.toBeVisible({ timeout: 5_000 })
+
+    // Dialog should close on success
+    await expect(confirmDialog2).not.toBeVisible({ timeout: 10_000 })
 
     // ── Verify post-transfer state ──
-    // The "Open Squad Planner" badge should be gone
-    await expect(devRow.getByText('Open Squad Planner')).not.toBeVisible()
+    // The "Squad Planner" source badge should be gone
+    await expect(devRow.getByText('Squad Planner')).not.toBeVisible()
     // The "Switch to manual capacity" button should be gone
     await expect(devRow.getByTitle(/Transfer this role/)).not.toBeVisible()
-    // The badge should now be clickable for editing
-    await expect(devRow.getByTitle('Click to edit capacity profile')).toBeVisible({ timeout: 10_000 })
 
-    // Verify capacity is unchanged (badge text is same as before)
-    const badgeAfter = devRow.locator('button[title="Click to edit capacity profile"]')
-    await expect(badgeAfter).toBeVisible()
-    const badgeTextAfter = await badgeAfter.textContent()
-    // The display label may differ ("Squad Planner" → "Varies by week") but the
-    // effective capacity week segments should be the same. We check by opening the editor.
+    // The role should now be editable
+    const editBadge = devRow.getByTitle('Click to edit capacity profile')
+    await expect(editBadge).toBeVisible({ timeout: 10_000 })
 
-    // ── Open capacity profile editor ──
-    await badgeAfter.click()
+    // ── Open capacity profile editor and verify segments are preserved ──
+    await editBadge.click()
     const editorDialog = page.getByRole('dialog', { name: /edit capacity profile/i })
     await expect(editorDialog).toBeVisible({ timeout: 8_000 })
 
-    // Verify segments exist (the editor should show segments from the transferred profile)
-    const firstSegmentStart = editorDialog.getByTestId('cp-seg-start-0')
-    const firstSegmentEnd = editorDialog.getByTestId('cp-seg-end-0')
-    const firstSegmentPct = editorDialog.getByTestId('cp-seg-pct-0')
-    await expect(firstSegmentStart).toBeVisible({ timeout: 5_000 })
+    // Verify segments exist
+    await expect(editorDialog.getByTestId('cp-seg-start-0')).toBeVisible({ timeout: 5_000 })
 
     // Record current segment values
-    const segStart = await firstSegmentStart.inputValue()
-    const segEnd = await firstSegmentEnd.inputValue()
-    const segPct = await firstSegmentPct.inputValue()
+    const segPct = await editorDialog.getByTestId('cp-seg-pct-0').inputValue()
 
     // ── Edit the capacity ──
-    // Change the first segment's percent to a different value
-    await firstSegmentPct.fill('50')
+    await editorDialog.getByTestId('cp-seg-pct-0').fill('50')
 
     // Save
     const saveResp = page.waitForResponse(
@@ -831,29 +861,36 @@ test.describe('Switch to manual capacity', () => {
     await saveResp
     await expect(editorDialog).not.toBeVisible({ timeout: 5_000 })
 
-    // ── Navigate to Timeline to verify the change propagated ──
-    await page.goto(`/projects/${projectId}/timeline`)
-    await expect(
-      page.getByRole('heading', { name: /timeline planner/i }),
-    ).toBeVisible({ timeout: 10_000 })
+    // ── Verify via API that the manual state persisted ──
+    const cpAfterResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+      { headers: authHeaders },
+    )
+    expect(cpAfterResp.ok()).toBeTruthy()
+    const cpAfterData = await cpAfterResp.json() as { capacityProfiles: Array<{ resourceTypeId: string | null; source: string }> }
+    const devManualProfiles = cpAfterData.capacityProfiles.filter(
+      (p: { resourceTypeId: string | null; source: string }) => p.resourceTypeId === devRt!.id,
+    )
+    expect(devManualProfiles.length).toBeGreaterThan(0)
+    expect(devManualProfiles[0].source).toBe('manual')
 
-    // ── Return to Resource Profile and verify persistence ──
+    // ── Return to Resource Profile and verify the edited capacity persists ──
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
     ).toBeVisible({ timeout: 10_000 })
 
-    // The developer row should still be editable (not reverted to Squad Planner)
     const devRowFinal = page.locator('tr').filter({ hasText: /Developer/i }).first()
     await expect(devRowFinal).toBeVisible({ timeout: 15_000 })
+
+    // Verify the role is still editable (not reverted to Squad Planner)
     await expect(devRowFinal.getByTitle('Click to edit capacity profile')).toBeVisible({ timeout: 10_000 })
 
-    // Open editor again to confirm the edit persisted
+    // Open editor to confirm the edit persisted
     await devRowFinal.getByTitle('Click to edit capacity profile').click()
     const editorFinal = page.getByRole('dialog', { name: /edit capacity profile/i })
     await expect(editorFinal).toBeVisible({ timeout: 8_000 })
-    const finalSegPct = editorFinal.getByTestId('cp-seg-pct-0')
-    await expect(finalSegPct).toHaveValue('50')
+    await expect(editorFinal.getByTestId('cp-seg-pct-0')).toHaveValue('50')
     await editorFinal.getByTestId('cp-cancel-btn').click()
     await expect(editorFinal).not.toBeVisible({ timeout: 5_000 })
   })

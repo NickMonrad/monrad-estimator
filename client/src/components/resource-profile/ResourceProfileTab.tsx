@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Legend, Bar, CartesianGrid,
@@ -541,60 +541,150 @@ export default function ResourceProfileTab({
 
       {/* ── Transfer-to-manual confirmation dialog ── */}
       {transferConfirm && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={e => {
-            if (e.target === e.currentTarget) setTransferConfirm(null)
+        <TransferConfirmDialog
+          resourceTypeName={transferConfirm.resourceTypeName}
+          isPending={transferMutation.isPending}
+          error={transferMutation.isError ? (transferMutation.error instanceof Error ? transferMutation.error.message : 'Transfer failed') : null}
+          onConfirm={() => {
+            transferMutation.mutate(transferConfirm.resourceTypeId, {
+              onSuccess: () => {
+                setTransferConfirm(null)
+              },
+            })
           }}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Switch to manual capacity"
-        >
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-md mx-4 p-6">
-            <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">
-              Switch to manual capacity?
-            </h3>
-            <div className="text-sm text-gray-600 dark:text-gray-400 space-y-2">
-              <p>
-                This will transfer <strong>{transferConfirm.resourceTypeName}</strong> from Squad Planner-managed to manual capacity management.
-              </p>
-              <ul className="list-disc pl-5 space-y-1">
-                <li>The current capacity and segment boundaries will be preserved.</li>
-                <li>Resource Profile will become the editing surface for this role.</li>
-                <li>The role will no longer be automatically updated by later Squad Planner applications.</li>
-                <li>This transfer is one-way unless a future workflow deliberately re-establishes planner ownership.</li>
-              </ul>
-            </div>
-            <div className="flex items-center justify-end gap-3 mt-6">
-              <button
-                onClick={() => setTransferConfirm(null)}
-                disabled={transferMutation.isPending}
-                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  transferMutation.mutate(transferConfirm.resourceTypeId, {
-                    onSuccess: () => {
-                      setTransferConfirm(null)
-                    },
-                  })
-                }}
-                disabled={transferMutation.isPending}
-                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {transferMutation.isPending ? 'Transferring…' : 'Switch to manual capacity'}
-              </button>
-            </div>
-            {transferMutation.isError && (
-              <p className="mt-3 text-sm text-red-600 dark:text-red-400">
-                Error: {transferMutation.error instanceof Error ? transferMutation.error.message : 'Transfer failed'}
-              </p>
-            )}
-          </div>
-        </div>
+          onCancel={() => {
+            if (!transferMutation.isPending) setTransferConfirm(null)
+          }}
+        />
       )}
     </>
+  )
+}
+
+// ─── Transfer confirmation dialog with full focus/keyboard lifecycle ────
+
+interface TransferConfirmDialogProps {
+  resourceTypeName: string
+  isPending: boolean
+  error: string | null
+  onConfirm: () => void
+  onCancel: () => void
+}
+
+function TransferConfirmDialog({
+  resourceTypeName,
+  isPending,
+  error,
+  onConfirm,
+  onCancel,
+}: TransferConfirmDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const previouslyFocused = useRef<HTMLElement | null>(null)
+
+  // Store the previously focused element and focus the dialog
+  useEffect(() => {
+    previouslyFocused.current = document.activeElement as HTMLElement | null
+    // Focus the confirm button on open (primary action)
+    confirmRef.current?.focus()
+  }, [])
+
+  // Focus restoration on unmount
+  useEffect(() => {
+    return () => {
+      previouslyFocused.current?.focus()
+    }
+  }, [])
+
+  // Tab/Shift+Tab focus containment and Escape handling
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape' && !isPending) {
+      onCancel()
+      return
+    }
+
+    if (e.key === 'Tab') {
+      const dialog = dialogRef.current
+      if (!dialog) return
+
+      const focusable = dialog.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )
+      const firstFocusable = focusable[0]
+      const lastFocusable = focusable[focusable.length - 1]
+
+      if (e.shiftKey) {
+        if (document.activeElement === firstFocusable) {
+          e.preventDefault()
+          lastFocusable?.focus()
+        }
+      } else {
+        if (document.activeElement === lastFocusable) {
+          e.preventDefault()
+          firstFocusable?.focus()
+        }
+      }
+    }
+  }
+
+  // Prevent backdrop click while pending
+  function handleBackdropClick(e: React.MouseEvent) {
+    if (isPending) return
+    if (e.target === e.currentTarget) {
+      onCancel()
+    }
+  }
+
+  return (
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={handleBackdropClick}
+      onKeyDown={handleKeyDown}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="transfer-dialog-title"
+    >
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-md mx-4 p-6">
+        <h3 id="transfer-dialog-title" className="text-base font-semibold text-gray-900 dark:text-white mb-2">
+          Switch to manual capacity?
+        </h3>
+        <div className="text-sm text-gray-600 dark:text-gray-400 space-y-2">
+          <p>
+            This will transfer <strong>{resourceTypeName}</strong> from Squad Planner-managed to manual capacity management.
+          </p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li>The current capacity and segment boundaries will be preserved.</li>
+            <li>Resource Profile will become the editing surface for this role.</li>
+            <li>The role will no longer be automatically updated by later Squad Planner applications.</li>
+            <li>This transfer is one-way unless a future workflow deliberately re-establishes planner ownership.</li>
+          </ul>
+        </div>
+        <div className="flex items-center justify-end gap-3 mt-6">
+          <button
+            ref={cancelRef}
+            onClick={onCancel}
+            disabled={isPending}
+            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            ref={confirmRef}
+            onClick={onConfirm}
+            disabled={isPending}
+            className="px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isPending ? 'Transferring…' : 'Switch to manual capacity'}
+          </button>
+        </div>
+        {error && (
+          <p className="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">
+            Error: {error}
+          </p>
+        )}
+      </div>
+    </div>
   )
 }

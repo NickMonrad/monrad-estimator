@@ -252,7 +252,7 @@ describe('Switch to manual capacity', () => {
         profilesTransferred: 3,
         plannedResourceProfilesTransferred: 2,
         roleProfileTransferred: true,
-        protectedProfiles: [],
+        protectedProfileIds: [],
       },
     })
 
@@ -321,7 +321,7 @@ describe('Switch to manual capacity', () => {
         profilesTransferred: 1,
         plannedResourceProfilesTransferred: 0,
         roleProfileTransferred: true,
-        protectedProfiles: [],
+        protectedProfileIds: [],
       },
     })
     await waitFor(() => {
@@ -365,7 +365,7 @@ describe('Switch to manual capacity', () => {
         profilesTransferred: 1,
         plannedResourceProfilesTransferred: 0,
         roleProfileTransferred: true,
-        protectedProfiles: [],
+        protectedProfileIds: [],
       },
     })
 

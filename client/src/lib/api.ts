@@ -127,7 +127,7 @@ export interface TransferToManualResult {
     profilesTransferred: number
     plannedResourceProfilesTransferred: number
     roleProfileTransferred: boolean
-    protectedProfiles: string[]
+    protectedProfileIds: string[]
   }
 }
 
