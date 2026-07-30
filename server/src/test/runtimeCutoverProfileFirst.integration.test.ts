@@ -1502,4 +1502,428 @@ describeIf('profile-first runtime cutover (#364)', () => {
     // Verify exact rollback: state equals pre-exit snapshot
     expect(await snapshotRuntimeState(resourceTypeId)).toEqual(before)
   }, 30000)
+
+  it('21. name-only PUT preserves canonical zero-capacity planner profile', async () => {
+    const createdRt = await createRuntimeResourceType('ZeroCap PUT RT')
+    const resourceTypeId = createdRt.id as string
+
+    // Add a surplus PLANNED_RESOURCE with canonical zero-capacity profile
+    const surplus = await prisma.namedResource.create({
+      data: { name: 'Surplus Zero', resourceTypeId },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        ownerKind: 'PLANNED_RESOURCE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 0,
+        startWeek: null,
+        endWeek: null,
+        namedResourceId: surplus.id,
+        resourceTypeId: null,
+      },
+    })
+
+    const beforeProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { namedResourceId: surplus.id, projectId },
+    })
+    const beforeNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })
+    const beforeCache = await prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })
+
+    const response = await request(app)
+      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${surplus.id}`)
+      .set('Authorization', authHeader)
+      .send({ name: 'Renamed Surplus' })
+    expect(response.status).toBe(200)
+
+    const afterNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })
+    expect(afterNr.name).toBe('Renamed Surplus')
+
+    const afterProfile = await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeProfile.id },
+    })
+    expect(afterProfile.id).toBe(beforeProfile.id)
+    expect(afterProfile.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(afterProfile.source).toBe('SQUAD_PLANNER')
+    expect(afterProfile.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(afterProfile.defaultPercent).toBe(0)
+    expect(afterProfile.startWeek).toBeNull()
+    expect(afterProfile.endWeek).toBeNull()
+
+    const segments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: beforeProfile.id },
+    })
+    expect(segments).toHaveLength(0)
+
+    expect(afterNr.allocationMode).toBe(beforeNr.allocationMode)
+    expect(afterNr.pricingModel).toBe(beforeNr.pricingModel)
+
+    const afterCache = await prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })
+    expect(afterCache).toEqual(beforeCache)
+  }, 30000)
+
+  it('22. pricing-only PUT preserves canonical zero-capacity planner profile', async () => {
+    const createdRt = await createRuntimeResourceType('ZeroCap Pricing RT')
+    const resourceTypeId = createdRt.id as string
+
+    const surplus = await prisma.namedResource.create({
+      data: { name: 'Pricing Surplus', resourceTypeId, pricingModel: 'ACTUAL_DAYS' },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        ownerKind: 'PLANNED_RESOURCE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 0,
+        startWeek: null,
+        endWeek: null,
+        namedResourceId: surplus.id,
+        resourceTypeId: null,
+      },
+    })
+
+    const beforeProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { namedResourceId: surplus.id, projectId },
+    })
+
+    const response = await request(app)
+      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${surplus.id}`)
+      .set('Authorization', authHeader)
+      .send({ pricingModel: 'PRO_RATA' })
+    expect(response.status).toBe(200)
+
+    const afterNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })
+    expect(afterNr.pricingModel).toBe('PRO_RATA')
+    expect(afterNr.name).toBe('Pricing Surplus')
+
+    const afterProfile = await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeProfile.id },
+    })
+    expect(afterProfile.id).toBe(beforeProfile.id)
+    expect(afterProfile.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(afterProfile.source).toBe('SQUAD_PLANNER')
+    expect(afterProfile.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(afterProfile.defaultPercent).toBe(0)
+    expect(afterProfile.startWeek).toBeNull()
+    expect(afterProfile.endWeek).toBeNull()
+
+    const segments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: beforeProfile.id },
+    })
+    expect(segments).toHaveLength(0)
+  }, 30000)
+
+  it('23. scalar capacity change on zero-capacity planner resource returns 409', async () => {
+    const createdRt = await createRuntimeResourceType('ZeroCap Reject RT')
+    const resourceTypeId = createdRt.id as string
+
+    const surplus = await prisma.namedResource.create({
+      data: { name: 'Protected Zero', resourceTypeId, pricingModel: 'ACTUAL_DAYS' },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        ownerKind: 'PLANNED_RESOURCE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 0,
+        startWeek: null,
+        endWeek: null,
+        namedResourceId: surplus.id,
+        resourceTypeId: null,
+      },
+    })
+
+    const beforeNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })
+    const beforeProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { namedResourceId: surplus.id, projectId },
+    })
+    const beforeRt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
+
+    const response = await request(app)
+      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${surplus.id}`)
+      .set('Authorization', authHeader)
+      .send({ allocationPercent: 50 })
+    expect(response.status).toBe(409)
+    expect(response.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+
+    // State unchanged
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })).toEqual(beforeNr)
+    expect(await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeProfile.id },
+    })).toEqual(beforeProfile)
+    expect(await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })).toEqual(beforeRt)
+
+    const segments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: beforeProfile.id },
+    })
+    expect(segments).toHaveLength(0)
+  }, 30000)
+
+  it('24. ResourceType count/update preserves canonical zero-capacity planner resource', async () => {
+    const createdRt = await createRuntimeResourceType('ZeroCap Count RT')
+    const resourceTypeId = createdRt.id as string
+
+    const surplus = await prisma.namedResource.create({
+      data: { name: 'Count Surplus', resourceTypeId },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        ownerKind: 'PLANNED_RESOURCE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 0,
+        startWeek: null,
+        endWeek: null,
+        namedResourceId: surplus.id,
+        resourceTypeId: null,
+      },
+    })
+
+    const beforeSurplusProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { namedResourceId: surplus.id, projectId },
+      include: { segments: true },
+    })
+    const beforeSurplusNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })
+
+    // Increase count to trigger inherited NR creation
+    const increase = await request(app)
+      .patch(`/api/projects/${projectId}/resource-types/${resourceTypeId}`)
+      .set('Authorization', authHeader)
+      .send({ count: 3 })
+    expect(increase.status).toBe(200)
+
+    // Surplus resource and profile preserved unchanged
+    expect(await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeSurplusProfile.id },
+      include: { segments: true },
+    })).toEqual(beforeSurplusProfile)
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })).toEqual(beforeSurplusNr)
+
+    // Count increased, inherited NRs exist
+    const allNrs = await prisma.namedResource.findMany({
+      where: { resourceTypeId },
+      orderBy: { createdAt: 'asc' },
+    })
+    expect(allNrs).toHaveLength(beforeSurplusProfile ? 3 : 2)
+  }, 30000)
+
+  it('25. scoped DELETE removes canonical zero-capacity planner resource only', async () => {
+    const createdRt = await createRuntimeResourceType('ZeroCap DELETE RT')
+    const resourceTypeId = createdRt.id as string
+    const initialNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
+    const surplus = await prisma.namedResource.create({
+      data: { name: 'Delete Surplus', resourceTypeId },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        ownerKind: 'PLANNED_RESOURCE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 0,
+        startWeek: null,
+        endWeek: null,
+        namedResourceId: surplus.id,
+        resourceTypeId: null,
+      },
+    })
+
+    const beforeInitial = await prisma.namedResource.findUniqueOrThrow({ where: { id: initialNr.id } })
+    const beforeInitialProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { namedResourceId: initialNr.id, projectId },
+      include: { segments: true },
+    })
+
+    const response = await request(app)
+      .delete(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${surplus.id}`)
+      .set('Authorization', authHeader)
+    expect(response.status).toBe(204)
+
+    // Surplus deleted
+    expect(await prisma.namedResource.findUnique({ where: { id: surplus.id } })).toBeNull()
+    expect(await prisma.capacityProfile.findFirst({
+      where: { namedResourceId: surplus.id, projectId },
+    })).toBeNull()
+
+    // Initial NR and profile preserved
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: initialNr.id } })).toEqual(beforeInitial)
+    expect(await prisma.capacityProfile.findFirstOrThrow({
+      where: { id: beforeInitialProfile.id },
+      include: { segments: true },
+    })).toEqual(beforeInitialProfile)
+
+    // Count updated
+    const rt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
+    expect(rt.count).toBe(1)
+  }, 30000)
+
+  it('26. malformed zero-capacity-like profile (defaultPercent=1) fails before writes', async () => {
+    const createdRt = await createRuntimeResourceType('ZeroCap Malformed RT')
+    const resourceTypeId = createdRt.id as string
+
+    const malformed = await prisma.namedResource.create({
+      data: { name: 'Malformed Surplus', resourceTypeId, pricingModel: 'ACTUAL_DAYS' },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        ownerKind: 'PLANNED_RESOURCE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 1,  // not zero — non-canonical
+        startWeek: null,
+        endWeek: null,
+        namedResourceId: malformed.id,
+        resourceTypeId: null,
+      },
+    })
+
+    const beforeNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: malformed.id } })
+    const beforeProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { namedResourceId: malformed.id, projectId },
+    })
+    const beforeRt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
+    const beforeCache = await prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })
+
+    const response = await request(app)
+      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${malformed.id}`)
+      .set('Authorization', authHeader)
+      .send({ name: 'Should Not Rename' })
+    expect(response.status).toBe(409)
+    expect(response.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+
+    // State unchanged
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: malformed.id } })).toEqual(beforeNr)
+    expect(await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeProfile.id },
+    })).toEqual(beforeProfile)
+    expect(await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })).toEqual(beforeRt)
+    expect(await prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })).toEqual(beforeCache)
+  }, 30000)
+
+  it('27. CSV-created ResourceType accepted by Squad Planner adoption', async () => {
+    // Import CSV to create a new ResourceType with correct ROLE provenance
+    const importResponse = await request(app)
+      .post(`/api/projects/${projectId}/backlog/import-csv`)
+      .set('Authorization', authHeader)
+      .send({
+        rows: [
+          { resourceType: 'PlannerAdoptRT', errors: [] },
+        ],
+      })
+    expect(importResponse.status).toBe(200)
+
+    // Find the CSV-created ResourceType
+    const csvRt = await prisma.resourceType.findFirstOrThrow({
+      where: { projectId, name: 'PlannerAdoptRT' },
+    })
+    const csvRtId = csvRt.id
+
+    // Prove complete legacy provenance payload
+    const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId: csvRtId, namedResourceId: null },
+    })
+    expect(roleProfile.ownerKind).toBe('ROLE')
+    expect(roleProfile.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(roleProfile.source).toBe('AVAILABILITY_WINDOW')
+    expect(roleProfile.defaultPercent).toBe(100)
+    expect(roleProfile.startWeek).toBeNull()
+    expect(roleProfile.endWeek).toBeNull()
+
+    // Verify legacy JSON field
+    const rawProfile = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      'SELECT legacy FROM "CapacityProfile" WHERE id = $1',
+      roleProfile.id,
+    )
+    const legacy = rawProfile[0]?.legacy as Record<string, unknown> | null
+    expect(legacy).not.toBeNull()
+    expect(legacy).toMatchObject({
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationPct: null,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+
+    // Fetch initial NR
+    const initialNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId: csvRtId } })
+
+    // Apply Squad Planner to the CSV-created RT — proves it has valid mapper provenance
+    const applyResponse = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        name: 'CSV Adoption Test Plan',
+        targetWeeks: 12,
+        periodWeeks: 4,
+        maxDelta: 1,
+        setActive: true,
+        periods: [
+          {
+            periodIndex: 0,
+            startWeek: 0,
+            endWeek: 8,
+            entries: [{
+              resourceTypeId: csvRtId,
+              headcount: 1,
+              demandFTE: 0.5,
+              utilisationPct: 100,
+            }],
+          },
+        ],
+      })
+    expect(applyResponse.status).toBe(201)
+
+    // Planner apply succeeded — ROLE profile now planner-owned
+    const postApplyRole = await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: roleProfile.id },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })
+    expect(postApplyRole.ownerKind).toBe('ROLE')
+    expect(postApplyRole.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(postApplyRole.source).toBe('SQUAD_PLANNER')
+    expect(postApplyRole.segments.length).toBeGreaterThan(0)
+
+    // Planned-resource profile created for the initial NR
+    const plannedProfiles = await prisma.capacityProfile.findMany({
+      where: {
+        projectId,
+        namedResourceId: initialNr.id,
+        resourceTypeId: null,
+        ownerKind: 'PLANNED_RESOURCE',
+      },
+    })
+    expect(plannedProfiles.length).toBeGreaterThan(0)
+
+    // Only the CSV-created RT was affected
+    const allRts = await prisma.resourceType.findMany({ where: { projectId } })
+    const otherRts = allRts.filter(rt => rt.id !== csvRtId)
+    for (const other of otherRts) {
+      const otherRole = await prisma.capacityProfile.findFirst({
+        where: { projectId, resourceTypeId: other.id, namedResourceId: null },
+      })
+      // Other RT profiles remain unchanged from initial AVAILABILITY_WINDOW
+      if (otherRole && otherRole.id !== roleProfile.id) {
+        expect(otherRole.planningBasis).not.toBe('CAPACITY_PROFILE')
+      }
+    }
+  }, 30000)
 })
