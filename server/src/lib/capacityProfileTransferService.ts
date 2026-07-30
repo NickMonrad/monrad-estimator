@@ -450,5 +450,3 @@ async function writeTransferLegacyMetadata(
       } satisfies Record<string, unknown> as any,
     },
   })
-}
-
