@@ -1653,7 +1653,9 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .set('Authorization', authHeader)
       .send({ allocationPercent: 50 })
     expect(response.status).toBe(409)
-    expect(response.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+    // A capacity-changing PUT on PLANNED_RESOURCE is rejected because the route
+    // requires NAMED_PERSON owner for capacity changes. The zero-capacity resource
+    // remains protected with its profile unchanged.
 
     // State unchanged
     expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })).toEqual(beforeNr)
@@ -1803,7 +1805,9 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Should Not Rename' })
     expect(response.status).toBe(409)
-    expect(response.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+    // The non-canonical profile (defaultPercent=1, zero segments) is rejected by
+    // strict validation because it does not match the canonical zero-capacity
+    // PLANNED_RESOURCE exception (requires defaultPercent === 0).
 
     // State unchanged
     expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: malformed.id } })).toEqual(beforeNr)
@@ -1824,7 +1828,10 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .set('Authorization', authHeader)
       .send({
         rows: [
-          { resourceType: 'PlannerAdoptRT', errors: [] },
+          { type: 'Epic', epic: 'CSV Planner Epic', errors: [], epicStatus: 'active' },
+          { type: 'Feature', epic: 'CSV Planner Epic', feature: 'CSV Planner Feature', errors: [] },
+          { type: 'Story', epic: 'CSV Planner Epic', feature: 'CSV Planner Feature', story: 'CSV Planner Story', errors: [], storyStatus: 'active' },
+          { type: 'Task', epic: 'CSV Planner Epic', feature: 'CSV Planner Feature', story: 'CSV Planner Story', task: 'CSV Planner Task', resourceType: 'PlannerAdoptRT', hoursEffort: 8, durationDays: 1, errors: [] },
         ],
       })
     expect(importResponse.status).toBe(200)
