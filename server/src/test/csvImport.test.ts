@@ -123,7 +123,7 @@ describe('POST /api/projects/:projectId/backlog/import-csv', () => {
         count: 1,
         projectId,
         capacityProfiles: {
-          create: expect.objectContaining({
+          create: {
             projectId,
             ownerKind: 'ROLE',
             planningBasis: 'AVAILABILITY_WINDOW',
@@ -131,7 +131,16 @@ describe('POST /api/projects/:projectId/backlog/import-csv', () => {
             defaultPercent: 100,
             startWeek: null,
             endWeek: null,
-          }),
+            legacy: {
+              allocationMode: 'TIMELINE',
+              allocationPercent: 100,
+              allocationPct: null,
+              allocationStartWeek: null,
+              allocationEndWeek: null,
+              startWeek: null,
+              endWeek: null,
+            },
+          },
         },
       }),
       select: { id: true, name: true, hoursPerDay: true },

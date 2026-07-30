@@ -362,11 +362,24 @@ export async function loadAndValidateOwnerProfile(
     }
   }
 
-  // CAPACITY_PROFILE intrinsically requires at least one segment
+  // CAPACITY_PROFILE intrinsically requires at least one segment,
+  // except for the canonical zero-capacity PLANNED_RESOURCE state.
+  // Squad Planner intentionally persists surplus resources with
+  // planningBasis=CAPACITY_PROFILE, defaultPercent=0, source=SQUAD_PLANNER,
+  // null windows, and zero segments.
   if (planningBasis === 'CAPACITY_PROFILE' && segments.length === 0) {
-    throw new CapacityIntegrityError(
-      `CAPACITY_PROFILE profile ${profile.id} has no segments but segments are required.`,
+    const isCanonicalZero = (
+      ownerKind === 'PLANNED_RESOURCE' &&
+      profile.source === 'SQUAD_PLANNER' &&
+      profile.defaultPercent === 0 &&
+      startWeek === null &&
+      endWeek === null
     )
+    if (!isCanonicalZero) {
+      throw new CapacityIntegrityError(
+        `CAPACITY_PROFILE profile ${profile.id} has no segments but segments are required.`,
+      )
+    }
   }
 
   return {
