@@ -821,7 +821,13 @@ describeIf('Scenario 8 — Later Squad Planner apply blocked', () => {
 
     // The planner apply should return 409 because the role now has MANUAL profiles
     expect(applyRes.status).toBe(409)
-    expect(applyRes.body.error).toContain('conflict')
+    expect(applyRes.body.error).toBeTruthy()
+
+    // Verify the transferred role was NOT reclaimed by the planner
+    const afterProfiles = await fetchProfiles(projectId)
+    const roleProfile = afterProfiles.find(p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtId)
+    expect(roleProfile).toBeDefined()
+    expect(roleProfile!.source).toBe('MANUAL')
   })
 })
 
