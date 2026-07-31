@@ -133,6 +133,27 @@ describe('loadAndValidateOwnerProfile', () => {
       })
       expect(result.segments[0].capacityPercent).toBe(0)
     })
+
+    it('accepts segmented CAPACITY_PROFILE with profile-level windows (Squad Planner apply shape)', async () => {
+      // Squad Planner apply persists startWeek/endWeek as min/max segment bounds.
+      const tx = makeTx([makeValidProfile({
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 11,
+        segments: [
+          { id: 'seg-a', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          { id: 'seg-b', capacityProfileId: 'cp-1', startWeek: 8, endWeek: 11, capacityPercent: 25, source: 'SQUAD_PLANNER' },
+        ],
+      })])
+      const result = await loadAndValidateOwnerProfile({
+        tx, projectId: 'proj-1', ownerKind: 'NAMED_PERSON', ownerId: 'nr-1',
+      })
+      expect(result.segments.length).toBe(2)
+      expect(result.startWeek).toBe(0)
+      expect(result.endWeek).toBe(11)
+    })
   })
 
   describe('zero-capacity planner profile exception', () => {

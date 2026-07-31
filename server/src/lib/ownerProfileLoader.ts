@@ -271,15 +271,23 @@ export async function loadAndValidateOwnerProfile(
       )
     }
   } else if (planningBasis === 'CAPACITY_PROFILE') {
-    if (startWeek !== null) {
-      throw new CapacityIntegrityError(
-        `CAPACITY_PROFILE profile ${profile.id} must not have startWeek.`,
-      )
-    }
-    if (endWeek !== null) {
-      throw new CapacityIntegrityError(
-        `CAPACITY_PROFILE profile ${profile.id} must not have endWeek.`,
-      )
+    // Squad Planner apply persists profile-level startWeek/endWeek as the
+    // min/max bounds of the segmented CAPACITY_PROFILE (see
+    // buildRoleProfileData / buildPlannedResourceProfileData). Those windows
+    // are valid persisted authority. Only a SEGMENTLESS CAPACITY_PROFILE must
+    // have null windows — and that state is restricted to the canonical
+    // zero-capacity PLANNED_RESOURCE exception below.
+    if (segmentsRaw.length === 0) {
+      if (startWeek !== null) {
+        throw new CapacityIntegrityError(
+          `CAPACITY_PROFILE profile ${profile.id} must not have startWeek.`,
+        )
+      }
+      if (endWeek !== null) {
+        throw new CapacityIntegrityError(
+          `CAPACITY_PROFILE profile ${profile.id} must not have endWeek.`,
+        )
+      }
     }
   }
 
