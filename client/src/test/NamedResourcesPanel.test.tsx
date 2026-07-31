@@ -12,6 +12,8 @@ vi.mock('../lib/api', () => ({
     put: vi.fn().mockResolvedValue({ data: {} }),
     delete: vi.fn().mockResolvedValue({}),
   },
+  apiErrorMessage: (err: unknown, fallback: string) =>
+    (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback,
 }))
 
 import { api } from '../lib/api'
@@ -883,5 +885,145 @@ describe('NamedResourcesPanel authoritative null handling', () => {
         { pricingModel: 'PRO_RATA' },
       )
     })
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// Scalar capacity edits submit the first-class capacity-profile endpoint (#403)
+// ---------------------------------------------------------------------------
+describe('NamedResourcesPanel — first-class capacity edits (#403)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('allocation-% edit PUTs the first-class endpoint with the mapped planning basis', async () => {
+    api.get.mockReset()
+    api.get.mockResolvedValue({ data: MOCK_NAMED_RESOURCES })
+    api.put.mockReset()
+    api.put.mockResolvedValue({ data: {} })
+
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={2}
+              columnCount={8}
+              allocations={MOCK_ALLOCATIONS}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await screen.findAllByDisplayValue('100')
+
+    // The allocation-% input is the third number input in the first row
+    // (row order: name, start week, end week, allocation %).
+    const numberInputs = document.querySelectorAll<HTMLInputElement>('input[type="number"]')
+    const pctInput = numberInputs[2]
+    fireEvent.change(pctInput, { target: { value: '80' } })
+    fireEvent.blur(pctInput)
+
+    await waitFor(() => {
+      expect(api.put).toHaveBeenCalledWith(
+        '/projects/proj-1/capacity-profiles/NAMED_PERSON/nr-1',
+        {
+          planningBasis: 'DEMAND_FOLLOWING',
+          defaultPercent: 80,
+          startWeek: null,
+          endWeek: null,
+        },
+      )
+    })
+  })
+
+  it('start-week edit PUTs AVAILABILITY_WINDOW preserving the end week and percent', async () => {
+    const timelineAllocation = MOCK_ALLOCATIONS.map(a => ({
+      ...a,
+      allocationMode: 'TIMELINE' as const,
+      allocationPercent: 75,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+      startWeek: 2,
+      endWeek: 10,
+    }))
+    api.get.mockReset()
+    api.get.mockResolvedValue({ data: MOCK_NAMED_RESOURCES })
+    api.put.mockReset()
+    api.put.mockResolvedValue({ data: {} })
+
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={2}
+              columnCount={8}
+              allocations={timelineAllocation}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await screen.findAllByDisplayValue('75')
+
+    const startInputs = document.querySelectorAll<HTMLInputElement>('input[placeholder="Project start"]')
+    const startInput = startInputs[0]
+    fireEvent.change(startInput, { target: { value: '4' } })
+    fireEvent.blur(startInput)
+
+    await waitFor(() => {
+      expect(api.put).toHaveBeenCalledWith(
+        '/projects/proj-1/capacity-profiles/NAMED_PERSON/nr-1',
+        {
+          planningBasis: 'AVAILABILITY_WINDOW',
+          defaultPercent: 75,
+          startWeek: 4,
+          endWeek: 10,
+        },
+      )
+    })
+  })
+
+  it('a planner-managed 409 from a capacity edit surfaces the actionable message (#403 finding 4)', async () => {
+    api.get.mockReset()
+    api.get.mockResolvedValue({ data: MOCK_NAMED_RESOURCES })
+    api.put.mockReset()
+    api.put.mockRejectedValue({
+      response: { data: { error: 'Resource "Alice" is managed by Squad Planner. Switch to manual capacity before changing its resources.', code: 'PLANNER_MANAGED_IDENTITY' } },
+    })
+
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={2}
+              columnCount={8}
+              allocations={MOCK_ALLOCATIONS}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await screen.findAllByDisplayValue('100')
+
+    const numberInputs = document.querySelectorAll<HTMLInputElement>('input[type="number"]')
+    const pctInput = numberInputs[2]
+    fireEvent.change(pctInput, { target: { value: '80' } })
+    fireEvent.blur(pctInput)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Switch to manual capacity')
   })
 })

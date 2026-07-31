@@ -13,6 +13,7 @@ import {
   getEffectiveAvailabilityBadge,
   getEffectiveAvailabilityPeriod,
   formatEffectiveAvailabilityPeriod,
+  scalarModeToPlanningBasis,
 } from '../lib/capacityProfileFormatting'
 
 describe('formatPlanningBasis', () => {
@@ -459,5 +460,23 @@ describe('getEffectiveAvailabilityBadge', () => {
     }, 'Varies by week'],
   ] as const)('uses the canonical %s label', (_case, row, label) => {
     expect(getEffectiveAvailabilityBadge(getEffectiveAvailabilityDisplay(row)).label).toBe(label)
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// scalarModeToPlanningBasis — mode → first-class planning basis (#403)
+// ---------------------------------------------------------------------------
+describe('scalarModeToPlanningBasis', () => {
+  it.each([
+    ['EFFORT', 'DEMAND_FOLLOWING'],
+    ['FULL_PROJECT', 'WHOLE_PROJECT_ALLOCATION'],
+    ['TIMELINE', 'AVAILABILITY_WINDOW'],
+  ] as const)('maps %s → %s', (mode, basis) => {
+    expect(scalarModeToPlanningBasis(mode)).toBe(basis)
+  })
+
+  it.each(['CAPACITY_PLAN', 'UNKNOWN', ''])('returns null for non-scalar mode %s', (mode) => {
+    expect(scalarModeToPlanningBasis(mode)).toBeNull()
   })
 })

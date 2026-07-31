@@ -34,6 +34,7 @@ export default function ResourceProfileTab({
   projectId, profile, profileLoading, overheadItems, resourceTypes,
   filteredResourceRows, hasCost, columnCount, chartData,
   expandedRows, expandedNamedResources, editingId, form, setForm, formError,
+  profileMutationError, clearProfileMutationError,
   bufferWeeks, onboardingWeeks, qc,
   toggleRow, toggleNamedResources, resetForm, handleFormSubmit, handleEdit, handleDelete,
   updateResourceType, addPerson, removeLastPerson,
@@ -69,6 +70,19 @@ export default function ResourceProfileTab({
           <strong className="font-medium">Capacity profiles</strong> describe how much of a role, named person, or planned resource is available over time. Changing a profile affects planning capacity and scheduling. Commercial billing basis and billable days are managed separately on the <strong className="font-medium">Commercial</strong> tab.
         </p>
       </div>
+      {profileMutationError && (
+        <div className="px-6 py-2 border-b border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950">
+          <p role="alert" className="text-xs text-red-700 dark:text-red-400">
+            {profileMutationError}
+            <button
+              onClick={clearProfileMutationError}
+              className="ml-2 underline hover:text-red-800 dark:hover:text-red-300"
+            >
+              Dismiss
+            </button>
+          </p>
+        </div>
+      )}
       {profileLoading && <div className="py-12 text-center text-gray-400 dark:text-gray-500">Loading resource profile…</div>}
       {!profileLoading && profile && profile.resourceRows.length === 0 && profile.overheadRows.length === 0 && (
         <div className="py-12 text-center text-gray-400 dark:text-gray-500">

@@ -774,6 +774,31 @@ test.describe('Switch to manual capacity', () => {
     expect(devPlannerProfiles.length).toBeGreaterThan(0)
     expect(devPlannerProfiles[0].source).toBe('squadPlanner')
 
+    // ── Planner-owned identity operations fail closed with 409 (#403) ──
+    // Count changes on a planner-owned role must be rejected before any
+    // mutation and direct the user to the transfer workflow.
+    const conflictResp = await request.patch(
+      `${API_BASE}/api/projects/${projectId}/resource-types/${devRt!.id}`,
+      { headers: authHeaders, data: { count: 5 } },
+    )
+    expect(conflictResp.status()).toBe(409)
+    const conflictBody = await conflictResp.json() as { error?: string; code?: string }
+    expect(conflictBody.code).toBe('PLANNER_MANAGED_IDENTITY')
+    expect(conflictBody.error).toContain('Switch to manual capacity')
+
+    // The rejected request left the planner ownership intact
+    const cpAfterConflict = await request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+      { headers: authHeaders },
+    )
+    expect(cpAfterConflict.ok()).toBeTruthy()
+    const cpAfterConflictData = await cpAfterConflict.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string }> }
+    const devRoleAfterConflict = cpAfterConflictData.capacityProfiles.find(
+      (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
+        p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
+    )
+    expect(devRoleAfterConflict?.source).toBe('squadPlanner')
+
     // ── Capture exact role-level weekly capacity BEFORE transfer via the real scheduler path ──
     // GET /timeline returns weeklyCapacity computed by the scheduler-facing resolver.
     async function fetchDevWeeklyCapacity(): Promise<Record<number, number>> {

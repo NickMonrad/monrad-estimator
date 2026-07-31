@@ -454,12 +454,21 @@ test.describe('Starting Team Finder drawer — with resources', () => {
         const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
         const res = await fetch(`/api/projects/${id}/resource-types/${devRtId}/named-resources`, {
           method: 'POST', headers,
-          body: JSON.stringify({ name: 'Ramp-Up Alice', allocationMode: 'EFFORT' }),
+          // Capacity is no longer accepted on this route (#403): the new NR
+          // derives its profile from the role's authoritative profile.
+          body: JSON.stringify({ name: 'Ramp-Up Alice' }),
         })
         if (!res.ok) throw new Error(`POST named-resource failed: ${await res.text()}`)
         return { nrId: (await res.json() as { id: string }).id }
       }, { id: projectId, devRtId: preData.devRtId })
       expect(nrResult.nrId).toBeTruthy()
+
+      // 2b. SQL: the generated profile carries the shared generation
+      // provenance (DERIVED + legacy.writer=ROLE_DEFAULT) — #403.
+      const genCp = await db.query(`SELECT source, legacy FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
+      expect(genCp.rows).toHaveLength(1)
+      expect(genCp.rows[0].source).toBe('DERIVED')
+      expect(genCp.rows[0].legacy).toMatchObject({ version: 1, writer: 'ROLE_DEFAULT' })
 
       // Delete the CapacityProfile so the NR has NO_PROFILE
       await db.query(`DELETE FROM "CapacitySegment" WHERE "capacityProfileId" IN (SELECT id FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2)`, [nrResult.nrId, projectId])
@@ -481,7 +490,8 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       const preNrSql = await db.query(`SELECT * FROM "NamedResource" WHERE "id" = $1`, [nrResult.nrId])
       expect(preNrSql.rows).toHaveLength(1)
       const preNr = preNrSql.rows[0]
-      expect(preNr.allocationMode).toBe('EFFORT')
+      // Derived from the Developer role profile (AVAILABILITY_WINDOW default → TIMELINE compat)
+      expect(preNr.allocationMode).toBe('TIMELINE')
       expect(preNr.allocationPercent).toBe(100)
       expect(preNr.allocationPct).toBe(100)
       expect(preNr.allocationStartWeek).toBeNull()
@@ -519,7 +529,10 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       const preRpNr = preState.devNr!
       expect(preRpNr.capacityProfile).toBeDefined()
       expect(preRpNr.capacityProfile!.resolutionSource).toBe('LEGACY')
-      expect(preRpNr.capacityProfile!.source).toBe('fixed')
+      // The pre-edit DTO is legacy-resolved, so its source mirrors the role.
+      expect(preRpNr.capacityProfile!.source).toBe('availabilityWindow')
+
+
 
       // 3d. Timeline reader
       const preTl = await page.evaluate(async ({ id, nrId }) => {
@@ -1229,12 +1242,14 @@ test.describe('Timeline — Resource-counts layout', () => {
    */
   async function setNamedResourceBasisAndWait(page: Page, nrId: string, basisLocator: Locator, basis: 'EFFORT' | 'TIMELINE') {
     const tlMatcher = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
-    const patchResp = page.waitForResponse(
+    // Issue #403: Timeline basis changes submit the first-class
+    // owner-scoped capacity-profile request contract.
+    const capResp = page.waitForResponse(
       resp => {
-        if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
+        if (resp.request().method() !== 'PUT' || !resp.ok()) return false
         try {
           const u = new URL(resp.request().url())
-          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+          if (u.pathname.endsWith(`/capacity-profiles/NAMED_PERSON/${nrId}`)) {
             tlMatcher.gate()
             return true
           }
@@ -1244,8 +1259,8 @@ test.describe('Timeline — Resource-counts layout', () => {
       { timeout: 10_000 },
     )
     await basisLocator.selectOption(basis)
-    const [patchRespResolved] = await Promise.all([patchResp, tlMatcher.promise])
-    expect(patchRespResolved.status()).toBe(200)
+    const [capRespResolved] = await Promise.all([capResp, tlMatcher.promise])
+    expect(capRespResolved.status()).toBe(200)
     tlMatcher.cleanup()
   }
 
@@ -1280,10 +1295,10 @@ test.describe('Timeline — Resource-counts layout', () => {
     const tlPct = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchPct = page.waitForResponse(
       resp => {
-        if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
+        if (resp.request().method() !== 'PUT' || !resp.ok()) return false
         try {
           const u = new URL(resp.request().url())
-          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+          if (u.pathname.endsWith(`/capacity-profiles/NAMED_PERSON/${nrId}`)) {
             tlPct.gate()
             return true
           }
@@ -1306,10 +1321,10 @@ test.describe('Timeline — Resource-counts layout', () => {
     const tlStart = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchStart = page.waitForResponse(
       resp => {
-        if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
+        if (resp.request().method() !== 'PUT' || !resp.ok()) return false
         try {
           const u = new URL(resp.request().url())
-          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+          if (u.pathname.endsWith(`/capacity-profiles/NAMED_PERSON/${nrId}`)) {
             tlStart.gate()
             return true
           }
@@ -1332,10 +1347,10 @@ test.describe('Timeline — Resource-counts layout', () => {
     const tlEnd = createEligibleMatcher(page, 'GET', `/api/projects/${projectId}/timeline`, 10_000)
     const patchEnd = page.waitForResponse(
       resp => {
-        if (resp.request().method() !== 'PATCH' || !resp.ok()) return false
+        if (resp.request().method() !== 'PUT' || !resp.ok()) return false
         try {
           const u = new URL(resp.request().url())
-          if (u.pathname.endsWith(`/named-resources/${nrId}`)) {
+          if (u.pathname.endsWith(`/capacity-profiles/NAMED_PERSON/${nrId}`)) {
             tlEnd.gate()
             return true
           }
