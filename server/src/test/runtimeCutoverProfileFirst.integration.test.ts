@@ -27,7 +27,6 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
 import { app } from '../app.js'
 import { __setRTPatchFailureSeam } from '../routes/resourceTypes.js'
-import { exitCapacityPlanRoleProfile } from '../lib/capacityPlanExit.js'
 
 // ─── Guard ──────────────────────────────────────────────────────────
 
@@ -136,6 +135,13 @@ async function snapshotRuntimeState(resourceTypeId: string) {
   }))
 }
 
+async function seedDistinctCache() {
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { weeklyDemandCache: { [`403|${randomUUID()}`]: 123.75 } },
+  })
+}
+
 async function createRuntimeResourceType(name: string) {
   const response = await request(app)
     .post(`/api/projects/${projectId}/resource-types`)
@@ -225,23 +231,34 @@ describeIf('profile-first runtime cutover (#364)', () => {
     expect(nrs[0].allocationMode).toBe('EFFORT')
   })
 
-  it('3. preserves profile ID after scalar capacity update', async () => {
+  it('3. rejects legacy capacity fields on PUT and preserves the profile exactly', async () => {
     const firstRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'asc' } })
     const firstRtId = firstRt!.id
     const beforeId = await getProfileId('ROLE', firstRtId)
     expect(beforeId).toBeTruthy()
+    const beforeProfile = await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeId! },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })
 
-    await request(app)
+    const res = await request(app)
       .put(`/api/projects/${projectId}/resource-types/${firstRtId}`)
       .set('Authorization', authHeader)
       .send({ allocationMode: 'EFFORT', allocationPercent: 75 })
 
+    // Legacy capacity request fields are rejected before any write (#403)
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationMode', 'allocationPercent'])
+
     const afterId = await getProfileId('ROLE', firstRtId)
     expect(afterId).toBe(beforeId)
     expect(await countProfiles('ROLE', firstRtId)).toBe(1)
+    expect(await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeId! },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })).toEqual(beforeProfile)
   })
-
-  it('4. preserves NAMED_PERSON profile ID after scalar update', async () => {
+  it('4. rejects legacy capacity fields on named-resource routes and preserves the profile', async () => {
     const nr = await prisma.namedResource.findFirst({
       where: { resourceType: { projectId } },
       orderBy: { id: 'asc' },
@@ -251,18 +268,35 @@ describeIf('profile-first runtime cutover (#364)', () => {
 
     const beforeId = await getProfileId('NAMED_PERSON', nrId)
     expect(beforeId).toBeTruthy()
+    const beforeProfile = await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeId! },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })
 
-    await request(app)
+    const res = await request(app)
       .put(`/api/projects/${projectId}/resource-types/${nr!.resourceTypeId}/named-resources/${nrId}`)
       .set('Authorization', authHeader)
       .send({ allocationMode: 'EFFORT', allocationPercent: 50 })
 
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationMode', 'allocationPercent'])
+
+    // The legacy PATCH capacity route is removed (#403)
+    const patchRes = await request(app)
+      .patch(`/api/projects/${projectId}/resource-types/${nr!.resourceTypeId}/named-resources/${nrId}`)
+      .set('Authorization', authHeader)
+      .send({ allocationMode: 'EFFORT' })
+    expect(patchRes.status).toBe(404)
+
     const afterId = await getProfileId('NAMED_PERSON', nrId)
     expect(afterId).toBe(beforeId)
     expect(await countProfiles('NAMED_PERSON', nrId)).toBe(1)
+    expect(await prisma.capacityProfile.findUniqueOrThrow({
+      where: { id: beforeId! },
+      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
+    })).toEqual(beforeProfile)
   })
-
-  it('5. rollback preserves original profile state after validation failure', async () => {
+  it('5. rejects supplied legacy capacity fields with 400 and preserves the profile', async () => {
     const testRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'desc' } })
     const testRtId = testRt!.id
     const beforeId = await getProfileId('ROLE', testRtId)
@@ -277,16 +311,18 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .set('Authorization', authHeader)
       .send({ allocationMode: 'INVALID_MODE' })
 
+    // The field is rejected as a legacy capacity request field — no validation
+    // of its value ever runs because the request never enters the transaction
     expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationMode'])
 
     const afterProfile = await prisma.capacityProfile.findFirst({
       where: { id: beforeId! },
     })
     expect(afterProfile).toBeDefined()
-    expect(afterProfile!.defaultPercent).toBe(beforeProfile!.defaultPercent)
+    expect(afterProfile).toEqual(beforeProfile)
     expect(await countProfiles('ROLE', testRtId)).toBe(1)
   })
-
   it('6. missing profile blocks non-capacity update', async () => {
     const testRt = await prisma.resourceType.create({
       data: { name: 'Test-Orphan', category: 'ENGINEERING', projectId, count: 0 },
@@ -326,10 +362,12 @@ describeIf('profile-first runtime cutover (#364)', () => {
     const testRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'asc' } })
     const testRtId = testRt!.id
 
+    // Capacity mutations go through the first-class capacity-profiles endpoint;
+    // the other project's ROLE profile must not block updates to our RT.
     const res = await request(app)
-      .put(`/api/projects/${projectId}/resource-types/${testRtId}`)
+      .put(`/api/projects/${projectId}/capacity-profiles/ROLE/${testRtId}`)
       .set('Authorization', authHeader)
-      .send({ allocationMode: 'EFFORT', allocationPercent: 80 })
+      .send({ planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 80, startWeek: null, endWeek: null })
 
     // Should succeed — our RT has its own profile
     expect(res.status).toBe(200)
@@ -409,7 +447,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     }
   })
 
-  it('10. authoritative profiles override stale compatibility for scalar writes and count changes', async () => {
+  it('10. authoritative profiles override stale compatibility for first-class writes and count changes', async () => {
     const createdRt = await createRuntimeResourceType('Stale Authority RT')
     const resourceTypeId = createdRt.id as string
     const initialNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
@@ -420,67 +458,43 @@ describeIf('profile-first runtime cutover (#364)', () => {
       where: { projectId, namedResourceId: initialNr.id, resourceTypeId: null },
     })
 
-    await prisma.capacityProfile.update({
-      where: { id: roleProfile.id },
-      data: {
-        planningBasis: 'AVAILABILITY_WINDOW',
-        source: 'AVAILABILITY_WINDOW',
-        defaultPercent: 75,
-        startWeek: 4,
-        endWeek: 12,
-      },
-    })
+    // Stale legacy compatibility fields contradict the authoritative profiles
     await prisma.resourceType.update({
       where: { id: resourceTypeId },
-      data: {
-        allocationMode: 'EFFORT',
-        allocationPercent: 20,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-      },
-    })
-    await prisma.capacityProfile.update({
-      where: { id: nrProfile.id },
-      data: {
-        planningBasis: 'AVAILABILITY_WINDOW',
-        source: 'AVAILABILITY_WINDOW',
-        defaultPercent: 75,
-        startWeek: 4,
-        endWeek: 12,
-      },
+      data: { allocationMode: 'EFFORT', allocationPercent: 20, allocationStartWeek: null, allocationEndWeek: null },
     })
     await prisma.namedResource.update({
       where: { id: initialNr.id },
       data: {
-        allocationMode: 'EFFORT',
-        allocationPercent: 20,
-        allocationPct: 20,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        startWeek: null,
-        endWeek: null,
+        allocationMode: 'EFFORT', allocationPercent: 20, allocationPct: 20,
+        allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null,
       },
     })
 
+    // First-class ROLE write — the profile is authoritative, compatibility follows
     const rtPut = await request(app)
-      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}`)
+      .put(`/api/projects/${projectId}/capacity-profiles/ROLE/${resourceTypeId}`)
       .set('Authorization', authHeader)
-      .send({ allocationPercent: 80 })
+      .send({ planningBasis: 'AVAILABILITY_WINDOW', defaultPercent: 75, startWeek: 4, endWeek: 12 })
     expect(rtPut.status).toBe(200)
-    expect(rtPut.body).toMatchObject({
+    expect(await getProfileId('ROLE', resourceTypeId)).toBe(roleProfile.id)
+    const rtAfter = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
+    expect(rtAfter).toMatchObject({
       allocationMode: 'TIMELINE',
-      allocationPercent: 80,
+      allocationPercent: 75,
       allocationStartWeek: 4,
       allocationEndWeek: 12,
     })
-    expect(await getProfileId('ROLE', resourceTypeId)).toBe(roleProfile.id)
 
+    // First-class NAMED_PERSON write
     const nrPut = await request(app)
-      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${initialNr.id}`)
+      .put(`/api/projects/${projectId}/capacity-profiles/NAMED_PERSON/${initialNr.id}`)
       .set('Authorization', authHeader)
-      .send({ allocationPercent: 85 })
+      .send({ planningBasis: 'AVAILABILITY_WINDOW', defaultPercent: 85, startWeek: 4, endWeek: 12 })
     expect(nrPut.status).toBe(200)
-    expect(nrPut.body).toMatchObject({
+    expect(await getProfileId('NAMED_PERSON', initialNr.id)).toBe(nrProfile.id)
+    const nrAfter = await prisma.namedResource.findUniqueOrThrow({ where: { id: initialNr.id } })
+    expect(nrAfter).toMatchObject({
       allocationMode: 'TIMELINE',
       allocationPercent: 85,
       allocationPct: 85,
@@ -489,33 +503,29 @@ describeIf('profile-first runtime cutover (#364)', () => {
       startWeek: 4,
       endWeek: 12,
     })
-    expect(await getProfileId('NAMED_PERSON', initialNr.id)).toBe(nrProfile.id)
 
-    const nrPatch = await request(app)
+    // Legacy capacity request fields are rejected on the non-capacity routes (#403)
+    const legacyRt = await request(app)
+      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}`)
+      .set('Authorization', authHeader)
+      .send({ allocationPercent: 80 })
+    expect(legacyRt.status).toBe(400)
+    expect(legacyRt.body.rejectedFields).toEqual(['allocationPercent'])
+
+    const legacyNr = await request(app)
+      .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${initialNr.id}`)
+      .set('Authorization', authHeader)
+      .send({ allocationStartWeek: 5 })
+    expect(legacyNr.status).toBe(400)
+    expect(legacyNr.body.rejectedFields).toEqual(['allocationStartWeek'])
+
+    const legacyPatch = await request(app)
       .patch(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${initialNr.id}`)
       .set('Authorization', authHeader)
       .send({ allocationStartWeek: 5 })
-    expect(nrPatch.status).toBe(200)
-    expect(nrPatch.body).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 85,
-      allocationPct: 85,
-      allocationStartWeek: 5,
-      allocationEndWeek: 12,
-      startWeek: 5,
-      endWeek: 12,
-    })
-    expect(await getProfileId('NAMED_PERSON', initialNr.id)).toBe(nrProfile.id)
+    expect(legacyPatch.status).toBe(404)
 
-    await prisma.resourceType.update({
-      where: { id: resourceTypeId },
-      data: {
-        allocationMode: 'FULL_PROJECT',
-        allocationPercent: 20,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-      },
-    })
+    // POST derives the new NR profile from the authoritative ROLE profile
     const createNr = await request(app)
       .post(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources`)
       .set('Authorization', authHeader)
@@ -523,25 +533,13 @@ describeIf('profile-first runtime cutover (#364)', () => {
     expect(createNr.status).toBe(201)
     expect(createNr.body).toMatchObject({
       allocationMode: 'TIMELINE',
-      allocationPercent: 80,
-      allocationPct: 80,
+      allocationPercent: 75,
+      allocationPct: 75,
       allocationStartWeek: 4,
       allocationEndWeek: 12,
     })
 
-    await prisma.capacityProfile.update({
-      where: { id: roleProfile.id },
-      data: { defaultPercent: 75, startWeek: 4, endWeek: 12 },
-    })
-    await prisma.resourceType.update({
-      where: { id: resourceTypeId },
-      data: {
-        allocationMode: 'EFFORT',
-        allocationPercent: 20,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-      },
-    })
+    // Count increase derives the inherited NR from the authoritative ROLE profile
     const existingIds = new Set(
       (await prisma.namedResource.findMany({ where: { resourceTypeId }, select: { id: true } }))
         .map(resource => resource.id),
@@ -568,21 +566,13 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })
     expect(inheritedProfile).toMatchObject({
       planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
+      source: 'DERIVED',
       defaultPercent: 75,
       startWeek: 4,
       endWeek: 12,
     })
 
-    await prisma.resourceType.update({
-      where: { id: resourceTypeId },
-      data: {
-        allocationMode: 'EFFORT',
-        allocationPercent: 20,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-      },
-    })
+    // Count reduction removes the inherited NR and its profile
     const reduction = await request(app)
       .patch(`/api/projects/${projectId}/resource-types/${resourceTypeId}`)
       .set('Authorization', authHeader)
@@ -591,8 +581,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     expect(await prisma.namedResource.findUnique({ where: { id: inherited!.id } })).toBeNull()
     expect(await prisma.capacityProfile.findUnique({ where: { id: inheritedProfile.id } })).toBeNull()
   })
-
-  it('11. count increase exits a segmented capacity plan without leaking planner state', async () => {
+  it('11. count changes on a planner-owned role are rejected with 409 and no partial mutation', async () => {
     const createdRt = await createRuntimeResourceType('Capacity Exit RT')
     const resourceTypeId = createdRt.id as string
     const protectedNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
@@ -629,7 +618,6 @@ describeIf('profile-first runtime cutover (#364)', () => {
         allocationEndWeek: null,
       },
     })
-
     await prisma.capacityProfile.update({
       where: { id: protectedProfile.id },
       data: {
@@ -647,71 +635,20 @@ describeIf('profile-first runtime cutover (#364)', () => {
         { capacityProfileId: protectedProfile.id, startWeek: 4, endWeek: 7, capacityPercent: 40, source: 'SQUAD_PLANNER' },
       ],
     })
-    const protectedBefore = await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: protectedProfile.id },
-      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
-    })
-    const protectedCompatibilityBefore = await prisma.namedResource.findUniqueOrThrow({
-      where: { id: protectedNr.id },
-    })
+    await seedDistinctCache()
+    const before = await snapshotRuntimeState(resourceTypeId)
 
     const response = await request(app)
       .patch(`/api/projects/${projectId}/resource-types/${resourceTypeId}`)
       .set('Authorization', authHeader)
       .send({ count: 2 })
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(409)
+    expect(response.body.code).toBe('PLANNER_MANAGED_IDENTITY')
+    expect(response.body.error).toContain('Switch to manual capacity')
 
-    const postExitRole = await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: roleProfile.id },
-      include: { segments: true },
-    })
-    expect(postExitRole).toMatchObject({
-      ownerKind: 'ROLE',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
-      defaultPercent: 100,
-      startWeek: null,
-      endWeek: null,
-    })
-    expect(postExitRole.segments).toHaveLength(0)
-
-    const resources = await prisma.namedResource.findMany({
-      where: { resourceTypeId },
-      orderBy: { createdAt: 'asc' },
-    })
-    expect(resources).toHaveLength(2)
-    const createdNr = resources.find(resource => resource.id !== protectedNr.id)
-    expect(createdNr).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
-      allocationPct: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-      startWeek: null,
-      endWeek: null,
-    })
-    const createdProfile = await prisma.capacityProfile.findFirstOrThrow({
-      where: { projectId, namedResourceId: createdNr!.id, resourceTypeId: null },
-      include: { segments: true },
-    })
-    expect(createdProfile).toMatchObject({
-      ownerKind: 'NAMED_PERSON',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
-      defaultPercent: 100,
-      startWeek: null,
-      endWeek: null,
-    })
-    expect(createdProfile.segments).toHaveLength(0)
-
-    expect(await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: protectedProfile.id },
-      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
-    })).toEqual(protectedBefore)
-    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: protectedNr.id } }))
-      .toEqual(protectedCompatibilityBefore)
+    // Complete state — profiles, segments, resources, cache — unchanged
+    expect(await snapshotRuntimeState(resourceTypeId)).toEqual(before)
   })
-
   it('12. count reduction deletes only inherited resources and preserves protected state exactly', async () => {
     const createdRt = await createRuntimeResourceType('Protected Reduction RT')
     const resourceTypeId = createdRt.id as string
@@ -756,35 +693,11 @@ describeIf('profile-first runtime cutover (#364)', () => {
       ],
     })
 
-    const plannerResponse = await request(app)
-      .post(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources`)
-      .set('Authorization', authHeader)
-      .send({ name: 'Planner protected resource' })
-    expect(plannerResponse.status).toBe(201)
-    const plannerNrId = plannerResponse.body.id as string
-    const plannerProfile = await prisma.capacityProfile.findFirstOrThrow({
-      where: { projectId, namedResourceId: plannerNrId, resourceTypeId: null },
-    })
-    await prisma.capacityProfile.update({
-      where: { id: plannerProfile.id },
-      data: {
-        ownerKind: 'PLANNED_RESOURCE',
-        planningBasis: 'CAPACITY_PROFILE',
-        source: 'SQUAD_PLANNER',
-        defaultPercent: 40,
-        startWeek: null,
-        endWeek: null,
-      },
-    })
-    await prisma.capacitySegment.createMany({
-      data: [
-        { capacityProfileId: plannerProfile.id, startWeek: 0, endWeek: 1, capacityPercent: 100, source: 'SQUAD_PLANNER' },
-        { capacityProfileId: plannerProfile.id, startWeek: 2, endWeek: 3, capacityPercent: 0, source: 'SQUAD_PLANNER' },
-        { capacityProfileId: plannerProfile.id, startWeek: 4, endWeek: 7, capacityPercent: 40, source: 'SQUAD_PLANNER' },
-      ],
-    })
-
-    const protectedNrIds = [explicitNr.id, segmentedNrId, plannerNrId]
+    // Planner-owned resources block count changes outright (covered by
+    // tests 11 and the legacy-alias-removal suite); the protected set here is
+    // the explicitly created resource and a manually segmented resource,
+    // both of which must survive a count reduction untouched.
+    const protectedNrIds = [explicitNr.id, segmentedNrId]
     const protectedResourcesBefore = await prisma.namedResource.findMany({
       where: { id: { in: protectedNrIds } },
       orderBy: { id: 'asc' },
@@ -794,16 +707,18 @@ describeIf('profile-first runtime cutover (#364)', () => {
       include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
       orderBy: { id: 'asc' },
     })
-    expect(protectedProfilesBefore).toHaveLength(3)
+    expect(protectedProfilesBefore).toHaveLength(2)
     expect(protectedProfilesBefore.every(profile => profile.startWeek === null && profile.endWeek === null)).toBe(true)
     expect(protectedProfilesBefore
       .filter(profile => profile.segments.length > 0)
       .every(profile => profile.segments.some(segment => segment.capacityPercent === 0))).toBe(true)
 
+    // Current count is 3 (explicit + inherited + segmented); reducing to 2
+    // must remove exactly the system-created inherited resource.
     const reduction = await request(app)
       .patch(`/api/projects/${projectId}/resource-types/${resourceTypeId}`)
       .set('Authorization', authHeader)
-      .send({ count: 3 })
+      .send({ count: 2 })
     expect(reduction.status).toBe(200)
 
     expect(await prisma.namedResource.findUnique({ where: { id: inheritedNr.id } })).toBeNull()
@@ -819,17 +734,19 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })).toEqual(protectedProfilesBefore)
   })
 
-  it('13. rolls back count and capacity-plan exit after transactional writes begin', async () => {
+  it('13. rolls back the complete count/profile change after transactional writes begin', async () => {
     const createdRt = await createRuntimeResourceType('Rollback RT')
     const resourceTypeId = createdRt.id as string
     const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
       where: { projectId, resourceTypeId, namedResourceId: null },
     })
+    // Transferred-style manual segmented role: count operations are allowed
+    // and the injected seam must roll back everything.
     await prisma.capacityProfile.update({
       where: { id: roleProfile.id },
       data: {
         planningBasis: 'CAPACITY_PROFILE',
-        source: 'SQUAD_PLANNER',
+        source: 'MANUAL',
         defaultPercent: 60,
         startWeek: null,
         endWeek: null,
@@ -837,18 +754,18 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })
     await prisma.capacitySegment.createMany({
       data: [
-        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 2, capacityPercent: 100, source: 'SQUAD_PLANNER' },
-        { capacityProfileId: roleProfile.id, startWeek: 3, endWeek: 4, capacityPercent: 0, source: 'SQUAD_PLANNER' },
-        { capacityProfileId: roleProfile.id, startWeek: 5, endWeek: 8, capacityPercent: 50, source: 'SQUAD_PLANNER' },
+        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 2, capacityPercent: 100, source: 'MANUAL' },
+        { capacityProfileId: roleProfile.id, startWeek: 3, endWeek: 4, capacityPercent: 0, source: 'MANUAL' },
+        { capacityProfileId: roleProfile.id, startWeek: 5, endWeek: 8, capacityPercent: 50, source: 'MANUAL' },
       ],
     })
     await prisma.resourceType.update({
       where: { id: resourceTypeId },
       data: {
-        allocationMode: 'CAPACITY_PLAN',
+        allocationMode: 'TIMELINE',
         allocationPercent: 20,
-        allocationStartWeek: 99,
-        allocationEndWeek: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
       },
     })
     await prisma.project.update({
@@ -896,7 +813,6 @@ describeIf('profile-first runtime cutover (#364)', () => {
 
     expect(await snapshotRuntimeState(resourceTypeId)).toEqual(before)
   })
-
   it('14. rejects missing and malformed ROLE authority before scalar writes', async () => {
     const cases = [
       { name: 'missing', profile: null, segments: [] },
@@ -1046,7 +962,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })
     try {
       const crossProject = await request(app)
-        .patch(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${namedResource.id}`)
+        .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${namedResource.id}`)
         .set('Authorization', authHeader)
         .send({ pricingModel: 'PRO_RATA' })
       expect(crossProject.status).toBe(409)
@@ -1194,7 +1110,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     })).toEqual(survivorProfilesBefore)
   })
 
-  it('18. named-resource POST exits CAPACITY_PLAN at the authoritative ROLE profile level', async () => {
+  it('18. named-resource POST on a planner-owned role returns 409 with complete state unchanged', async () => {
     const createdRt = await createRuntimeResourceType('POST CAPACITY_PLAN Exit RT')
     const resourceTypeId = createdRt.id as string
     const protectedNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
@@ -1202,7 +1118,6 @@ describeIf('profile-first runtime cutover (#364)', () => {
       where: { projectId, resourceTypeId, namedResourceId: null },
     })
 
-    // Set ROLE profile to CAPACITY_PROFILE with segments
     await prisma.capacityProfile.update({
       where: { id: roleProfile.id },
       data: {
@@ -1219,7 +1134,6 @@ describeIf('profile-first runtime cutover (#364)', () => {
         { capacityProfileId: roleProfile.id, startWeek: 4, endWeek: 5, capacityPercent: 0, source: 'SQUAD_PLANNER' },
       ],
     })
-    // Stale legacy RT fields (should be overwritten by projection)
     await prisma.resourceType.update({
       where: { id: resourceTypeId },
       data: {
@@ -1229,8 +1143,6 @@ describeIf('profile-first runtime cutover (#364)', () => {
         allocationEndWeek: null,
       },
     })
-
-    // Set existing NR to PLANNED_RESOURCE with CAPACITY_PROFILE (should be preserved)
     const protectedProfile = await prisma.capacityProfile.findFirstOrThrow({
       where: { projectId, namedResourceId: protectedNr.id, resourceTypeId: null },
     })
@@ -1250,85 +1162,24 @@ describeIf('profile-first runtime cutover (#364)', () => {
         { capacityProfileId: protectedProfile.id, startWeek: 2, endWeek: 3, capacityPercent: 0, source: 'SQUAD_PLANNER' },
       ],
     })
+    await seedDistinctCache()
+    const before = await snapshotRuntimeState(resourceTypeId)
 
-    const protectedBefore = await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: protectedProfile.id },
-      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
-    })
-
-    // POST a new named resource — should trigger ROLE exit
+    // POST a new named resource — the planner-owned role rejects the identity
+    // change before any write and directs the user to the transfer workflow
     const postResponse = await request(app)
       .post(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources`)
       .set('Authorization', authHeader)
       .send({ name: 'Post Exit Person' })
-    expect(postResponse.status).toBe(201)
-    const createdNrId = postResponse.body.id as string
+    expect(postResponse.status).toBe(409)
+    expect(postResponse.body.code).toBe('PLANNER_MANAGED_IDENTITY')
+    expect(postResponse.body.error).toContain('Switch to manual capacity')
 
-    // Assert 1: ROLE profile was updated in place (ID preserved, planning changed)
-    const postExitRole = await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: roleProfile.id },
-      include: { segments: true },
-    })
-    expect(postExitRole).toMatchObject({
-      ownerKind: 'ROLE',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
-      defaultPercent: 100,
-      startWeek: null,
-      endWeek: null,
-    })
-    expect(postExitRole.segments).toHaveLength(0)
-
-    // Assert 2: ResourceType compatibility fields project correctly
-    const postExitRt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
-    expect(postExitRt).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-    })
-
-    // Assert 3: New NR has a valid NAMED_PERSON profile from post-exit ROLE defaults
-    const createdNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: createdNrId } })
-    expect(createdNr).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
-      allocationPct: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-      startWeek: null,
-      endWeek: null,
-    })
-    const createdProfile = await prisma.capacityProfile.findFirstOrThrow({
-      where: { projectId, namedResourceId: createdNrId, resourceTypeId: null },
-      include: { segments: true },
-    })
-    expect(createdProfile).toMatchObject({
-      ownerKind: 'NAMED_PERSON',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
-      defaultPercent: 100,
-      startWeek: null,
-      endWeek: null,
-    })
-    expect(createdProfile.segments).toHaveLength(0)
-
-    // Assert 4: Existing PLANNED_RESOURCE profile and segments are preserved
-    expect(await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: protectedProfile.id },
-      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
-    })).toEqual(protectedBefore)
-
-    // Assert 5: Count is correct
-    expect(await prisma.namedResource.count({ where: { resourceTypeId } })).toBe(2)
-    expect(postExitRt.count).toBe(2)
-
-    // Assert 6: Weekly cache was cleared
-    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
-    expect(project.weeklyDemandCache).toEqual({})
+    // Complete state — role profile, segments, NRs, count and cache — unchanged
+    expect(await snapshotRuntimeState(resourceTypeId)).toEqual(before)
+    expect(await prisma.namedResource.count({ where: { resourceTypeId } })).toBe(1)
   }, 30000)
-
-  it('19. named-resource DELETE exits CAPACITY_PLAN at the authoritative ROLE profile level', async () => {
+  it('19. named-resource DELETE on a planner-owned role returns 409 with complete state unchanged', async () => {
     const createdRt = await createRuntimeResourceType('DELETE CAPACITY_PLAN Exit RT')
     const resourceTypeId = createdRt.id as string
     const targetNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
@@ -1336,7 +1187,6 @@ describeIf('profile-first runtime cutover (#364)', () => {
       where: { projectId, resourceTypeId, namedResourceId: null },
     })
 
-    // Set ROLE profile to CAPACITY_PROFILE with segments
     await prisma.capacityProfile.update({
       where: { id: roleProfile.id },
       data: {
@@ -1361,148 +1211,19 @@ describeIf('profile-first runtime cutover (#364)', () => {
         allocationEndWeek: null,
       },
     })
-
-    // Add a second NR to verify count sync + protected owner preservation
-    const secondNrResponse = await request(app)
-      .post(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources`)
-      .set('Authorization', authHeader)
-      .send({ name: 'Survivor NR' })
-    expect(secondNrResponse.status).toBe(201)
-    const survivorNrId = secondNrResponse.body.id as string
-
-    // Capture survivor state before DELETE
-    const survivorBefore = await prisma.namedResource.findUniqueOrThrow({ where: { id: survivorNrId } })
-    const survivorProfileBefore = await prisma.capacityProfile.findFirstOrThrow({
-      where: { projectId, namedResourceId: survivorNrId, resourceTypeId: null },
-      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
-    })
-
-    // Reset ROLE to CAPACITY_PROFILE for the DELETE test
-    await prisma.capacityProfile.update({
-      where: { id: roleProfile.id },
-      data: {
-        planningBasis: 'CAPACITY_PROFILE',
-        source: 'SQUAD_PLANNER',
-        defaultPercent: 60,
-        startWeek: null,
-        endWeek: null,
-      },
-    })
-    await prisma.capacitySegment.createMany({
-      data: [
-        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
-      ],
-    })
-    await prisma.resourceType.update({
-      where: { id: resourceTypeId },
-      data: {
-        allocationMode: 'EFFORT',
-        allocationPercent: 20,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-      },
-    })
+    await seedDistinctCache()
+    const before = await snapshotRuntimeState(resourceTypeId)
 
     const deleteResponse = await request(app)
       .delete(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${targetNr.id}`)
       .set('Authorization', authHeader)
-    expect(deleteResponse.status).toBe(204)
+    expect(deleteResponse.status).toBe(409)
+    expect(deleteResponse.body.code).toBe('PLANNER_MANAGED_IDENTITY')
+    expect(deleteResponse.body.error).toContain('Switch to manual capacity')
 
-    // Assert 1: ROLE profile transitioned to AVAILABILITY_WINDOW
-    const postExitRole = await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: roleProfile.id },
-      include: { segments: true },
-    })
-    expect(postExitRole).toMatchObject({
-      ownerKind: 'ROLE',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
-      defaultPercent: 100,
-      startWeek: null,
-      endWeek: null,
-    })
-    expect(postExitRole.segments).toHaveLength(0)
-
-    // Assert 2: ResourceType compatibility fields projected correctly
-    const postExitRt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
-    expect(postExitRt).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-    })
-
-    // Assert 3: Deleted NR and its profile are gone
-    expect(await prisma.namedResource.findUnique({ where: { id: targetNr.id } })).toBeNull()
-    const deletedProfile = await prisma.capacityProfile.findFirst({
-      where: { projectId, namedResourceId: targetNr.id, resourceTypeId: null },
-    })
-    expect(deletedProfile).toBeNull()
-
-    // Assert 4: Survivor NR and its profile preserved
-    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: survivorNrId } })).toEqual(survivorBefore)
-    expect(await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: survivorProfileBefore.id },
-      include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
-    })).toEqual(survivorProfileBefore)
-
-    // Assert 5: Count is correct (1 remaining)
-    expect(postExitRt.count).toBe(1)
-
-    // Assert 6: Weekly cache was cleared
-    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } })
-    expect(project.weeklyDemandCache).toEqual({})
-  }, 30000)
-
-  it('20. exitCapacityPlanRoleProfile rolls back atomically within a failing transaction', async () => {
-    const testRt = await prisma.resourceType.findFirst({ where: { projectId }, orderBy: { id: 'asc' } })
-    const resourceTypeId = testRt!.id
-    const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
-      where: { projectId, resourceTypeId, namedResourceId: null },
-    })
-
-    // Set ROLE to CAPACITY_PROFILE with segments
-    await prisma.capacityProfile.update({
-      where: { id: roleProfile.id },
-      data: {
-        planningBasis: 'CAPACITY_PROFILE',
-        source: 'SQUAD_PLANNER',
-        defaultPercent: 60,
-        startWeek: null,
-        endWeek: null,
-      },
-    })
-    await prisma.capacitySegment.createMany({
-      data: [
-        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
-      ],
-    })
-    await prisma.resourceType.update({
-      where: { id: resourceTypeId },
-      data: {
-        allocationMode: 'EFFORT',
-        allocationPercent: 20,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-      },
-    })
-
-    const before = await snapshotRuntimeState(resourceTypeId)
-
-    // Call the exit helper inside a transaction that will fail
-    try {
-      await prisma.$transaction(async tx => {
-        await exitCapacityPlanRoleProfile(tx, projectId, resourceTypeId)
-        throw new Error('seam: transaction rollback after exit')
-      })
-    } catch {
-      // Expected — no action
-    }
-
-    // Verify exact rollback: state equals pre-exit snapshot
+    // Complete state — role profile, segments, NRs, count and cache — unchanged
     expect(await snapshotRuntimeState(resourceTypeId)).toEqual(before)
   }, 30000)
-
   it('21. name-only PUT preserves canonical zero-capacity planner profile', async () => {
     const createdRt = await createRuntimeResourceType('ZeroCap PUT RT')
     const resourceTypeId = createdRt.id as string
@@ -1621,7 +1342,7 @@ describeIf('profile-first runtime cutover (#364)', () => {
     expect(segments).toHaveLength(0)
   }, 30000)
 
-  it('23. scalar capacity change on zero-capacity planner resource returns 409', async () => {
+  it('23. scalar capacity change on zero-capacity planner resource is rejected with 400', async () => {
     const createdRt = await createRuntimeResourceType('ZeroCap Reject RT')
     const resourceTypeId = createdRt.id as string
 
@@ -1647,15 +1368,18 @@ describeIf('profile-first runtime cutover (#364)', () => {
       where: { namedResourceId: surplus.id, projectId },
     })
     const beforeRt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
+    const beforeCache = await prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })
 
     const response = await request(app)
       .put(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${surplus.id}`)
       .set('Authorization', authHeader)
       .send({ allocationPercent: 50 })
-    expect(response.status).toBe(409)
-    // A capacity-changing PUT on PLANNED_RESOURCE is rejected because the route
-    // requires NAMED_PERSON owner for capacity changes. The zero-capacity resource
-    // remains protected with its profile unchanged.
+    // The supplied legacy capacity field is rejected before any write
+    expect(response.status).toBe(400)
+    expect(response.body.rejectedFields).toEqual(['allocationPercent'])
 
     // State unchanged
     expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })).toEqual(beforeNr)
@@ -1663,14 +1387,17 @@ describeIf('profile-first runtime cutover (#364)', () => {
       where: { id: beforeProfile.id },
     })).toEqual(beforeProfile)
     expect(await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })).toEqual(beforeRt)
+    expect(await prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })).toEqual(beforeCache)
 
     const segments = await prisma.capacitySegment.findMany({
       where: { capacityProfileId: beforeProfile.id },
     })
     expect(segments).toHaveLength(0)
   }, 30000)
-
-  it('24. ResourceType count/update preserves canonical zero-capacity planner resource', async () => {
+  it('24. ResourceType count changes on a role with a planner-owned resource return 409', async () => {
     const createdRt = await createRuntimeResourceType('ZeroCap Count RT')
     const resourceTypeId = createdRt.id as string
 
@@ -1691,38 +1418,24 @@ describeIf('profile-first runtime cutover (#364)', () => {
       },
     })
 
-    const beforeSurplusProfile = await prisma.capacityProfile.findFirstOrThrow({
-      where: { namedResourceId: surplus.id, projectId },
-      include: { segments: true },
-    })
-    const beforeSurplusNr = await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })
+    await seedDistinctCache()
+    const before = await snapshotRuntimeState(resourceTypeId)
 
-    // Increase count to trigger inherited NR creation
+    // Increase count — the planner-owned resource makes the role's identity
+    // immutable until the user switches to manual capacity
     const increase = await request(app)
       .patch(`/api/projects/${projectId}/resource-types/${resourceTypeId}`)
       .set('Authorization', authHeader)
       .send({ count: 3 })
-    expect(increase.status).toBe(200)
+    expect(increase.status).toBe(409)
+    expect(increase.body.code).toBe('PLANNER_MANAGED_IDENTITY')
 
-    // Surplus resource and profile preserved unchanged
-    expect(await prisma.capacityProfile.findUniqueOrThrow({
-      where: { id: beforeSurplusProfile.id },
-      include: { segments: true },
-    })).toEqual(beforeSurplusProfile)
-    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: surplus.id } })).toEqual(beforeSurplusNr)
-
-    // Count increased, inherited NRs exist
-    const allNrs = await prisma.namedResource.findMany({
-      where: { resourceTypeId },
-      orderBy: { createdAt: 'asc' },
-    })
-    expect(allNrs).toHaveLength(beforeSurplusProfile ? 3 : 2)
+    // Complete state unchanged
+    expect(await snapshotRuntimeState(resourceTypeId)).toEqual(before)
   }, 30000)
-
-  it('25. scoped DELETE removes canonical zero-capacity planner resource only', async () => {
+  it('25. DELETE of a planner-owned resource returns 409 with complete state unchanged', async () => {
     const createdRt = await createRuntimeResourceType('ZeroCap DELETE RT')
     const resourceTypeId = createdRt.id as string
-    const initialNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId } })
     const surplus = await prisma.namedResource.create({
       data: { name: 'Delete Surplus', resourceTypeId },
     })
@@ -1740,35 +1453,20 @@ describeIf('profile-first runtime cutover (#364)', () => {
       },
     })
 
-    const beforeInitial = await prisma.namedResource.findUniqueOrThrow({ where: { id: initialNr.id } })
-    const beforeInitialProfile = await prisma.capacityProfile.findFirstOrThrow({
-      where: { namedResourceId: initialNr.id, projectId },
-      include: { segments: true },
-    })
+    await seedDistinctCache()
+    const before = await snapshotRuntimeState(resourceTypeId)
 
     const response = await request(app)
       .delete(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${surplus.id}`)
       .set('Authorization', authHeader)
-    expect(response.status).toBe(204)
+    expect(response.status).toBe(409)
+    expect(response.body.code).toBe('PLANNER_MANAGED_IDENTITY')
+    expect(response.body.error).toContain('Switch to manual capacity')
 
-    // Surplus deleted
-    expect(await prisma.namedResource.findUnique({ where: { id: surplus.id } })).toBeNull()
-    expect(await prisma.capacityProfile.findFirst({
-      where: { namedResourceId: surplus.id, projectId },
-    })).toBeNull()
-
-    // Initial NR and profile preserved
-    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: initialNr.id } })).toEqual(beforeInitial)
-    expect(await prisma.capacityProfile.findFirstOrThrow({
-      where: { id: beforeInitialProfile.id },
-      include: { segments: true },
-    })).toEqual(beforeInitialProfile)
-
-    // Count updated
-    const rt = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
-    expect(rt.count).toBe(1)
+    // Complete state unchanged
+    expect(await snapshotRuntimeState(resourceTypeId)).toEqual(before)
+    expect(await prisma.namedResource.count({ where: { resourceTypeId } })).toBe(2)
   }, 30000)
-
   it('26. malformed zero-capacity-like profile (defaultPercent=1) fails before writes', async () => {
     const createdRt = await createRuntimeResourceType('ZeroCap Malformed RT')
     const resourceTypeId = createdRt.id as string

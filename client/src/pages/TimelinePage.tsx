@@ -26,6 +26,7 @@ import {
   formatAllocationMode,
   formatAllocationModeDescription,
   ALLOCATION_MODE_OPTIONS,
+  scalarModeToPlanningBasis,
 } from '../lib/capacityProfileFormatting'
 
 const CATEGORY_HEADER_BG: Record<string, string> = {
@@ -298,6 +299,7 @@ export default function TimelinePage() {
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [editColour, setEditColour] = useState<string | null>(null)
   const [scheduleStale, setScheduleStale] = useState(false)
+  const [namedResourceError, setNamedResourceError] = useState<string | null>(null)
   const rlKey = `timeline.resourceLevel.${projectId}`
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
   const [optimiserOpen, setOptimiserOpen] = useState(false)
@@ -653,7 +655,6 @@ export default function TimelinePage() {
     mutationFn: ({ rtId, name }: { rtId: string; name: string }) =>
       api.post(`/projects/${projectId}/resource-types/${rtId}/named-resources`, {
         name,
-        allocationPct: 100,
       }).then(r => r.data),
     onSuccess: () => {
       invalidateProjectResourceProfile(qc, projectId)
@@ -671,11 +672,32 @@ export default function TimelinePage() {
   })
 
   const updateNamedResource = useMutation({
-    mutationFn: ({ rtId, nrId, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }: { rtId: string; nrId: string; allocationMode: string; allocationPercent: number; allocationStartWeek?: number | null; allocationEndWeek?: number | null }) =>
-      api.patch(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`, { allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }).then(r => r.data),
+    mutationFn: ({ nrId, allocationMode, allocationPercent, allocationStartWeek, allocationEndWeek }: { rtId: string; nrId: string; allocationMode: string; allocationPercent: number; allocationStartWeek?: number | null; allocationEndWeek?: number | null }) => {
+      // Map the Timeline scalar/window controls to the first-class
+      // owner-scoped capacity-profile request contract (#403).
+      // EFFORT → DEMAND_FOLLOWING, FULL_PROJECT → WHOLE_PROJECT_ALLOCATION,
+      // TIMELINE → AVAILABILITY_WINDOW (nullable selected weeks preserved).
+      // CAPACITY_PLAN is never editable through this scalar editor.
+      const planningBasis = scalarModeToPlanningBasis(allocationMode)
+      if (!planningBasis) {
+        return Promise.reject(new Error('CAPACITY_PLAN availability cannot be changed from the timeline scalar editor.'))
+      }
+      return api.put(`/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`, {
+        planningBasis,
+        defaultPercent: allocationPercent,
+        startWeek: planningBasis === 'AVAILABILITY_WINDOW' ? (allocationStartWeek ?? null) : null,
+        endWeek: planningBasis === 'AVAILABILITY_WINDOW' ? (allocationEndWeek ?? null) : null,
+      }).then(r => r.data)
+    },
     onSuccess: () => {
+      setNamedResourceError(null)
       invalidateProjectResourceProfile(qc, projectId)
       setScheduleStale(true)
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        ?? 'Failed to update named-resource availability'
+      setNamedResourceError(msg)
     },
   })
 
@@ -1108,6 +1130,11 @@ export default function TimelinePage() {
           </button>
           {resourcesOpen && (
             <div className="px-4 pb-4">
+              {namedResourceError && (
+                <p role="alert" className="text-xs text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-900 rounded px-2 py-1.5 mb-3">
+                  {namedResourceError}
+                </p>
+              )}
               <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">Counts affect how quickly each feature can be delivered in parallel</p>
               {rtByCategory.map(([category, rts]) => (
                 <div key={category} className="mb-4">

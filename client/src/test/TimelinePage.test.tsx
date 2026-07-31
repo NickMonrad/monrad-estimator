@@ -392,13 +392,28 @@ describe('TimelinePage — named-resource allocation controls', () => {
       return Promise.resolve({ data: mockProject })
     })
 
-    mockPatch.mockImplementation((url: string, body: Record<string, unknown>) => {
-      if (url.includes('/named-resources/')) {
+    mockPatch.mockImplementation((_url: string, _body: Record<string, unknown>) => {
+      return Promise.resolve({ data: mockProject })
+    })
+    // Issue #403: Timeline capacity edits submit the first-class
+    // owner-scoped capacity-profile request contract.
+    mockPut.mockImplementation((url: string, body: Record<string, unknown>) => {
+      if (url.includes('/capacity-profiles/NAMED_PERSON/')) {
         const nrId = url.split('/').pop()
+        const basis = body.planningBasis
+        const allocationMode = basis === 'DEMAND_FOLLOWING' ? 'EFFORT'
+          : basis === 'WHOLE_PROJECT_ALLOCATION' ? 'FULL_PROJECT'
+          : 'TIMELINE'
         mockTimeline = {
           ...mockTimeline,
           namedResources: (mockTimeline.namedResources ?? []).map((nr: any) =>
-            nr.id === nrId ? { ...nr, ...body } : nr,
+            nr.id === nrId ? {
+              ...nr,
+              allocationMode,
+              allocationPercent: body.defaultPercent ?? 100,
+              allocationStartWeek: allocationMode === 'TIMELINE' ? (body.startWeek ?? null) : null,
+              allocationEndWeek: allocationMode === 'TIMELINE' ? (body.endWeek ?? null) : null,
+            } : nr,
           ),
         }
         return Promise.resolve({ data: mockTimeline })
@@ -467,12 +482,12 @@ describe('TimelinePage — named-resource allocation controls', () => {
     fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
         expect.objectContaining({
-          allocationMode: 'FULL_PROJECT',
-          allocationStartWeek: null,
-          allocationEndWeek: null,
+          planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+          startWeek: null,
+          endWeek: null,
         }),
       )
     })
@@ -495,12 +510,12 @@ describe('TimelinePage — named-resource allocation controls', () => {
     fireEvent.change(select, { target: { value: 'TIMELINE' } })
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
         expect.objectContaining({
-          allocationMode: 'TIMELINE',
-          allocationStartWeek: 3,
-          allocationEndWeek: 12,
+          planningBasis: 'AVAILABILITY_WINDOW',
+          startWeek: 3,
+          endWeek: 12,
         }),
       )
     })
@@ -585,10 +600,10 @@ describe('TimelinePage — named-resource allocation controls', () => {
     fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalled()
+      expect(mockPut).toHaveBeenCalled()
     })
 
-    // stale banner should appear after patch resolves
+    // stale banner should appear after the capacity write resolves
     await waitFor(() => {
       expect(screen.getByText(/timeline inputs changed/i)).toBeInTheDocument()
     })
@@ -613,13 +628,13 @@ describe('TimelinePage — named-resource allocation controls', () => {
     fireEvent.change(select, { target: { value: 'EFFORT' } })
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
         {
-          allocationMode: 'EFFORT',
-          allocationPercent: 100,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
+          planningBasis: 'DEMAND_FOLLOWING',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
         },
       )
     })
@@ -640,13 +655,13 @@ describe('TimelinePage — named-resource allocation controls', () => {
     fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
         {
-          allocationMode: 'FULL_PROJECT',
-          allocationPercent: 80,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
+          planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+          defaultPercent: 80,
+          startWeek: null,
+          endWeek: null,
         },
       )
     })
@@ -667,13 +682,13 @@ describe('TimelinePage — named-resource allocation controls', () => {
     fireEvent.change(select, { target: { value: 'TIMELINE' } })
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
         {
-          allocationMode: 'TIMELINE',
-          allocationPercent: 80,
-          allocationStartWeek: 3,
-          allocationEndWeek: 12,
+          planningBasis: 'AVAILABILITY_WINDOW',
+          defaultPercent: 80,
+          startWeek: 3,
+          endWeek: 12,
         },
       )
     })
@@ -902,11 +917,77 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(weekInputs.length).toBeGreaterThanOrEqual(2)
     weekInputs.slice(-2).forEach(el => expect(el).toBeDisabled())
   })
+
+  it('add named resource does not send allocationPct', async () => {
+    mockResourceTypes = [baseResourceType]
+    mockTimeline = createTimeline({
+      weeklyDemand: [{ resourceTypeName: 'Developer', demandDays: 5 }],
+      namedResources: [],
+    })
+    mockPost.mockResolvedValue({ data: { id: 'nr-new' } })
+    renderPage()
+
+    await screen.findAllByText('Developer')
+    const addBtn = screen.getByRole('button', { name: /add named resource to developer/i })
+    fireEvent.click(addBtn)
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        `/projects/${projectId}/resource-types/${rtId}/named-resources`,
+        expect.objectContaining({ name: expect.any(String) }),
+      )
+    })
+    // Issue #403: the capacity shape is established by the server; the
+    // identity route must not receive allocationPct.
+    const [, body] = mockPost.mock.calls.find(([url]: [string]) =>
+      String(url).includes('/named-resources')) ?? []
+    expect(body).not.toHaveProperty('allocationPct')
+  })
+
+  it('failed profile write surfaces the server error and does not mark the timeline stale', async () => {
+    setupWithNamedResource({ allocationMode: 'EFFORT' })
+    mockPut.mockRejectedValue({
+      response: { data: { error: 'Cannot replace a PLANNED_RESOURCE profile manually' } },
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
+
+    // The server error is visible in the resource-counts panel
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Cannot replace a PLANNED_RESOURCE profile manually')
+    })
+    // A failed write must not mark the schedule stale
+    expect(screen.queryByText(/timeline inputs changed/i)).not.toBeInTheDocument()
+  })
+
+  it('switching away from CAPACITY_PLAN fails visibly with the 409 error', async () => {
+    setupWithNamedResource({ allocationMode: 'CAPACITY_PLAN' })
+    mockPut.mockRejectedValue({
+      response: { data: { error: 'Cannot replace a PLANNED_RESOURCE profile manually' } },
+    })
+    renderPage()
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toHaveValue('CAPACITY_PLAN')
+
+    fireEvent.change(select, { target: { value: 'EFFORT' } })
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
+        expect.objectContaining({ planningBasis: 'DEMAND_FOLLOWING' }),
+      )
+    })
+    // The planner-managed conflict is surfaced to the user
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Cannot replace a PLANNED_RESOURCE profile manually')
+    })
+  })
 })
 
-// ---------------------------------------------------------------------------
-// Resource-counts section layout — issue #369
-// ---------------------------------------------------------------------------
+
 describe('TimelinePage — resource-counts layout', () => {
   const rtId = 'rt-layout'
   const nrId = 'nr-layout-1'
@@ -1146,13 +1227,13 @@ describe('TimelinePage — resource-counts layout', () => {
     fireEvent.change(select, { target: { value: 'FULL_PROJECT' } })
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
         expect.objectContaining({
-          allocationMode: 'FULL_PROJECT',
-          allocationPercent: 100,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
+          planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
         }),
       )
     })
@@ -1180,9 +1261,9 @@ describe('TimelinePage — resource-counts layout', () => {
     fireEvent.blur(pctInput)
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-        expect.objectContaining({ allocationPercent: 60 }),
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
+        expect.objectContaining({ defaultPercent: 60 }),
       )
     })
 
@@ -1192,9 +1273,9 @@ describe('TimelinePage — resource-counts layout', () => {
     fireEvent.blur(startInput)
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-        expect.objectContaining({ allocationStartWeek: 5 }),
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
+        expect.objectContaining({ startWeek: 5 }),
       )
     })
 
@@ -1204,9 +1285,9 @@ describe('TimelinePage — resource-counts layout', () => {
     fireEvent.blur(endInput)
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalledWith(
-        `/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`,
-        expect.objectContaining({ allocationEndWeek: 15 }),
+      expect(mockPut).toHaveBeenCalledWith(
+        `/projects/${projectId}/capacity-profiles/NAMED_PERSON/${nrId}`,
+        expect.objectContaining({ endWeek: 15 }),
       )
     })
   })
@@ -1280,7 +1361,7 @@ describe('TimelinePage — resource-counts layout', () => {
       weeklyDemand: [{ resourceTypeName: 'LayoutTester', demandDays: 5 }],
       namedResources: [{ ...baseNamedResource, allocationMode: 'TIMELINE' }],
     })
-    mockPatch.mockResolvedValue({ data: {} })
+    mockPut.mockResolvedValue({ data: {} })
 
     const qc = createQueryClient()
     const spy = vi.spyOn(qc, 'invalidateQueries')
@@ -1294,7 +1375,7 @@ describe('TimelinePage — resource-counts layout', () => {
     fireEvent.blur(pctInput)
 
     await waitFor(() => {
-      expect(mockPatch).toHaveBeenCalled()
+      expect(mockPut).toHaveBeenCalled()
     })
 
     // The central helper invalidates 4 keys including ['timeline', projectId]

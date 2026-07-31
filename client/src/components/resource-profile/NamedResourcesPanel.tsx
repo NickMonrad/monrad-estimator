@@ -9,6 +9,7 @@ import {
   formatCapacityProfileSource,
   formatResolutionSource,
   getEffectiveAvailabilityDisplay,
+  scalarModeToPlanningBasis,
 } from '../../lib/capacityProfileFormatting'
 import CapacityProfileEditorModal from './CapacityProfileEditorModal'
 import type { CapacityProfileEditorDraft } from '../../lib/capacityProfileFormatting'
@@ -98,9 +99,6 @@ export default function NamedResourcesPanel({
     }: {
       id: string
       name?: string
-      startWeek?: number | null
-      endWeek?: number | null
-      allocationPct?: number
       pricingModel?: string
     }) =>
       api
@@ -108,6 +106,37 @@ export default function NamedResourcesPanel({
           `/projects/${projectId}/resource-types/${rtId}/named-resources/${id}`,
           data,
         )
+        .then((r) => r.data),
+    onSuccess: () => {
+      invalidateProjectResourceProfile(qc, projectId)
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
+    },
+  })
+
+  // Scalar start/end-week and allocation-% edits submit the first-class
+  // owner-scoped capacity-profile request contract (#403) instead of the
+  // legacy NamedResource capacity fields.
+  const updateCapacity = useMutation({
+    mutationFn: ({
+      id,
+      planningBasis,
+      defaultPercent,
+      startWeek,
+      endWeek,
+    }: {
+      id: string
+      planningBasis: 'DEMAND_FOLLOWING' | 'WHOLE_PROJECT_ALLOCATION' | 'AVAILABILITY_WINDOW'
+      defaultPercent: number | null
+      startWeek?: number | null
+      endWeek?: number | null
+    }) =>
+      api
+        .put(`/projects/${projectId}/capacity-profiles/NAMED_PERSON/${id}`, {
+          planningBasis,
+          defaultPercent,
+          startWeek: planningBasis === 'AVAILABILITY_WINDOW' ? (startWeek ?? null) : null,
+          endWeek: planningBasis === 'AVAILABILITY_WINDOW' ? (endWeek ?? null) : null,
+        })
         .then((r) => r.data),
     onSuccess: () => {
       invalidateProjectResourceProfile(qc, projectId)
@@ -261,7 +290,13 @@ export default function NamedResourcesPanel({
                           ? parseInt(e.target.value, 10)
                           : null
                         if (value !== resource.startWeek) {
-                          updateResource.mutate({ id: resource.id, startWeek: value })
+                          updateCapacity.mutate({
+                            id: resource.id,
+                            planningBasis: 'AVAILABILITY_WINDOW',
+                            defaultPercent: resource.allocationPct,
+                            startWeek: value,
+                            endWeek: resource.endWeek,
+                          })
                         }
                       }}
                       disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
@@ -281,7 +316,13 @@ export default function NamedResourcesPanel({
                           ? parseInt(e.target.value, 10)
                           : null
                         if (value !== resource.endWeek) {
-                          updateResource.mutate({ id: resource.id, endWeek: value })
+                          updateCapacity.mutate({
+                            id: resource.id,
+                            planningBasis: 'AVAILABILITY_WINDOW',
+                            defaultPercent: resource.allocationPct,
+                            startWeek: resource.startWeek,
+                            endWeek: value,
+                          })
                         }
                       }}
                       disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
@@ -305,7 +346,16 @@ export default function NamedResourcesPanel({
                           value <= 100 &&
                           value !== resource.allocationPct
                         ) {
-                          updateResource.mutate({ id: resource.id, allocationPct: value })
+                          const basis = scalarModeToPlanningBasis(resource.availability?.effectiveMode ?? 'EFFORT')
+                          if (basis) {
+                            updateCapacity.mutate({
+                              id: resource.id,
+                              planningBasis: basis,
+                              defaultPercent: value,
+                              startWeek: resource.startWeek,
+                              endWeek: resource.endWeek,
+                            })
+                          }
                         }
                       }}
                       disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}

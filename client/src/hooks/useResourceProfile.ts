@@ -67,10 +67,6 @@ export interface ResourceProfileState {
   setEditingTaxRate: React.Dispatch<React.SetStateAction<boolean>>
   taxRateDraft: string
   setTaxRateDraft: React.Dispatch<React.SetStateAction<string>>
-  editingAllocation: string | null
-  setEditingAllocation: React.Dispatch<React.SetStateAction<string | null>>
-  allocationDraft: { allocationMode: string; allocationPercent: number; allocationStartWeek: number | null; allocationEndWeek: number | null } | null
-  setAllocationDraft: React.Dispatch<React.SetStateAction<{ allocationMode: string; allocationPercent: number; allocationStartWeek: number | null; allocationEndWeek: number | null } | null>>
   hasCost: boolean
   columnCount: number
   chartData: Array<{ name: string; taskDays: number; overheadDays: number }>
@@ -81,8 +77,6 @@ export interface ResourceProfileState {
   updateTax: UseMutationResult<any, any, any, any>
   applyRateCard: UseMutationResult<any, any, any, any>
   updateResourceType: UseMutationResult<any, any, any, any>
-  updateAllocationMutation: UseMutationResult<any, any, any, any>
-  updateNrAllocationMutation: UseMutationResult<any, any, any, any>
   addPerson: UseMutationResult<any, any, any, any>
   removeLastPerson: UseMutationResult<any, any, any, any>
   createOverhead: UseMutationResult<any, any, any, any>
@@ -101,7 +95,6 @@ export interface ResourceProfileState {
   handleExportFull: () => Promise<void>
   handleDiscountSubmit: () => void
   handleApplyRateCard: () => void
-  startEditAllocation: (row: CommercialRow) => void
   getAllocationBadge: (row: CommercialRow) => { label: string; color: string; sub: string | null }
   toggleRow: (rtId: string) => void
   toggleNamedResources: (rtId: string) => void
@@ -150,15 +143,8 @@ export function useResourceProfile(): ResourceProfileState {
     handleFormSubmit, handleEdit, handleDelete,
   } = useResourceProfileMutations(projectId)
 
-  // ── Allocation editing ──
-  const {
-    editingAllocation, setEditingAllocation,
-    allocationDraft, setAllocationDraft,
-    updateAllocationMutation,
-    updateNrAllocationMutation,
-    startEditAllocation,
-    getAllocationBadge,
-  } = useAllocationEditing(projectId)
+  // ── Allocation badge ──
+  const { getAllocationBadge } = useAllocationEditing()
   const getAllocationBadgeForRow = (row: CommercialRow) => getAllocationBadge(row, profile)
 
   // ── Buffer / onboarding weeks ──
@@ -236,11 +222,9 @@ export function useResourceProfile(): ResourceProfileState {
     taxLabelDraft, setTaxLabelDraft,
     editingTaxRate, setEditingTaxRate,
     taxRateDraft, setTaxRateDraft,
-    editingAllocation, setEditingAllocation,
-    allocationDraft, setAllocationDraft,
     hasCost, columnCount, chartData, filteredResourceRows, commercialData,
     createDiscount, deleteDiscount, updateTax, applyRateCard,
-    updateResourceType, updateAllocationMutation, updateNrAllocationMutation,
+    updateResourceType,
     addPerson, removeLastPerson,
     createOverhead, updateOverhead, deleteOverhead,
     handleFormSubmit, handleEdit, handleDelete,
@@ -248,7 +232,7 @@ export function useResourceProfile(): ResourceProfileState {
     slugify, toCsvValue, buildProfileCsv, createCsvBlob, downloadBlob,
     handleExportProfile, handleExportFull,
     handleDiscountSubmit, handleApplyRateCard,
-    startEditAllocation, getAllocationBadge: getAllocationBadgeForRow,
+    getAllocationBadge: getAllocationBadgeForRow,
     toggleRow, toggleNamedResources,
     weekToDate, fmtDate, formatNumber,
   }

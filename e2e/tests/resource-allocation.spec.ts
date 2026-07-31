@@ -546,9 +546,10 @@ async function measurePatternSelect(page: Page, viewport: { width: number; heigh
   const nrSelect = rowLoc.locator('select[aria-label*="Availability pattern for"]')
   await expect(nrSelect).toBeVisible()
   
-  // Change to FULL_PROJECT (longest option) and wait for PATCH to settle
+  // Change to FULL_PROJECT (longest option) and wait for the first-class
+  // capacity write to settle (#403 — pattern changes PUT capacity-profiles).
   const patchResp = page.waitForResponse(
-    resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
+    resp => resp.request().method() === 'PUT' && resp.url().includes('/capacity-profiles/NAMED_PERSON/'),
     { timeout: 10_000 },
   )
   await nrSelect.selectOption('FULL_PROJECT')
@@ -601,7 +602,7 @@ async function addNamedResourceSimple(page: Page): Promise<string> {
   const testId = await nrRow.getAttribute('data-testid')
   const nrSelect = nrRow.locator('select[aria-label*="Availability pattern for"]')
   const patchResp = page.waitForResponse(
-    resp => resp.request().method() === 'PATCH' && resp.url().includes('/named-resources/'),
+    resp => resp.request().method() === 'PUT' && resp.url().includes('/capacity-profiles/NAMED_PERSON/'),
     { timeout: 10_000 },
   )
   await nrSelect.selectOption('TIMELINE')
