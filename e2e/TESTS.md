@@ -127,7 +127,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 #### `Starting Team Finder drawer — with resources` describe block (5 tests — Phase 4, issue #233; profile-first ramp-up, issue #360)
 
-`beforeEach` seeds a project with Developer (264 h) and Tech Lead (8 h) tasks via CSV import, navigates to Timeline, and runs Quick schedule. The ramp-up test additionally creates a named resource via `POST /named-resources` (which since #403 sends no capacity fields and derives the new profile from the role's authoritative profile), then deletes that profile via raw SQL — leaving the named resource in **NO_PROFILE** state (eligible for ramp-up). The feature start week is manually overridden to week 5 and re-scheduled to push Developer first demand past week 0. Each test has a 90 s timeout.
+`beforeEach` seeds a project with Developer (264 h) and Tech Lead (8 h) tasks via CSV import, navigates to Timeline, and runs Quick schedule. The ramp-up test additionally creates a named resource via `POST /named-resources` (which since #403 sends no capacity fields and generates the new profile from the role's authoritative profile with `source=DERIVED` and `legacy.writer=ROLE_DEFAULT`), then deletes that profile via raw SQL — leaving the named resource in **NO_PROFILE** state (eligible for ramp-up). The feature start week is manually overridden to week 5 and re-scheduled to push Developer first demand past week 0. Each test has a 90 s timeout.
 
 | Test | Description |
 |------|-------------|

@@ -286,7 +286,8 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .patch(`/api/projects/${projectId}/resource-types/${nr!.resourceTypeId}/named-resources/${nrId}`)
       .set('Authorization', authHeader)
       .send({ allocationMode: 'EFFORT' })
-    expect(patchRes.status).toBe(404)
+    expect(patchRes.status).toBe(400)
+    expect(patchRes.body.rejectedFields).toEqual(['allocationMode'])
 
     const afterId = await getProfileId('NAMED_PERSON', nrId)
     expect(afterId).toBe(beforeId)
@@ -440,7 +441,9 @@ describeIf('profile-first runtime cutover (#364)', () => {
       expect(nrProfile).toBeDefined()
       expect(nrProfile!.ownerKind).toBe('NAMED_PERSON')
       expect(nrProfile!.planningBasis).toBe(roleProfile.planningBasis)
-      expect(nrProfile!.source).toBe(roleProfile.source)
+      // Generated profiles carry the shared generation provenance (#403 finding 1)
+      expect(nrProfile!.source).toBe('DERIVED')
+      expect(nrProfile!.legacy).toMatchObject({ version: 1, writer: 'ROLE_DEFAULT' })
       expect(nrProfile!.defaultPercent).toBe(roleProfile.defaultPercent)
       expect(nrProfile!.startWeek).toBe(roleProfile.startWeek)
       expect(nrProfile!.endWeek).toBe(roleProfile.endWeek)
@@ -523,7 +526,8 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .patch(`/api/projects/${projectId}/resource-types/${resourceTypeId}/named-resources/${initialNr.id}`)
       .set('Authorization', authHeader)
       .send({ allocationStartWeek: 5 })
-    expect(legacyPatch.status).toBe(404)
+    expect(legacyPatch.status).toBe(400)
+    expect(legacyPatch.body.rejectedFields).toEqual(['allocationStartWeek'])
 
     // POST derives the new NR profile from the authoritative ROLE profile
     const createNr = await request(app)

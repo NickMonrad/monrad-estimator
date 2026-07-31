@@ -12,6 +12,8 @@ vi.mock('../lib/api', () => ({
     put: vi.fn().mockResolvedValue({ data: {} }),
     delete: vi.fn().mockResolvedValue({}),
   },
+  apiErrorMessage: (err: unknown, fallback: string) =>
+    (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback,
 }))
 
 import { api } from '../lib/api'
@@ -988,5 +990,40 @@ describe('NamedResourcesPanel — first-class capacity edits (#403)', () => {
         },
       )
     })
+  })
+
+  it('a planner-managed 409 from a capacity edit surfaces the actionable message (#403 finding 4)', async () => {
+    api.get.mockReset()
+    api.get.mockResolvedValue({ data: MOCK_NAMED_RESOURCES })
+    api.put.mockReset()
+    api.put.mockRejectedValue({
+      response: { data: { error: 'Resource "Alice" is managed by Squad Planner. Switch to manual capacity before changing its resources.', code: 'PLANNER_MANAGED_IDENTITY' } },
+    })
+
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <table>
+          <tbody>
+            <NamedResourcesPanel
+              projectId="proj-1"
+              rtId="rt-1"
+              rtCount={2}
+              columnCount={8}
+              allocations={MOCK_ALLOCATIONS}
+            />
+          </tbody>
+        </table>
+      </QueryClientProvider>,
+    )
+
+    await screen.findAllByDisplayValue('100')
+
+    const numberInputs = document.querySelectorAll<HTMLInputElement>('input[type="number"]')
+    const pctInput = numberInputs[2]
+    fireEvent.change(pctInput, { target: { value: '80' } })
+    fireEvent.blur(pctInput)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Switch to manual capacity')
   })
 })

@@ -391,7 +391,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
     expectRejectedStateUnchanged(before, after)
   })
-  it('B: PATCH route is removed → 404 (segmented NAMED_PERSON)', async () => {
+  it('B: PATCH is rejection-only → structured 400, state and cache unchanged (segmented NAMED_PERSON)', async () => {
     await seedDistinctWeeklyDemandCache('B')
     const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
     expect(before.cache).toEqual({ [`${rtId}|B`]: 42.5 })
@@ -404,7 +404,9 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
         allocationPercent: 80,
       })
 
-    expect(res.status).toBe(404)
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPercent', 'startWeek'])
+    expect(res.body.error).toContain('capacity-profiles/:ownerKind/:ownerId')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
     expectRejectedStateUnchanged(before, after)
@@ -473,7 +475,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
     expectRejectedStateUnchanged(before, after)
   })
-  it('E2: PATCH route is removed → 404 (segmentless CAPACITY_PROFILE)', async () => {
+  it('E2: PATCH is rejection-only → structured 400, state and cache unchanged (segmentless CAPACITY_PROFILE)', async () => {
     await seedDistinctWeeklyDemandCache('E2')
     const capBase = `/api/projects/${projectId}/resource-types/${defaultRtId}/named-resources`
     const before = await readCanonicalState(capProfileNrId, capProfileProfileId)
@@ -486,7 +488,8 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
         allocationPercent: 60,
       })
 
-    expect(res.status).toBe(404)
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPercent'])
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
     expectRejectedStateUnchanged(before, after)

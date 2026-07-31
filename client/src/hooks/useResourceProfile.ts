@@ -44,6 +44,8 @@ export interface ResourceProfileState {
   setEditingId: React.Dispatch<React.SetStateAction<string | null>>
   formError: string | null
   setFormError: React.Dispatch<React.SetStateAction<string | null>>
+  profileMutationError: string | null
+  clearProfileMutationError: () => void
   form: { name: string; resourceTypeId: string; type: 'PERCENTAGE' | 'FIXED_DAYS' | 'DAYS_PER_WEEK'; value: string }
   setForm: React.Dispatch<React.SetStateAction<{ name: string; resourceTypeId: string; type: 'PERCENTAGE' | 'FIXED_DAYS' | 'DAYS_PER_WEEK'; value: string }>>
   bufferWeeks: number
@@ -134,6 +136,7 @@ export function useResourceProfile(): ResourceProfileState {
     expandedNamedResources, setExpandedNamedResources,
     editingId, setEditingId,
     formError, setFormError,
+    profileMutationError, clearProfileMutationError,
     form, setForm,
     toggleRow, toggleNamedResources,
     resetForm,
@@ -210,6 +213,7 @@ export function useResourceProfile(): ResourceProfileState {
     expandedNamedResources, setExpandedNamedResources,
     editingId, setEditingId,
     formError, setFormError,
+    profileMutationError, clearProfileMutationError,
     form, setForm,
     bufferWeeks, onboardingWeeks,
     activeTab, setActiveTab,

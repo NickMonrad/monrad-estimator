@@ -890,6 +890,114 @@ describe('capacity profile profile-first writes (no sync)', () => {
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 
+  it('PATCH count increase clones the role profile with generation provenance', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT', name: 'Engineer', allocationPercent: null, allocationStartWeek: null, allocationEndWeek: null } as never)
+    const tx = {
+      namedResource: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'nr-1' }]),
+        create: vi.fn().mockResolvedValue({ id: 'nr-new' }),
+      },
+      capacityProfile: {
+        findMany: profileFinder(roleProfile({ planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL', defaultPercent: 60, segments: [{ id: 'cs-1', capacityProfileId: 'cp-role-1', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'MANUAL' }] }), [namedProfile('nr-1', { planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 100 })]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
+        update: vi.fn(),
+      },
+      resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 2 }) },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    await request(app)
+      .patch('/api/projects/proj-1/resource-types/rt-1')
+      .set('Authorization', authHeader)
+      .send({ count: 2 })
+
+    expect(tx.capacityProfile.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'DERIVED',
+        defaultPercent: 60,
+        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+      }),
+    }))
+  })
+
+  it('PATCH count increase rejects aggregate ROLE defaultPercent above 100 before any write', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT', name: 'Engineer', allocationPercent: null, allocationStartWeek: null, allocationEndWeek: null } as never)
+    const tx = {
+      namedResource: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'nr-1' }]),
+        create: vi.fn().mockResolvedValue({ id: 'nr-new' }),
+      },
+      capacityProfile: {
+        findMany: profileFinder(roleProfile({ planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 150 }), [namedProfile('nr-1')]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
+        update: vi.fn(),
+      },
+      resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 2 }) },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .patch('/api/projects/proj-1/resource-types/rt-1')
+      .set('Authorization', authHeader)
+      .send({ count: 2 })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('AGGREGATE_ROLE_CAPACITY')
+    expect(res.body.error).toContain('150')
+    expect(tx.namedResource.create).not.toHaveBeenCalled()
+    expect(tx.capacityProfile.create).not.toHaveBeenCalled()
+    expect(tx.resourceType.update).not.toHaveBeenCalled()
+    // Cache untouched
+    expect(tx.project.update).not.toHaveBeenCalled()
+  })
+
+  it('PATCH count increase rejects an aggregate ROLE segment above 100 before any write', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT', name: 'Engineer', allocationPercent: null, allocationStartWeek: null, allocationEndWeek: null } as never)
+    const tx = {
+      namedResource: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'nr-1' }]),
+        create: vi.fn().mockResolvedValue({ id: 'nr-new' }),
+      },
+      capacityProfile: {
+        findMany: profileFinder(roleProfile({
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL',
+          defaultPercent: 60,
+          segments: [
+            { id: 'cs-1', capacityProfileId: 'cp-role-1', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'MANUAL' },
+            { id: 'cs-2', capacityProfileId: 'cp-role-1', startWeek: 5, endWeek: 8, capacityPercent: 120, source: 'MANUAL' },
+          ],
+        }), [namedProfile('nr-1')]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
+        update: vi.fn(),
+      },
+      resourceType: { update: vi.fn().mockResolvedValue({ id: 'rt-1', count: 2 }) },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .patch('/api/projects/proj-1/resource-types/rt-1')
+      .set('Authorization', authHeader)
+      .send({ count: 2 })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('AGGREGATE_ROLE_CAPACITY')
+    expect(res.body.error).toContain('W5-W8')
+    expect(tx.namedResource.create).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
+  })
+
   it('DELETE does not call sync (cascade handles profiles)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({

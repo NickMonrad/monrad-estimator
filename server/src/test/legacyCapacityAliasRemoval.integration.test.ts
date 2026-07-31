@@ -223,14 +223,38 @@ describeIf('legacy capacity alias removal (#403)', () => {
     expect(await snapshotRoleState(rt.id)).toEqual(beforeState)
   })
 
-  it('3. named-resource PATCH route is removed (404)', async () => {
+  it('3. named-resource PATCH is rejection-only — structured 400, no write or cache clear', async () => {
     const rt = await createRuntimeResourceType('No Patch')
     const nr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId: rt.id } })
+    await seedDistinctCache()
+    const before = await snapshotRoleState(rt.id)
+    const beforeCache = await readCache()
+
     const res = await request(app)
       .patch(`/api/projects/${projectId}/resource-types/${rt.id}/named-resources/${nr.id}`)
       .set('Authorization', authHeader)
       .send({ allocationMode: 'EFFORT' })
-    expect(res.status).toBe(404)
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationMode'])
+    expect(res.body.error).toContain('capacity-profiles/:ownerKind/:ownerId')
+
+    // Explicit null also counts as a supplied legacy field
+    const nullRes = await request(app)
+      .patch(`/api/projects/${projectId}/resource-types/${rt.id}/named-resources/${nr.id}`)
+      .set('Authorization', authHeader)
+      .send({ startWeek: null, endWeek: null })
+    expect(nullRes.status).toBe(400)
+    expect(nullRes.body.rejectedFields).toEqual(['startWeek', 'endWeek'])
+
+    // No legacy field → method/contract error, no mutation path
+    const noField = await request(app)
+      .patch(`/api/projects/${projectId}/resource-types/${rt.id}/named-resources/${nr.id}`)
+      .set('Authorization', authHeader)
+      .send({ name: 'ignored' })
+    expect(noField.status).toBe(405)
+
+    expect(await readCache()).toEqual(beforeCache)
+    expect(await snapshotRoleState(rt.id)).toEqual(before)
   })
 
   it('4. planner-owned count/add/remove return 409 with complete state unchanged', async () => {
@@ -356,10 +380,11 @@ describeIf('legacy capacity alias removal (#403)', () => {
     })
     expect(clonedProfile).toMatchObject({
       planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
+      source: 'DERIVED',
       defaultPercent: 75,
       startWeek: 4,
       endWeek: 12,
+      legacy: { version: 1, writer: 'ROLE_DEFAULT' },
     })
     expect(await prisma.capacityProfile.findUniqueOrThrow({ where: { id: roleProfile.id }, include: { segments: true } }))
       .toEqual(beforeRole)
@@ -376,10 +401,11 @@ describeIf('legacy capacity alias removal (#403)', () => {
     expect(addedProfile).toMatchObject({
       ownerKind: 'NAMED_PERSON',
       planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
+      source: 'DERIVED',
       defaultPercent: 75,
       startWeek: 4,
       endWeek: 12,
+      legacy: { version: 1, writer: 'ROLE_DEFAULT' },
     })
     const rtAfterAdd = await prisma.resourceType.findUniqueOrThrow({ where: { id: rt.id } })
     expect(rtAfterAdd.count).toBe(3)
@@ -446,6 +472,7 @@ describeIf('legacy capacity alias removal (#403)', () => {
       defaultPercent: 60,
       startWeek: null,
       endWeek: null,
+      legacy: { version: 1, writer: 'ROLE_DEFAULT' },
     })
     expect(cloned.segments.map(s => [s.startWeek, s.endWeek, s.capacityPercent, s.source])).toEqual([
       [0, 2, 100, 'MANUAL'],
@@ -458,22 +485,142 @@ describeIf('legacy capacity alias removal (#403)', () => {
       include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
     })).toEqual(beforeRole)
 
-    // Count reduction back to 1 — the clone carries segments, which the
-    // classifier treats as explicit protection evidence, so it is preserved
-    // and the reduction reports the protected resources.
+    // Count reduction back to 1 — the generated segmented clone carries the
+    // ROLE_DEFAULT provenance marker, so the classifier treats it as inherited
+    // and removes it (profile and segments), completing the 1 → 2 → 1 round
+    // trip. The ROLE profile stays byte-for-byte identical.
     const reduction = await request(app)
       .patch(`/api/projects/${projectId}/resource-types/${rt.id}`)
       .set('Authorization', authHeader)
       .send({ count: 1 })
     expect(reduction.status).toBe(200)
-    expect(reduction.body.warnings?.[0] ?? '').toContain('custom or protected capacity settings')
-    expect(await prisma.namedResource.count({ where: { resourceTypeId: rt.id } })).toBe(2)
-    expect(await prisma.capacityProfile.count({ where: { namedResourceId: nrs[1].id } })).toBe(1)
+    expect(await prisma.namedResource.count({ where: { resourceTypeId: rt.id } })).toBe(1)
+    expect(await prisma.capacityProfile.count({ where: { namedResourceId: nrs[1].id } })).toBe(0)
+    expect(await prisma.capacitySegment.count({ where: { capacityProfileId: cloned.id } })).toBe(0)
+    // ROLE profile ID, fields and segment IDs/order/content are unchanged
     expect(await prisma.capacityProfile.findUniqueOrThrow({
       where: { id: roleProfile.id },
       include: { segments: { orderBy: [{ startWeek: 'asc' }, { id: 'asc' }] } },
     })).toEqual(beforeRole)
     expect(await everyOwnerHasExactlyOneProfile(rt.id)).toBeNull()
+  })
+
+  it('6b. a user-edited segmented named-resource profile stays protected from count reduction', async () => {
+    const rt = await createRuntimeResourceType('Edited Segmented NR')
+    const originalNr = await prisma.namedResource.findFirstOrThrow({ where: { resourceTypeId: rt.id } })
+    const nrProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, namedResourceId: originalNr.id, resourceTypeId: null },
+    })
+    // Simulate a genuine user edit through the first-class endpoint: source
+    // flips to MANUAL and the profile carries explicit segments.
+    await prisma.capacityProfile.update({
+      where: { id: nrProfile.id },
+      data: {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'MANUAL',
+        defaultPercent: 50,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    await prisma.capacitySegment.createMany({
+      data: [
+        { capacityProfileId: nrProfile.id, startWeek: 0, endWeek: 2, capacityPercent: 80, source: 'MANUAL' },
+        { capacityProfileId: nrProfile.id, startWeek: 3, endWeek: 5, capacityPercent: 0, source: 'MANUAL' },
+      ],
+    })
+    await seedDistinctCache()
+    const before = await snapshotRoleState(rt.id)
+
+    // Reduce count to 0 — the user-edited segmented profile must survive
+    const reduction = await request(app)
+      .patch(`/api/projects/${projectId}/resource-types/${rt.id}`)
+      .set('Authorization', authHeader)
+      .send({ count: 0 })
+    expect(reduction.status).toBe(200)
+    expect(reduction.body.warnings?.[0] ?? '').toContain('custom or protected capacity settings')
+    expect(await prisma.namedResource.count({ where: { resourceTypeId: rt.id } })).toBe(1)
+    expect(await prisma.capacityProfile.count({ where: { namedResourceId: originalNr.id } })).toBe(1)
+    // Every persisted entity is unchanged (the reduction attempt clears the
+    // weekly-demand cache by design, so exclude it from the comparison)
+    const after = await snapshotRoleState(rt.id)
+    const { weeklyDemandCache: _beforeCache, ...beforeRest } = before
+    const { weeklyDemandCache: _afterCache, ...afterRest } = after
+    expect(afterRest).toEqual(beforeRest)
+  })
+
+  it('6c. aggregate scalar ROLE capacity above 100 blocks count increase and NamedResource POST unchanged', async () => {
+    const rt = await createRuntimeResourceType('Aggregate Scalar')
+    const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId: rt.id, namedResourceId: null },
+    })
+    await prisma.capacityProfile.update({
+      where: { id: roleProfile.id },
+      data: {
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 150,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    await seedDistinctCache()
+    const before = await snapshotRoleState(rt.id)
+
+    // Count increase → 400 before any write
+    const increase = await request(app)
+      .patch(`/api/projects/${projectId}/resource-types/${rt.id}`)
+      .set('Authorization', authHeader)
+      .send({ count: 2 })
+    expect(increase.status).toBe(400)
+    expect(increase.body.code).toBe('AGGREGATE_ROLE_CAPACITY')
+    expect(increase.body.error).toContain('150')
+
+    // NamedResource POST → 400 before any write
+    const post = await request(app)
+      .post(`/api/projects/${projectId}/resource-types/${rt.id}/named-resources`)
+      .set('Authorization', authHeader)
+      .send({ name: 'Nobody' })
+    expect(post.status).toBe(400)
+    expect(post.body.code).toBe('AGGREGATE_ROLE_CAPACITY')
+
+    // Complete state and cache unchanged
+    expect(await snapshotRoleState(rt.id)).toEqual(before)
+  })
+
+  it('6d. aggregate segmented ROLE capacity above 100 blocks count increase unchanged', async () => {
+    const rt = await createRuntimeResourceType('Aggregate Segmented')
+    const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId: rt.id, namedResourceId: null },
+    })
+    await prisma.capacityProfile.update({
+      where: { id: roleProfile.id },
+      data: {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'MANUAL',
+        defaultPercent: 60,
+        startWeek: null,
+        endWeek: null,
+      },
+    })
+    await prisma.capacitySegment.createMany({
+      data: [
+        { capacityProfileId: roleProfile.id, startWeek: 0, endWeek: 2, capacityPercent: 100, source: 'MANUAL' },
+        { capacityProfileId: roleProfile.id, startWeek: 3, endWeek: 5, capacityPercent: 120, source: 'MANUAL' },
+      ],
+    })
+    await seedDistinctCache()
+    const before = await snapshotRoleState(rt.id)
+
+    const increase = await request(app)
+      .patch(`/api/projects/${projectId}/resource-types/${rt.id}`)
+      .set('Authorization', authHeader)
+      .send({ count: 2 })
+    expect(increase.status).toBe(400)
+    expect(increase.body.code).toBe('AGGREGATE_ROLE_CAPACITY')
+    expect(increase.body.error).toContain('W3-W5')
+
+    expect(await snapshotRoleState(rt.id)).toEqual(before)
   })
 
   it('7. explicit NamedResource profiles are not flattened or overwritten by count operations', async () => {

@@ -14,6 +14,12 @@ import {
   PlannerManagedIdentityError,
   isPlannerManagedIdentityError,
 } from '../lib/legacyCapacityFieldGuard.js'
+import {
+  ROLE_DEFAULT_CLONE_LEGACY,
+  assertRoleProfileCloneableAsNamedPerson,
+  isAggregateRoleCloneError,
+  respondAggregateRoleCloneError,
+} from '../lib/roleProfileClonePolicy.js'
 
 const clearWeeklyDemandCache = (projectId: string, tx?: any) =>
   (tx ?? prisma).project.update({
@@ -172,6 +178,10 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
       res.status(409).json({ error: error.message, code: error.code })
       return
     }
+    if (isAggregateRoleCloneError(error)) {
+      respondAggregateRoleCloneError(error, res)
+      return
+    }
     throw error
   }
 }))
@@ -235,6 +245,10 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       // ── Count increase ─────────────────────────────────────────
       if (count > currentCount) {
+        // Aggregate ROLE capacity above 100% per person cannot be represented
+        // as one valid named-person profile — reject before any write.
+        assertRoleProfileCloneableAsNamedPerson(roleProfile)
+
         for (let n = currentCount + 1; n <= count; n++) {
           const nr = await tx.namedResource.create({
             data: {
@@ -257,13 +271,14 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
               resourceTypeId: null,
               namedResourceId: nr.id,
               planningBasis: roleProfile.planningBasis as any,
-              // System-derived clones must stay deletable on later reduction:
-              // a MANUAL role source marks user-edited profiles as protected.
-              source: roleProfile.source === 'MANUAL' ? 'DERIVED' : (roleProfile.source as any),
+              // Generated profiles are system-derived: non-protective source
+              // plus a persisted provenance marker so the classifier treats
+              // them as inherited and count reduction can remove them.
+              source: 'DERIVED' as any,
               defaultPercent: roleProfile.defaultPercent,
               startWeek: roleProfile.startWeek,
               endWeek: roleProfile.endWeek,
-              legacy: {},
+              legacy: ROLE_DEFAULT_CLONE_LEGACY,
               segments: segs && segs.length > 0
                 ? { create: segs.map((seg: any) => ({
                     startWeek: seg.startWeek,
@@ -339,6 +354,10 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   } catch (error) {
     if (isPlannerManagedIdentityError(error)) {
       res.status(409).json({ error: error.message, code: error.code })
+      return
+    }
+    if (isAggregateRoleCloneError(error)) {
+      respondAggregateRoleCloneError(error, res)
       return
     }
     throw error

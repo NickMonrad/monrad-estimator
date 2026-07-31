@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '../../lib/api'
+import { api, apiErrorMessage } from '../../lib/api'
 import type { ResourceProfileRow } from '../../types/backlog'
 import {
   buildEffectiveProfileDraft,
@@ -64,6 +64,7 @@ export default function NamedResourcesPanel({
   allocations = [],
 }: NamedResourcesPanelProps) {
   const qc = useQueryClient()
+  const [panelError, setPanelError] = useState<string | null>(null)
   const [editingProfile, setEditingProfile] = useState<{
     ownerKind: 'ROLE' | 'NAMED_PERSON'
     ownerId: string
@@ -87,9 +88,11 @@ export default function NamedResourcesPanel({
         })
         .then((r) => r.data),
     onSuccess: () => {
+      setPanelError(null)
       invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
+    onError: (err) => setPanelError(apiErrorMessage(err, 'Failed to add named resource')),
   })
 
   const updateResource = useMutation({
@@ -139,9 +142,11 @@ export default function NamedResourcesPanel({
         })
         .then((r) => r.data),
     onSuccess: () => {
+      setPanelError(null)
       invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
+    onError: (err) => setPanelError(apiErrorMessage(err, 'Failed to update capacity')),
   })
 
   const deleteResource = useMutation({
@@ -150,9 +155,11 @@ export default function NamedResourcesPanel({
         `/projects/${projectId}/resource-types/${rtId}/named-resources/${id}`,
       ),
     onSuccess: () => {
+      setPanelError(null)
       invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
+    onError: (err) => setPanelError(apiErrorMessage(err, 'Failed to remove named resource')),
   })
 
   const allocationById = new Map(allocations.map(allocation => [allocation.id, allocation]))
@@ -236,6 +243,12 @@ export default function NamedResourcesPanel({
           <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
             Named Resources
           </h4>
+
+          {panelError && (
+            <p role="alert" className="text-xs text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-900 rounded px-2 py-1.5">
+              {panelError}
+            </p>
+          )}
 
           {isLoading ? (
             <p className="text-sm text-gray-400 dark:text-gray-500">Loading…</p>

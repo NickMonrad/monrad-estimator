@@ -463,6 +463,13 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       }, { id: projectId, devRtId: preData.devRtId })
       expect(nrResult.nrId).toBeTruthy()
 
+      // 2b. SQL: the generated profile carries the shared generation
+      // provenance (DERIVED + legacy.writer=ROLE_DEFAULT) — #403.
+      const genCp = await db.query(`SELECT source, legacy FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
+      expect(genCp.rows).toHaveLength(1)
+      expect(genCp.rows[0].source).toBe('DERIVED')
+      expect(genCp.rows[0].legacy).toMatchObject({ version: 1, writer: 'ROLE_DEFAULT' })
+
       // Delete the CapacityProfile so the NR has NO_PROFILE
       await db.query(`DELETE FROM "CapacitySegment" WHERE "capacityProfileId" IN (SELECT id FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2)`, [nrResult.nrId, projectId])
       const delResult = await db.query(`DELETE FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
@@ -522,9 +529,10 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       const preRpNr = preState.devNr!
       expect(preRpNr.capacityProfile).toBeDefined()
       expect(preRpNr.capacityProfile!.resolutionSource).toBe('LEGACY')
-      // The NR profile was cloned from the Developer role profile
-      // (AVAILABILITY_WINDOW default) — see #403 POST semantics.
+      // The pre-edit DTO is legacy-resolved, so its source mirrors the role.
       expect(preRpNr.capacityProfile!.source).toBe('availabilityWindow')
+
+
 
       // 3d. Timeline reader
       const preTl = await page.evaluate(async ({ id, nrId }) => {

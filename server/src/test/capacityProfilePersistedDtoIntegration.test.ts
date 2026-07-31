@@ -936,19 +936,24 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(aliceDto!.owner.roleId).toBe(rtId)
     })
 
-    it('PATCH named-resource route is removed (404)', async () => {
+    it('PATCH rejects legacy capacity fields with the structured 400', async () => {
       const rtId = 'patch-sync-rt'
       const nrId = 'patch-sync-nr'
       addResourceType(rtId, 'Patch Sync RT', 1)
       addNamedResource(nrId, 'Patch Sync Person', rtId)
+      const before = JSON.parse(JSON.stringify(storeRef.current))
 
       const res = await request(app)
         .patch(`/api/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`)
         .set('Authorization', authHeader)
         .send({ allocationPercent: 80 })
 
-      // Issue #403 removed the legacy NamedResource PATCH capacity route
-      expect(res.status).toBe(404)
+      // Issue #403: PATCH is rejection-only — legacy capacity fields get the
+      // stable structured 400 and no write or cache clear happens.
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationPercent'])
+      expect(res.body.error).toContain('capacity-profiles/:ownerKind/:ownerId')
+      expect(JSON.parse(JSON.stringify(storeRef.current))).toEqual(before)
     })
   })
 
@@ -2072,7 +2077,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.endWeek).toBe(10)
     })
 
-    it('PATCH null clears is rejected — PATCH route removed (404)', async () => {
+    it('PATCH explicit null capacity fields are rejected with the structured 400', async () => {
       addResourceType('rt-pnull-1', 'PNull RT', 1)
       addNamedResource('nr-pnull-1', 'PNull Person', 'rt-pnull-1')
 
@@ -2081,9 +2086,11 @@ describe('persisted capacity-profile DTO integration', () => {
         .set('Authorization', authHeader)
         .send({ allocationStartWeek: null, allocationEndWeek: null })
 
-      expect(res.status).toBe(404)
+      // Explicit null counts as a supplied legacy capacity field
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationStartWeek', 'allocationEndWeek'])
     })
-    it('PATCH omission is rejected — PATCH route removed (404)', async () => {
+    it('PATCH with a capacity field is rejected with the structured 400', async () => {
       addResourceType('rt-pom-1', 'POm RT', 1)
       addNamedResource('nr-pom-1', 'POm Person', 'rt-pom-1')
 
@@ -2092,7 +2099,8 @@ describe('persisted capacity-profile DTO integration', () => {
         .set('Authorization', authHeader)
         .send({ allocationStartWeek: 2 })
 
-      expect(res.status).toBe(404)
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationStartWeek'])
     })
     it('non-capacity PUT preserves a valid TIMELINE profile over stale compatibility', async () => {
       const mtRtId = 'rt-miss-tl'
@@ -2193,7 +2201,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(res.body.rejectedFields).toEqual(['allocationPercent'])
       expect(storeRef.current.namedResources.find((n: any) => n.id === 'nr-one-1')!.allocationPercent).toBe(75)
     })
-    it('PATCH with one capacity field is rejected — PATCH route removed (404)', async () => {
+    it('PATCH with one capacity field is rejected with the structured 400', async () => {
       addResourceType('rt-ppatch-1', 'PPatch RT', 1)
       addNamedResource('nr-ppatch-1', 'PPatch Person', 'rt-ppatch-1')
 
@@ -2202,7 +2210,8 @@ describe('persisted capacity-profile DTO integration', () => {
         .set('Authorization', authHeader)
         .send({ allocationPercent: 80 })
 
-      expect(res.status).toBe(404)
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationPercent'])
     })
     it.each(['put', 'patch'] as const)(
       'non-capacity %s fails closed (PUT 409 / PATCH 404)',
@@ -2226,8 +2235,9 @@ describe('persisted capacity-profile DTO integration', () => {
           expect(response.status).toBe(409)
           expect(response.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
         } else {
-          // Issue #403 removed the NamedResource PATCH route entirely
-          expect(response.status).toBe(404)
+          // PATCH is rejection-only: no legacy field, so no mutation path exists
+          expect(response.status).toBe(405)
+          expect(response.body.error).toContain('capacity-profiles')
         }
         expect(JSON.parse(JSON.stringify(storeRef.current))).toEqual(before)
       },
@@ -3248,7 +3258,7 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(nrp.resourceTypeId).toBeNull()
       expect(nrp.namedResourceId).toBe(newNR!.id)
       expect(nrp.planningBasis).toBe('AVAILABILITY_WINDOW')
-      expect(nrp.source).toBe('AVAILABILITY_WINDOW')
+      expect(nrp.source).toBe('DERIVED')
       expect(nrp.defaultPercent).toBe(75)
       expect(nrp.startWeek).toBe(1)
       expect(nrp.endWeek).toBe(12)
@@ -3733,7 +3743,7 @@ describe('persisted capacity-profile DTO integration', () => {
       const after = JSON.parse(JSON.stringify(storeRef.current))
       expect(after).toEqual(before)
     })
-    it('capacity PATCH on segmented named person returns 404 (route removed) and does not change state', async () => {
+    it('capacity PATCH on segmented named person returns structured 400 and does not change state', async () => {
       const before = JSON.parse(JSON.stringify(storeRef.current))
 
       const res = await request(app)
@@ -3741,7 +3751,8 @@ describe('persisted capacity-profile DTO integration', () => {
         .set('Authorization', authHeader)
         .send({ allocationPercent: 50 })
 
-      expect(res.status).toBe(404)
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationPercent'])
 
       const after = JSON.parse(JSON.stringify(storeRef.current))
       expect(after).toEqual(before)

@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toPng } from 'html-to-image'
-import { api } from '../lib/api'
+import { api, apiErrorMessage } from '../lib/api'
 import type { OptimiserCandidate } from '../lib/api'
 import { useIsDark } from '../hooks/useIsDark'
 import AppLayout from '../components/layout/AppLayout'
@@ -657,8 +657,12 @@ export default function TimelinePage() {
         name,
       }).then(r => r.data),
     onSuccess: () => {
+      setNamedResourceError(null)
       invalidateProjectResourceProfile(qc, projectId)
       setScheduleStale(true)
+    },
+    onError: (err: unknown) => {
+      setNamedResourceError(apiErrorMessage(err, 'Failed to add named resource'))
     },
   })
 
@@ -666,8 +670,12 @@ export default function TimelinePage() {
     mutationFn: ({ rtId, nrId }: { rtId: string; nrId: string }) =>
       api.delete(`/projects/${projectId}/resource-types/${rtId}/named-resources/${nrId}`).then(r => r.data),
     onSuccess: () => {
+      setNamedResourceError(null)
       invalidateProjectResourceProfile(qc, projectId)
       setScheduleStale(true)
+    },
+    onError: (err: unknown) => {
+      setNamedResourceError(apiErrorMessage(err, 'Failed to remove named resource'))
     },
   })
 
@@ -1228,6 +1236,10 @@ export default function TimelinePage() {
                                             <select
                                               value={mode}
                                               aria-label={`Availability pattern for ${nr.name}`}
+                                              // Planner-managed / CAPACITY_PLAN availability is edited in
+                                              // Resource Profile (Switch to manual capacity), never through
+                                              // the scalar editor (#403 finding 4).
+                                              disabled={mode === 'CAPACITY_PLAN'}
                                               onChange={e => {
                                                 const newMode = e.target.value
                                                 const pct = newMode === 'EFFORT' ? 100 : (nr.allocationPercent ?? 100)

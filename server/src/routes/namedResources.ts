@@ -14,6 +14,12 @@ import {
   PlannerManagedIdentityError,
   isPlannerManagedIdentityError,
 } from '../lib/legacyCapacityFieldGuard.js'
+import {
+  ROLE_DEFAULT_CLONE_LEGACY,
+  assertRoleProfileCloneableAsNamedPerson,
+  isAggregateRoleCloneError,
+  respondAggregateRoleCloneError,
+} from '../lib/roleProfileClonePolicy.js'
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
@@ -137,6 +143,10 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         throw new PlannerManagedIdentityError(`Resource type "${rt.name}"`)
       }
 
+      // Aggregate ROLE capacity above 100% per person cannot be represented
+      // as one valid named-person profile — reject before any write.
+      assertRoleProfileCloneableAsNamedPerson(roleProfile)
+
       // Create NR with non-capacity fields only
       const created = await tx.namedResource.create({
         data: {
@@ -147,9 +157,10 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
 
       // ── Create the required owner profile from the role default ────
-      // The new person inherits the authoritative ROLE profile exactly
-      // (planning basis, source, percentage, window, segments), matching
-      // the count-increase behaviour in the ResourceType PATCH route.
+      // The new person inherits the authoritative ROLE profile (planning
+      // basis, percentage, window, segments) with the same generation
+      // provenance policy as ResourceType count increase: non-protective
+      // DERIVED source plus a persisted ROLE_DEFAULT writer marker.
       const segments = roleProfile.segments ?? []
       await tx.capacityProfile.create({
         data: {
@@ -158,11 +169,11 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           resourceTypeId: null,
           namedResourceId: created.id,
           planningBasis: roleProfile.planningBasis as any,
-          source: roleProfile.source as any,
+          source: 'DERIVED' as any,
           defaultPercent: roleProfile.defaultPercent,
           startWeek: roleProfile.startWeek,
           endWeek: roleProfile.endWeek,
-          legacy: {},
+          legacy: ROLE_DEFAULT_CLONE_LEGACY,
           segments: segments.length > 0
             ? { create: segments.map((seg: any) => ({
                 startWeek: seg.startWeek,
@@ -213,6 +224,10 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       res.status(409).json({ error: error.message, code: error.code })
       return
     }
+    if (isAggregateRoleCloneError(error)) {
+      respondAggregateRoleCloneError(error, res)
+      return
+    }
     throw error
   }
 }))
@@ -257,6 +272,32 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     return updated
   })
   res.json(resource)
+}))
+
+// PATCH /projects/:projectId/resource-types/:rtId/named-resources/:id
+//
+// Rejection-only route (#403): PATCH is not a capacity-mutation path. Any
+// legacy capacity field (including explicit null) receives the stable
+// structured 400; any other payload receives a method/contract error. This
+// route performs no transaction, database write, or cache clear.
+router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { projectId, rtId, id } = req.params as { projectId: string; rtId: string; id: string }
+  const project = await ownedProject(projectId, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const rt = await verifyResourceType(rtId, projectId)
+  if (!rt) { res.status(404).json({ error: 'Resource type not found' }); return }
+
+  const existing = await prisma.namedResource.findFirst({ where: { id, resourceTypeId: rtId } })
+  if (!existing) { res.status(404).json({ error: 'Named resource not found' }); return }
+
+  if (rejectLegacyCapacityFields(req.body, res)) return
+
+  res.status(405).json({
+    error: 'PATCH is not supported for named resources. Use PUT on the owner-scoped capacity-profile endpoint ' +
+      '(/api/projects/:projectId/capacity-profiles/:ownerKind/:ownerId) for capacity changes, or PUT on this route ' +
+      'for name and pricingModel.',
+  })
 }))
 
 // DELETE /projects/:projectId/resource-types/:rtId/named-resources/:id

@@ -23,6 +23,8 @@ vi.mock('@/lib/api', () => ({
     put: mockPut,
     delete: mockDelete,
   },
+  apiErrorMessage: (err: unknown, fallback: string) =>
+    (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback,
 }))
 
 vi.mock('@/components/layout/AppLayout', () => ({
@@ -589,6 +591,38 @@ describe('TimelinePage — named-resource allocation controls', () => {
     expect(viewProfileBtn).toBeInTheDocument()
     fireEvent.click(viewProfileBtn)
     expect(mockNavigate).toHaveBeenCalledWith(`/projects/${projectId}/resource-profile`)
+  })
+
+  it('CAPACITY_PLAN rows disable the scalar pattern select and issue no mutation (#403 finding 4)', async () => {
+    setupWithNamedResource({ allocationMode: 'CAPACITY_PLAN' })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    const select = await screen.findByRole('combobox')
+    expect(select).toBeDisabled()
+
+    // A disabled select cannot issue a capacity-profile mutation
+    fireEvent.change(select, { target: { value: 'EFFORT' } })
+    expect(mockPut).not.toHaveBeenCalled()
+    // The user is directed to Resource Profile for the manual transfer
+    const viewProfileBtn = screen.getByText(/View Resource Profile/)
+    expect(viewProfileBtn).toBeInTheDocument()
+    fireEvent.click(viewProfileBtn)
+    expect(mockNavigate).toHaveBeenCalledWith(`/projects/${projectId}/resource-profile`)
+  })
+
+  it('planner-managed add/remove failures surface the actionable 409 message', async () => {
+    setupWithNamedResource({ allocationMode: 'EFFORT' })
+    renderPage()
+    await screen.findAllByText('Alice')
+
+    mockPost.mockRejectedValue({
+      response: { data: { error: 'Resource type "Developer" is managed by Squad Planner. Switch to manual capacity before changing its resources.', code: 'PLANNER_MANAGED_IDENTITY' } },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /add named resource to developer/i }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Switch to manual capacity')
   })
 
   it('marks timeline stale after allocation mode change', async () => {
