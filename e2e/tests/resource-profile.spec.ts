@@ -944,8 +944,15 @@ test.describe('Switch to manual capacity', () => {
 
     // ── Assert exact edited capacity through the real scheduler path ──
     const afterEditWeekly = await fetchDevWeeklyCapacity()
-    // Every week in the edited segment must equal exactly 50% of a 5-day week = 2.5 days
-    for (let w = firstSegStart; w <= firstSegEnd; w++) {
+    // The timeline emits weeklyCapacity only across the schedule horizon
+    // (0..maxWeek-1 plus the max demand week), which for this single-week
+    // fixture is week 0 only. Assert every EMITTED week inside the edited
+    // segment equals exactly 50% of a 5-day week = 2.5 days.
+    const emittedEditedWeeks = Object.keys(afterEditWeekly)
+      .map(Number)
+      .filter(w => w >= firstSegStart && w <= firstSegEnd)
+    expect(emittedEditedWeeks.length).toBeGreaterThan(0)
+    for (const w of emittedEditedWeeks) {
       expect(afterEditWeekly[w]).toBe(2.5)
     }
     // Every week outside the edited segment retains its original capacity
