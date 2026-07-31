@@ -21,6 +21,10 @@ import {
 } from '../lib/capacityProfileReplaceValidator.js'
 import type { ReplaceCapacityProfileOwnerKind } from '../lib/capacityProfileReplaceValidator.js'
 import { replaceCapacityProfile, ServiceError } from '../lib/capacityProfileReplaceService.js'
+import {
+  transferToManualCapacity,
+  TransferError,
+} from '../lib/capacityProfileTransferService.js'
 import { ownedProject } from '../lib/ownership.js'
 
 
@@ -147,6 +151,32 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   })
 
   res.json({ capacityProfiles: legacyProfiles })
+}))
+
+// ─── POST transfer-to-manual (must be registered before parameterised routes) ──
+
+router.post('/transfer-to-manual', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const projectId = req.params.projectId as string
+  const { resourceTypeId } = req.body as { resourceTypeId?: string }
+
+  if (!resourceTypeId || typeof resourceTypeId !== 'string') {
+    res.status(400).json({ error: 'resourceTypeId is required' })
+    return
+  }
+
+  try {
+    const result = await prisma.$transaction(tx =>
+      transferToManualCapacity(tx, projectId, resourceTypeId, req.userId!),
+    )
+
+    res.status(200).json({ transferred: true, result })
+  } catch (err) {
+    if (err instanceof TransferError) {
+      res.status(err.status).json({ error: err.message })
+      return
+    }
+    throw err
+  }
 }))
 
 const VALID_OWNER_KINDS: Record<string, ReplaceCapacityProfileOwnerKind> = {

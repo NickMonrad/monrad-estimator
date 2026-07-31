@@ -1436,3 +1436,87 @@ describe('overlap suppression precision (remediation)', () => {
     expect(rt.roleSegments!.length).toBeGreaterThan(0)
   })
 })
+
+describe('transfer provenance suppression (issue #411)', () => {
+  function makeTransferredFixture(plannedResourceLegacy: { writer?: string } | null | undefined) {
+    return mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-xfr', name: 'Transfer Role', count: 1, hoursPerDay: 8,
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-xfr', name: 'Planned 1', startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 0, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: true, createdAt: new Date(),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        // Manual ROLE profile (transferred — sole authority)
+        {
+          id: 'cp-role-xfr', projectId: 'proj-1',
+          resourceTypeId: 'rt-xfr', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: { writer: 'transfer-to-manual' },
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+        // Manual planned-resource profile — provenance varies per test
+        {
+          id: 'cp-nr-xfr', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-xfr',
+          ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: plannedResourceLegacy ?? null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+      ],
+    })
+  }
+
+  it('1. transferred planned-resource with transfer provenance is suppressed (no double count)', async () => {
+    const client = makeTransferredFixture({ writer: 'transfer-to-manual' })
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+
+    // ROLE segments are authoritative
+    expect(rt.roleSegments).toBeDefined()
+    expect(rt.roleSegments!.length).toBeGreaterThan(0)
+
+    // The transferred planned resource is suppressed → no capacitySegments,
+    // and its legacy fields (allocationPercent 0) contribute zero.
+    const nr = rt.namedResources[0]
+    expect(nr.capacitySegments).toBeUndefined()
+  })
+
+  it('2. unrelated manual planned-resource WITHOUT transfer provenance remains authoritative', async () => {
+    const client = makeTransferredFixture({ writer: 'manual-editor' })
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const rt = result.resourceTypes[0]
+    const nr = rt.namedResources[0]
+
+    // Independently authored manual planned-resource stays scheduler-authoritative
+    expect(nr.capacitySegments).toBeDefined()
+    expect(nr.capacitySegments!.length).toBeGreaterThan(0)
+    expect(nr.capacitySegments![0]).toEqual({ startWeek: 0, endWeek: 10, allocationPercent: 100 })
+  })
+
+  it('3. malformed/ambiguous provenance shape does not silently suppress', async () => {
+    // legacy present but writer missing → not transfer provenance
+    const client = makeTransferredFixture({})
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const nr = result.resourceTypes[0].namedResources[0]
+
+    expect(nr.capacitySegments).toBeDefined()
+    expect(nr.capacitySegments!.length).toBeGreaterThan(0)
+  })
+})

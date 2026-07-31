@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, createProject, quickSchedule } from './helpers'
+import { login, createProject, quickSchedule, API_BASE } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -651,5 +651,357 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await expect(finalSubtotalCell).toBeVisible({ timeout: 5_000 })
     const finalSubtotal = await finalSubtotalCell.textContent()
     expect(finalSubtotal?.trim()).toBe(initialSubtotal?.trim())
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Squad Planner → manual transfer — issue #411
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Switch to manual capacity', () => {
+  test('transfer Squad Planner role to manual, edit capacity, verify persistence', async ({ page, request }) => {
+    test.setTimeout(180_000)
+
+    const projectName = `E2E Transfer ${Date.now()}`
+
+    // ── Login and create project ──
+    await login(page)
+    await createProject(page, projectName)
+
+    // ── Import backlog CSV to create Developer + Tech Lead tasks ──
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
+    const csvContent = [
+      'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+      'Epic,Platform Build,,,,,,,,,,,,',
+      'Feature,Platform Build,Core API,,,,,,,,,,,',
+      'Story,Platform Build,Core API,API Design,,,,,,,,,,',
+      'Task,Platform Build,Core API,API Design,Implement,,Developer,40,5,,,,,',
+      'Task,Platform Build,Core API,API Design,Review,,Tech Lead,16,2,,,,,',
+    ].join('\n')
+    const tmpFile = path.join(os.tmpdir(), `transfer-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, csvContent)
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
+
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+
+    // ── Navigate to Timeline and set start date ──
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole('button', { name: /timeline/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /timeline/i }).click()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 8_000 })
+
+    const dateInput = page.locator('input[type="date"]')
+    await expect(dateInput).toBeVisible({ timeout: 8_000 })
+    await dateInput.fill('2026-06-01')
+    await expect(dateInput).toHaveValue('2026-06-01')
+
+    // ── Quick schedule ──
+    await quickSchedule(page)
+    await expect(
+      page.getByRole('button', { name: /sequential|parallel/i }).first(),
+    ).toBeVisible({ timeout: 15_000 })
+
+    // ── Get auth token for API calls ──
+    // Reuse the helpers from the existing test pattern
+    const authToken = await page.evaluate(() => localStorage.getItem('token'))
+    const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
+
+    // ── Determine resource type IDs via API ──
+    const projectResp = await request.get(`${API_BASE}/api/projects/${projectId}`, { headers: authHeaders })
+    expect(projectResp.ok()).toBeTruthy()
+    const projectData = await projectResp.json() as { resourceTypes: Array<{ id: string; name: string }> }
+    const devRt = projectData.resourceTypes.find(rt => rt.name === 'Developer')
+    expect(devRt).toBeDefined()
+
+    // ── Open Squad Planner drawer ──
+    await page.getByRole('button', { name: /open squad planner/i }).click()
+    const drawer = page.getByRole('dialog', { name: /squad planner/i })
+    await expect(drawer).toBeVisible({ timeout: 5_000 })
+
+    // ── Generate capacity profile ──
+    const generateBtn = drawer.getByRole('button', { name: /generate capacity profile/i })
+    await expect(generateBtn).toBeVisible()
+    const planResponse = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan') && !resp.url().includes('/apply') && resp.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await generateBtn.click()
+    await planResponse
+
+    // Wait for result KPIs
+    await expect(drawer.getByText(/Peak/i)).toBeVisible({ timeout: 10_000 })
+    await expect(drawer.getByText(/Delivery/i)).toBeVisible()
+    await expect(drawer.getByText(/Planned squad cost/i)).toBeVisible()
+
+    // ── Apply capacity profile ──
+    const applyBtn = drawer.getByRole('button', { name: /apply capacity profile/i })
+    await expect(applyBtn).toBeVisible()
+
+    // Accept confirm dialogs
+    page.on('dialog', dialog => dialog.accept())
+
+    const applyResponse = page.waitForResponse(
+      resp => resp.url().includes('/squad-plan/apply') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
+    await applyBtn.click()
+    const response = await applyResponse
+    expect(response.status()).toBe(201)
+
+    // Drawer closes after successful apply
+    await expect(drawer).not.toBeVisible({ timeout: 10_000 })
+
+    // ── Verify via API that Squad Planner profiles exist ──
+    const cpResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+      { headers: authHeaders },
+    )
+    expect(cpResp.ok()).toBeTruthy()
+    const cpData = await cpResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string }> }
+    const devPlannerProfiles = cpData.capacityProfiles.filter(
+      (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
+        p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
+    )
+    expect(devPlannerProfiles.length).toBeGreaterThan(0)
+    expect(devPlannerProfiles[0].source).toBe('squadPlanner')
+
+    // ── Capture exact role-level weekly capacity BEFORE transfer via the real scheduler path ──
+    // GET /timeline returns weeklyCapacity computed by the scheduler-facing resolver.
+    async function fetchDevWeeklyCapacity(): Promise<Record<number, number>> {
+      const resp = await request.get(
+        `${API_BASE}/api/projects/${projectId}/timeline`,
+        { headers: authHeaders },
+      )
+      expect(resp.ok()).toBeTruthy()
+      const data = await resp.json() as { weeklyCapacity: Array<{ week: number; resourceTypeName: string; capacityDays: number }> }
+      const weekly: Record<number, number> = {}
+      for (const row of data.weeklyCapacity) {
+        if (row.resourceTypeName?.toLowerCase().includes('developer')) {
+          weekly[row.week] = row.capacityDays
+        }
+      }
+      return weekly
+    }
+    const beforeWeekly = await fetchDevWeeklyCapacity()
+    expect(Object.keys(beforeWeekly).length).toBeGreaterThan(0)
+
+    // ── Capture Commercial billing-basis state before transfer ──
+    const rpPreResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-profile`,
+      { headers: authHeaders },
+    )
+    expect(rpPreResp.ok()).toBeTruthy()
+    const rpPreData = await rpPreResp.json() as { resourceRows: Array<{ name: string; dayRate: number | null; estimatedCost: number | null }>; summary: { totalCost: number | null } }
+    const devPreRow = rpPreData.resourceRows.find(r => r.name?.toLowerCase().includes('developer'))
+    expect(devPreRow).toBeDefined()
+    const commercialBefore = {
+      dayRate: devPreRow!.dayRate,
+      estimatedCost: devPreRow!.estimatedCost,
+      totalCost: rpPreData.summary?.totalCost ?? null,
+    }
+
+    // ── Verify via API that Resource Profile shows planner-managed state ──
+    const rpResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-profile`,
+      { headers: authHeaders },
+    )
+    expect(rpResp.ok()).toBeTruthy()
+    const rpData = await rpResp.json() as { resourceRows: Array<{ name: string; capacityProfile?: { source: string } }> }
+    const devRowAPI = rpData.resourceRows.find(r => r.name?.toLowerCase().includes('developer'))
+    expect(devRowAPI).toBeDefined()
+    expect(devRowAPI!.capacityProfile?.source).toBe('squadPlanner')
+
+    // ── Navigate to Resource Profile and verify UI state ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // Find the Developer row
+    const devRow = page.locator('tr').filter({ hasText: /Developer/i }).first()
+    await expect(devRow).toBeVisible({ timeout: 15_000 })
+
+    // Verify Squad Planner source badge (exact match — the badge span, not the Open Squad Planner button)
+    await expect(devRow.getByText('Squad Planner', { exact: true })).toBeVisible({ timeout: 5_000 })
+
+    // Verify the "Switch to manual capacity" button is visible
+    await expect(devRow.getByTitle(/Transfer this role/)).toBeVisible({ timeout: 5_000 })
+
+    // ── Transfer to manual capacity ──
+    await devRow.getByTitle(/Transfer this role/).click()
+
+    // Confirmation dialog should appear
+    const confirmDialog = page.getByRole('dialog', { name: /Switch to manual capacity/i })
+    await expect(confirmDialog).toBeVisible({ timeout: 5_000 })
+
+    // Cancel should close the dialog
+    await confirmDialog.getByText('Cancel').click()
+    await expect(confirmDialog).not.toBeVisible({ timeout: 5_000 })
+
+    // Re-open and confirm
+    await devRow.getByTitle(/Transfer this role/).click()
+    const confirmDialog2 = page.getByRole('dialog', { name: /Switch to manual capacity/i })
+    await expect(confirmDialog2).toBeVisible({ timeout: 5_000 })
+
+    // Wait for the transfer API call
+    const transferResponse = page.waitForResponse(
+      resp => resp.url().includes('/capacity-profiles/transfer-to-manual') && resp.request().method() === 'POST',
+      { timeout: 15_000 },
+    )
+    await confirmDialog2.getByRole('button', { name: /Switch to manual capacity/i }).click()
+    const transferResp = await transferResponse
+    expect(transferResp.status()).toBe(200)
+
+    // Dialog should close on success
+    await expect(confirmDialog2).not.toBeVisible({ timeout: 10_000 })
+
+    // ── Verify post-transfer state ──
+    // The "Squad Planner" source badge should be gone (exact match)
+    await expect(devRow.getByText('Squad Planner', { exact: true })).not.toBeVisible()
+    // The "Switch to manual capacity" button should be gone
+    await expect(devRow.getByTitle(/Transfer this role/)).not.toBeVisible()
+
+    // The role should now be editable
+    const editBadge = devRow.getByTitle('Click to edit capacity profile')
+    await expect(editBadge).toBeVisible({ timeout: 10_000 })
+
+    // ── Verify exact weekly capacity parity immediately after transfer via the real scheduler path ──
+    const cpAfterTransferResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+      { headers: authHeaders },
+    )
+    expect(cpAfterTransferResp.ok()).toBeTruthy()
+    const cpAfterTransferData = await cpAfterTransferResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string }> }
+    const devManualProfiles = cpAfterTransferData.capacityProfiles.filter(
+      (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
+        p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
+    )
+    expect(devManualProfiles.length).toBeGreaterThan(0)
+    expect(devManualProfiles[0].source).toBe('manual')
+    const afterTransferWeekly = await fetchDevWeeklyCapacity()
+    expect(afterTransferWeekly).toEqual(beforeWeekly)
+
+    // ── Open capacity profile editor and verify segments are preserved ──
+    await editBadge.click()
+    const editorDialog = page.getByRole('dialog', { name: /edit capacity profile/i })
+    await expect(editorDialog).toBeVisible({ timeout: 8_000 })
+
+    // Verify segments exist
+    await expect(editorDialog.getByTestId('cp-seg-start-0')).toBeVisible({ timeout: 5_000 })
+
+    // Record the first segment's week range (0-based, matching timeline indices)
+    const firstSegStart = parseInt(await editorDialog.getByTestId('cp-seg-start-0').inputValue(), 10)
+    const firstSegEnd = parseInt(await editorDialog.getByTestId('cp-seg-end-0').inputValue(), 10)
+
+    // ── Edit the capacity: set first segment to exactly 50 ──
+    await editorDialog.getByTestId('cp-seg-pct-0').fill('50')
+
+    // Save
+    const saveResp = page.waitForResponse(
+      r => r.url().includes('/capacity-profiles/') && r.request().method() === 'PUT',
+      { timeout: 15_000 },
+    )
+    await editorDialog.getByTestId('cp-save-btn').click()
+    await saveResp
+    await expect(editorDialog).not.toBeVisible({ timeout: 5_000 })
+
+    // ── Verify via API that the manual state persisted ──
+    const cpAfterResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+      { headers: authHeaders },
+    )
+    expect(cpAfterResp.ok()).toBeTruthy()
+    const cpAfterData = await cpAfterResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string }> }
+    const devEditedProfiles = cpAfterData.capacityProfiles.filter(
+      (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
+        p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
+    )
+    expect(devEditedProfiles.length).toBeGreaterThan(0)
+    expect(devEditedProfiles[0].source).toBe('manual')
+
+    // ── Navigate to Timeline, click Update timeline, and wait for the scheduler request ──
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const scheduleResponse = page.waitForResponse(
+      resp => resp.url().includes('/timeline/schedule') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
+    await quickSchedule(page)
+    const schedResp = await scheduleResponse
+    expect(schedResp.status()).toBe(200)
+
+    // ── Assert exact edited capacity through the real scheduler path ──
+    const afterEditWeekly = await fetchDevWeeklyCapacity()
+    // The timeline emits weeklyCapacity only across the schedule horizon
+    // (0..maxWeek-1 plus the max demand week), which for this single-week
+    // fixture is week 0 only. Assert every EMITTED week inside the edited
+    // segment equals exactly 50% of a 5-day week = 2.5 days.
+    const emittedEditedWeeks = Object.keys(afterEditWeekly)
+      .map(Number)
+      .filter(w => w >= firstSegStart && w <= firstSegEnd)
+    expect(emittedEditedWeeks.length).toBeGreaterThan(0)
+    for (const w of emittedEditedWeeks) {
+      expect(afterEditWeekly[w]).toBe(2.5)
+    }
+    // Every week outside the edited segment retains its original capacity
+    for (const [week, cap] of Object.entries(beforeWeekly)) {
+      const w = Number(week)
+      if (w >= firstSegStart && w <= firstSegEnd) continue
+      expect(afterEditWeekly[w]).toBe(cap)
+    }
+
+    // ── Reload and verify the edited scheduler capacity is retained ──
+    await page.reload()
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 10_000 })
+    const retainedWeekly = await fetchDevWeeklyCapacity()
+    expect(retainedWeekly).toEqual(afterEditWeekly)
+
+    // ── Verify Commercial billing-basis state unchanged ──
+    const rpPostResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-profile`,
+      { headers: authHeaders },
+    )
+    expect(rpPostResp.ok()).toBeTruthy()
+    const rpPostData = await rpPostResp.json() as { resourceRows: Array<{ name: string; dayRate: number | null; estimatedCost: number | null }>; summary: { totalCost: number | null } }
+    const devPostRow = rpPostData.resourceRows.find(r => r.name?.toLowerCase().includes('developer'))
+    expect(devPostRow).toBeDefined()
+    expect(devPostRow!.dayRate).toBe(commercialBefore.dayRate)
+    expect(devPostRow!.estimatedCost).toBe(commercialBefore.estimatedCost)
+    expect(rpPostData.summary?.totalCost ?? null).toBe(commercialBefore.totalCost)
+
+    // ── Return to Resource Profile and confirm still editable ──
+    await page.goto(`/projects/${projectId}/resource-profile`)
+    await expect(
+      page.getByRole('heading', { name: /resource profile/i }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    const devRowAfterNav = page.locator('tr').filter({ hasText: /Developer/i }).first()
+    await expect(devRowAfterNav).toBeVisible({ timeout: 15_000 })
+
+    // Confirm the role has not reverted to Squad Planner ownership
+    await expect(devRowAfterNav.getByTitle('Click to edit capacity profile')).toBeVisible({ timeout: 10_000 })
+    await expect(devRowAfterNav.getByText('Squad Planner', { exact: true })).not.toBeVisible()
+
+    // Open editor to confirm the edit survived navigation
+    await devRowAfterNav.getByTitle('Click to edit capacity profile').click()
+    const editorAfterNav = page.getByRole('dialog', { name: /edit capacity profile/i })
+    await expect(editorAfterNav).toBeVisible({ timeout: 8_000 })
+    await expect(editorAfterNav.getByTestId('cp-seg-pct-0')).toHaveValue('50')
+    await editorAfterNav.getByTestId('cp-cancel-btn').click()
+    await expect(editorAfterNav).not.toBeVisible({ timeout: 5_000 })
   })
 })

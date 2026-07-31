@@ -17,6 +17,7 @@ try {
       'test:scheduler-capacity-integration',
       'test:ownership-invariants-integration',
       'test:runtime-cutover-integration',
+      'test:transfer-integration',
     ]) {
       if (guard.triggered) break
       await runCommand('npm', ['run', script, '--workspace=server'], { cwd: root, env: environment, signal: guard.abortSignal })

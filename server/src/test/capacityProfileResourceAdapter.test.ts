@@ -1175,6 +1175,6 @@ describe('buildResourceCapacityProfileMap', () => {
     // The adapter enriches with profile data — no commercial fields exist
     // (commercial computation is the route's domain)
     const keys = Object.keys(result.roleProfiles.get('rt-com')!).sort()
-    expect(keys).toEqual(['defaultPercent', 'endWeek', 'planningBasis', 'resolutionSource', 'segments', 'source', 'startWeek'])
+    expect(keys).toEqual(['defaultPercent', 'endWeek', 'legacyWriter', 'planningBasis', 'resolutionSource', 'segments', 'source', 'startWeek'])
   })
 })

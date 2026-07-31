@@ -187,7 +187,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
-### `resource-profile.spec.ts` — Resource Profile & Commercial (9 tests)
+### `resource-profile.spec.ts` — Resource Profile & Commercial (10 tests)
 
 #### `Resource Profile` describe block (1 test — original)
 
@@ -222,6 +222,12 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | Test | Description |
 |------|-------------|
 | create Varies by week segments, verify cross-view persistence and Commercial unchanged | Seeds Developer + Tech Lead tasks via CSV, opens the ROLE capacity profile editor on the Developer row, selects "Varies by week" (capacityProfile) mode, adds two non-overlapping segments (W2-W4: 80%, W8-W10: 60%) with a gap (W5-W7), saves, verifies badge shows "Varies by week", navigates to Timeline → sets start date → Quick schedule → verifies resource-counts panel renders, returns to Resource Profile — verifies badge and editor segments persist after navigation, switches to Commercial tab — verifies Cost Summary heading loads without error |
+
+#### `Switch to manual capacity` describe block (1 test — issue #411)
+
+| Test | Description |
+|------|-------------|
+| transfer Squad Planner role to manual, edit capacity, verify persistence | Seeds Developer + Tech Lead tasks via CSV, schedules on Timeline, opens Squad Planner drawer, generates and applies capacity. Verifies via API that the Developer role has a `squadPlanner` ROLE capacity profile (using the `owner.kind`/`owner.id` DTO contract). Captures exact Developer weekly capacity from the scheduler-facing `GET /timeline` `weeklyCapacity` rows plus Commercial billing-basis state. Opens Resource Profile, verifies the Squad Planner badge and **Switch to manual capacity** action, cancels once (no mutation), then confirms the transfer. Asserts exact weekly capacity parity via `GET /timeline` immediately after transfer, verifies the role becomes manually editable, edits the first segment percent to `50` through the #363 editor, saves, navigates to Timeline, clicks **Update timeline** and waits for the `POST /timeline/schedule` response. Asserts via `GET /timeline` that every week in the edited segment equals exactly `2.5` capacity days and all other weeks are unchanged. Reloads and asserts the edited scheduler capacity is retained, verifies Commercial day rate/cost state unchanged, and confirms the role remains manually managed (not reverted to Squad Planner). |
 
 ---
 
