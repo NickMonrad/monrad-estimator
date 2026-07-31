@@ -286,6 +286,21 @@ async function fetchSegments(profileId: string): Promise<SegmentRow[]> {
   }) as unknown as SegmentRow[]
 }
 
+/**
+ * Structural segment comparison — the fields the transfer must preserve exactly.
+ * Excludes `source` (SQUAD_PLANNER → MANUAL) and `updatedAt` (row update) which
+ * legitimately change during the transfer.
+ */
+function segmentStructuralFields(segments: SegmentRow[]) {
+  return segments.map(({ id, capacityProfileId, startWeek, endWeek, capacityPercent }) => ({
+    id,
+    capacityProfileId,
+    startWeek,
+    endWeek,
+    capacityPercent,
+  }))
+}
+
 async function fetchNamedResources(resourceTypeId: string): Promise<Array<{
   id: string
   name: string
@@ -469,10 +484,26 @@ describeIf('Scenario 1 — Successful transfer', () => {
   })
 
   it('preserves exact profile and segment IDs and boundaries after transfer', async () => {
-    // Segment IDs and values must be byte-for-byte unchanged
-    expect(await fetchSegments(roleProfileIdBefore)).toEqual(preTransferRoleSegments)
-    expect(await fetchSegments(nrProfile1IdBefore)).toEqual(preTransferNr1Segments)
-    expect(await fetchSegments(nrProfile2IdBefore)).toEqual(preTransferNr2Segments)
+    // Structural fields (id, capacityProfileId, startWeek, endWeek, capacityPercent,
+    // ordering) must be exactly unchanged. `source` (SQUAD_PLANNER → MANUAL) and
+    // `updatedAt` legitimately change during the transfer.
+    expect(segmentStructuralFields(await fetchSegments(roleProfileIdBefore)))
+      .toEqual(segmentStructuralFields(preTransferRoleSegments))
+    expect(segmentStructuralFields(await fetchSegments(nrProfile1IdBefore)))
+      .toEqual(segmentStructuralFields(preTransferNr1Segments))
+    expect(segmentStructuralFields(await fetchSegments(nrProfile2IdBefore)))
+      .toEqual(segmentStructuralFields(preTransferNr2Segments))
+
+    // Every transferred segment source is now MANUAL
+    for (const segments of [
+      await fetchSegments(roleProfileIdBefore),
+      await fetchSegments(nrProfile1IdBefore),
+      await fetchSegments(nrProfile2IdBefore),
+    ]) {
+      for (const seg of segments) {
+        expect(seg.source).toBe('MANUAL')
+      }
+    }
 
     // Profile IDs unchanged
     const profiles = await fetchProfiles(projectId)
