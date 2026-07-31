@@ -177,6 +177,31 @@ function planningBasisToEditableMode(basis: string | null | undefined): Allocati
 }
 
 /**
+ * Map a scalar allocation mode to its first-class planning basis for the
+ * owner-scoped capacity-profile request contract (#403).
+ *
+ * | Scalar mode     | Planning basis             |
+ * |-----------------|----------------------------|
+ * | EFFORT          | DEMAND_FOLLOWING           |
+ * | FULL_PROJECT    | WHOLE_PROJECT_ALLOCATION   |
+ * | TIMELINE        | AVAILABILITY_WINDOW        |
+ * | CAPACITY_PLAN   | null (not scalar-editable) |
+ *
+ * Returns null for CAPACITY_PLAN / unknown modes — those are never
+ * representable through the scalar/window editors.
+ */
+export function scalarModeToPlanningBasis(
+  mode: string,
+): 'DEMAND_FOLLOWING' | 'WHOLE_PROJECT_ALLOCATION' | 'AVAILABILITY_WINDOW' | null {
+  switch (mode) {
+    case 'EFFORT': return 'DEMAND_FOLLOWING'
+    case 'FULL_PROJECT': return 'WHOLE_PROJECT_ALLOCATION'
+    case 'TIMELINE': return 'AVAILABILITY_WINDOW'
+    default: return null
+  }
+}
+
+/**
  * Derive the effective availability state for a resource row.
  *
  * Priority order:

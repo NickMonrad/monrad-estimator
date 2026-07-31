@@ -112,6 +112,8 @@ function createProps(
     },
     setForm: vi.fn(),
     formError: null,
+    profileMutationError: null,
+    clearProfileMutationError: vi.fn(),
     bufferWeeks: 0,
     onboardingWeeks: 0,
     toggleRow: vi.fn(),
@@ -142,6 +144,21 @@ function createProps(
 }
 
 describe('ResourceProfileTab', () => {
+  it('surfaces a planner-managed identity conflict from count/add/remove mutations (#403 finding 4)', () => {
+    const clearProfileMutationError = vi.fn()
+    renderWithProviders(<ResourceProfileTab
+      {...createProps(1, {
+        profileMutationError: 'Resource type "Developer" is managed by Squad Planner. Switch to manual capacity before changing its resources.',
+        clearProfileMutationError,
+      })}
+    />)
+
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('Switch to manual capacity')
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    expect(clearProfileMutationError).toHaveBeenCalled()
+  })
+
   it('allows removing the final named resource when count is 1', () => {
     const removeMutate = vi.fn()
 

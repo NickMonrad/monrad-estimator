@@ -367,7 +367,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
 
   // ── A. Rejected mixed-field PUT ─────────────────────────────────────────
 
-  it('A: PUT with name + pricing + capacity fields → 409, exact state preserved (segmented NAMED_PERSON)', async () => {
+  it('A: PUT with name + pricing + legacy capacity fields → 400, exact state preserved (segmented NAMED_PERSON)', async () => {
     await seedDistinctWeeklyDemandCache('A')
     const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
     // Verify the cache is non-empty
@@ -384,14 +384,14 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
         endWeek: 10,
       })
 
-    expect(res.status).toBe(409)
-    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+    // Issue #403: supplied legacy capacity fields are rejected with 400
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPercent', 'startWeek', 'endWeek'])
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
     expectRejectedStateUnchanged(before, after)
   })
-
-  it('B: PATCH with scalar capacity → 409, exact state preserved (segmented NAMED_PERSON)', async () => {
+  it('B: PATCH is rejection-only → structured 400, state and cache unchanged (segmented NAMED_PERSON)', async () => {
     await seedDistinctWeeklyDemandCache('B')
     const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
     expect(before.cache).toEqual({ [`${rtId}|B`]: 42.5 })
@@ -404,14 +404,13 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
         allocationPercent: 80,
       })
 
-    expect(res.status).toBe(409)
-    expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPercent', 'startWeek'])
+    expect(res.body.error).toContain('capacity-profiles/:ownerKind/:ownerId')
 
     const after = await readCanonicalState(segmentedNrId, segmentedProfileId)
     expectRejectedStateUnchanged(before, after)
   })
-
-  // ── C. Safe name-only PUT ───────────────────────────────────────────────
   it('C: PUT with name only → 200, only name changes (segmented NAMED_PERSON)', async () => {
     const before = await readCanonicalState(segmentedNrId, segmentedProfileId)
 
@@ -455,7 +454,7 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
 
   // ── E. Segmentless CAPACITY_PROFILE PUT/PATCH ───────────────────────────
 
-  it('E1: PUT with capacity fields → 409, cache preserved (segmentless CAPACITY_PROFILE)', async () => {
+  it('E1: PUT with legacy capacity fields → 400, cache preserved (segmentless CAPACITY_PROFILE)', async () => {
     // Reseed with a distinct marker so this test proves cache preservation
     // independently — it does not rely on cache state left by earlier tests.
     await seedDistinctWeeklyDemandCache('E1')
@@ -470,14 +469,13 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
         startWeek: 2,
         allocationPercent: 80,
       })
-    expect(res.status).toBe(409)
-    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPercent', 'startWeek'])
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
     expectRejectedStateUnchanged(before, after)
   })
-
-  it('E2: PATCH with scalar capacity → 409, cache preserved (segmentless CAPACITY_PROFILE)', async () => {
+  it('E2: PATCH is rejection-only → structured 400, state and cache unchanged (segmentless CAPACITY_PROFILE)', async () => {
     await seedDistinctWeeklyDemandCache('E2')
     const capBase = `/api/projects/${projectId}/resource-types/${defaultRtId}/named-resources`
     const before = await readCanonicalState(capProfileNrId, capProfileProfileId)
@@ -490,17 +488,15 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
         allocationPercent: 60,
       })
 
-    expect(res.status).toBe(409)
-    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPercent'])
 
     const after = await readCanonicalState(capProfileNrId, capProfileProfileId)
     expectRejectedStateUnchanged(before, after)
   })
-
-  // ── F. Scalar-safe segmentless profile ─────────────────────────────────
-
-  it('F: PUT with capacity fields succeeds for normal segmentless profile', async () => {
-    const res = await request(app)
+  it('F: scalar-safe window edits use the first-class capacity-profile endpoint', async () => {
+    // Legacy capacity request fields are rejected on the NamedResource route
+    const rejected = await request(app)
       .put(namedUrl(scalarNrId))
       .set('Authorization', authHeader)
       .send({
@@ -508,7 +504,19 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
         endWeek: 9,
         allocationPct: 70,
       })
+    expect(rejected.status).toBe(400)
+    expect(rejected.body.rejectedFields).toEqual(['allocationPct', 'startWeek', 'endWeek'])
 
+    // The same edit succeeds through the owner-scoped capacity-profile endpoint
+    const res = await request(app)
+      .put(`/api/projects/${projectId}/capacity-profiles/NAMED_PERSON/${scalarNrId}`)
+      .set('Authorization', authHeader)
+      .send({
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: 70,
+        startWeek: 4,
+        endWeek: 9,
+      })
     expect(res.status).toBe(200)
 
     const after = await readCanonicalState(scalarNrId, scalarProfileId)
@@ -519,5 +527,8 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(after.nr?.endWeek).toBe(9)
     expect(after.nr?.allocationPercent).toBe(70)
     expect(after.nr?.allocationPct).toBe(70)
-  })
-})
+    expect(after.profile?.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(after.profile?.defaultPercent).toBe(70)
+    expect(after.profile?.startWeek).toBe(4)
+    expect(after.profile?.endWeek).toBe(9)
+  })})

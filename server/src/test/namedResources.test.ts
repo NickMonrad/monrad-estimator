@@ -50,7 +50,7 @@ describe('named-resource capacity profile write', () => {
     segments: [],
   }
 
-  it('PUT named-resource capacity update uses direct profile writes', async () => {
+  it('PUT with legacy capacity fields is rejected with 400 before any write', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({
@@ -80,23 +80,22 @@ describe('named-resource capacity profile write', () => {
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
 
-    await request(app)
+    const res = await request(app)
       .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
       .set('Authorization', authHeader)
       .send({ allocationMode: 'TIMELINE', allocationPercent: 80 })
 
-    // Profile-first write updates the profile directly
-    expect(tx.capacityProfile.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'cp-nr-1' },
-        data: expect.objectContaining({ defaultPercent: 80 }),
-      }),
-    )
-    expect(tx.namedResource.update).toHaveBeenCalled()
+    // Legacy capacity request fields are rejected before the transaction runs
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationMode', 'allocationPercent'])
+    expect(res.body.error).toContain('capacity-profiles/:ownerKind/:ownerId')
+    expect(tx.capacityProfile.update).not.toHaveBeenCalled()
+    expect(tx.namedResource.update).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
     // Sync is NOT called after #364 cutover
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
-  it('PATCH named-resource update uses direct profile writes inside the transaction', async () => {
+  it('PATCH named-resource route is rejection-only — structured 400 for capacity fields, 405 otherwise', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
     vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
     vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({
@@ -121,16 +120,30 @@ describe('named-resource capacity profile write', () => {
     }
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
 
-    await request(app)
+    // Legacy capacity field → structured 400, no write, no transaction
+    const res = await request(app)
       .patch('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
       .set('Authorization', authHeader)
       .send({ allocationMode: 'TIMELINE' })
 
-    // Profile-first write updates the profile directly
-    expect(tx.capacityProfile.update).toHaveBeenCalled()
-    expect(tx.namedResource.update).toHaveBeenCalled()
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationMode'])
+    expect(res.body.error).toContain('capacity-profiles/:ownerKind/:ownerId')
+    expect(tx.capacityProfile.update).not.toHaveBeenCalled()
+    expect(tx.namedResource.update).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
     // Sync is NOT called after #364
     expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
+
+    // No legacy field → method/contract error, still no mutation path
+    const noField = await request(app)
+      .patch('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ name: 'ignored' })
+
+    expect(noField.status).toBe(405)
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(tx.namedResource.update).not.toHaveBeenCalled()
   })
   it('PUT named-resource with existing profile does not call sync', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
@@ -298,7 +311,7 @@ describe('named-resource capacity guard', () => {
   }
 
   describe('rejected PUT atomicity', () => {
-    it('rejects with 409 for segmented CAPACITY_PROFILE profile', async () => {
+    it('rejects legacy capacity fields on a segmented profile with 400, no write', async () => {
       const tx = await setupTx([makeNRProfile({
         planningBasis: 'CAPACITY_PROFILE',
         segments: [{ id: 'cs-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 5, capacityPercent: 100, source: 'FIXED' }],
@@ -309,12 +322,15 @@ describe('named-resource capacity guard', () => {
         .set('Authorization', authHeader)
         .send({ name: 'Should not persist', pricingModel: 'PRO_RATA', allocationPercent: 75, startWeek: 0, endWeek: 10 })
 
-      expect(res.status).toBe(409)
-      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+      // The capacity fields are rejected as legacy request fields — no 409
+      // guard is ever reached because the request never enters the transaction
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationPercent', 'startWeek', 'endWeek'])
       expect(tx.namedResource.update).not.toHaveBeenCalled()
+      expect(tx.capacityProfile.update).not.toHaveBeenCalled()
     })
 
-    it('rejects PUT with 409 for CAPACITY_PROFILE with segments', async () => {
+    it('rejects PUT with allocationPercent with 400 and no write', async () => {
       const tx = await setupTx([makeNRProfile({
         planningBasis: 'CAPACITY_PROFILE',
         segments: [{ id: 'cs-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 5, capacityPercent: 100, source: 'FIXED' }],
@@ -325,13 +341,14 @@ describe('named-resource capacity guard', () => {
         .set('Authorization', authHeader)
         .send({ allocationPercent: 75 })
 
-      expect(res.status).toBe(409)
-      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationPercent'])
       expect(tx.namedResource.update).not.toHaveBeenCalled()
+      expect(tx.capacityProfile.update).not.toHaveBeenCalled()
     })
   })
   describe('rejected PATCH contract', () => {
-    it('rejects PATCH with 409 for segmented CAPACITY_PROFILE profile', async () => {
+    it('PATCH rejects capacity requests with the structured 400 and performs no write', async () => {
       const tx = await setupTx([makeNRProfile({
         planningBasis: 'CAPACITY_PROFILE',
         segments: [{ id: 'cs-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 5, capacityPercent: 100, source: 'FIXED' }],
@@ -342,14 +359,15 @@ describe('named-resource capacity guard', () => {
         .set('Authorization', authHeader)
         .send({ allocationPercent: 75 })
 
-      expect(res.status).toBe(409)
-      expect(res.body.code).toBe('PROFILE_MANAGED_CAPACITY')
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationPercent'])
+      expect(prisma.$transaction).not.toHaveBeenCalled()
       expect(tx.namedResource.update).not.toHaveBeenCalled()
     })
   })
 
-  describe('non-protection errors propagate', () => {
-    it('does NOT convert non-ProfileManagedCapacityError to 409', async () => {
+  describe('rejection before transaction', () => {
+    it('legacy capacity fields are rejected before any database call', async () => {
       vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
       vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
       vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({
@@ -377,7 +395,11 @@ describe('named-resource capacity guard', () => {
         .set('Authorization', authHeader)
         .send({ allocationPercent: 75 })
 
-      expect(res.status).toBe(500)
+      // The guard rejects the supplied legacy field before the transaction
+      // runs, so the failing DB mock is never reached.
+      expect(res.status).toBe(400)
+      expect(res.body.rejectedFields).toEqual(['allocationPercent'])
+      expect(prisma.$transaction).not.toHaveBeenCalled()
     })
   })
 
@@ -441,7 +463,7 @@ describe('named-resource capacity guard', () => {
         expect.objectContaining({ data: expect.objectContaining({ pricingModel: 'PRO_RATA' }) }),
       )
     })
-  it('PATCH applies allocationPct-only updates to the authoritative profile', async () => {
+  it('PATCH is rejection-only — allocationPct-only requests return the structured 400', async () => {
     const tx = await setupTx([makeNRProfile({ defaultPercent: 25 })])
 
     const res = await request(app)
@@ -449,21 +471,11 @@ describe('named-resource capacity guard', () => {
       .set('Authorization', authHeader)
       .send({ allocationPct: 40 })
 
-    expect(res.status).toBe(200)
-    expect(tx.capacityProfile.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'cp-1' },
-        data: expect.objectContaining({ defaultPercent: 40 }),
-      }),
-    )
-    expect(tx.namedResource.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          allocationPercent: 40,
-          allocationPct: 40,
-        }),
-      }),
-    )
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPct'])
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(tx.capacityProfile.update).not.toHaveBeenCalled()
+    expect(tx.namedResource.update).not.toHaveBeenCalled()
   })
 
   it.each(['ACTUAL_DAYS', 'PRO_RATA'])('accepts PUT pricing model %s', async pricingModel => {
@@ -494,7 +506,7 @@ describe('named-resource capacity guard', () => {
     expect(tx.project.update).not.toHaveBeenCalled()
   })
 
-  it('rejects scalar PUT updates for PLANNED_RESOURCE profiles as wrong-kind state', async () => {
+  it('rejects scalar capacity fields on a PLANNED_RESOURCE profile with 400', async () => {
     const tx = await setupTx([makeNRProfile({ ownerKind: 'PLANNED_RESOURCE' })])
 
     const res = await request(app)
@@ -502,9 +514,8 @@ describe('named-resource capacity guard', () => {
       .set('Authorization', authHeader)
       .send({ allocationPercent: 40 })
 
-    expect(res.status).toBe(409)
-    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
-    expect(res.body.error).toMatch(/Expected NAMED_PERSON.*found.*PLANNED_RESOURCE/)
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPercent'])
     expect(tx.capacityProfile.update).not.toHaveBeenCalled()
     expect(tx.namedResource.update).not.toHaveBeenCalled()
     expect(tx.project.update).not.toHaveBeenCalled()
@@ -512,3 +523,294 @@ describe('named-resource capacity guard', () => {
   })
 })
 
+describe('legacy capacity request rejection (#403)', () => {
+  const LEGACY_FIELDS = [
+    'allocationMode',
+    'allocationPercent',
+    'allocationPct',
+    'allocationStartWeek',
+    'allocationEndWeek',
+    'startWeek',
+    'endWeek',
+  ] as const
+
+  function stubLookups() {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
+    vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({
+      id: 'nr-1', resourceTypeId: 'rt-1',
+      allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: 100,
+      allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null,
+    } as never)
+  }
+
+  it.each(LEGACY_FIELDS)('POST rejects supplied legacy capacity field "%s" with 400, no write, no cache clear', async (field) => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', allocationMode: 'EFFORT' } as never)
+    const res = await request(app)
+      .post('/api/projects/proj-1/resource-types/rt-1/named-resources')
+      .set('Authorization', authHeader)
+      .send({ name: 'New person', [field]: field === 'allocationMode' ? 'EFFORT' : null })
+
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual([field])
+    expect(res.body.error).toContain('capacity-profiles/:ownerKind/:ownerId')
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(prisma.project.update).not.toHaveBeenCalled()
+  })
+
+  it.each(LEGACY_FIELDS)('PUT rejects supplied legacy capacity field "%s" with 400, no write, no cache clear', async (field) => {
+    stubLookups()
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ name: 'Renamed', [field]: field === 'allocationMode' ? 'EFFORT' : null })
+
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual([field])
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(prisma.project.update).not.toHaveBeenCalled()
+  })
+
+  it('reports multiple rejected fields together with endpoint guidance', async () => {
+    stubLookups()
+    const res = await request(app)
+      .put('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+      .send({ allocationPercent: 80, startWeek: 2, endWeek: null, allocationPct: 80 })
+
+    expect(res.status).toBe(400)
+    expect(res.body.rejectedFields).toEqual(['allocationPercent', 'allocationPct', 'startWeek', 'endWeek'])
+    expect(res.body.capacityProfileEndpoint).toBe('/api/projects/:projectId/capacity-profiles/:ownerKind/:ownerId')
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(prisma.project.update).not.toHaveBeenCalled()
+  })
+})
+
+describe('planner-owned named-resource identity conflicts (#403)', () => {
+  const plannerRoleProfile = () => ({
+    id: 'cp-role-1',
+    projectId: 'proj-1',
+    resourceTypeId: 'rt-1',
+    namedResourceId: null,
+    ownerKind: 'ROLE',
+    planningBasis: 'CAPACITY_PROFILE',
+    source: 'SQUAD_PLANNER',
+    defaultPercent: 25,
+    startWeek: null,
+    endWeek: null,
+    segments: [{
+      id: 'seg-role-1',
+      capacityProfileId: 'cp-role-1',
+      startWeek: 0,
+      endWeek: 10,
+      capacityPercent: 25,
+      source: 'SQUAD_PLANNER',
+    }],
+  })
+
+  function profileMock(role: any, named: any[] = []) {
+    return vi.fn().mockImplementation((args: any) => {
+      const where = args?.where ?? {}
+      if (where.resourceTypeId && where.namedResourceId === null) return Promise.resolve([role])
+      if (typeof where.namedResourceId === 'string') {
+        return Promise.resolve(named.filter((p: any) => p.namedResourceId === where.namedResourceId))
+      }
+      return Promise.resolve([])
+    })
+  }
+
+  it('POST returns 409 before any write when the role is planner-owned', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', name: 'Developer', allocationMode: 'CAPACITY_PLAN' } as never)
+    const tx = {
+      capacityProfile: { findMany: profileMock(plannerRoleProfile()) },
+      namedResource: {
+        create: vi.fn(),
+        update: vi.fn(),
+        count: vi.fn(),
+      },
+      resourceType: { update: vi.fn() },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/resource-types/rt-1/named-resources')
+      .set('Authorization', authHeader)
+      .send({ name: 'New person' })
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('PLANNER_MANAGED_IDENTITY')
+    expect(res.body.error).toContain('Switch to manual capacity')
+    expect(tx.namedResource.create).not.toHaveBeenCalled()
+    expect(tx.resourceType.update).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
+  })
+
+  it('DELETE returns 409 before any write when the resource is planner-owned', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', name: 'Developer', allocationMode: 'EFFORT' } as never)
+    vi.mocked(prisma.namedResource.findFirst).mockResolvedValue({ id: 'nr-1', name: 'Planned Dev', resourceTypeId: 'rt-1' } as never)
+    const plannerNrProfile = {
+      id: 'cp-nr-plan-1',
+      projectId: 'proj-1',
+      resourceTypeId: null,
+      namedResourceId: 'nr-1',
+      ownerKind: 'PLANNED_RESOURCE',
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+      defaultPercent: 40,
+      startWeek: null,
+      endWeek: null,
+      segments: [{
+        id: 'seg-1',
+        capacityProfileId: 'cp-nr-plan-1',
+        startWeek: 0,
+        endWeek: 7,
+        capacityPercent: 40,
+        source: 'SQUAD_PLANNER',
+      }],
+    }
+    const manualRole = {
+      id: 'cp-role-1',
+      projectId: 'proj-1',
+      resourceTypeId: 'rt-1',
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      segments: [],
+    }
+    const tx = {
+      capacityProfile: {
+        findMany: profileMock(manualRole, [plannerNrProfile]),
+      },
+      namedResource: { delete: vi.fn(), count: vi.fn() },
+      resourceType: { update: vi.fn() },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .delete('/api/projects/proj-1/resource-types/rt-1/named-resources/nr-1')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('PLANNER_MANAGED_IDENTITY')
+    expect(tx.namedResource.delete).not.toHaveBeenCalled()
+    expect(tx.resourceType.update).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
+  })
+
+  it('POST rejects an aggregate ROLE profile above 100 before any write', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', name: 'Developer', allocationMode: 'TIMELINE' } as never)
+    const aggregateRole = {
+      id: 'cp-role-1',
+      projectId: 'proj-1',
+      resourceTypeId: 'rt-1',
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'MANUAL',
+      defaultPercent: 60,
+      startWeek: null,
+      endWeek: null,
+      segments: [
+        { id: 'cs-1', capacityProfileId: 'cp-role-1', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'MANUAL' },
+        { id: 'cs-2', capacityProfileId: 'cp-role-1', startWeek: 5, endWeek: 8, capacityPercent: 120, source: 'MANUAL' },
+      ],
+    }
+    const tx = {
+      capacityProfile: {
+        findMany: profileMock(aggregateRole),
+        create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
+      },
+      namedResource: {
+        create: vi.fn().mockResolvedValue({ id: 'nr-new' }),
+        update: vi.fn().mockResolvedValue({ id: 'nr-new' }),
+        count: vi.fn().mockResolvedValue(2),
+      },
+      resourceType: { update: vi.fn() },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/resource-types/rt-1/named-resources')
+      .set('Authorization', authHeader)
+      .send({ name: 'Alice' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('AGGREGATE_ROLE_CAPACITY')
+    expect(res.body.error).toContain('W5-W8')
+    expect(tx.namedResource.create).not.toHaveBeenCalled()
+    expect(tx.capacityProfile.create).not.toHaveBeenCalled()
+    expect(tx.resourceType.update).not.toHaveBeenCalled()
+    expect(tx.project.update).not.toHaveBeenCalled()
+  })
+
+  it('POST clones the manual ROLE profile into the new NAMED_PERSON profile', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
+    vi.mocked(prisma.resourceType.findFirst).mockResolvedValue({ id: 'rt-1', projectId: 'proj-1', name: 'Developer', allocationMode: 'TIMELINE' } as never)
+    const manualRole = {
+      id: 'cp-role-1',
+      projectId: 'proj-1',
+      resourceTypeId: 'rt-1',
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 75,
+      startWeek: 4,
+      endWeek: 12,
+      segments: [],
+    }
+    const tx = {
+      capacityProfile: {
+        findMany: profileMock(manualRole),
+        create: vi.fn().mockResolvedValue({ id: 'cp-new' }),
+      },
+      namedResource: {
+        create: vi.fn().mockResolvedValue({ id: 'nr-new', name: 'New person', resourceTypeId: 'rt-1' }),
+        update: vi.fn().mockResolvedValue({ id: 'nr-new' }),
+        count: vi.fn().mockResolvedValue(2),
+      },
+      resourceType: { update: vi.fn() },
+      project: { update: vi.fn() },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => fn(tx))
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/resource-types/rt-1/named-resources')
+      .set('Authorization', authHeader)
+      .send({ name: 'Alice' })
+
+    expect(res.status).toBe(201)
+    expect(tx.namedResource.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ name: 'Alice', resourceTypeId: 'rt-1' }),
+    }))
+    // The new owner profile inherits the ROLE profile with the shared
+    // generation provenance policy (DERIVED source + ROLE_DEFAULT marker)
+    expect(tx.capacityProfile.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        ownerKind: 'NAMED_PERSON',
+        namedResourceId: 'nr-new',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'DERIVED',
+        defaultPercent: 75,
+        startWeek: 4,
+        endWeek: 12,
+        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+      }),
+    }))
+    // Count synced to the new total
+    expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: { count: 2 },
+    }))
+  })
+})

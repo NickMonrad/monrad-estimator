@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '../lib/api'
+import { api, apiErrorMessage } from '../lib/api'
 import { invalidateProjectResourceProfile } from '../lib/projectInvalidation'
 import type { NamedResourceEntry, OverheadItem } from '../types/backlog'
 
@@ -23,6 +23,7 @@ export interface ResourceProfileMutations {
   expandedNamedResources: Set<string>; setExpandedNamedResources: React.Dispatch<React.SetStateAction<Set<string>>>
   editingId: string | null; setEditingId: React.Dispatch<React.SetStateAction<string | null>>
   formError: string | null; setFormError: React.Dispatch<React.SetStateAction<string | null>>
+  profileMutationError: string | null; clearProfileMutationError: () => void
   form: { name: string; resourceTypeId: string; type: OverheadType; value: string }; setForm: React.Dispatch<React.SetStateAction<{ name: string; resourceTypeId: string; type: OverheadType; value: string }>>
   toggleRow: (rtId: string) => void
   toggleNamedResources: (rtId: string) => void
@@ -45,6 +46,10 @@ export function useResourceProfileMutations(projectId: string | undefined) {
   const [expandedNamedResources, setExpandedNamedResources] = useState<Set<string>>(new Set())
   const [editingId, setEditingId] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  // Surface actionable conflicts (e.g. 409 PLANNER_MANAGED_IDENTITY) from
+  // count/add/remove mutations instead of failing silently.
+  const [profileMutationError, setProfileMutationError] = useState<string | null>(null)
+  const clearProfileMutationError = () => setProfileMutationError(null)
   const [form, setForm] = useState({
     name: '',
     resourceTypeId: '',
@@ -82,8 +87,10 @@ export function useResourceProfileMutations(projectId: string | undefined) {
     mutationFn: ({ id, ...data }: { id: string; count?: number; hoursPerDay?: number | null; dayRate?: number | null }) =>
       api.put(`/projects/${projectId}/resource-types/${id}`, data).then(r => r.data),
     onSuccess: () => {
+      setProfileMutationError(null)
       invalidateProjectResourceProfile(qc, projectId)
     },
+    onError: (err) => setProfileMutationError(apiErrorMessage(err, 'Failed to update resource type')),
   })
 
   const addPerson = useMutation({
@@ -92,10 +99,12 @@ export function useResourceProfileMutations(projectId: string | undefined) {
         name: 'New person',
       }).then(r => r.data),
     onSuccess: (_data, rtId) => {
+      setProfileMutationError(null)
       invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
       setExpandedNamedResources(prev => new Set([...prev, rtId]))
     },
+    onError: (err) => setProfileMutationError(apiErrorMessage(err, 'Failed to add named resource')),
   })
 
   const removeLastPerson = useMutation({
@@ -107,9 +116,11 @@ export function useResourceProfileMutations(projectId: string | undefined) {
       }
     },
     onSuccess: (_data, rtId) => {
+      setProfileMutationError(null)
       invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
+    onError: (err) => setProfileMutationError(apiErrorMessage(err, 'Failed to remove named resource')),
   })
 
   const createOverhead = useMutation({
@@ -180,6 +191,7 @@ export function useResourceProfileMutations(projectId: string | undefined) {
     expandedNamedResources, setExpandedNamedResources,
     editingId, setEditingId,
     formError, setFormError,
+    profileMutationError, clearProfileMutationError,
     form, setForm,
     toggleRow, toggleNamedResources,
     resetForm, invalidateProfile,

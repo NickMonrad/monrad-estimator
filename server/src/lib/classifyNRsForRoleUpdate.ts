@@ -9,6 +9,9 @@
  * @see docs/domain/capacity-profile-source-of-truth-migration-plan.md#phase-4
  */
 
+import { isRoleDefaultClone } from './roleProfileClonePolicy.js'
+
+
 // ─── Input types ─────────────────────────────────────────────────────────────
 
 export interface NRToClassify {
@@ -98,8 +101,14 @@ function nrMatchesOldRoleDefault(
  * persisted profiles has authoritative evidence:
  *
  * 1. `ownerKind === 'PLANNED_RESOURCE'` — synthetic/planned resource.
- * 2. Non-empty `segments` — fine-grained explicit allocation.
- * 3. `legacy === null | undefined` — profile-first write, never sync-derived.
+ * 2. `source === 'MANUAL'` — user-authored or transferred, even with legacy metadata.
+ * 3. `source === 'SQUAD_PLANNER'` — planner-owned (defensive; routes guard earlier).
+ * 4. `legacy === null | undefined` — profile-first write, never sync-derived.
+ * 5. Non-empty `segments` — fine-grained explicit allocation, UNLESS the
+ *    profile is a system-generated role-default clone (persisted
+ *    `legacy.writer === 'ROLE_DEFAULT'`): generated segmented resources must
+ *    remain removable by a later count reduction, so they fall through to
+ *    semantic equality instead.
  *
  * When ALL profiles are sync-derived (populated legacy) the semantic equality
  * of the NR's effective allocation against the old role default decides:
@@ -161,18 +170,21 @@ export function classifyNRsForRoleUpdate(
           break
         }
 
-        if (profile.segments && profile.segments.length > 0) {
-          hasProtectedEvidence = true
-          break
-        }
-
-        // Manual profiles with explicit source are protected — even with legacy metadata
-        if (profile.source === 'MANUAL') {
+        // Manual/transferred profiles are protected — even with legacy metadata
+        if (profile.source === 'MANUAL' || profile.source === 'SQUAD_PLANNER') {
           hasProtectedEvidence = true
           break
         }
 
         if (profile.legacy === null || profile.legacy === undefined) {
+          hasProtectedEvidence = true
+          break
+        }
+
+        // Segments protect unless the profile is a system-generated
+        // role-default clone (count increase / NamedResource POST), which
+        // must stay removable by count reduction.
+        if (profile.segments && profile.segments.length > 0 && !isRoleDefaultClone(profile)) {
           hasProtectedEvidence = true
           break
         }

@@ -7,6 +7,11 @@ const baseURL = import.meta.env.VITE_API_URL
 
 export const api = axios.create({ baseURL, timeout: 30000 })
 
+/** Extract the server-provided error message from an axios rejection. */
+export function apiErrorMessage(err: unknown, fallback: string): string {
+  return (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback
+}
+
 api.interceptors.request.use((config) => {
   const token = getStoredToken()
   if (token) config.headers.Authorization = `Bearer ${token}`

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { invalidateProjectResourceProfile } from '@/lib/projectInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '../../lib/api'
+import { api, apiErrorMessage } from '../../lib/api'
 import type { ResourceProfileRow } from '../../types/backlog'
 import {
   buildEffectiveProfileDraft,
@@ -9,6 +9,7 @@ import {
   formatCapacityProfileSource,
   formatResolutionSource,
   getEffectiveAvailabilityDisplay,
+  scalarModeToPlanningBasis,
 } from '../../lib/capacityProfileFormatting'
 import CapacityProfileEditorModal from './CapacityProfileEditorModal'
 import type { CapacityProfileEditorDraft } from '../../lib/capacityProfileFormatting'
@@ -63,6 +64,7 @@ export default function NamedResourcesPanel({
   allocations = [],
 }: NamedResourcesPanelProps) {
   const qc = useQueryClient()
+  const [panelError, setPanelError] = useState<string | null>(null)
   const [editingProfile, setEditingProfile] = useState<{
     ownerKind: 'ROLE' | 'NAMED_PERSON'
     ownerId: string
@@ -86,9 +88,11 @@ export default function NamedResourcesPanel({
         })
         .then((r) => r.data),
     onSuccess: () => {
+      setPanelError(null)
       invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
+    onError: (err) => setPanelError(apiErrorMessage(err, 'Failed to add named resource')),
   })
 
   const updateResource = useMutation({
@@ -98,9 +102,6 @@ export default function NamedResourcesPanel({
     }: {
       id: string
       name?: string
-      startWeek?: number | null
-      endWeek?: number | null
-      allocationPct?: number
       pricingModel?: string
     }) =>
       api
@@ -115,15 +116,50 @@ export default function NamedResourcesPanel({
     },
   })
 
+  // Scalar start/end-week and allocation-% edits submit the first-class
+  // owner-scoped capacity-profile request contract (#403) instead of the
+  // legacy NamedResource capacity fields.
+  const updateCapacity = useMutation({
+    mutationFn: ({
+      id,
+      planningBasis,
+      defaultPercent,
+      startWeek,
+      endWeek,
+    }: {
+      id: string
+      planningBasis: 'DEMAND_FOLLOWING' | 'WHOLE_PROJECT_ALLOCATION' | 'AVAILABILITY_WINDOW'
+      defaultPercent: number | null
+      startWeek?: number | null
+      endWeek?: number | null
+    }) =>
+      api
+        .put(`/projects/${projectId}/capacity-profiles/NAMED_PERSON/${id}`, {
+          planningBasis,
+          defaultPercent,
+          startWeek: planningBasis === 'AVAILABILITY_WINDOW' ? (startWeek ?? null) : null,
+          endWeek: planningBasis === 'AVAILABILITY_WINDOW' ? (endWeek ?? null) : null,
+        })
+        .then((r) => r.data),
+    onSuccess: () => {
+      setPanelError(null)
+      invalidateProjectResourceProfile(qc, projectId)
+      qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
+    },
+    onError: (err) => setPanelError(apiErrorMessage(err, 'Failed to update capacity')),
+  })
+
   const deleteResource = useMutation({
     mutationFn: (id: string) =>
       api.delete(
         `/projects/${projectId}/resource-types/${rtId}/named-resources/${id}`,
       ),
     onSuccess: () => {
+      setPanelError(null)
       invalidateProjectResourceProfile(qc, projectId)
       qc.invalidateQueries({ queryKey: ['named-resources', projectId, rtId] })
     },
+    onError: (err) => setPanelError(apiErrorMessage(err, 'Failed to remove named resource')),
   })
 
   const allocationById = new Map(allocations.map(allocation => [allocation.id, allocation]))
@@ -208,6 +244,12 @@ export default function NamedResourcesPanel({
             Named Resources
           </h4>
 
+          {panelError && (
+            <p role="alert" className="text-xs text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-900 rounded px-2 py-1.5">
+              {panelError}
+            </p>
+          )}
+
           {isLoading ? (
             <p className="text-sm text-gray-400 dark:text-gray-500">Loading…</p>
           ) : mergedResources.length === 0 ? (
@@ -261,7 +303,13 @@ export default function NamedResourcesPanel({
                           ? parseInt(e.target.value, 10)
                           : null
                         if (value !== resource.startWeek) {
-                          updateResource.mutate({ id: resource.id, startWeek: value })
+                          updateCapacity.mutate({
+                            id: resource.id,
+                            planningBasis: 'AVAILABILITY_WINDOW',
+                            defaultPercent: resource.allocationPct,
+                            startWeek: value,
+                            endWeek: resource.endWeek,
+                          })
                         }
                       }}
                       disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
@@ -281,7 +329,13 @@ export default function NamedResourcesPanel({
                           ? parseInt(e.target.value, 10)
                           : null
                         if (value !== resource.endWeek) {
-                          updateResource.mutate({ id: resource.id, endWeek: value })
+                          updateCapacity.mutate({
+                            id: resource.id,
+                            planningBasis: 'AVAILABILITY_WINDOW',
+                            defaultPercent: resource.allocationPct,
+                            startWeek: resource.startWeek,
+                            endWeek: value,
+                          })
                         }
                       }}
                       disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
@@ -305,7 +359,16 @@ export default function NamedResourcesPanel({
                           value <= 100 &&
                           value !== resource.allocationPct
                         ) {
-                          updateResource.mutate({ id: resource.id, allocationPct: value })
+                          const basis = scalarModeToPlanningBasis(resource.availability?.effectiveMode ?? 'EFFORT')
+                          if (basis) {
+                            updateCapacity.mutate({
+                              id: resource.id,
+                              planningBasis: basis,
+                              defaultPercent: value,
+                              startWeek: resource.startWeek,
+                              endWeek: resource.endWeek,
+                            })
+                          }
                         }
                       }}
                       disabled={!resource.persisted || resource.resourceIdentity === 'PLANNED_RESOURCE'}
