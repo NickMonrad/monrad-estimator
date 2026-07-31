@@ -118,6 +118,9 @@ export default function DocumentsPage() {
           generatedBy: user?.name ?? user?.email ?? 'Monrad Estimator',
           documentLabel: label,
         },
+      }, {
+        // PDF generation can take 30-60s for complex documents
+        timeout: 120_000,
       })
       queryClient.invalidateQueries({ queryKey: ['generated-docs', projectId] })
       setLabel(defaultLabel(project?.name))
