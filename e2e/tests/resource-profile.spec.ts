@@ -766,12 +766,31 @@ test.describe('Switch to manual capacity', () => {
       { headers: authHeaders },
     )
     expect(cpResp.ok()).toBeTruthy()
-    const cpData = await cpResp.json() as { capacityProfiles: Array<{ resourceTypeId: string | null; source: string }> }
+    const cpData = await cpResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string }> }
     const devPlannerProfiles = cpData.capacityProfiles.filter(
-      (p: { resourceTypeId: string | null; source: string }) => p.resourceTypeId === devRt!.id,
+      (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
+        p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
     )
     expect(devPlannerProfiles.length).toBeGreaterThan(0)
     expect(devPlannerProfiles[0].source).toBe('squadPlanner')
+
+    // ── Capture exact role-level weekly capacity BEFORE transfer ──
+    const roleProfileDto = devPlannerProfiles[0] as {
+      owner: { kind: string; id: string }
+      source: string
+      segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    }
+    function weeklyCapacityFromSegments(segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>): Record<number, number> {
+      const weekly: Record<number, number> = {}
+      for (const seg of segments) {
+        for (let w = seg.startWeek; w <= seg.endWeek; w++) {
+          weekly[w] = seg.capacityPercent
+        }
+      }
+      return weekly
+    }
+    const beforeWeekly = weeklyCapacityFromSegments(roleProfileDto.segments)
+    expect(Object.keys(beforeWeekly).length).toBeGreaterThan(0)
 
     // ── Verify via API that Resource Profile shows planner-managed state ──
     const rpResp = await request.get(
@@ -838,6 +857,22 @@ test.describe('Switch to manual capacity', () => {
     const editBadge = devRow.getByTitle('Click to edit capacity profile')
     await expect(editBadge).toBeVisible({ timeout: 10_000 })
 
+    // ── Verify exact weekly capacity parity immediately after transfer ──
+    const cpAfterTransferResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
+      { headers: authHeaders },
+    )
+    expect(cpAfterTransferResp.ok()).toBeTruthy()
+    const cpAfterTransferData = await cpAfterTransferResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string; segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }> }> }
+    const devManualProfiles = cpAfterTransferData.capacityProfiles.filter(
+      (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
+        p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
+    )
+    expect(devManualProfiles.length).toBeGreaterThan(0)
+    expect(devManualProfiles[0].source).toBe('manual')
+    const afterTransferWeekly = weeklyCapacityFromSegments(devManualProfiles[0].segments)
+    expect(afterTransferWeekly).toEqual(beforeWeekly)
+
     // ── Open capacity profile editor and verify segments are preserved ──
     await editBadge.click()
     const editorDialog = page.getByRole('dialog', { name: /edit capacity profile/i })
@@ -861,18 +896,22 @@ test.describe('Switch to manual capacity', () => {
     await saveResp
     await expect(editorDialog).not.toBeVisible({ timeout: 5_000 })
 
-    // ── Verify via API that the manual state persisted ──
+    // ── Verify via API that the manual state persisted and capacity changed ──
     const cpAfterResp = await request.get(
       `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
       { headers: authHeaders },
     )
     expect(cpAfterResp.ok()).toBeTruthy()
-    const cpAfterData = await cpAfterResp.json() as { capacityProfiles: Array<{ resourceTypeId: string | null; source: string }> }
-    const devManualProfiles = cpAfterData.capacityProfiles.filter(
-      (p: { resourceTypeId: string | null; source: string }) => p.resourceTypeId === devRt!.id,
+    const cpAfterData = await cpAfterResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string; segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }> }> }
+    const devEditedProfiles = cpAfterData.capacityProfiles.filter(
+      (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
+        p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
     )
-    expect(devManualProfiles.length).toBeGreaterThan(0)
-    expect(devManualProfiles[0].source).toBe('manual')
+    expect(devEditedProfiles.length).toBeGreaterThan(0)
+    expect(devEditedProfiles[0].source).toBe('manual')
+    const editedWeekly = weeklyCapacityFromSegments(devEditedProfiles[0].segments)
+    // The first segment's percent was edited to 50 — capacity changed
+    expect(editedWeekly).not.toEqual(beforeWeekly)
 
     // ── Return to Resource Profile and verify the edited capacity persists ──
     await page.goto(`/projects/${projectId}/resource-profile`)
