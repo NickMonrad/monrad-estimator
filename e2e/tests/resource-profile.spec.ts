@@ -830,8 +830,8 @@ test.describe('Switch to manual capacity', () => {
     const devRow = page.locator('tr').filter({ hasText: /Developer/i }).first()
     await expect(devRow).toBeVisible({ timeout: 15_000 })
 
-    // Verify Squad Planner source badge
-    await expect(devRow.getByText('Squad Planner')).toBeVisible({ timeout: 5_000 })
+    // Verify Squad Planner source badge (exact match — the badge span, not the Open Squad Planner button)
+    await expect(devRow.getByText('Squad Planner', { exact: true })).toBeVisible({ timeout: 5_000 })
 
     // Verify the "Switch to manual capacity" button is visible
     await expect(devRow.getByTitle(/Transfer this role/)).toBeVisible({ timeout: 5_000 })
@@ -865,8 +865,8 @@ test.describe('Switch to manual capacity', () => {
     await expect(confirmDialog2).not.toBeVisible({ timeout: 10_000 })
 
     // ── Verify post-transfer state ──
-    // The "Squad Planner" source badge should be gone
-    await expect(devRow.getByText('Squad Planner')).not.toBeVisible()
+    // The "Squad Planner" source badge should be gone (exact match)
+    await expect(devRow.getByText('Squad Planner', { exact: true })).not.toBeVisible()
     // The "Switch to manual capacity" button should be gone
     await expect(devRow.getByTitle(/Transfer this role/)).not.toBeVisible()
 
@@ -987,7 +987,7 @@ test.describe('Switch to manual capacity', () => {
 
     // Confirm the role has not reverted to Squad Planner ownership
     await expect(devRowAfterNav.getByTitle('Click to edit capacity profile')).toBeVisible({ timeout: 10_000 })
-    await expect(devRowAfterNav.getByText('Squad Planner')).not.toBeVisible()
+    await expect(devRowAfterNav.getByText('Squad Planner', { exact: true })).not.toBeVisible()
 
     // Open editor to confirm the edit survived navigation
     await devRowAfterNav.getByTitle('Click to edit capacity profile').click()

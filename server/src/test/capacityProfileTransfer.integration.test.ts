@@ -325,6 +325,10 @@ describeIf('Scenario 1 — Successful transfer', () => {
   let roleProfileIdBefore: string
   let nrProfile1IdBefore: string
   let nrProfile2IdBefore: string
+  let preTransferWeekly: Record<number, number>
+  let preTransferRoleSegments: SegmentRow[]
+  let preTransferNr1Segments: SegmentRow[]
+  let preTransferNr2Segments: SegmentRow[]
 
   beforeAll(async () => {
     if (!runIntegration) return
@@ -361,6 +365,21 @@ describeIf('Scenario 1 — Successful transfer', () => {
   })
 
   it('transfers the role and preserves profile IDs', async () => {
+    // ── Capture exact pre-transfer scheduler weekly capacity (hours) via the real resolver ──
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const resolvedBefore = await resolveSchedulerCapacity(prisma as any, projectId, 8)
+    const rtBefore = resolvedBefore.resourceTypes.find(rt => rt.id === rtId)
+    expect(rtBefore).toBeDefined()
+    preTransferWeekly = {}
+    for (let w = 0; w <= 11; w++) {
+      preTransferWeekly[w] = getWeeklyCapacity(rtBefore!, w, 8)
+    }
+
+    // Capture exact segment IDs/values before transfer for identity preservation
+    preTransferRoleSegments = await fetchSegments(roleProfileIdBefore)
+    preTransferNr1Segments = await fetchSegments(nrProfile1IdBefore)
+    preTransferNr2Segments = await fetchSegments(nrProfile2IdBefore)
+
     const res = await request(app)
       .post(`/api/projects/${projectId}/capacity-profiles/transfer-to-manual`)
       .set('Authorization', authHeader)
@@ -422,45 +441,96 @@ describeIf('Scenario 1 — Successful transfer', () => {
     expect(nr2Segments[1]).toMatchObject({ startWeek: 8, endWeek: 11, capacityPercent: 25 })
   })
 
-  it('preserves scheduler-visible effective weekly capacity via resolveSchedulerCapacity', async () => {
-    // Use the real scheduler-facing resolver to compute capacity per week.
+  it('preserves scheduler-visible effective weekly capacity via resolveSchedulerCapacity (exact parity)', async () => {
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const resolved = await resolveSchedulerCapacity(prisma as any, projectId, 8)
     const rt = resolved.resourceTypes.find(rt => rt.id === rtId)
     expect(rt).toBeDefined()
 
-    // After transfer, the ROLE profile is the sole authority.
-    // The ROLE segments represent aggregate headcount capacity.
-    // Compute weekly capacity via getWeeklyCapacity for each week.
-    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
-    const weekly: Record<number, number> = {}
+    // Compute exact post-transfer weekly capacity
+    const postTransferWeekly: Record<number, number> = {}
     for (let w = 0; w <= 11; w++) {
-      weekly[w] = getWeeklyCapacity(rt!, w, 8)
+      postTransferWeekly[w] = getWeeklyCapacity(rt!, w, 8)
     }
 
-    // Week 0-3: ROLE segment at 100%
-    for (let w = 0; w <= 3; w++) {
-      expect(weekly[w]).toBeGreaterThan(0)
-    }
-    // Week 4-7: ROLE segment at 100%
-    for (let w = 4; w <= 7; w++) {
-      expect(weekly[w]).toBeGreaterThan(0)
-    }
-    // Week 8-11: ROLE segment at 25%
-    for (let w = 8; w <= 11; w++) {
-      expect(weekly[w]).toBeGreaterThan(0)
-    }
+    // EXACT equality for every tested week (including zero and transitions)
+    expect(postTransferWeekly).toEqual(preTransferWeekly)
 
     // Verify the ROLE is the sole authority (roleSegments defined, not suppressed)
     expect(rt!.roleSegments).toBeDefined()
     expect(rt!.roleSegments!.length).toBeGreaterThan(0)
 
-    // Verify planned resources don't contribute independent segments
+    // Verify transferred planned resources don't contribute independent segments
     for (const nr of rt!.namedResources) {
       if (nr.name.includes('Transfer Engineer')) {
-        // Transferred planned resources should have NO capacitySegments
-        // (suppressed via the authority rule)
         expect(nr.capacitySegments).toBeUndefined()
       }
+    }
+  })
+
+  it('preserves exact profile and segment IDs and boundaries after transfer', async () => {
+    // Segment IDs and values must be byte-for-byte unchanged
+    expect(await fetchSegments(roleProfileIdBefore)).toEqual(preTransferRoleSegments)
+    expect(await fetchSegments(nrProfile1IdBefore)).toEqual(preTransferNr1Segments)
+    expect(await fetchSegments(nrProfile2IdBefore)).toEqual(preTransferNr2Segments)
+
+    // Profile IDs unchanged
+    const profiles = await fetchProfiles(projectId)
+    expect(profiles.some(p => p.id === roleProfileIdBefore)).toBe(true)
+    expect(profiles.some(p => p.id === nrProfile1IdBefore)).toBe(true)
+    expect(profiles.some(p => p.id === nrProfile2IdBefore)).toBe(true)
+  })
+
+  it('a role-level manual edit via the #363 path changes scheduler capacity exactly', async () => {
+    // Perform a normal role-level manual edit through replaceCapacityProfile (the #363 path)
+    const { replaceCapacityProfile } = await import('../lib/capacityProfileReplaceService.js')
+    await prisma.$transaction(async tx => {
+      await replaceCapacityProfile(
+        tx as any,
+        projectId,
+        'ROLE',
+        rtId,
+        {
+          planningBasis: 'CAPACITY_PROFILE',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          segments: [
+            { startWeek: 0, endWeek: 3, capacityPercent: 50 }, // edited: 100 → 50
+            { startWeek: 4, endWeek: 7, capacityPercent: 100 },
+            { startWeek: 8, endWeek: 11, capacityPercent: 25 },
+          ],
+        },
+        userId,
+      )
+    })
+
+    // Resolve capacity again — the edited first segment must change exactly
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const resolved = await resolveSchedulerCapacity(prisma as any, projectId, 8)
+    const rt = resolved.resourceTypes.find(rt => rt.id === rtId)
+    expect(rt).toBeDefined()
+
+    const editedWeekly: Record<number, number> = {}
+    for (let w = 0; w <= 11; w++) {
+      editedWeekly[w] = getWeeklyCapacity(rt!, w, 8)
+    }
+
+    // Weeks 0-3 now at 50% of 8h × 5d = 20h (was 40h)
+    for (let w = 0; w <= 3; w++) {
+      expect(editedWeekly[w]).toBe(20)
+      expect(editedWeekly[w]).not.toBe(preTransferWeekly[w])
+    }
+    // Weeks 4-7 and 8-11 unchanged
+    for (let w = 4; w <= 11; w++) {
+      expect(editedWeekly[w]).toBe(preTransferWeekly[w])
+    }
+
+    // Changed value survives another resolution (re-read)
+    const resolvedAgain = await resolveSchedulerCapacity(prisma as any, projectId, 8)
+    const rtAgain = resolvedAgain.resourceTypes.find(rt => rt.id === rtId)
+    for (let w = 0; w <= 3; w++) {
+      expect(getWeeklyCapacity(rtAgain!, w, 8)).toBe(20)
     }
   })
 

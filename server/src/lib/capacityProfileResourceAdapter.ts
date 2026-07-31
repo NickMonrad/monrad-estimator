@@ -54,6 +54,8 @@ export interface CapacityProfileResourceData {
   resolutionSource: CapacityProfileResolutionSource
   /** Identity derived from the profile ownerKind: NAMED_PERSON for named people, PLANNED_RESOURCE for planned resources. Undefined for role-level profiles. */
   resourceIdentity?: 'NAMED_PERSON' | 'PLANNED_RESOURCE'
+  /** Persisted legacy metadata writer — identifies profiles written by the #411 transfer ('transfer-to-manual'). */
+  legacyWriter?: string | null
 }
 
 /**
@@ -118,6 +120,7 @@ export interface CapacityProfileAdapterInput {
     defaultPercent: number | null
     startWeek: number | null
     endWeek: number | null
+    legacy?: { writer?: string | null } | null
     segments: Array<{
       id: string
       capacityProfileId: string
@@ -262,6 +265,7 @@ function profileDtoToData(
     segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
   },
   ownerKind?: string,
+  legacyWriter?: string | null,
 ): CapacityProfileResourceData {
   const result: CapacityProfileResourceData = {
     planningBasis: p.planningBasis,
@@ -275,6 +279,7 @@ function profileDtoToData(
       capacityPercent: s.capacityPercent,
     })),
     resolutionSource: 'PROFILE',
+    legacyWriter: legacyWriter ?? null,
   }
   if (ownerKind === 'PLANNED_RESOURCE' || ownerKind === 'NAMED_PERSON') {
     result.resourceIdentity = ownerKind === 'PLANNED_RESOURCE' ? 'PLANNED_RESOURCE' : 'NAMED_PERSON'
@@ -418,7 +423,7 @@ export function buildResourceCapacityProfileMap(
         namedResourceById,
       )
       if (dto[0]) {
-        namedResourceProfiles.set(nrId, profileDtoToData(dto[0], classification.profile.ownerKind))
+        namedResourceProfiles.set(nrId, profileDtoToData(dto[0], classification.profile.ownerKind, classification.profile.legacy?.writer ?? null))
       }
     }
   }

@@ -281,14 +281,16 @@ export async function resolveSchedulerCapacity(
       const nrProfile = profileMap.namedResourceProfiles.get(nr.id)
 
       // After Squad Planner → manual transfer (issue #411):
-      // The ROLE profile is the sole scheduling authority. Transferred
-      // PLANNED_RESOURCE profiles retain their identity and segment data
-      // but must not contribute independent capacity while a valid MANUAL
-      // ROLE CAPACITY_PROFILE exists. Skip their profile segments and
-      // fall through to legacy compatibility fields.
+      // The ROLE profile is the sole scheduling authority. ONLY planned-resource
+      // profiles carrying the #411 transfer provenance marker (legacy writer
+      // 'transfer-to-manual') retain their identity and segment data but must
+      // not contribute independent capacity while a valid MANUAL ROLE
+      // CAPACITY_PROFILE exists. An independently authored manual planned-resource
+      // profile without that marker remains scheduler-authoritative.
       const isTransferredPlannedResource = nrProfile?.resourceIdentity === 'PLANNED_RESOURCE' &&
         nrProfile?.source === 'manual' &&
         nrProfile?.resolutionSource === 'PROFILE' &&
+        nrProfile?.legacyWriter === 'transfer-to-manual' &&
         roleProfile?.source === 'manual' &&
         roleProfile?.planningBasis === 'capacityProfile' &&
         roleProfileValid
