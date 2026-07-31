@@ -111,7 +111,7 @@ export async function transferToManualCapacity(
   // ── 2. Load all profiles and named resources for this role ────────────
   const namedResources = await tx.namedResource.findMany({
     where: { resourceTypeId },
-    select: { id: true, name: true },
+    select: { id: true, name: true, allocationMode: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   })
   const namedResourceIds = namedResources.map(nr => nr.id)
@@ -177,7 +177,7 @@ export async function transferToManualCapacity(
       // No profile at all — check via planner provenance
       const provenance = plannerProvenanceFrom(plannerAuthority, resourceTypeId)
       const kind = classifyNamedResource(
-        { id: nr.id, allocationMode: 'CAPACITY_PLAN' },
+        { id: nr.id, allocationMode: nr.allocationMode ?? null },
         [],
         provenance,
       )
@@ -303,9 +303,11 @@ export async function transferToManualCapacity(
   for (const profile of plannerProfiles) {
     if (!profile.namedResourceId) continue
 
-    // Transferred planned resources project to zero legacy capacity.
-    // The ROLE profile is the scheduling authority; planned-resource
-    // legacy fields must not contribute independent capacity.
+    // Transferred planned resources project to zero legacy capacity on the
+    // NamedResource compatibility fields. The profile's own defaultPercent
+    // and segments are preserved (they retain identity and segment shape).
+    // The scheduler authority rule suppresses independent capacity contribution
+    // from these profiles, so the manual ROLE profile is the sole authority.
     await tx.namedResource.update({
       where: { id: profile.namedResourceId },
       data: {

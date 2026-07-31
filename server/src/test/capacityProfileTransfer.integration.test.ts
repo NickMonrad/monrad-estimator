@@ -382,13 +382,14 @@ describeIf('Scenario 1 — Successful transfer', () => {
     expect(roleProfile!.planningBasis).toBe('CAPACITY_PROFILE')
   })
 
-  it('changes PLANNED_RESOURCE profile source from SQUAD_PLANNER to MANUAL and sets zero-capacity', async () => {
+  it('changes PLANNED_RESOURCE profile source from SQUAD_PLANNER to MANUAL and preserves profile data', async () => {
     const profiles = await fetchProfiles(projectId)
     const nr1Profile = profiles.find(p => p.id === nrProfile1IdBefore)
     expect(nr1Profile).toBeDefined()
     expect(nr1Profile!.source).toBe('MANUAL')
     expect(nr1Profile!.ownerKind).toBe('PLANNED_RESOURCE')
-    expect(nr1Profile!.defaultPercent).toBe(0)
+    // Profile defaultPercent and windows are preserved (not zeroed)
+    expect(nr1Profile!.defaultPercent).toBe(100)
     expect(nr1Profile!.startWeek).toBeNull()
     expect(nr1Profile!.endWeek).toBeNull()
 
@@ -396,7 +397,7 @@ describeIf('Scenario 1 — Successful transfer', () => {
     expect(nr2Profile).toBeDefined()
     expect(nr2Profile!.source).toBe('MANUAL')
     expect(nr2Profile!.ownerKind).toBe('PLANNED_RESOURCE')
-    expect(nr2Profile!.defaultPercent).toBe(0)
+    expect(nr2Profile!.defaultPercent).toBe(50)
     expect(nr2Profile!.startWeek).toBeNull()
     expect(nr2Profile!.endWeek).toBeNull()
   })
@@ -493,27 +494,29 @@ describeIf('Scenario 2 — Protected named-person profiles unchanged', () => {
       { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: 100 },
     )
 
-    // Create an explicit NAMED_PERSON profile (MANUAL source)
+    // Create an explicit NAMED_PERSON profile (MANUAL source, DEMAND_FOLLOWING)
     namedPersonProfileId = await createProfile(
       projectId, 'cp-named-s2', 'NAMED_PERSON', null, namedPersonNrId,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 100 },
     )
 
-    // Create a planner-managed role profile
+    // Create a planner-managed role profile WITH segments (null profile-level windows)
     await createProfile(
       projectId, 'cp-role-s2', 'ROLE', rtId, null,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: 0, endWeek: 5 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
+    await createSegment('cp-role-s2', 0, 5, 100)
 
-    // Create a planner-managed PLANNED_RESOURCE profile
+    // Create a planner-managed PLANNED_RESOURCE profile WITH segments
     const plannerNrId = await createNamedResource(
       projectId, rtId, 'nr-planner-s2', 'Planned Resource 1',
       { allocationMode: 'CAPACITY_PLAN' },
     )
     await createProfile(
       projectId, 'cp-planned-s2', 'PLANNED_RESOURCE', null, plannerNrId,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: 0, endWeek: 5 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
+    await createSegment('cp-planned-s2', 0, 5, 100)
   })
 
   it('transfers planner profiles but leaves named-person profile unchanged', async () => {
@@ -554,11 +557,12 @@ describeIf('Scenario 3 — Unrelated roles unchanged', () => {
     rtTransfer = await createResourceType(projectId, 'rt-tx-s3', 'Transfer Role')
     rtUnrelated = await createResourceType(projectId, 'rt-ur-s3', 'Unrelated Role')
 
-    // Create planner profile for transfer role
+    // Create planner profile for transfer role with segments
     await createProfile(
       projectId, 'cp-tx-s3', 'ROLE', rtTransfer, null,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100 },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
+    await createSegment('cp-tx-s3', 0, 5, 100)
 
     // Create a MANUAL profile for unrelated role (should stay MANUAL)
     unrelatedProfileId = await createProfile(
@@ -764,13 +768,14 @@ describeIf('Scenario 8 — Later Squad Planner apply blocked', () => {
     // Set up a planner-managed role with backlog
     await createEpicBacklog(projectId, rtId)
 
-    // Create planner profile (profile-level windows null — segments define windows)
+    // Create planner profile with segments
     await createProfile(
       projectId, 'cp-role-s8', 'ROLE', rtId, null,
       { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
+    await createSegment('cp-role-s8', 0, 5, 100)
 
-    // Create planner resource profile (segmentless — null windows)
+    // Create planner resource profile with segments
     const nrId = await createNamedResource(
       projectId, rtId, 'nr-s8', 'Planned 1',
       { allocationMode: 'CAPACITY_PLAN' },
@@ -779,6 +784,7 @@ describeIf('Scenario 8 — Later Squad Planner apply blocked', () => {
       projectId, 'cp-nr-s8', 'PLANNED_RESOURCE', null, nrId,
       { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
+    await createSegment('cp-nr-s8', 0, 5, 100)
   })
 
   it('blocks Squad Planner apply after transfer', async () => {
@@ -963,6 +969,10 @@ describeIf('Scenario 11 — Atomic rollback on failure', () => {
       where: { id: rtId },
       select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
     })
+    const beforeProject = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })
 
     // Inject failure seam BEFORE the transfer (fires after writes)
     let seamReached = false
@@ -1004,11 +1014,11 @@ describeIf('Scenario 11 — Atomic rollback on failure', () => {
     })
     expect(afterRT).toEqual(beforeRT)
 
-    // Verify weeklyDemandCache unchanged
+    // Verify weeklyDemandCache matches exact pre-transfer value
     const afterProject = await prisma.project.findUnique({
       where: { id: projectId },
       select: { weeklyDemandCache: true },
     })
-    expect(afterProject?.weeklyDemandCache).toEqual({})
+    expect(afterProject?.weeklyDemandCache).toEqual(beforeProject?.weeklyDemandCache)
   })
 })
