@@ -774,23 +774,40 @@ test.describe('Switch to manual capacity', () => {
     expect(devPlannerProfiles.length).toBeGreaterThan(0)
     expect(devPlannerProfiles[0].source).toBe('squadPlanner')
 
-    // ── Capture exact role-level weekly capacity BEFORE transfer ──
-    const roleProfileDto = devPlannerProfiles[0] as {
-      owner: { kind: string; id: string }
-      source: string
-      segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
-    }
-    function weeklyCapacityFromSegments(segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>): Record<number, number> {
+    // ── Capture exact role-level weekly capacity BEFORE transfer via the real scheduler path ──
+    // GET /timeline returns weeklyCapacity computed by the scheduler-facing resolver.
+    async function fetchDevWeeklyCapacity(): Promise<Record<number, number>> {
+      const resp = await request.get(
+        `${API_BASE}/api/projects/${projectId}/timeline`,
+        { headers: authHeaders },
+      )
+      expect(resp.ok()).toBeTruthy()
+      const data = await resp.json() as { weeklyCapacity: Array<{ week: number; resourceTypeName: string; capacityDays: number }> }
       const weekly: Record<number, number> = {}
-      for (const seg of segments) {
-        for (let w = seg.startWeek; w <= seg.endWeek; w++) {
-          weekly[w] = seg.capacityPercent
+      for (const row of data.weeklyCapacity) {
+        if (row.resourceTypeName?.toLowerCase().includes('developer')) {
+          weekly[row.week] = row.capacityDays
         }
       }
       return weekly
     }
-    const beforeWeekly = weeklyCapacityFromSegments(roleProfileDto.segments)
+    const beforeWeekly = await fetchDevWeeklyCapacity()
     expect(Object.keys(beforeWeekly).length).toBeGreaterThan(0)
+
+    // ── Capture Commercial billing-basis state before transfer ──
+    const rpPreResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-profile`,
+      { headers: authHeaders },
+    )
+    expect(rpPreResp.ok()).toBeTruthy()
+    const rpPreData = await rpPreResp.json() as { resourceRows: Array<{ name: string; dayRate: number | null; estimatedCost: number | null }>; summary: { totalCost: number | null } }
+    const devPreRow = rpPreData.resourceRows.find(r => r.name?.toLowerCase().includes('developer'))
+    expect(devPreRow).toBeDefined()
+    const commercialBefore = {
+      dayRate: devPreRow!.dayRate,
+      estimatedCost: devPreRow!.estimatedCost,
+      totalCost: rpPreData.summary?.totalCost ?? null,
+    }
 
     // ── Verify via API that Resource Profile shows planner-managed state ──
     const rpResp = await request.get(
@@ -857,20 +874,20 @@ test.describe('Switch to manual capacity', () => {
     const editBadge = devRow.getByTitle('Click to edit capacity profile')
     await expect(editBadge).toBeVisible({ timeout: 10_000 })
 
-    // ── Verify exact weekly capacity parity immediately after transfer ──
+    // ── Verify exact weekly capacity parity immediately after transfer via the real scheduler path ──
     const cpAfterTransferResp = await request.get(
       `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
       { headers: authHeaders },
     )
     expect(cpAfterTransferResp.ok()).toBeTruthy()
-    const cpAfterTransferData = await cpAfterTransferResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string; segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }> }> }
+    const cpAfterTransferData = await cpAfterTransferResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string }> }
     const devManualProfiles = cpAfterTransferData.capacityProfiles.filter(
       (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
         p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
     )
     expect(devManualProfiles.length).toBeGreaterThan(0)
     expect(devManualProfiles[0].source).toBe('manual')
-    const afterTransferWeekly = weeklyCapacityFromSegments(devManualProfiles[0].segments)
+    const afterTransferWeekly = await fetchDevWeeklyCapacity()
     expect(afterTransferWeekly).toEqual(beforeWeekly)
 
     // ── Open capacity profile editor and verify segments are preserved ──
@@ -881,10 +898,11 @@ test.describe('Switch to manual capacity', () => {
     // Verify segments exist
     await expect(editorDialog.getByTestId('cp-seg-start-0')).toBeVisible({ timeout: 5_000 })
 
-    // Record current segment values
-    const segPct = await editorDialog.getByTestId('cp-seg-pct-0').inputValue()
+    // Record the first segment's week range (0-based, matching timeline indices)
+    const firstSegStart = parseInt(await editorDialog.getByTestId('cp-seg-start-0').inputValue(), 10)
+    const firstSegEnd = parseInt(await editorDialog.getByTestId('cp-seg-end-0').inputValue(), 10)
 
-    // ── Edit the capacity ──
+    // ── Edit the capacity: set first segment to exactly 50 ──
     await editorDialog.getByTestId('cp-seg-pct-0').fill('50')
 
     // Save
@@ -896,54 +914,69 @@ test.describe('Switch to manual capacity', () => {
     await saveResp
     await expect(editorDialog).not.toBeVisible({ timeout: 5_000 })
 
-    // ── Verify via API that the manual state persisted and capacity changed ──
+    // ── Verify via API that the manual state persisted ──
     const cpAfterResp = await request.get(
       `${API_BASE}/api/projects/${projectId}/capacity-profiles`,
       { headers: authHeaders },
     )
     expect(cpAfterResp.ok()).toBeTruthy()
-    const cpAfterData = await cpAfterResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string; segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }> }> }
+    const cpAfterData = await cpAfterResp.json() as { capacityProfiles: Array<{ owner: { kind: string; id: string } | undefined; source: string }> }
     const devEditedProfiles = cpAfterData.capacityProfiles.filter(
       (p: { owner: { kind: string; id: string } | undefined; source: string }) =>
         p.owner?.kind === 'role' && p.owner?.id === devRt!.id,
     )
     expect(devEditedProfiles.length).toBeGreaterThan(0)
     expect(devEditedProfiles[0].source).toBe('manual')
-    const editedWeekly = weeklyCapacityFromSegments(devEditedProfiles[0].segments)
-    // The first segment's percent was edited to 50 — capacity changed
-    expect(editedWeekly).not.toEqual(beforeWeekly)
 
-    // ── Return to Resource Profile and verify the edited capacity persists ──
-    await page.goto(`/projects/${projectId}/resource-profile`)
-    await expect(
-      page.getByRole('heading', { name: /resource profile/i }),
-    ).toBeVisible({ timeout: 10_000 })
-
-    const devRowFinal = page.locator('tr').filter({ hasText: /Developer/i }).first()
-    await expect(devRowFinal).toBeVisible({ timeout: 15_000 })
-
-    // Verify the role is still editable (not reverted to Squad Planner)
-    await expect(devRowFinal.getByTitle('Click to edit capacity profile')).toBeVisible({ timeout: 10_000 })
-
-    // Open editor to confirm the edit persisted
-    await devRowFinal.getByTitle('Click to edit capacity profile').click()
-    const editorFinal = page.getByRole('dialog', { name: /edit capacity profile/i })
-    await expect(editorFinal).toBeVisible({ timeout: 8_000 })
-    await expect(editorFinal.getByTestId('cp-seg-pct-0')).toHaveValue('50')
-    await editorFinal.getByTestId('cp-cancel-btn').click()
-    await expect(editorFinal).not.toBeVisible({ timeout: 5_000 })
-
-    // ── Navigate to Timeline and verify the edited capacity is reflected ──
+    // ── Navigate to Timeline, click Update timeline, and wait for the scheduler request ──
     await page.goto(`/projects/${projectId}/timeline`)
     await expect(
       page.getByRole('heading', { name: /timeline planner/i }),
     ).toBeVisible({ timeout: 10_000 })
 
-    // Verify the timeline page loads without errors (capacity change propagated)
-    // The Developer resource type's capacity determines the schedule.
-    await expect(page.getByRole('button', { name: /Update timeline/i }).first()).toBeVisible({ timeout: 10_000 })
+    const scheduleResponse = page.waitForResponse(
+      resp => resp.url().includes('/timeline/schedule') && resp.request().method() === 'POST',
+      { timeout: 20_000 },
+    )
+    await quickSchedule(page)
+    const schedResp = await scheduleResponse
+    expect(schedResp.status()).toBe(200)
 
-    // ── Navigate back to Resource Profile and confirm still editable ──
+    // ── Assert exact edited capacity through the real scheduler path ──
+    const afterEditWeekly = await fetchDevWeeklyCapacity()
+    // Every week in the edited segment must equal exactly 50% of a 5-day week = 2.5 days
+    for (let w = firstSegStart; w <= firstSegEnd; w++) {
+      expect(afterEditWeekly[w]).toBe(2.5)
+    }
+    // Every week outside the edited segment retains its original capacity
+    for (const [week, cap] of Object.entries(beforeWeekly)) {
+      const w = Number(week)
+      if (w >= firstSegStart && w <= firstSegEnd) continue
+      expect(afterEditWeekly[w]).toBe(cap)
+    }
+
+    // ── Reload and verify the edited scheduler capacity is retained ──
+    await page.reload()
+    await expect(
+      page.getByRole('heading', { name: /timeline planner/i }),
+    ).toBeVisible({ timeout: 10_000 })
+    const retainedWeekly = await fetchDevWeeklyCapacity()
+    expect(retainedWeekly).toEqual(afterEditWeekly)
+
+    // ── Verify Commercial billing-basis state unchanged ──
+    const rpPostResp = await request.get(
+      `${API_BASE}/api/projects/${projectId}/resource-profile`,
+      { headers: authHeaders },
+    )
+    expect(rpPostResp.ok()).toBeTruthy()
+    const rpPostData = await rpPostResp.json() as { resourceRows: Array<{ name: string; dayRate: number | null; estimatedCost: number | null }>; summary: { totalCost: number | null } }
+    const devPostRow = rpPostData.resourceRows.find(r => r.name?.toLowerCase().includes('developer'))
+    expect(devPostRow).toBeDefined()
+    expect(devPostRow!.dayRate).toBe(commercialBefore.dayRate)
+    expect(devPostRow!.estimatedCost).toBe(commercialBefore.estimatedCost)
+    expect(rpPostData.summary?.totalCost ?? null).toBe(commercialBefore.totalCost)
+
+    // ── Return to Resource Profile and confirm still editable ──
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(
       page.getByRole('heading', { name: /resource profile/i }),
