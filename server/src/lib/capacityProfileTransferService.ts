@@ -32,7 +32,7 @@
  */
 
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
-import { validatePlannerOwnerState } from './squadPlannerProfileWriter.js'
+import { validatePlannerOwnerState, capturePlannerAuthority, classifyNamedResource, plannerProvenanceFrom } from './squadPlannerProfileWriter.js'
 import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
 import type { PrismaClient } from '@prisma/client'
 
@@ -166,7 +166,32 @@ export async function transferToManualCapacity(
     )
   }
 
-  // 3d. Strict validate every NamedResource that has a profile
+  // 3d. Detect unprofiled planner-managed NamedResources via active-plan provenance
+  // Capture planner authority to detect resources kept under planner fallback.
+  const plannerAuthority = await capturePlannerAuthority(tx, projectId)
+
+  for (const nr of namedResources) {
+    const nrProfiles = allProfiles.filter(p => p.namedResourceId === nr.id)
+
+    if (nrProfiles.length === 0) {
+      // No profile at all — check via planner provenance
+      const provenance = plannerProvenanceFrom(plannerAuthority, resourceTypeId)
+      const kind = classifyNamedResource(
+        { id: nr.id, allocationMode: 'CAPACITY_PLAN' },
+        [],
+        provenance,
+      )
+      if (kind === 'planner_managed' || kind === 'legacy_adoptable' || kind === 'capacity_plan_untouched') {
+        throw new TransferError(
+          409,
+          `Named resource "${nr.name}" is planner-managed without a persisted profile. ` +
+          'Apply Squad Planner to create profiles for all resources before transferring.',
+        )
+      }
+    }
+  }
+
+  // 3e. Strict validate every NamedResource that has a profile
   const resourceProfiles = allProfiles.filter(
     p => p.namedResourceId !== null && namedResourceIds.includes(p.namedResourceId!),
   )

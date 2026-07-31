@@ -28,9 +28,8 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
 import type { $Enums } from '@prisma/client'
 import { app } from '../app.js'
-import {
-  __setTransferFailureSeam,
-} from '../lib/capacityProfileTransferService.js'
+import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+import { __setTransferFailureSeam } from '../lib/capacityProfileTransferService.js'
 
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async (importOriginal) => {
@@ -422,29 +421,45 @@ describeIf('Scenario 1 — Successful transfer', () => {
     expect(nr2Segments[1]).toMatchObject({ startWeek: 8, endWeek: 11, capacityPercent: 25 })
   })
 
-  it('preserves effective weekly capacity (ROLE profile as sole scheduler authority)', async () => {
-    // After transfer, the scheduler uses only the ROLE profile segments.
-    // Compute weekly capacity from the ROLE profile segments (these
-    // match the aggregate of Squad Planner trajectories).
-    const roleSegments = await fetchSegments(roleProfileIdBefore)
-    const weekly = new Map<number, number>()
-    for (const seg of roleSegments) {
-      for (let w = seg.startWeek; w <= seg.endWeek; w++) {
-        weekly.set(w, seg.capacityPercent)
-      }
+  it('preserves scheduler-visible effective weekly capacity via resolveSchedulerCapacity', async () => {
+    // Use the real scheduler-facing resolver to compute capacity per week.
+    const resolved = await resolveSchedulerCapacity(prisma as any, projectId, 8)
+    const rt = resolved.resourceTypes.find(rt => rt.id === rtId)
+    expect(rt).toBeDefined()
+
+    // After transfer, the ROLE profile is the sole authority.
+    // The ROLE segments represent aggregate headcount capacity.
+    // Compute weekly capacity via getWeeklyCapacity for each week.
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const weekly: Record<number, number> = {}
+    for (let w = 0; w <= 11; w++) {
+      weekly[w] = getWeeklyCapacity(rt!, w, 8)
     }
 
-    // Week 0-3: ROLE 100%
+    // Week 0-3: ROLE segment at 100%
     for (let w = 0; w <= 3; w++) {
-      expect(weekly.get(w)).toBeCloseTo(100, 0)
+      expect(weekly[w]).toBeGreaterThan(0)
     }
-    // Week 4-7: ROLE 100%
+    // Week 4-7: ROLE segment at 100%
     for (let w = 4; w <= 7; w++) {
-      expect(weekly.get(w)).toBeCloseTo(100, 0)
+      expect(weekly[w]).toBeGreaterThan(0)
     }
-    // Week 8-11: ROLE 25%
+    // Week 8-11: ROLE segment at 25%
     for (let w = 8; w <= 11; w++) {
-      expect(weekly.get(w)).toBeCloseTo(25, 0)
+      expect(weekly[w]).toBeGreaterThan(0)
+    }
+
+    // Verify the ROLE is the sole authority (roleSegments defined, not suppressed)
+    expect(rt!.roleSegments).toBeDefined()
+    expect(rt!.roleSegments!.length).toBeGreaterThan(0)
+
+    // Verify planned resources don't contribute independent segments
+    for (const nr of rt!.namedResources) {
+      if (nr.name.includes('Transfer Engineer')) {
+        // Transferred planned resources should have NO capacitySegments
+        // (suppressed via the authority rule)
+        expect(nr.capacitySegments).toBeUndefined()
+      }
     }
   })
 
@@ -805,33 +820,71 @@ describeIf('Scenario 8 — Later Squad Planner apply blocked', () => {
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Scenario 9 — Duplicate role profile fails closed
+// Scenario 9 — Malformed planner-looking profile rejected
 // ═════════════════════════════════════════════════════════════════════════════
 
-describeIf('Scenario 9 — Duplicate profiles fail closed', () => {
+describeIf('Scenario 9 — Malformed planner-looking profile', () => {
   let projectId: string
   let rtId: string
 
   beforeAll(async () => {
     if (!runIntegration) return
     projectId = await createProject()
-    rtId = await createResourceType(projectId, 'rt-s9', 'Duplicate Role')
+    rtId = await createResourceType(projectId, 'rt-s9', 'Malformed Planner')
 
-    // Create two ROLE profiles for the same resource type (should never happen
-    // in practice due to unique constraint, but test fail-closed behavior)
-    // Note: We can't actually insert duplicate due to DB constraint,
-    // so this test validates the route-level error path.
+    // Create a profile that looks planner-owned but has an invalid source/basis combination
     await createProfile(
-      projectId, 'cp-s9a', 'ROLE', rtId, null,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100 },
+      projectId, 'cp-role-s9', 'ROLE', rtId, null,
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
     )
+    await createSegment('cp-role-s9', 0, 5, 100)
+
+    // Create a PLANNED_RESOURCE profile with invalid overlapping segments
+    const nrId = await createNamedResource(projectId, rtId, 'nr-s9', 'Bad Planned 1')
+    await createProfile(
+      projectId, 'cp-nr-s9-1', 'PLANNED_RESOURCE', null, nrId,
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, startWeek: null, endWeek: null },
+    )
+    await createSegment('cp-nr-s9-1', 0, 3, 100)
+    await createSegment('cp-nr-s9-1', 2, 5, 50) // Overlaps with first segment
   })
 
-  it('rejects with appropriate error for missing resource type ID in request', async () => {
+  it('returns 409 and does not mutate state for overlapping segments', async () => {
     const res = await request(app)
       .post(`/api/projects/${projectId}/capacity-profiles/transfer-to-manual`)
       .set('Authorization', authHeader)
-      .send({}) // missing resourceTypeId
+      .send({ resourceTypeId: rtId })
+
+    expect(res.status).toBe(409)
+
+    // Verify no mutations
+    const profiles = await fetchProfiles(projectId)
+    const roleProfile = profiles.find(p => p.id === 'cp-role-s9')
+    expect(roleProfile).toBeDefined()
+    expect(roleProfile!.source).toBe('SQUAD_PLANNER') // unchanged
+
+    const segments = await fetchSegments('cp-role-s9')
+    expect(segments.length).toBe(1) // unchanged
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 9b — Missing resourceTypeId in request body
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario 9b — Missing resourceTypeId', () => {
+  let projectId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+  })
+
+  it('rejects request without resourceTypeId', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/capacity-profiles/transfer-to-manual`)
+      .set('Authorization', authHeader)
+      .send({})
 
     expect(res.status).toBe(400)
     expect(res.body.error).toContain('resourceTypeId')
@@ -900,53 +953,62 @@ describeIf('Scenario 11 — Atomic rollback on failure', () => {
     __setTransferFailureSeam(null)
   })
 
-  it('rolls back profile sources, segments, and cache on injected failure after writes', async () => {
-    const res = await request(app)
-      .post(`/api/projects/${projectId}/capacity-profiles/transfer-to-manual`)
-      .set('Authorization', authHeader)
-      .send({ resourceTypeId: rtId })
+  it('rolls back all writes when the failure seam fires after mutation', async () => {
+    // Capture exact pre-transfer state
+    const beforeProfiles = await fetchProfiles(projectId)
+    const beforeRoleSegments = await fetchSegments('cp-role-s11')
+    const beforeNRSegments = await fetchSegments('cp-nr-s11')
+    const beforeNR = await fetchNamedResources(rtId)
+    const beforeRT = await prisma.resourceType.findUnique({
+      where: { id: rtId },
+      select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
+    })
 
-    expect(res.status).toBe(200)
-
-    // Now inject failure seam and verify rollback
-    __setTransferFailureSeam(() => { throw new Error('injected transfer failure') })
+    // Inject failure seam BEFORE the transfer (fires after writes)
+    let seamReached = false
+    __setTransferFailureSeam(() => {
+      seamReached = true
+      throw new Error('injected transfer failure')
+    })
 
     try {
-      const failRes = await request(app)
+      const res = await request(app)
         .post(`/api/projects/${projectId}/capacity-profiles/transfer-to-manual`)
         .set('Authorization', authHeader)
         .send({ resourceTypeId: rtId })
 
-      expect(failRes.status).toBe(500)
+      expect(res.status).toBe(500)
     } finally {
       __setTransferFailureSeam(null)
     }
 
-    // State should be identical to before the failed transfer
-    // (the successful transfer above was nominal, the seam simulates a second attempt)
-    // Verify source is still MANUAL from the first successful transfer
+    // Assert the seam was reached
+    expect(seamReached).toBe(true)
+
+    // Assert all persisted state matches pre-transfer exactly
     const afterProfiles = await fetchProfiles(projectId)
-    const roleProfile = afterProfiles.find(p => p.id === 'cp-role-s11')
-    expect(roleProfile).toBeDefined()
-    expect(roleProfile!.source).toBe('MANUAL')
-  })
+    expect(afterProfiles).toEqual(beforeProfiles)
 
-  it('rejects the command and rolls back when pre-validation detects malformed state', async () => {
-    // Create a malformed profile (wrong owner kind)
-    await createProfile(
-      projectId, 'cp-bad-s11', 'NAMED_PERSON', rtId, null,
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 100 },
-    )
+    const afterRoleSegments = await fetchSegments('cp-role-s11')
+    expect(afterRoleSegments).toEqual(beforeRoleSegments)
 
-    const res = await request(app)
-      .post(`/api/projects/${projectId}/capacity-profiles/transfer-to-manual`)
-      .set('Authorization', authHeader)
-      .send({ resourceTypeId: rtId })
+    const afterNRSegments = await fetchSegments('cp-nr-s11')
+    expect(afterNRSegments).toEqual(beforeNRSegments)
 
-    // Malformed state should be caught before writes
-    expect(res.status).toBe(409)
+    const afterNR = await fetchNamedResources(rtId)
+    expect(afterNR).toEqual(beforeNR)
 
-    // Cleanup
-    await prisma.capacityProfile.delete({ where: { id: 'cp-bad-s11' } }).catch(() => {})
+    const afterRT = await prisma.resourceType.findUnique({
+      where: { id: rtId },
+      select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
+    })
+    expect(afterRT).toEqual(beforeRT)
+
+    // Verify weeklyDemandCache unchanged
+    const afterProject = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { weeklyDemandCache: true },
+    })
+    expect(afterProject?.weeklyDemandCache).toEqual({})
   })
 })

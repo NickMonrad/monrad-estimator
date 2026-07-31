@@ -712,7 +712,7 @@ test.describe('Switch to manual capacity', () => {
 
     // ── Get auth token for API calls ──
     // Reuse the helpers from the existing test pattern
-    const authToken = await page.evaluate(() => localStorage.getItem('auth_token'))
+    const authToken = await page.evaluate(() => localStorage.getItem('token'))
     const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
 
     // ── Determine resource type IDs via API ──
