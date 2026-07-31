@@ -2,7 +2,21 @@ import React, { type ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import ResourceProfileTab from '@/components/resource-profile/ResourceProfileTab'
+
+function createTestQueryClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+function renderWithProviders(ui: React.ReactElement) {
+  const qc = createTestQueryClient()
+  return render(
+    <QueryClientProvider client={qc}>
+      {ui}
+    </QueryClientProvider>,
+  )
+}
 
 function createProps(
   overrides: Partial<ComponentProps<typeof ResourceProfileTab>> = {},
@@ -56,6 +70,7 @@ function createProps(
     updateNrAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     startEditAllocation: vi.fn(),
     getAllocationBadge: () => ({ label: 'As needed', color: 'bg-gray-100 text-gray-600', sub: null }),
+    qc: new QueryClient(),
     ...overrides,
   }
 }
@@ -97,7 +112,7 @@ describe('Capacity Profile Display', () => {
         resolutionSource: 'PROFILE',
       },
     }
-    render(<MemoryRouter><ResourceProfileTab
+    renderWithProviders(<MemoryRouter><ResourceProfileTab
       {...createProps({
         profile: {
           projectId: 'project-1',
@@ -134,7 +149,7 @@ describe('Capacity Profile Display', () => {
         resolutionSource: 'PROFILE',
       },
     }
-    render(<MemoryRouter><ResourceProfileTab
+    renderWithProviders(<MemoryRouter><ResourceProfileTab
       {...createProps({
         profile: {
           projectId: 'project-1',
@@ -178,7 +193,7 @@ describe('Capacity Profile Display', () => {
         resolutionSource: 'PROFILE',
       },
     }
-    render(<MemoryRouter><ResourceProfileTab
+    renderWithProviders(<MemoryRouter><ResourceProfileTab
       {...createProps({
         profile: {
           projectId: 'project-1',
@@ -243,7 +258,7 @@ describe('Capacity Profile Display', () => {
         },
       ],
     }
-    render(<MemoryRouter><ResourceProfileTab
+    renderWithProviders(<MemoryRouter><ResourceProfileTab
       {...createProps({
         profile: {
           projectId: 'project-1',
@@ -317,7 +332,7 @@ describe('Capacity Profile Display', () => {
         },
       ],
     }
-    render(<MemoryRouter><ResourceProfileTab
+    renderWithProviders(<MemoryRouter><ResourceProfileTab
       {...createProps({
         profile: {
           projectId: 'project-1',
@@ -359,7 +374,7 @@ describe('Capacity Profile Display', () => {
         resolutionSource: 'PROFILE',
       },
     }
-    render(<MemoryRouter><ResourceProfileTab
+    renderWithProviders(<MemoryRouter><ResourceProfileTab
       {...createProps({
         profile: {
           projectId: 'project-1',
@@ -442,7 +457,7 @@ describe('Named resource aggregate hint', () => {
         },
       ],
     }
-    render(<MemoryRouter><ResourceProfileTab
+    renderWithProviders(<MemoryRouter><ResourceProfileTab
       {...createProps({
         profile: {
           projectId: 'project-1', hoursPerDay: 8, projectDurationWeeks: 12,
@@ -496,7 +511,7 @@ describe('Named resource aggregate hint', () => {
         },
       ],
     }
-    render(<MemoryRouter><ResourceProfileTab
+    renderWithProviders(<MemoryRouter><ResourceProfileTab
       {...createProps({
         profile: {
           projectId: 'project-1', hoursPerDay: 8, projectDurationWeeks: 12,

@@ -2,6 +2,7 @@ import React, { type ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }))
 
@@ -14,9 +15,18 @@ vi.mock('react-router-dom', async () => {
 })
 import ResourceProfileTab from '@/components/resource-profile/ResourceProfileTab'
 
-/** Wrap in MemoryRouter for useNavigate support. */
-function renderWithRouter(ui: React.ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>)
+function createTestQueryClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+/** Wrap in MemoryRouter and QueryClientProvider for routing and React Query support. */
+function renderWithProviders(ui: React.ReactElement) {
+  const qc = createTestQueryClient()
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>,
+  )
 }
 
 function createProps(
@@ -126,6 +136,7 @@ function createProps(
     updateNrAllocationMutation: { isPending: false, mutate: vi.fn() } as never,
     startEditAllocation: vi.fn(),
     getAllocationBadge: () => ({ label: 'As needed', color: 'bg-gray-100 text-gray-600', sub: null }),
+    qc: new QueryClient(),
     ...overrides,
   }
 }
@@ -134,7 +145,7 @@ describe('ResourceProfileTab', () => {
   it('allows removing the final named resource when count is 1', () => {
     const removeMutate = vi.fn()
 
-    renderWithRouter(<ResourceProfileTab {...createProps(1, { removeLastPerson: { mutate: removeMutate } as never })} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(1, { removeLastPerson: { mutate: removeMutate } as never })} />)
 
     const removeButton = screen.getByTitle('Remove person')
     expect(removeButton).toBeEnabled()
@@ -145,13 +156,13 @@ describe('ResourceProfileTab', () => {
   })
 
   it('disables removal only when the count is already zero', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(0)} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(0)} />)
 
     expect(screen.getByTitle('Remove person')).toBeDisabled()
   })
 
   it('shows named resource assignment summaries on the role row', () => {
-    renderWithRouter(<ResourceProfileTab
+    renderWithProviders(<ResourceProfileTab
       {...createProps(1, {
         profile: {
           projectId: 'project-1',
@@ -267,7 +278,7 @@ describe('ResourceProfileTab', () => {
 
 describe('ResourceProfileTab Planning Context', () => {
   it('shows Planning Context heading with read-only values', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+    renderWithProviders(<ResourceProfileTab {...createProps(1, {
       onboardingWeeks: 3,
       bufferWeeks: 2,
     })} />)
@@ -278,7 +289,7 @@ describe('ResourceProfileTab Planning Context', () => {
     expect(screen.getAllByText('Set in Timeline → Planning Settings')).toHaveLength(2)
   })
   it('does not show editable Project Duration section with inputs and save', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1)} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(1)} />)
 
     expect(screen.queryByText('Project Duration')).not.toBeInTheDocument()
     expect(screen.queryByText('Weeks at project start for team onboarding (added to period)')).not.toBeInTheDocument()
@@ -290,7 +301,7 @@ describe('ResourceProfileTab Planning Context', () => {
 
 describe('Capacity Profile labels — availability terminology', () => {
   it('shows Resource Profile heading and capacity profile help text', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1)} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(1)} />)
     expect(screen.getByText('Capacity profile summary')).toBeInTheDocument()
     // Help text: the <strong> element contains "Capacity profiles"
     expect(screen.getByText('Capacity profiles')).toBeInTheDocument()
@@ -299,12 +310,12 @@ describe('Capacity Profile labels — availability terminology', () => {
   })
 
   it('shows resource identity as Role-level capacity when no named resources exist', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1)} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(1)} />)
     expect(screen.getByText('Role-level capacity')).toBeInTheDocument()
   })
 
   it('shows resource identity as Named person when named resources are non-synthetic', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+    renderWithProviders(<ResourceProfileTab {...createProps(1, {
       profile: {
         projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 0,
         bufferWeeks: 0, onboardingWeeks: 0,
@@ -348,7 +359,7 @@ describe('Capacity Profile labels — availability terminology', () => {
   })
 
   it('shows resource identity as Planned resource when all named resources are synthetic', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+    renderWithProviders(<ResourceProfileTab {...createProps(1, {
       profile: {
         projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 0,
         bufferWeeks: 0, onboardingWeeks: 0,
@@ -392,12 +403,12 @@ describe('Capacity Profile labels — availability terminology', () => {
   })
 
   it('shows As needed badge by default (EFFORT)', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1)} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(1)} />)
     expect(screen.getByText(/As needed/i)).toBeInTheDocument()
   })
 
   it('rejects forbidden internal terms in the Resource Profile UI', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1)} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(1)} />)
     const forbidden = [
       'Capacity Plan', 'Timeline allocation', 'Full Project',
       'SyntheticSlot', 'Allocation mode', 'ActualAllocatedDays',
@@ -409,7 +420,7 @@ describe('Capacity Profile labels — availability terminology', () => {
   })
 
   it('shows Fixed for selected weeks badge for TIMELINE allocation mode', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+    renderWithProviders(<ResourceProfileTab {...createProps(1, {
       profile: {
         projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 0,
         bufferWeeks: 0, onboardingWeeks: 0,
@@ -437,7 +448,7 @@ describe('Capacity Profile labels — availability terminology', () => {
   })
 
   it('shows Fixed for whole project badge for FULL_PROJECT mode with percent', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+    renderWithProviders(<ResourceProfileTab {...createProps(1, {
       profile: {
         projectId: 'p', hoursPerDay: 8, projectDurationWeeks: 10,
         bufferWeeks: 0, onboardingWeeks: 0,
@@ -468,7 +479,7 @@ describe('Capacity Profile labels — availability terminology', () => {
 
 
   it('shows Availability pattern table heading on the column', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1)} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(1)} />)
     const thElements = document.querySelectorAll('th')
     const heading = Array.from(thElements).find(th => th.textContent === 'Availability pattern')
     expect(heading).toBeTruthy()
@@ -479,7 +490,7 @@ describe('Capacity Profile labels — availability terminology', () => {
 
 describe('Overhead type options', () => {
   it('shows all three overhead type options', () => {
-    renderWithRouter(<ResourceProfileTab {...createProps(1)} />)
+    renderWithProviders(<ResourceProfileTab {...createProps(1)} />)
     expect(screen.getByText('% of task days')).toBeInTheDocument()
     expect(screen.getByText('Fixed total days')).toBeInTheDocument()
     expect(screen.getByText('Days per week')).toBeInTheDocument()
@@ -487,7 +498,7 @@ describe('Overhead type options', () => {
 
   it('selecting % of task days sets form.type to PERCENTAGE', () => {
     const setForm = vi.fn()
-    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+    renderWithProviders(<ResourceProfileTab {...createProps(1, {
       editingId: 'overhead-1',
       form: { name: 'Test', resourceTypeId: '', type: 'FIXED_DAYS' as const, value: '10' },
       setForm,
@@ -503,7 +514,7 @@ describe('Overhead type options', () => {
     const handleFormSubmit = vi.fn(() => {
       createOverheadMutate({ name: 'Test', type: 'PERCENTAGE', value: 20 })
     })
-    renderWithRouter(<ResourceProfileTab {...createProps(1, {
+    renderWithProviders(<ResourceProfileTab {...createProps(1, {
       form: { name: 'Test', resourceTypeId: '', type: 'PERCENTAGE' as const, value: '20' },
       handleFormSubmit,
       createOverhead: { isPending: false, mutate: createOverheadMutate } as never,

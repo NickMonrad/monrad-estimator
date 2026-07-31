@@ -271,15 +271,23 @@ export async function loadAndValidateOwnerProfile(
       )
     }
   } else if (planningBasis === 'CAPACITY_PROFILE') {
-    if (startWeek !== null) {
-      throw new CapacityIntegrityError(
-        `CAPACITY_PROFILE profile ${profile.id} must not have startWeek.`,
-      )
-    }
-    if (endWeek !== null) {
-      throw new CapacityIntegrityError(
-        `CAPACITY_PROFILE profile ${profile.id} must not have endWeek.`,
-      )
+    // Squad Planner apply persists profile-level startWeek/endWeek as the
+    // min/max bounds of the segmented CAPACITY_PROFILE (see
+    // buildRoleProfileData / buildPlannedResourceProfileData). Those windows
+    // are valid persisted authority. Only a SEGMENTLESS CAPACITY_PROFILE must
+    // have null windows — and that state is restricted to the canonical
+    // zero-capacity PLANNED_RESOURCE exception below.
+    if (segmentsRaw.length === 0) {
+      if (startWeek !== null) {
+        throw new CapacityIntegrityError(
+          `CAPACITY_PROFILE profile ${profile.id} must not have startWeek.`,
+        )
+      }
+      if (endWeek !== null) {
+        throw new CapacityIntegrityError(
+          `CAPACITY_PROFILE profile ${profile.id} must not have endWeek.`,
+        )
+      }
     }
   }
 
@@ -367,10 +375,12 @@ export async function loadAndValidateOwnerProfile(
   // Squad Planner intentionally persists surplus resources with
   // planningBasis=CAPACITY_PROFILE, defaultPercent=0, source=SQUAD_PLANNER,
   // null windows, and zero segments.
+  // After transfer to manual, the equivalent state with source=MANUAL
+  // is also valid (issue #411).
   if (planningBasis === 'CAPACITY_PROFILE' && segments.length === 0) {
     const isCanonicalZero = (
       ownerKind === 'PLANNED_RESOURCE' &&
-      profile.source === 'SQUAD_PLANNER' &&
+      (profile.source === 'SQUAD_PLANNER' || profile.source === 'MANUAL') &&
       profile.defaultPercent === 0 &&
       startWeek === null &&
       endWeek === null
