@@ -333,7 +333,9 @@ interface CanonicalProfileRow {
 
 interface CanonicalProjectState {
   resourceTypes: Array<{ id: string; name: string; category: string; count: number; hoursPerDay: number | null; dayRate: number | null; globalTypeId: string | null; allocationMode: string; allocationPercent: number; allocationStartWeek: number | null; allocationEndWeek: number | null }>
-  namedResources: Array<{ id: string; resourceTypeId: string; name: string; startWeek: number | null; endWeek: number | null; allocationPct: number; allocationMode: string; allocationPercent: number; allocationStartWeek: number | null; allocationEndWeek: number | null; pricingModel: string }>
+  // Issue #418: candidate legacy capacity columns are excluded from canonical
+  // comparisons — restore never writes them.
+  namedResources: Array<{ id: string; resourceTypeId: string; name: string; pricingModel: string }>
   capacityProfiles: CanonicalProfileRow[]
   timelineEntries: Array<{ startWeek: number; durationWeeks: number; isManual: boolean }>
   storyTimelineEntries: Array<{ startWeek: number; durationWeeks: number; isManual: boolean }>
@@ -366,7 +368,13 @@ async function captureCanonicalState(projectId: string): Promise<CanonicalProjec
   const dbNullIds = Array.from(await detectDbNullProfileIds(projectId))
   return {
     resourceTypes,
-    namedResources: namedResources.map(stripTimestamps),
+    // Issue #418: the candidate legacy capacity columns are frozen historical
+    // data — restore never writes them, so canonical comparisons exclude them.
+    namedResources: namedResources.map(nr => {
+      const { allocationMode: _am, allocationPercent: _ap, allocationPct: _apct, allocationStartWeek: _asw, allocationEndWeek: _aew, startWeek: _sw, endWeek: _ew, ...rest } = stripTimestamps(nr)
+      void _am; void _ap; void _apct; void _asw; void _aew; void _sw; void _ew
+      return { id: rest.id, resourceTypeId: rest.resourceTypeId, name: rest.name, pricingModel: rest.pricingModel }
+    }),
     capacityProfiles: capacityProfiles.map(p => ({
       ...stripTimestamps(p),
       segments: p.segments.map(s => stripTimestamps(s)),
