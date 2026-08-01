@@ -21,7 +21,6 @@ import {
   type CapacityPlanPeriodInput,
   type CapacityPlanResourceTrajectory,
 } from './capacityPlanMaterialisation.js'
-import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import type { CapacityProfileSource } from '@prisma/client'
 
 // ─── Public types ───────────────────────────────────────────────────────────
@@ -235,18 +234,15 @@ interface NamedResourceSummary {
   id: string
   name: string
   createdAt: Date
-  allocationMode?: string | null
 }
 
 /** Legacy planner rows may be adopted only when every planner marker agrees. */
 export function isLegacyPlannerProfile(
   profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>,
-  namedResource: Pick<NamedResourceSummary, 'allocationMode'>,
 ): boolean {
   return profile.ownerKind === 'NAMED_PERSON'
     && profile.source === 'SQUAD_PLANNER'
     && profile.planningBasis === 'CAPACITY_PROFILE'
-    && namedResource.allocationMode === 'CAPACITY_PLAN'
 }
 
 export interface PlannerProvenance {
@@ -409,9 +405,12 @@ const noPlannerProvenance: PlannerProvenance = { priorActivePlan: false }
  * 2. Non-legacy NAMED_PERSON     → 'explicit_person' (never matched)
  * 3. Legacy adoptable (all markers) → 'legacy_adoptable' (matched)
  * 4. PLANNED_RESOURCE+SQUAD_PLANNER → 'planner_managed' (matched)
- * 5. No profiles + CAPACITY_PLAN mode + prior active-plan provenance
+ * 5. No profiles + prior active-plan provenance (or created this apply)
  *    → 'capacity_plan_untouched' (matched)
  * 6. Everything else → 'other'
+ *
+ * Classification uses only authoritative profile state and plan provenance
+ * (issue #418) — NamedResource candidate columns are never consulted.
  */
 export type PlannerResourceKind =
   | 'explicit_person'
@@ -426,7 +425,7 @@ export type PlannerResourceKind =
  * planner-vs-explicit determination.
  */
 export function classifyNamedResource(
-  namedResource: Pick<NamedResourceSummary, 'allocationMode'> & { id?: string },
+  namedResource: { id?: string },
   profiles: ReadonlyArray<Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>>,
   provenance: PlannerProvenance = noPlannerProvenance,
 ): PlannerResourceKind {
@@ -436,12 +435,12 @@ export function classifyNamedResource(
     }
   }
   for (const profile of profiles) {
-    if (profile.ownerKind === 'NAMED_PERSON' && !isLegacyPlannerProfile(profile, namedResource)) {
+    if (profile.ownerKind === 'NAMED_PERSON' && !isLegacyPlannerProfile(profile)) {
       return 'explicit_person'
     }
   }
   for (const profile of profiles) {
-    if (isLegacyPlannerProfile(profile, namedResource)) {
+    if (isLegacyPlannerProfile(profile)) {
       return 'legacy_adoptable'
     }
   }
@@ -451,7 +450,6 @@ export function classifyNamedResource(
     }
   }
   if (profiles.length === 0
-    && namedResource.allocationMode === 'CAPACITY_PLAN'
     && (provenance.priorActivePlan
       || (namedResource.id !== undefined && provenance.createdResourceIds?.has(namedResource.id)))) {
     return 'capacity_plan_untouched'
@@ -464,7 +462,7 @@ export function classifyNamedResource(
  * or an unprofiled legacy row backed by prior active-plan provenance).
  */
 export function isPlannerManaged(
-  namedResource: Pick<NamedResourceSummary, 'allocationMode'> & { id?: string },
+  namedResource: { id?: string },
   profiles: ReadonlyArray<Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis'>>,
   provenance: PlannerProvenance = noPlannerProvenance,
 ): boolean {
@@ -634,7 +632,7 @@ export function classifyProfileConflicts(
         namedResourceName,
       })
     }
-    const namedResource = usedResources.find(r => r.id === namedResourceId) ?? { allocationMode: null }
+    const namedResource = usedResources.find(r => r.id === namedResourceId) ?? { id: namedResourceId }
     const kind = classifyNamedResource(namedResource, profiles)
     if (kind === 'explicit_person') {
       protectedNamedPersonProfiles.push({
@@ -823,7 +821,7 @@ export async function conflictPreflightCheck(
     const namedResources = (await tx.namedResource.findMany({
       where: { resourceTypeId: rtId },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true, createdAt: true, allocationMode: true },
+      select: { id: true, name: true, createdAt: true },
     })) ?? []
 
     const resourceProfiles = namedResources.length === 0
@@ -886,7 +884,7 @@ export async function findOrCreatePlannedResources(
   const existingNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, name: true, createdAt: true, allocationMode: true },
+    select: { id: true, name: true, createdAt: true },
   })
   const existingProfiles = existingNRs.length === 0
     ? []
@@ -928,8 +926,6 @@ export async function findOrCreatePlannedResources(
     const newNRs = Array.from({ length: missing }, (_, i) => ({
       resourceTypeId,
       name: `${resourceTypeName} ${startIndex + i}`,
-      allocationMode: 'CAPACITY_PLAN' as const,
-      startWeek: 0,
     }))
     await tx.namedResource.createMany({ data: newNRs })
   }
@@ -938,7 +934,7 @@ export async function findOrCreatePlannedResources(
   const allNRs = await tx.namedResource.findMany({
     where: { resourceTypeId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, name: true, createdAt: true, allocationMode: true },
+    select: { id: true, name: true, createdAt: true },
   })
   const existingResourceIds = new Set(existingNRs.map(resource => resource.id))
   const createdResourceIds = new Set(
@@ -1068,6 +1064,15 @@ export async function writePlannerProfiles(
         [{ resourceTypeId: rp.resourceTypeId, resourceTypeName: 'role' }],
       )
     }
+    // The authoritative structural rules require segments on CAPACITY_PROFILE
+    // roles (the canonical segmentless zero state is PLANNED_RESOURCE only).
+    // Zero-capacity roles (omitted / zero-headcount RTs) therefore carry an
+    // explicit zero segment instead of being written segmentless.
+    const roleIsZeroCapacity = rp.segments.length === 0 && (rp.defaultPercent == null || rp.defaultPercent === 0)
+    const roleSegments = roleIsZeroCapacity
+      ? [{ startWeek: 0, endWeek: 0, capacityPercent: 0 }]
+      : rp.segments
+    const roleDefaultPercent = roleIsZeroCapacity ? 0 : rp.defaultPercent
     const profile = existing
       ? await tx.capacityProfile.update({
           where: { id: existing.id },
@@ -1077,7 +1082,7 @@ export async function writePlannerProfiles(
             ownerKind: 'ROLE',
             planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
-            defaultPercent: rp.defaultPercent,
+            defaultPercent: roleDefaultPercent,
             startWeek: rp.startWeek,
             endWeek: rp.endWeek,
           },
@@ -1090,15 +1095,15 @@ export async function writePlannerProfiles(
             ownerKind: 'ROLE',
             planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
-            defaultPercent: rp.defaultPercent,
+            defaultPercent: roleDefaultPercent,
             startWeek: rp.startWeek,
             endWeek: rp.endWeek,
           },
         })
     await tx.capacitySegment.deleteMany({ where: { capacityProfileId: profile.id } })
-    if (rp.segments.length > 0) {
+    if (roleSegments.length > 0) {
       await tx.capacitySegment.createMany({
-        data: rp.segments.map(s => ({
+        data: roleSegments.map(s => ({
           capacityProfileId: profile.id,
           startWeek: s.startWeek,
           endWeek: s.endWeek,
@@ -1106,7 +1111,7 @@ export async function writePlannerProfiles(
           source: prismaSource,
         })),
       })
-      segmentsWritten += rp.segments.length
+      segmentsWritten += roleSegments.length
     }
     roleProfilesWritten++
   }
@@ -1251,94 +1256,6 @@ export async function writePlannerProfiles(
 
 // ─── Async: project compatibility fields from just-written profiles ─────────
 
-/**
- * Project legacy compatibility fields from the just-written ROLE profile
- * onto the ResourceType, and from PLANNED_RESOURCE profiles onto each
- * NamedResource.
- *
- * The projection is lossy for multi-segment profiles. The authoritative
- * profile data remains in CapacityProfile/CapacitySegment.
- */
-export async function projectCompatibilityFields(
-  tx: PrismaTransactionClient,
-  _projectId: string,
-  roleProfiles: RoleProfileWriteSet[],
-  plannedProfiles: PlannedResourceProfileWriteSet[],
-): Promise<void> {
-  for (const rp of roleProfiles) {
-    const projection = projectCapacityProfileToLegacyAllocation({
-      planningBasis: 'capacityProfile',
-      source: 'SQUAD_PLANNER',
-      defaultPercent: rp.defaultPercent,
-      startWeek: rp.startWeek,
-      endWeek: rp.endWeek,
-      segments: rp.segments,
-    })
-    if (projection) {
-      await tx.resourceType.update({
-        where: { id: rp.resourceTypeId },
-        data: {
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 0,
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
-        },
-      })
-    }
-  }
-
-  for (const pp of plannedProfiles) {
-    const projection = projectCapacityProfileToLegacyAllocation({
-      planningBasis: 'capacityProfile',
-      source: 'SQUAD_PLANNER',
-      defaultPercent: pp.defaultPercent,
-      startWeek: pp.startWeek,
-      endWeek: pp.endWeek,
-      segments: pp.segments,
-    })
-    if (projection) {
-      await tx.namedResource.update({
-        where: { id: pp.namedResourceId },
-        data: {
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 0,
-          allocationPct: Math.round(projection.allocationPercent ?? 0),
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
-          startWeek: projection.allocationStartWeek,
-          endWeek: projection.allocationEndWeek,
-        },
-      })
-    }
-  }
-}
-
-// ─── Async: clear compatibility fields for surplus resources ─────────────────
-
-/**
- * Clear legacy compatibility fields on surplus named resources so they
- * do not contribute stale capacity to legacy readers.
- */
-export async function clearSurplusCompatibilityFields(
-  tx: PrismaTransactionClient,
-  surplusResourceIds: string[],
-): Promise<void> {
-  if (surplusResourceIds.length === 0) return
-
-  await tx.namedResource.updateMany({
-    where: { id: { in: surplusResourceIds } },
-    data: {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 0,
-      allocationPct: 0,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-      startWeek: null,
-      endWeek: null,
-    },
-  })
-}
-
 // ─── Test failure seam ───────────────────────────────────────────────────────
 
 /**
@@ -1409,7 +1326,6 @@ export async function clearOmittedPlannerCapacity(
       .filter((id): id is string => id !== null),
   ])
   const zeroPlannedProfiles: PlannedResourceProfileWriteSet[] = []
-  const zeroResourceIds: string[] = []
 
   for (const resourceTypeId of omittedResourceTypeIds) {
     const ownerConflicts = await validatePlannerOwnerState(tx, projectId, resourceTypeId, authority)
@@ -1423,15 +1339,11 @@ export async function clearOmittedPlannerCapacity(
       where: { id: resourceTypeId },
       data: {
         count: 0,
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: 0,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
       },
     })
     const namedResources = await tx.namedResource.findMany({
       where: { resourceTypeId },
-      select: { id: true, allocationMode: true },
+      select: { id: true },
     })
     const nrIds = namedResources.map(nr => nr.id)
     const nrAllProfiles = nrIds.length === 0 ? [] : await tx.capacityProfile.findMany({
@@ -1449,12 +1361,11 @@ export async function clearOmittedPlannerCapacity(
     for (const namedResource of namedResources) {
       const profiles = profilesByNrId.get(namedResource.id) ?? []
       if (isPlannerManaged(
-        namedResource,
+        { id: namedResource.id },
         profiles,
         { priorActivePlan: priorActivePlanResourceTypeIds.has(resourceTypeId) },
       )) {
         zeroPlannedProfiles.push(buildZeroCapacityProfileData(namedResource.id))
-        zeroResourceIds.push(namedResource.id)
         hasPlannerManagedNRs = true
       }
     }
@@ -1477,8 +1388,6 @@ export async function clearOmittedPlannerCapacity(
     }))
 
   await writePlannerProfiles(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles, [], undefined, authority)
-  await projectCompatibilityFields(tx, projectId, zeroRoleProfiles, zeroPlannedProfiles)
-  await clearSurplusCompatibilityFields(tx, zeroResourceIds)
 }
 
 
@@ -1530,7 +1439,7 @@ export interface PlannerResourcePlan {
  * - Returned plannerResources are ordered by (createdAt, id).
  */
 export function buildPlannerResourcePlan(
-  existingNamedResources: ReadonlyArray<{ id: string; name: string; createdAt: Date; allocationMode: string | null }>,
+  existingNamedResources: ReadonlyArray<{ id: string; name: string; createdAt: Date }>,
   existingProfiles: ReadonlyArray<{ namedResourceId: string | null; ownerKind: string; source: string; planningBasis?: string }>,
   resourceTypeId: string,
   resourceTypeName: string,
@@ -1581,10 +1490,10 @@ export function buildPlannerResourcePlan(
         namedResourceName: nr.name,
       })
     }
-    const kind = classifyNamedResource(nr, profiles, provenance)
+    const kind = classifyNamedResource({ id: nr.id }, profiles, provenance)
     if (kind === 'explicit_person') {
       explicitResources.push({ id: nr.id, name: nr.name })
-    } else if (isPlannerManaged(nr, profiles, provenance)) {
+    } else if (isPlannerManaged({ id: nr.id }, profiles, provenance)) {
       plannerResources.push({ id: nr.id, name: nr.name })
     }
     // 'other' resources are ignored — they aren't planner-managed and not explicit
@@ -1664,7 +1573,7 @@ export async function revalidatePlannerPlan(
     const namedResources = await tx.namedResource.findMany({
       where: { resourceTypeId: rtId },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true, createdAt: true, allocationMode: true },
+      select: { id: true, name: true, createdAt: true },
     })
 
     // Fetch profiles for those named resources

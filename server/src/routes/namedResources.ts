@@ -6,8 +6,6 @@ import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
 import type { OwnerProfileQuery } from '../lib/ownerProfileLoader.js'
-import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
-import { toLegacyAllocationPct } from '../lib/resolveRoleDefaultForMutation.js'
 import {
   rejectLegacyCapacityFields,
   isPlannerOwnedProfile,
@@ -185,38 +183,11 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         },
       })
 
-      // ── Write projected legacy compatibility fields ────────────────
-      const projection = projectCapacityProfileToLegacyAllocation({
-        planningBasis: roleProfile.planningBasis,
-        source: roleProfile.source,
-        defaultPercent: roleProfile.defaultPercent,
-        startWeek: roleProfile.startWeek,
-        endWeek: roleProfile.endWeek,
-        segments: segments.map((seg: any) => ({
-          startWeek: seg.startWeek,
-          endWeek: seg.endWeek,
-          capacityPercent: seg.capacityPercent,
-          source: seg.source,
-        })),
-      })
-      const updated = await tx.namedResource.update({
-        where: { id: created.id },
-        data: {
-          allocationMode: projection?.allocationMode ?? 'EFFORT',
-          allocationPercent: projection?.allocationPercent ?? 100,
-          allocationPct: toLegacyAllocationPct(projection?.allocationPercent ?? 100),
-          allocationStartWeek: projection?.allocationStartWeek ?? null,
-          allocationEndWeek: projection?.allocationEndWeek ?? null,
-          startWeek: projection?.allocationStartWeek ?? null,
-          endWeek: projection?.allocationEndWeek ?? null,
-        },
-      })
-
       // Sync resource type count to match total named resources
       const total = await tx.namedResource.count({ where: { resourceTypeId: rtId } })
       await tx.resourceType.update({ where: { id: rtId }, data: { count: total } })
 
-      return updated
+      return created
     })
     res.status(201).json(resource)
   } catch (error) {

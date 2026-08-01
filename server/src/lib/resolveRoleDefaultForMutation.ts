@@ -3,9 +3,9 @@
  * authoritative role-level default for a ResourceType during PATCH count
  * mutations.
  *
- * The role-owned CapacityProfile is the source of truth when it exists.
- * ResourceType legacy fields serve only as a fallback when no role profile
- * has been persisted yet.
+ * The role-owned CapacityProfile is the source of truth. Missing role profile
+ * state fails closed with a CapacityIntegrityError — ResourceType legacy fields
+ * are never consulted (issue #418).
  *
  * @see capacityProfileLegacyProjection.ts for the projection algorithm
  * @see docs/domain/capacity-profile-source-of-truth-migration-plan.md
@@ -13,6 +13,7 @@
 
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import type { LegacyAllocationProjection, SegmentLike } from './capacityProfileLegacyProjection.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
 
 // ─── Input types ─────────────────────────────────────────────────────────────
 
@@ -49,17 +50,6 @@ export interface ResolvedRoleDefault {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Convert a projected allocation percent to the legacy `allocationPct`
- * integer field on NamedResource.
- *
- * `allocationPct` is `Int @default(100)` in the schema, so the Float
- * projection is rounded to the nearest integer.
- */
-export function toLegacyAllocationPct(percent: number): number {
-  return Math.round(percent)
-}
 
 /**
  * Normalize an enum value from UPPER_SNAKE_CASE (Prisma format) to
@@ -103,8 +93,8 @@ function projectionsAreIdentical(
  *    values → use the first/oldest, return with `source: 'PROFILE'`.
  * 3. If multiple conflicting role-owned profiles exist → throw an error.
  *    This prevents silently creating NR defaults from an ambiguous source.
- * 4. If no role-owned profile exists → return ResourceType legacy fields with
- *    `source: 'LEGACY'`.
+ * 4. If no role-owned profile exists → throw a CapacityIntegrityError.
+ *    There is no legacy fallback: missing profile state fails closed.
  *
  * ## Multi-segment profiles
  *
@@ -123,10 +113,8 @@ function projectionsAreIdentical(
  * - Conflicting duplicates → throw with a descriptive message.
  */
 export function resolveRoleDefaultForMutation(params: {
-  resourceType: RoleDefaultResourceTypeLike
   roleProfiles: readonly RoleProfileLike[]
 }): ResolvedRoleDefault {
-  const { resourceType } = params
   let { roleProfiles } = params
   roleProfiles = roleProfiles ?? []
 
@@ -149,7 +137,10 @@ export function resolveRoleDefaultForMutation(params: {
     )
 
     if (validProjections.length === 0) {
-      return fallbackToLegacy(resourceType)
+      throw new CapacityIntegrityError(
+        'Missing capacity profile for the role owner. ' +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
     }
 
     const allIdentical = validProjections.every(p =>
@@ -189,7 +180,10 @@ export function resolveRoleDefaultForMutation(params: {
     })
 
     if (!projection) {
-      return fallbackToLegacy(resourceType)
+      throw new CapacityIntegrityError(
+        'Missing capacity profile for the role owner. ' +
+        'Run the capacity profile backfill/repair workflow before retrying this operation.',
+      )
     }
 
     return {
@@ -203,19 +197,9 @@ export function resolveRoleDefaultForMutation(params: {
     }
   }
 
-  // ── No role profiles → use ResourceType legacy fields ─────────────
-  return fallbackToLegacy(resourceType)
-}
-
-function fallbackToLegacy(
-  resourceType: RoleDefaultResourceTypeLike,
-): ResolvedRoleDefault {
-  return {
-    allocationMode: resourceType.allocationMode ?? 'EFFORT',
-    allocationPercent: resourceType.allocationPercent ?? 100,
-    allocationStartWeek: resourceType.allocationStartWeek ?? null,
-    allocationEndWeek: resourceType.allocationEndWeek ?? null,
-    source: 'LEGACY',
-    lossy: false,
-  }
+  // ── No role profiles → fail closed ──────────────────────────────
+  throw new CapacityIntegrityError(
+    'Missing capacity profile for the role owner. ' +
+    'Run the capacity profile backfill/repair workflow before retrying this operation.',
+  )
 }

@@ -1,24 +1,23 @@
 /**
  * capacityProfileReplaceService.ts — Transaction-based service for
  * replacing (upserting) a capacity profile for a role or named person,
- * and applying the role-level default to inherited named resources.
+ * and keeping inherited named-resource profiles tracking the role default.
  *
  * This is the write path for issue #363: the PUT endpoint that replaces
- * an owner's capacity profile and projects back to legacy fields.
+ * an owner's capacity profile. Authoritative profile state only — no
+ * ResourceType/NamedResource candidate-column reads or writes (issue #418).
  *
  * ## Exports
  *
  * - `replaceCapacityProfile` — Replace/create a profile for a single owner (PUT handler).
- * - `applyRoleDefaultToInheritedNRs` — Apply a new role default to inherited
- *   named resources (used by resourceTypes.ts after role-level RT updates).
  */
 
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
-import type { LegacyAllocationProjection } from './capacityProfileLegacyProjection.js'
 import { mapPersistedProfilesToDTOs } from './capacityProfileMapping.js'
 import type { CapacityProfileDTO } from './capacityProfileMapping.js'
-import { resolveRoleDefaultForMutation } from './resolveRoleDefaultForMutation.js'
+import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
 import { classifyNRsForRoleUpdate } from './classifyNRsForRoleUpdate.js'
+import { isRoleDefaultClone } from './roleProfileClonePolicy.js'
 import type { PrismaClient } from '@prisma/client'
 
 /** Inferred Prisma transaction client type used throughout this module. */
@@ -50,41 +49,6 @@ export class ServiceError extends Error {
     this.name = 'ServiceError'
     this.status = status
   }
-}
-
-// ─── Role-inheritance helper (used by resourceTypes.ts) ──────────────────────
-
-/**
- * Apply a new role-level default (capacity profile) to all inherited
- * named resources by updating only their legacy compatibility fields.
- *
- * This does NOT create independent CapacityProfile records — the
- * role-level profile remains the source of truth for inherited NRs.
- *
- * @param tx              Transaction client
- */
-export async function applyRoleDefaultToInheritedNRs(
-  tx: TxClient,
-  inheritedNRIds: string[],
-  projection: LegacyAllocationProjection,
-): Promise<void> {
-  if (!inheritedNRIds || inheritedNRIds.length === 0) return
-
-  // Update legacy NamedResource fields for backward compatibility.
-  // Do NOT create independent CapacityProfile records for inherited NRs —
-  // the role-level profile is the source of truth for inherited resources.
-  await tx.namedResource.updateMany({
-    where: { id: { in: inheritedNRIds } },
-    data: {
-      allocationMode: projection.allocationMode,
-      allocationPercent: projection.allocationPercent ?? 100,
-      allocationStartWeek: projection.allocationStartWeek,
-      allocationEndWeek: projection.allocationEndWeek,
-      allocationPct: Math.round(projection.allocationPercent ?? 100),
-      startWeek: projection.allocationStartWeek,
-      endWeek: projection.allocationEndWeek,
-    },
-  })
 }
 
 // ─── PUT replace handler ─────────────────────────────────────────────────────
@@ -191,24 +155,25 @@ export async function replaceCapacityProfile(
 
   const existingId = existingProfiles.length === 1 ? existingProfiles[0].id : null
   // ── 3. [ROLE only] Classify inherited named resources ──────────────────
-  let inheritedNRIds: string[] = []
+  // Authoritative profile state only (issue #418): the validated ROLE profile
+  // supplies the old role default shape; every named resource must have
+  // exactly one validated profile.
+  let inheritedNRProfiles: Array<{
+    id: string
+    planningBasis: string
+    defaultPercent: number | null
+    startWeek: number | null
+    endWeek: number | null
+    segments: Array<{ id: string; startWeek: number; endWeek: number; capacityPercent: number; source: string }>
+  }> = []
   if (ownerKind === 'ROLE') {
-    // Load current RT for old-role-default fallback
-    const rtRecord = await tx.resourceType.findFirst({
-      where: { id: ownerId },
-      select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
-    })
-
-    // Load existing role profiles with segments
-    const oldRoleProfiles = await tx.capacityProfile.findMany({
-      where: { resourceTypeId: ownerId, namedResourceId: null, projectId },
-      include: { segments: true },
-    })
-
-    // Resolve authoritative pre-mutation role default
-    const oldRoleDefault = resolveRoleDefaultForMutation({
-      resourceType: rtRecord!,
-      roleProfiles: oldRoleProfiles as unknown as readonly any[],
+    // Load and validate the authoritative pre-mutation role profile (fails
+    // closed on missing, duplicate, malformed or cross-project state).
+    const oldRoleProfile = await loadAndValidateOwnerProfile({
+      tx,
+      projectId,
+      ownerKind: 'ROLE',
+      ownerId,
     })
 
     // Load all named resources for this ResourceType
@@ -217,27 +182,51 @@ export async function replaceCapacityProfile(
       orderBy: { createdAt: 'asc' },
     })
 
-    // Load NR capacity profiles with segments
+    // Load NR capacity profiles with segments and validate exactly one per NR
     const nrProfileRows = nrs.length > 0
       ? await tx.capacityProfile.findMany({
-          where: { namedResourceId: { in: nrs.map((n: { id: string }) => n.id) } },
+          where: { namedResourceId: { in: nrs.map((n: { id: string }) => n.id) }, projectId },
           include: { segments: true },
         })
       : []
+
+    const profilesByNRId = new Map<string, any[]>()
+    for (const profile of nrProfileRows) {
+      if (!profile.namedResourceId) continue
+      const arr = profilesByNRId.get(profile.namedResourceId) ?? []
+      arr.push(profile)
+      profilesByNRId.set(profile.namedResourceId, arr)
+    }
+    for (const nr of nrs) {
+      const profiles = profilesByNRId.get(nr.id) ?? []
+      if (profiles.length === 0) {
+        throw new ServiceError(409, `Missing capacity profile for named resource ${nr.id}`)
+      }
+      if (profiles.length > 1) {
+        throw new ServiceError(409, `Multiple capacity profiles exist for named resource ${nr.id}`)
+      }
+    }
 
     // Classify: which NRs inherit the role default vs. are explicitly custom
     const classification = classifyNRsForRoleUpdate(
       nrs as any,
       nrProfileRows as any,
       {
-        allocationMode: oldRoleDefault.allocationMode,
-        allocationPercent: oldRoleDefault.allocationPercent,
-        allocationStartWeek: oldRoleDefault.allocationStartWeek,
-        allocationEndWeek: oldRoleDefault.allocationEndWeek,
+        planningBasis: oldRoleProfile.planningBasis,
+        defaultPercent: oldRoleProfile.defaultPercent,
+        startWeek: oldRoleProfile.startWeek,
+        endWeek: oldRoleProfile.endWeek,
+        segments: oldRoleProfile.segments.map(s => ({
+          startWeek: s.startWeek,
+          endWeek: s.endWeek,
+          capacityPercent: s.capacityPercent,
+        })),
       },
     )
 
-    inheritedNRIds = classification.inheritedNRIds
+    inheritedNRProfiles = classification.inheritedNRIds
+      .map(id => profilesByNRId.get(id)?.[0])
+      .filter((profile): profile is NonNullable<typeof profile> => profile != null)
   }
 
   // ── 4. Prepare segment data with deterministic ordering ────────────────
@@ -337,7 +326,7 @@ export async function replaceCapacityProfile(
         orderBy: { createdAt: 'desc' },
       })).id
   )
-  // ── 6. Project back to legacy fields ──────────────────────────────────
+  // ── 6. Project the new profile for provenance metadata ───────────────
   const camelPlanningBasis = planningBasis.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
 
   const projectionInput = {
@@ -355,36 +344,63 @@ export async function replaceCapacityProfile(
 
   const projection = projectCapacityProfileToLegacyAllocation(projectionInput)
 
-  // ── 7. Write projection to legacy compatibility fields ────────────────
-  if (projection) {
-    if (ownerKind === 'ROLE') {
-      await tx.resourceType.update({
-        where: { id: ownerId },
+  // ── 7. Keep inherited named-resource profiles tracking the role default ─
+  // The profile-first equivalent of the retired legacy-column projection
+  // (issue #418): inherited system-generated clones (ROLE_DEFAULT marker)
+  // mirror the new role profile shape so a later count reduction can still
+  // classify them as inherited. Segment IDs are preserved by updating
+  // existing segments in place; provenance (source, legacy writer marker) is
+  // untouched so generated clones remain removable. Sync-derived scalar
+  // profiles without the marker are left untouched — their classification
+  // follows the authoritative profile-shape comparison.
+  if (ownerKind === 'ROLE' && inheritedNRProfiles.length > 0) {
+    const sortedRoleSegments = [...sortedSegments].map((s, idx) => ({ ...s, idx }))
+    for (const inheritedProfile of inheritedNRProfiles) {
+      if (!isRoleDefaultClone({ legacy: (inheritedProfile as { legacy?: unknown }).legacy })) continue
+      await tx.capacityProfile.update({
+        where: { id: inheritedProfile.id },
         data: {
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 100,
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
+          planningBasis,
+          defaultPercent: defaultPercent ?? null,
+          startWeek: startWeek !== undefined ? startWeek : null,
+          endWeek: endWeek !== undefined ? endWeek : null,
         },
       })
-
-      // Apply role default to inherited named resources (compatibility fields only)
-      if (inheritedNRIds.length > 0) {
-        await applyRoleDefaultToInheritedNRs(tx, inheritedNRIds, projection)
+      const existingSegments = [...(inheritedProfile.segments ?? [])]
+        .sort((a, b) => a.startWeek - b.startWeek || a.endWeek - b.endWeek)
+      // Update existing segments in place (preserve IDs), create extras, delete leftovers.
+      for (let i = 0; i < sortedRoleSegments.length; i++) {
+        const seg = sortedRoleSegments[i]
+        if (i < existingSegments.length) {
+          await tx.capacitySegment.update({
+            where: { id: existingSegments[i].id },
+            data: {
+              startWeek: seg.startWeek,
+              endWeek: seg.endWeek,
+              capacityPercent: seg.capacityPercent,
+              source: 'MANUAL',
+            },
+          })
+        } else {
+          await tx.capacitySegment.create({
+            data: {
+              capacityProfileId: inheritedProfile.id,
+              startWeek: seg.startWeek,
+              endWeek: seg.endWeek,
+              capacityPercent: seg.capacityPercent,
+              source: 'MANUAL',
+            },
+          })
+        }
       }
-    } else {
-      await tx.namedResource.update({
-        where: { id: ownerId },
-        data: {
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 100,
-          allocationPct: Math.round(projection.allocationPercent ?? 100),
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
-          startWeek: projection.allocationStartWeek,
-          endWeek: projection.allocationEndWeek,
-        },
-      })
+      if (existingSegments.length > sortedRoleSegments.length) {
+        const surplusIds = existingSegments
+          .slice(sortedRoleSegments.length)
+          .map(s => s.id)
+        await tx.capacitySegment.deleteMany({
+          where: { id: { in: surplusIds } },
+        })
+      }
     }
   }
 

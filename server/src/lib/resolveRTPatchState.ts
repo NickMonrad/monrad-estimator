@@ -200,19 +200,26 @@ export async function resolveRTPatchState(
     nrProfileRows.push(p)
   }
 
-  // ── 5. Build old-role-default for classifier ─────────────────────────
-  const oldRoleDefault = {
-    allocationMode: roleDefault.allocationMode,
-    allocationPercent: roleDefault.allocationPercent,
-    allocationStartWeek: roleDefault.allocationStartWeek,
-    allocationEndWeek: roleDefault.allocationEndWeek,
+  // ── 5. Build old-role-default profile shape for the classifier ──────
+  // The authoritative profile shape (not the lossy legacy projection) drives
+  // the inherited-vs-explicit comparison (issue #418).
+  const oldRoleProfileShape = {
+    planningBasis: roleProfile.planningBasis,
+    defaultPercent: roleProfile.defaultPercent,
+    startWeek: roleProfile.startWeek,
+    endWeek: roleProfile.endWeek,
+    segments: roleProfile.segments.map(s => ({
+      startWeek: s.startWeek,
+      endWeek: s.endWeek,
+      capacityPercent: s.capacityPercent,
+    })),
   }
 
   // ── 6. Classify NRs ──────────────────────────────────────────────────
   const classification = classifyNRsForRoleUpdate(
     namedResources as unknown as NRToClassify[],
     nrProfileRows as unknown as NRProfileState[],
-    oldRoleDefault,
+    oldRoleProfileShape,
   )
 
   return {

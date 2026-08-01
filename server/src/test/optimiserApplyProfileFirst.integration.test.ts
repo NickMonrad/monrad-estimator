@@ -64,6 +64,8 @@ async function createScenario(
     allocationMode?: 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
     allocationPercent?: number
     withBacklog?: boolean
+    /** Skip the mapper-provenance profile (scenarios that seed their own). */
+    withProfile?: boolean
   } = {},
 ): Promise<Scenario> {
   const project = await prisma.project.create({
@@ -84,20 +86,50 @@ async function createScenario(
       allocationPercent: 100,
     },
   })
+  const startWeek = options.startWeek ?? 1
+  const endWeek = options.endWeek ?? 12
+  const allocationPercent = options.allocationPercent ?? 80
   const namedResource = await prisma.namedResource.create({
     data: {
       resourceTypeId: resourceType.id,
       name: `${label} Alice`,
-      startWeek: options.startWeek ?? 1,
-      endWeek: options.endWeek ?? 12,
-      allocationPct: options.allocationPercent ?? 80,
+      startWeek,
+      endWeek,
+      allocationPct: allocationPercent,
       allocationMode: options.allocationMode ?? 'TIMELINE',
-      allocationPercent: options.allocationPercent ?? 80,
-      allocationStartWeek: options.startWeek ?? 1,
-      allocationEndWeek: options.endWeek ?? 12,
+      allocationPercent,
+      allocationStartWeek: startWeek,
+      allocationEndWeek: endWeek,
       pricingModel: 'ACTUAL_DAYS',
     },
   })
+  // Profile-first (issue #418): the NR's capacity state is a persisted
+  // mapper-provenance scalar profile the optimiser may adopt. Scenarios that
+  // seed their own ownership state opt out via withProfile: false.
+  if (options.withProfile !== false) {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId: project.id,
+        resourceTypeId: null,
+        namedResourceId: namedResource.id,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: allocationPercent,
+        startWeek,
+        endWeek,
+        legacy: {
+          allocationMode: options.allocationMode ?? 'TIMELINE',
+          allocationPercent,
+          allocationPct: allocationPercent,
+          allocationStartWeek: startWeek,
+          allocationEndWeek: endWeek,
+          startWeek,
+          endWeek,
+        },
+      },
+    })
+  }
 
   if (options.withBacklog) {
     const epic = await prisma.epic.create({
@@ -197,13 +229,15 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
       legacy: RESOURCE_OPTIMISER_PROFILE_PROVENANCE,
       segments: [],
     })
+    // Issue #418: the optimiser writes the profile only — candidate legacy
+    // columns on the NamedResource are never modified.
     expect(namedResource).toMatchObject({
-      startWeek: 4,
+      startWeek: 1,
       endWeek: 12,
       allocationPct: 80,
       allocationMode: 'TIMELINE',
       allocationPercent: 80,
-      allocationStartWeek: 4,
+      allocationStartWeek: 1,
       allocationEndWeek: 12,
     })
     expect(project.weeklyDemandCache).toEqual({})
@@ -211,10 +245,25 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     const snapshotData = snapshot.snapshot as Record<string, unknown>
     const snapResourceTypes = snapshotData.resourceTypes as Array<Record<string, unknown>>
     const snapNamedResources = snapshotData.namedResources as Array<Record<string, unknown>>
-    expect(snapshotData.schemaVersion).toBe(3)
+    const snapCapacityProfiles = snapshotData.capacityProfiles as Array<Record<string, unknown>>
+    expect(snapshotData.schemaVersion).toBe(4)
     expect(snapResourceTypes.find(row => row.id === scenario.resourceTypeId)?.count).toBe(2)
-    expect(snapNamedResources.find(row => row.id === scenario.namedResourceId)?.startWeek).toBe(1)
-    expect(snapshotData.capacityProfiles).toEqual([])
+    // V4 snapshots omit the candidate legacy capacity columns (issue #418) —
+    // capacity state lives in capacityProfiles.
+    expect(snapNamedResources.find(row => row.id === scenario.namedResourceId)?.startWeek).toBeUndefined()
+    expect(snapCapacityProfiles).toHaveLength(1)
+    // V4 snapshots store the raw persisted profile rows (restore writes them
+    // back verbatim) — enums are the persisted form, not DTO-cased.
+    expect(snapCapacityProfiles[0]).toMatchObject({
+      ownerKind: 'NAMED_PERSON',
+      namedResourceId: scenario.namedResourceId,
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 80,
+      startWeek: 1,
+      endWeek: 12,
+      segments: [],
+    })
     expect((snapshotData.project as Record<string, unknown>).weeklyDemandCache).toEqual({ sentinel: 42.5 })
 
     const firstProfileId = profiles[0]!.id
@@ -235,7 +284,7 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
   })
 
   it('rejects segmented explicit ownership before snapshot or mutation', async () => {
-    const scenario = await createScenario('segmented')
+    const scenario = await createScenario('segmented', { withProfile: false })
     const profile = await prisma.capacityProfile.create({
       data: {
         projectId: scenario.projectId,
@@ -324,20 +373,17 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
 
   it('revalidates ownership in-transaction and preserves a concurrent explicit profile', async () => {
     const scenario = await createScenario('race')
+    // One profile per named resource is enforced by a partial unique index,
+    // so the concurrent change mutates the existing mapper profile into an
+    // explicit MANUAL profile instead of inserting a second row.
     let concurrentProfileId = ''
     __setOptimiserPreTransactionSeam(async () => {
-      const concurrent = await prisma.capacityProfile.create({
-        data: {
-          projectId: scenario.projectId,
-          resourceTypeId: null,
-          namedResourceId: scenario.namedResourceId,
-          ownerKind: 'NAMED_PERSON',
-          planningBasis: 'AVAILABILITY_WINDOW',
-          source: 'MANUAL',
-          defaultPercent: 70,
-          startWeek: 1,
-          endWeek: 12,
-        },
+      const existing = await prisma.capacityProfile.findFirstOrThrow({
+        where: { namedResourceId: scenario.namedResourceId },
+      })
+      const concurrent = await prisma.capacityProfile.update({
+        where: { id: existing.id },
+        data: { source: 'MANUAL', defaultPercent: 70 },
       })
       concurrentProfileId = concurrent.id
     })
@@ -345,6 +391,9 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     try {
       const response = await applyScenario(scenario, 3, 4)
       expect(response.status).toBe(409)
+      // The concurrent mutation removed the mapper provenance inside the
+      // preflight window — the in-transaction revalidation sees an explicit
+      // MANUAL profile and fails closed.
       expect(response.body.conflicts[0].code).toBe('EXPLICIT_SCALAR_PROTECTED')
     } finally {
       __setOptimiserPreTransactionSeam(null)
@@ -359,6 +408,7 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     const scenario = await createScenario('malformed-effort', {
       allocationMode: 'EFFORT',
       startWeek: -3,
+      withProfile: false,
     })
 
     const beforeCount = await prisma.resourceType.findUniqueOrThrow({ where: { id: scenario.resourceTypeId } }).then(r => r.count)
@@ -367,7 +417,7 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     expect(response.status).toBe(409)
     expect(response.body.code).toBe('OPTIMISER_APPLY_CONFLICT')
     expect(response.body.conflicts).toEqual([expect.objectContaining({
-      code: 'MALFORMED_SCALAR_STATE',
+      code: 'MISSING_PROFILE',
     })])
 
     // Verify no snapshot or mutation occurred
@@ -406,7 +456,15 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
       allocationStartWeek: 1,
       allocationPercent: 80,
     })
-    expect(profiles).toEqual([])
+    // The mapper-provenance profile is untouched by the rolled-back apply.
+    expect(profiles).toHaveLength(1)
+    expect(profiles[0]).toMatchObject({
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 80,
+      startWeek: 1,
+      endWeek: 12,
+    })
     expect(project.weeklyDemandCache).toEqual({ sentinel: 42.5 })
     expect(timelines).toEqual([expect.objectContaining({ startWeek: 99, durationWeeks: 7 })])
     expect(storyTimelines).toEqual([expect.objectContaining({ startWeek: 99, durationWeeks: 7 })])

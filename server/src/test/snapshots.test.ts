@@ -466,8 +466,9 @@ describe('buildSnapshot', () => {
     }
 
     const result = await buildSnapshot(projId, db as never)
-    // schemaVersion 3
-    expect(result.schemaVersion).toBe(3)
+    // schemaVersion 4 — v4 snapshots omit the candidate legacy capacity
+    // columns (issue #418); capacity state lives in capacityProfiles.
+    expect(result.schemaVersion).toBe(4)
 
     // Project startDate converted to ISO string
     expect(result.project).not.toBeNull()

@@ -1,7 +1,5 @@
 import {
-  shouldFallbackToActiveCapacityPlan,
   type CapacityPlanSlotWindow,
-  type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
 
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
@@ -31,23 +29,11 @@ type ResourceTypeLike = {
   count: number
   allocationMode?: string | null
   /**
-   * True when valid persisted owner profiles are authoritative for this RT.
-   * In that case an active Capacity Plan must not rematerialize its named
-   * resources over the persisted profile-backed resources.
-   */
-  capacityProfileBacked?: boolean
-  /**
    * Resolved aggregate role-level capacity segments.
    * When present, constrains the phantom/unnamed-slot capacity instead of
    * using count-based synthetic resources at 100%.
    */
   roleSegments?: { startWeek: number; endWeek: number; allocationPercent: number }[]
-  /**
-   * True when the scheduler capacity resolver has already resolved this RT
-   * from an active Capacity Plan. When set, the assignment function must
-   * not rematerialize the plan over already-authoritative output.
-   */
-  capacityPlanResolved?: boolean
   namedResources?: NamedResourceLike[]
 }
 
@@ -98,10 +84,9 @@ type DerivedResourceTypeAssignment = {
   namedResources: DerivedNamedResourceAssignment[]
 }
 
-type DeriveNamedResourceAssignmentsInput = {
+export type DeriveNamedResourceAssignmentsInput = {
   resourceTypes: ResourceTypeLike[]
   weeklyDemand: WeeklyDemandLike[]
-  capacityPlanByRt?: Map<string, MaterializedCapacityPlanResource>
 }
 
 type WorkingNamedResource = DerivedNamedResourceAssignment & {
@@ -120,61 +105,14 @@ function toAllocationMode(mode: string | null | undefined): AllocationMode {
 function buildEffectiveNamedResources(
   resourceType: ResourceTypeLike,
   hasDemand: boolean,
-  capacityPlanByRt: Map<string, MaterializedCapacityPlanResource>,
 ): WorkingNamedResource[] {
   const persistedNamedResources = resourceType.namedResources ?? []
-  const mode = toAllocationMode(resourceType.allocationMode)
-  const capacityPlanMaterialized = capacityPlanByRt.get(resourceType.id)
   const hasRoleSegments = resourceType.roleSegments && resourceType.roleSegments.length > 0
-  // When a valid role profile is authoritative, suppress capacity plan fallback.
-  // The role segments provide aggregate unnamed-staff capacity instead of
-  // both the plan's trajectory set AND count-based phantom slots (defect #362).
-  // Also suppress when the resolver has already produced authoritative output.
-  const useCapacityPlanFallback =
-    mode === 'CAPACITY_PLAN' &&
-    !resourceType.capacityProfileBacked &&
-    !resourceType.capacityPlanResolved &&
-    !hasRoleSegments &&
-    shouldFallbackToActiveCapacityPlan(persistedNamedResources, capacityPlanMaterialized)
 
-  const baseNamedResources = useCapacityPlanFallback && capacityPlanMaterialized
-    ? (() => {
-        const usedTrajectories = capacityPlanMaterialized.resourceTrajectories
-
-        const trajectoryResources = usedTrajectories.map((trajectory, idx) => {
-          const existing = persistedNamedResources[idx]
-          const totalPercent = trajectory.segments.length > 0 ? trajectory.segments[0].allocationPercent : 100
-          return {
-            id: existing?.id ?? `${resourceType.id}-capacity-plan-${trajectory.trajectoryIndex + 1}`,
-            name: existing?.name ?? `${resourceType.name} ${trajectory.trajectoryIndex + 1}`,
-            startWeek: trajectory.segments[0]?.startWeek ?? null,
-            endWeek: trajectory.segments.length > 0 ? trajectory.segments[trajectory.segments.length - 1].endWeek : null,
-            allocationPct: totalPercent,
-            allocationMode: 'CAPACITY_PLAN',
-            allocationPercent: totalPercent,
-            allocationStartWeek: null,
-            allocationEndWeek: null,
-            pricingModel: existing?.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-            synthetic: !existing,
-            capacitySegments: trajectory.segments,
-          }
-        })
-
-        // Preserve persisted NRs not matched to any trajectory
-        const matchedIds = new Set(trajectoryResources.map(r => r.id))
-        const unmatchedPersisted = persistedNamedResources
-          .filter(nr => !matchedIds.has(nr.id))
-          .map(nr => ({
-            ...nr,
-            synthetic: false,
-          }))
-
-        return [...trajectoryResources, ...unmatchedPersisted]
-      })()
-    : persistedNamedResources.map(namedResource => ({
-        ...namedResource,
-        synthetic: false,
-      }))
+  const baseNamedResources = persistedNamedResources.map(namedResource => ({
+    ...namedResource,
+    synthetic: false,
+  }))
 
   // ── Role-segment authority: provide aggregate role capacity ────────────
   // When a valid role profile is authoritative, generate a synthetic NR
@@ -345,7 +283,6 @@ function buildSegments(weeks: NamedResourceAssignedWeek[]): NamedResourceAssigne
 export function deriveNamedResourceAssignments({
   resourceTypes,
   weeklyDemand,
-  capacityPlanByRt = new Map<string, MaterializedCapacityPlanResource>(),
 }: DeriveNamedResourceAssignmentsInput): Map<string, DerivedResourceTypeAssignment> {
   const weeklyDemandByResourceType = new Map<string, WeeklyDemandLike[]>()
 
@@ -366,7 +303,6 @@ export function deriveNamedResourceAssignments({
     const namedResources = buildEffectiveNamedResources(
       resourceType,
       demandRows.length > 0,
-      capacityPlanByRt,
     )
 
     let unallocatedDays = 0

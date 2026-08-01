@@ -2,14 +2,20 @@
  * schedulerCapacityResolver.ts — Shared profile-first capacity resolver for scheduler consumers.
  *
  * Centralises loading and resolution of project capacity into scheduler-facing DTOs.
- * Profile-first precedence: persisted CapacityProfile > active Capacity Plan fallback > legacy.
+ * Persisted CapacityProfile / CapacitySegment state is the ONLY resolution source
+ * (issue #418): the adapter fails closed on missing, conflicting, malformed or
+ * cross-project owner state, so no legacy-column fallback exists in this resolver.
  *
- * Resolution per named resource:
- * 1. Valid persisted profile (segmented, fixed, or availability-window) → capacitySegments
- * 2. Active Capacity Plan trajectory → per-resource segments
- * 3. Legacy allocation fields preserved unchanged
+ * Legacy-shaped DTO fields (allocationMode / allocationPercent / allocationPct /
+ * allocationStartWeek / allocationEndWeek / startWeek / endWeek) are derived from
+ * the authoritative profile via the projection helper — never read from
+ * ResourceType or NamedResource database columns.
  *
- * Role-level profiles are applied to phantom slot capacity.
+ * Transferred planned resources (Squad Planner → manual, #411) keep their
+ * identity and preserved profile data but contribute zero capacity while a
+ * manual ROLE CAPACITY_PROFILE profile is the scheduling authority. The
+ * suppression is driven by the persisted transfer provenance marker
+ * (legacy.writer === 'transfer-to-manual'), never by legacy column values.
  *
  * Keeps scheduler.ts pure (no Prisma dependency).
  */
@@ -20,10 +26,9 @@ import {
   type CapacityProfileResourceData,
 } from './capacityProfileResourceAdapter.js'
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
 import {
   materializeCapacityPlanResources,
-  matchTrajectoriesToResources,
-  shouldFallbackToActiveCapacityPlan,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
 import type {
@@ -92,53 +97,42 @@ function profileDataToSchedulerSegments(
 }
 
 /**
- * Build a single SchedulerNamedResource with profile segments from a
- * CapacityProfileResourceData.
+ * Build a SchedulerNamedResource with profile-derived capacity segments and
+ * legacy-shaped compatibility fields projected from the authoritative profile.
  *
- * When profile data is available, the allocationMode is projected from the
- * profile's planning basis (e.g. CAPACITY_PROFILE → CAPACITY_PLAN) rather
- * than using the stale legacy NamedResource.allocationMode field.
+ * No ResourceType/NamedResource candidate column is read: every field except
+ * id/name/pricingModel comes from the profile projection.
  */
 function buildProfileBackedNR(
-  nr: any,
+  nr: { id: string; name: string; pricingModel?: string | null },
   segments: SchedulerCapacitySegment[],
-  profile?: CapacityProfileResourceData | null,
+  profile: CapacityProfileResourceData,
 ): SchedulerNamedResource {
-  // Project allocation mode from profile when available; fall back to legacy
-  let allocationMode = nr.allocationMode ?? 'EFFORT'
-  let allocationPercent = nr.allocationPercent ?? 100
-  let allocationStartWeek: number | null = nr.allocationStartWeek ?? null
-  let allocationEndWeek: number | null = nr.allocationEndWeek ?? null
+  const projection = projectCapacityProfileToLegacyAllocation({
+    planningBasis: profile.planningBasis,
+    source: profile.source,
+    defaultPercent: profile.defaultPercent,
+    startWeek: profile.startWeek,
+    endWeek: profile.endWeek,
+    segments: profile.segments.map(s => ({
+      startWeek: s.startWeek,
+      endWeek: s.endWeek,
+      capacityPercent: s.capacityPercent,
+    })),
+  })
 
-  if (profile) {
-    const projection = projectCapacityProfileToLegacyAllocation({
-      planningBasis: profile.planningBasis,
-      source: profile.source,
-      defaultPercent: profile.defaultPercent,
-      startWeek: profile.startWeek,
-      endWeek: profile.endWeek,
-      segments: profile.segments.map(s => ({
-        startWeek: s.startWeek,
-        endWeek: s.endWeek,
-        capacityPercent: s.capacityPercent,
-      })),
-    })
-    if (projection) {
-      allocationMode = projection.allocationMode
-      allocationPercent = projection.allocationPercent ?? allocationPercent
-      allocationStartWeek = projection.allocationStartWeek
-      allocationEndWeek = projection.allocationEndWeek
-    }
-  }
+  const allocationMode = projection?.allocationMode ?? 'EFFORT'
+  const allocationPercent = projection?.allocationPercent ?? 100
+  const allocationStartWeek = projection?.allocationStartWeek ?? null
+  const allocationEndWeek = projection?.allocationEndWeek ?? null
 
   return {
     id: nr.id,
     name: nr.name,
-    // Profile-backed: legacy startWeek/endWeek fields are no longer authoritative
-    // for capacity calculation, but we preserve them for display/diagnostics
-    startWeek: nr.startWeek ?? null,
-    endWeek: nr.endWeek ?? null,
-    allocationPct: nr.allocationPct,
+    // Legacy-shaped aliases are profile-derived compatibility output only.
+    startWeek: allocationStartWeek,
+    endWeek: allocationEndWeek,
+    allocationPct: Math.round(allocationPercent),
     allocationMode,
     allocationPercent,
     allocationStartWeek,
@@ -149,21 +143,35 @@ function buildProfileBackedNR(
 }
 
 /**
- * Build legacy-fallback SchedulerNamedResource (no profile).
+ * Build the zero-capacity SchedulerNamedResource for a transferred planned
+ * resource (issue #411). Identity and preserved profile data are kept, but the
+ * capacity segments are explicitly zero while the manual ROLE CAPACITY_PROFILE
+ * profile is the scheduling authority.
  */
-function buildLegacyNR(nr: any): SchedulerNamedResource {
+function buildTransferredZeroNR(
+  nr: { id: string; name: string; pricingModel?: string | null },
+  _profile: CapacityProfileResourceData,
+): SchedulerNamedResource {
+  // The transferred planned resource is deliberately suppressed under the
+  // manual ROLE authority (issue #411): every compatibility capacity output
+  // must represent zero contribution so scheduler, Timeline and Resource
+  // Profile views stay consistent (issue #418 PR 1 review). The preserved
+  // underlying profile is untouched — this is presentation-only.
   return {
     id: nr.id,
     name: nr.name,
-    startWeek: nr.startWeek ?? null,
-    endWeek: nr.endWeek ?? null,
-    allocationPct: nr.allocationPct,
-    allocationMode: nr.allocationMode ?? 'EFFORT',
-    allocationPercent: nr.allocationPercent ?? 100,
-    allocationStartWeek: nr.allocationStartWeek ?? null,
-    allocationEndWeek: nr.allocationEndWeek ?? null,
+    startWeek: null,
+    endWeek: null,
+    allocationPct: 0,
+    allocationMode: 'CAPACITY_PLAN',
+    allocationPercent: 0,
+    allocationStartWeek: null,
+    allocationEndWeek: null,
     pricingModel: nr.pricingModel ?? undefined,
-    capacitySegments: undefined,
+    // Explicit zero segment: the ROLE profile is the authority; this resource
+    // must not contribute independent capacity and must not fall through to
+    // any legacy window calculation.
+    capacitySegments: [{ startWeek: 0, endWeek: Infinity, allocationPercent: 0 }],
   }
 }
 
@@ -174,13 +182,11 @@ function buildLegacyNR(nr: any): SchedulerNamedResource {
  *
  * @param client   Prisma client or transaction client
  * @param projectId  Project to resolve capacity for
- * @param hoursPerDay Project default hours per day
  * @returns Resolved scheduler capacity
  */
 export async function resolveSchedulerCapacity(
   client: any,
   projectId: string,
-  hoursPerDay: number,
 ): Promise<ResolvedSchedulerCapacity> {
   // ── 1. Load resource types with named resources ──────────────────────────
   const rawRTs = await client.resourceType.findMany({
@@ -213,7 +219,7 @@ export async function resolveSchedulerCapacity(
   })
   const capacityProfiles = rawProfiles as Array<Record<string, unknown>>
 
-  // ── 3. Load active capacity plan for fallback ────────────────────────────
+  // ── 3. Load active capacity plan for display materialisation ─────────────
   const rawPlan = await client.capacityPlan.findFirst({
     where: { projectId, isActive: true },
     include: {
@@ -231,16 +237,14 @@ export async function resolveSchedulerCapacity(
       : [],
   )
 
-  // ── 4. Build profile lookup maps using the existing adapter ──────────────
+  // ── 4. Build profile lookup maps using the existing adapter (fail-closed) ─
   const profileMap = buildResourceCapacityProfileMap({
     id: projectId,
-    hoursPerDay,
     resourceTypes: resourceTypes as unknown as CapacityProfileAdapterInput['resourceTypes'],
     capacityProfiles: capacityProfiles as unknown as CapacityProfileAdapterInput['capacityProfiles'],
-    capacityPlans: activeCapacityPlan ? [activeCapacityPlan] : [],
-  } as unknown as CapacityProfileAdapterInput)
+  })
 
-  // ── 5. Map rows to scheduler DTOs with profile-aware segments ────────────
+  // ── 5. Map rows to scheduler DTOs with profile-derived segments ──────────
   let profileBackedCount = 0
   let legacyCount = 0
   const profileBackedNamedResourceIds: string[] = []
@@ -249,7 +253,7 @@ export async function resolveSchedulerCapacity(
   const resultRTs: SchedulerResourceType[] = resourceTypes.map((rt: any) => {
     const rtNamedResources: any[] = (rt.namedResources ?? []).filter(Boolean)
     const roleProfile = profileMap.roleProfiles.get(rt.id)
-    const roleProfileValid = roleProfile && roleProfile.resolutionSource === 'PROFILE'
+    const roleProfileValid = roleProfile != null
 
     // When Squad Planner persists both an aggregate ROLE profile (source:
     // 'squadPlanner') AND planned-resource profiles for the same RT, they
@@ -265,7 +269,6 @@ export async function resolveSchedulerCapacity(
       rtNamedResources.some((nr: any) => {
         const nrProfile = profileMap.namedResourceProfiles.get(nr.id)
         return nrProfile?.resourceIdentity === 'PLANNED_RESOURCE' &&
-          nrProfile?.resolutionSource === 'PROFILE' &&
           nrProfile?.source === 'squadPlanner'
       })
     const useRoleSegments = roleProfileValid && !hasSquadPlannerPlannedResources
@@ -274,11 +277,18 @@ export async function resolveSchedulerCapacity(
       roleProfileRTIds.push(rt.id)
     }
 
-    // Track per-NR resolution source to distinguish PROFILE from ACTIVE_CAPACITY_PLAN
-    const nrSources = new Map<string, 'PROFILE' | 'ACTIVE_CAPACITY_PLAN' | 'LEGACY'>()
-
     const namedResources: SchedulerNamedResource[] = rtNamedResources.map((nr: any) => {
       const nrProfile = profileMap.namedResourceProfiles.get(nr.id)
+
+      // The adapter fails closed on missing/conflicting profiles, so every
+      // persisted named resource resolves here. Defensive throw keeps the
+      // invariant explicit for future callers.
+      if (!nrProfile) {
+        throw new CapacityIntegrityError(
+          `Missing capacity profile for named resource ${nr.id}. ` +
+          'Run the capacity profile backfill/repair workflow before retrying this operation.',
+        )
+      }
 
       // After Squad Planner → manual transfer (issue #411):
       // The ROLE profile is the sole scheduling authority. ONLY planned-resource
@@ -287,151 +297,67 @@ export async function resolveSchedulerCapacity(
       // not contribute independent capacity while a valid MANUAL ROLE
       // CAPACITY_PROFILE exists. An independently authored manual planned-resource
       // profile without that marker remains scheduler-authoritative.
-      const isTransferredPlannedResource = nrProfile?.resourceIdentity === 'PLANNED_RESOURCE' &&
-        nrProfile?.source === 'manual' &&
-        nrProfile?.resolutionSource === 'PROFILE' &&
-        nrProfile?.legacyWriter === 'transfer-to-manual' &&
+      const isTransferredPlannedResource =
+        nrProfile.resourceIdentity === 'PLANNED_RESOURCE' &&
+        nrProfile.source === 'manual' &&
+        nrProfile.legacyWriter === 'transfer-to-manual' &&
         roleProfile?.source === 'manual' &&
         roleProfile?.planningBasis === 'capacityProfile' &&
         roleProfileValid
 
       if (isTransferredPlannedResource) {
-        // Fall through to legacy — the ROLE profile is the authority.
-        // Legacy fields were updated during transfer to reflect the
-        // Squad Planner state, maintaining capacity parity.
         legacyCount++
-        nrSources.set(nr.id, 'LEGACY')
-        return buildLegacyNR(nr)
+        return buildTransferredZeroNR(
+          { id: nr.id, name: nr.name, pricingModel: nr.pricingModel ?? undefined },
+          nrProfile,
+        )
       }
 
       // Profile-first: valid persisted profile
-      if (nrProfile && nrProfile.resolutionSource === 'PROFILE') {
-        const segments = profileDataToSchedulerSegments(nrProfile)
-        profileBackedCount++
-        profileBackedNamedResourceIds.push(nr.id)
-        nrSources.set(nr.id, 'PROFILE')
-        return buildProfileBackedNR(nr, segments, nrProfile)
-      }
-
-      // Capacity plan trajectory → per-resource segments
-      if (nrProfile && nrProfile.resolutionSource === 'ACTIVE_CAPACITY_PLAN') {
-        const segments = profileDataToSchedulerSegments(nrProfile)
-        profileBackedCount++
-        profileBackedNamedResourceIds.push(nr.id)
-        nrSources.set(nr.id, 'ACTIVE_CAPACITY_PLAN')
-        return buildProfileBackedNR(nr, segments, nrProfile)
-      }
-
-      // Legacy fallback — no valid profile
-      legacyCount++
-      nrSources.set(nr.id, 'LEGACY')
-      return buildLegacyNR(nr)
+      const segments = profileDataToSchedulerSegments(nrProfile)
+      profileBackedCount++
+      profileBackedNamedResourceIds.push(nr.id)
+      return buildProfileBackedNR(
+        { id: nr.id, name: nr.name, pricingModel: nr.pricingModel ?? undefined },
+        segments,
+        nrProfile,
+      )
     })
 
-    // ── 5b. Capacity plan fallback: create synthetic NRs where appropriate ──
-    const allocationMode: string = rt.allocationMode ?? 'EFFORT'
-    const materialized = capacityPlanByRt.get(rt.id)
-
-    // Only a VALID role-level profile suppresses plan fallback. NR profile
-    // segments do NOT — the plan fallback code already handles PROFILE NRs
-    // by keeping their segments via matchTrajectoriesToResources.
-    const hasProfileAuthority = useRoleSegments
-
-    if (
-      !hasProfileAuthority &&
-      allocationMode === 'CAPACITY_PLAN' &&
-      materialized &&
-      shouldFallbackToActiveCapacityPlan(namedResources, materialized)
-    ) {
-      // Single code path: use matchTrajectoriesToResources to map ALL
-      // trajectories to ALL ordered persisted NRs. For each pairing:
-      //   - If the NR has a valid PROFILE source → keep its profile segments
-      //   - Otherwise → use trajectory segments
-      // This preserves stable IDs for matched NRs, generates deterministic
-      // synthetic IDs for unmatched trajectories, and never drops a persisted
-      // NR or loses a trajectory (defect #362 remediation).
-      const trajectories = materialized.resourceTrajectories
-      const matched = matchTrajectoriesToResources(
-        trajectories,
-        rt.id,
-        rt.name,
-        rtNamedResources.map((nr: any) => ({ id: nr.id, name: nr.name })),
-      )
-
-      const planSlots: SchedulerNamedResource[] = matched.map(m => {
-        // Does this matched resource have a valid persisted PROFILE?
-        const existingNR = namedResources.find(nr => nr.id === m.id)
-        const hasProfile = existingNR && nrSources.get(m.id) === 'PROFILE'
-
-        if (hasProfile && existingNR) {
-          // Keep the profile-backed NR as-is — its segments are authoritative
-          return existingNR
-        }
-
-        // Use trajectory segments for this slot
-        const firstSeg = m.slotWindows[0]
-        const lastSeg = m.slotWindows.length > 0 ? m.slotWindows[m.slotWindows.length - 1] : null
-        return {
-          id: m.id,
-          name: m.name,
-          startWeek: firstSeg?.startWeek ?? null,
-          endWeek: lastSeg?.endWeek ?? null,
-          allocationPct: firstSeg?.allocationPercent ?? 100,
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: firstSeg?.allocationPercent ?? 100,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          capacitySegments: m.slotWindows,
-        }
-      })
-
-      // Preserve unmatched persisted NRs — but set them to zero capacity.
-      // When the plan fallback runs, the plan's trajectories are the
-      // authoritative capacity. Unmatched NRs (e.g. original TIMELINE
-      // resources that became surplus after planner apply) must not
-      // contribute phantom or legacy capacity.
-      const matchedExistingIds = new Set(
-        matched.filter(m => m.existingNamedResourceId).map(m => m.existingNamedResourceId!),
-      )
-      const unmatchedPersisted: SchedulerNamedResource[] = namedResources
-        .filter(nr => !matchedExistingIds.has(nr.id))
-        .map(nr => ({
-          id: nr.id,
-          name: nr.name,
-          startWeek: null,
-          endWeek: null,
-          allocationPct: 0,
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 0,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          capacitySegments: [{ startWeek: 0, endWeek: 9999, allocationPercent: 0 }],
-        }))
-
-      return {
-        id: rt.id,
-        name: rt.name,
-        count: rt.count,
-        hoursPerDay: rt.hoursPerDay ?? null,
-        allocationMode: 'CAPACITY_PLAN',
-        namedResources: [...planSlots, ...unmatchedPersisted],
-        // Explicit empty roleSegments: the plan fallback replaces the ROLE
-        // profile as authoritative capacity. Undefined would cause
-        // getWeeklyCapacity to fall through to phantom slots (count-based).
-        // Empty array signals 'no role capacity, no phantom slots'.
-        roleSegments: [],
-        capacityPlanResolved: true,
-      }
-    }
+    // RT-level allocation mode is projected from the authoritative role
+    // profile. Explicit-only roles (no ROLE profile) present as EFFORT.
+    const roleProjection = roleProfile
+      ? projectCapacityProfileToLegacyAllocation({
+          planningBasis: roleProfile.planningBasis,
+          source: roleProfile.source,
+          defaultPercent: roleProfile.defaultPercent,
+          startWeek: roleProfile.startWeek,
+          endWeek: roleProfile.endWeek,
+          segments: roleProfile.segments.map(s => ({
+            startWeek: s.startWeek,
+            endWeek: s.endWeek,
+            capacityPercent: s.capacityPercent,
+          })),
+        })
+      : null
 
     return {
       id: rt.id,
       name: rt.name,
       count: rt.count,
       hoursPerDay: rt.hoursPerDay ?? null,
-      allocationMode,
+      allocationMode: roleProjection?.allocationMode ?? 'EFFORT',
       namedResources,
-      roleSegments: useRoleSegments ? profileDataToSchedulerSegments(roleProfile) : (roleProfileValid ? [] : undefined),
+      // No roleSegments → getWeeklyCapacity falls back to phantom count slots
+      // (legacy semantics). A role without a ROLE profile is legal only as an
+      // explicit-only role whose every NR is profile-backed (adapter-enforced),
+      // so the profile-derived NR capacity is the complete authority — never
+      // phantom slots on top of it (issue #418).
+      roleSegments: useRoleSegments
+        ? profileDataToSchedulerSegments(roleProfile)
+        : roleProfileValid
+          ? []
+          : [],
     }
   })
 

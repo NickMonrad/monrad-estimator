@@ -425,7 +425,19 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       },
       resourceType: {
         findFirst: (args: any) => findOne(store().resourceTypes, args?.where ?? {}),
-        findMany: (args: any) => findMany('resourceTypes', args ?? {}),
+        findMany: (args: any) => {
+          const results = findMany('resourceTypes', args ?? {})
+          // The scheduler capacity resolver includes namedResources (issue #418)
+          if (args?.include?.namedResources) {
+            return results.map((rt: any) => ({
+              ...rt,
+              namedResources: store().namedResources
+                .filter((n: any) => n.resourceTypeId === rt.id)
+                .map((n: any) => ({ ...n })),
+            }))
+          }
+          return results
+        },
         findUnique: (args: any) => findOne(store().resourceTypes, args?.where ?? {}),
         update: (args: any) => {
           const idx = store().resourceTypes.findIndex((r: any) => r.id === args.where.id)
@@ -993,7 +1005,11 @@ describe('persisted capacity-profile DTO integration', () => {
 
   describe('4. Squad Planner apply persists segments', () => {
     it('apply route creates profiles with segments in shared store; GET returns them', async () => {
-      addResourceType(rtId, userName, 1)
+      addResourceType(rtId, userName, 1, { allocationMode: 'CAPACITY_PLAN' }, {
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+      })
       addNamedResource('nr-1', 'Engineer 1', rtId, { allocationMode: 'CAPACITY_PLAN' })
       addPersistedProfile('cp-nr-1', {
         namedResourceId: 'nr-1',
@@ -1077,14 +1093,12 @@ describe('persisted capacity-profile DTO integration', () => {
       expect(dto.legacy.allocationMode).toBeNull()
     })
 
-    it('returns legacy-derived DTO when no persisted profiles exist', async () => {
+    it('fails closed when no persisted profiles exist (issue #418)', async () => {
       addResourceType(rtId, userName, 1, { allocationMode: 'EFFORT' }, null)
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      expect(getRes.body.capacityProfiles).toHaveLength(1)
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
-      expect(getRes.body.capacityProfiles[0].legacy).toMatchObject({ allocationMode: 'EFFORT' })
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
   })
 
@@ -1200,10 +1214,9 @@ describe('persisted capacity-profile DTO integration', () => {
       })
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      // Falls back to legacy — duplicate owner keys fail structural validation
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
-      expect(getRes.body.capacityProfiles[0].legacy).toMatchObject({ allocationMode: 'EFFORT' })
+      // Duplicate owner keys fail closed (issue #418) — no legacy fallback.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when persisted profile references non-existent named resource', async () => {
@@ -1218,9 +1231,9 @@ describe('persisted capacity-profile DTO integration', () => {
       })
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      // Falls back — orphan owner FK fails structural validation
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      // Orphan owner FK fails closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when persisted profile has both owner FKs set', async () => {
@@ -1237,13 +1250,9 @@ describe('persisted capacity-profile DTO integration', () => {
       })
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      // RT has named resource → legacy fallback returns named-person profile
-      expect(getRes.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
-      expect(getRes.body.capacityProfiles[0].owner.id).toBe('nr-both')
-      // Corrupt persisted profile id is NOT exposed
-      const ids = getRes.body.capacityProfiles.map((p: any) => p.id)
-      expect(ids).not.toContain('cp-both-fk')
+      // Exactly-one-FK violation fails closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when persisted profile has neither owner FK set', async () => {
@@ -1259,8 +1268,9 @@ describe('persisted capacity-profile DTO integration', () => {
       })
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      // Neither-FK owner shape fails closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when ROLE profile has namedResourceId but no resourceTypeId', async () => {
@@ -1277,13 +1287,9 @@ describe('persisted capacity-profile DTO integration', () => {
       })
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      // RT has named resource → legacy fallback returns named-person profile
-      expect(getRes.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
-      expect(getRes.body.capacityProfiles[0].owner.id).toBe('nr-role-wrong')
-      // Corrupt persisted profile id is NOT exposed
-      const ids = getRes.body.capacityProfiles.map((p: any) => p.id)
-      expect(ids).not.toContain('cp-role-nr')
+      // ROLE owner with a named-resource FK fails closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when NAMED_PERSON profile has resourceTypeId but no namedResourceId', async () => {
@@ -1299,8 +1305,9 @@ describe('persisted capacity-profile DTO integration', () => {
       })
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      // NAMED_PERSON owner with a resource-type FK fails closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when persisted profile has invalid source enum', async () => {
@@ -1315,8 +1322,9 @@ describe('persisted capacity-profile DTO integration', () => {
       })
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      // Invalid source enum fails closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when segments overlap', async () => {
@@ -1334,8 +1342,9 @@ describe('persisted capacity-profile DTO integration', () => {
       )
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      // Overlapping segments fail closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when segment has invalid source', async () => {
@@ -1352,8 +1361,9 @@ describe('persisted capacity-profile DTO integration', () => {
       )
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      // Invalid segment source fails closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('falls back to legacy when segment has negative startWeek', async () => {
@@ -1370,8 +1380,9 @@ describe('persisted capacity-profile DTO integration', () => {
       )
 
       const getRes = await getCapacityProfiles()
-      expect(getRes.status).toBe(200)
-      expect(getRes.body.capacityProfiles[0].id).toBe(rtId)
+      // Negative segment startWeek fails closed.
+      expect(getRes.status).toBe(409)
+      expect(getRes.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
 
     it('keeps ROLE profiles authoritative when segment capacity exceeds 100%', async () => {
@@ -1419,9 +1430,9 @@ describe('persisted capacity-profile DTO integration', () => {
       addTask(taskId, storyId, rtId, 160)
       storeRef.current.timelineEntries.push({ featureId: featId, startWeek: 0, durationWeeks: 4 })
 
-      // Directly add a named-person profile that matches what the legacy mapper produces
+      // Directly add a named-person profile (single owner FK, issue #418)
       addPersistedProfile('cp-nr-rp', {
-        resourceTypeId: rtId,
+        resourceTypeId: null,
         namedResourceId: 'nr-rp-1',
         ownerKind: 'NAMED_PERSON',
         planningBasis: 'DEMAND_FOLLOWING',
@@ -1505,11 +1516,13 @@ describe('persisted capacity-profile DTO integration', () => {
       // Keeping RT mode != CAPACITY_PLAN avoids the route-level capacity plan fallback that
       // would inflate named resources from slot windows.
       addResourceType(segRtId, 'Segmented RT', 1)
+      // profileOverrides=null: the persisted multi-segment profile below is the
+      // single source of truth for this named resource (issue #418).
       addNamedResource(segNrId, 'Seg Person', segRtId, {
         allocationMode: 'CAPACITY_PLAN',
         allocationPercent: 100,
         pricingModel: 'PRO_RATA',
-      })
+      }, null)
 
       // Backlog data so route produces resource rows
       addEpic('epic-seg', 'Seg Epic')
@@ -1570,7 +1583,7 @@ describe('persisted capacity-profile DTO integration', () => {
       storeRef.current.capacityProfiles.push({
         id: persProfileId,
         projectId,
-        resourceTypeId: segRtId,
+        resourceTypeId: null,
         namedResourceId: segNrId,
         ownerKind: 'NAMED_PERSON',
         planningBasis: 'CAPACITY_PROFILE',
@@ -2824,14 +2837,28 @@ describe('persisted capacity-profile DTO integration', () => {
         segments: [{ startWeek: 4, endWeek: 8, capacityPercent: 25, source: 'MANUAL' }],
       })
 
-      // Inherited NR: valid profile plus compatibility matching the old ROLE projection
+      // Inherited NR: system-generated ROLE_DEFAULT clone matching the role
+      // profile shape (issue #418 — classification is profile-shape based).
       addNamedResource(nrInhId, 'Patch Inherited', rtId, {
         allocationMode: 'CAPACITY_PLAN',
         allocationPercent: 25,
         allocationPct: 25,
         allocationStartWeek: 4,
         allocationEndWeek: 8,
+      }, null)
+      addPersistedProfile('cp-inh-1', {
+        namedResourceId: nrInhId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'DERIVED',
+        defaultPercent: 25,
+        startWeek: null,
+        endWeek: null,
+        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
       })
+      storeRef.current.capacitySegments.push(
+        { id: 'seg-inh-1', capacityProfileId: 'cp-inh-1', startWeek: 4, endWeek: 8, capacityPercent: 25, source: 'DERIVED', createdAt: new Date(), updatedAt: new Date() },
+      )
 
       // Explicit NR: segmented profile with CAPACITY_PLAN/25/W4-W8 compatibility
       addNamedResource(nrExpSegId, 'Patch Segmented', rtId, {
@@ -2959,15 +2986,27 @@ describe('persisted capacity-profile DTO integration', () => {
     })
 
     it('safe reduction with multiple inherited and protected NRs: deletes eligible inherited only, warns, count matches actual', async () => {
-      // Create two more inherited NRs (same CAPACITY_PLAN defaults as role → inherited)
-      addNamedResource('patch-nr-inh-2', 'Patch Inh 2', rtId, {
-        allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
-        allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8,
-      })
-      addNamedResource('patch-nr-inh-3', 'Patch Inh 3', rtId, {
-        allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
-        allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8,
-      })
+      // Create two more inherited NRs as ROLE_DEFAULT clones (profile shape
+      // matches the role default → inherited, deletable by reduction).
+      for (const id of ['patch-nr-inh-2', 'patch-nr-inh-3']) {
+        addNamedResource(id, id === 'patch-nr-inh-2' ? 'Patch Inh 2' : 'Patch Inh 3', rtId, {
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
+          allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8,
+        }, null)
+        addPersistedProfile(`cp-inh-${id}`, {
+          namedResourceId: id,
+          ownerKind: 'NAMED_PERSON',
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'DERIVED',
+          defaultPercent: 25,
+          startWeek: null,
+          endWeek: null,
+          legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+        })
+        storeRef.current.capacitySegments.push(
+          { id: `seg-inh-${id}`, capacityProfileId: `cp-inh-${id}`, startWeek: 4, endWeek: 8, capacityPercent: 25, source: 'DERIVED', createdAt: new Date(), updatedAt: new Date() },
+        )
+      }
 
       // Update store count
       const existingRT = storeRef.current.resourceTypes.find((rt: any) => rt.id === rtId)
@@ -2979,6 +3018,7 @@ describe('persisted capacity-profile DTO integration', () => {
         .patch(`/api/projects/${projectId}/resource-types/${rtId}`)
         .set('Authorization', authHeader)
         .send({ count: 1 })
+
       expect(res.status).toBe(200)
 
       // Only inherited NRs with no profiles are deletable
@@ -3003,14 +3043,25 @@ describe('persisted capacity-profile DTO integration', () => {
 
     it('safe reduction: reachable target with protected NRs produces no warning', async () => {
       // Setup: 2 protected NRs, 3 inherited NRs, current count = 5, requested count = 3
-      addNamedResource('patch-nr-inh-r2', 'Patch Inh R2', rtId, {
-        allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
-        allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8,
-      })
-      addNamedResource('patch-nr-inh-r3', 'Patch Inh R3', rtId, {
-        allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
-        allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8,
-      })
+      for (const id of ['patch-nr-inh-r2', 'patch-nr-inh-r3']) {
+        addNamedResource(id, id === 'patch-nr-inh-r2' ? 'Patch Inh R2' : 'Patch Inh R3', rtId, {
+          allocationMode: 'CAPACITY_PLAN', allocationPercent: 25,
+          allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8,
+        }, null)
+        addPersistedProfile(`cp-inh-${id}`, {
+          namedResourceId: id,
+          ownerKind: 'NAMED_PERSON',
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'DERIVED',
+          defaultPercent: 25,
+          startWeek: null,
+          endWeek: null,
+          legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+        })
+        storeRef.current.capacitySegments.push(
+          { id: `seg-inh-${id}`, capacityProfileId: `cp-inh-${id}`, startWeek: 4, endWeek: 8, capacityPercent: 25, source: 'DERIVED', createdAt: new Date(), updatedAt: new Date() },
+        )
+      }
       const existingRT = storeRef.current.resourceTypes.find((rt: any) => rt.id === rtId)
       if (existingRT) existingRT.count = 5
 
@@ -3178,10 +3229,26 @@ describe('persisted capacity-profile DTO integration', () => {
         updatedAt: now,
       })
 
-      // Inherited NR: matches authoritative role default projection (TIMELINE/75/W1-W12)
+      // Inherited NR: system-generated ROLE_DEFAULT clone matching the role
+      // profile shape (AVAILABILITY_WINDOW/75/W1-W12, issue #418).
       addNamedResource('ncp-nr-inh', 'Inherited', rtId, {
         allocationMode: 'TIMELINE', allocationPercent: 75, allocationPct: 75,
         allocationStartWeek: 1, allocationEndWeek: 12,
+      }, null)
+      storeRef.current.capacityProfiles.push({
+        id: 'ncp-inh-pro',
+        projectId,
+        namedResourceId: 'ncp-nr-inh',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'DERIVED',
+        defaultPercent: 75,
+        startWeek: 1,
+        resourceTypeId: null,
+        endWeek: 12,
+        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+        createdAt: now,
+        updatedAt: now,
       })
 
       // Explicit NR with explicit profile (segments/legacy)
@@ -3238,14 +3305,13 @@ describe('persisted capacity-profile DTO integration', () => {
       )
       expect(newNR).toBeDefined()
 
-      // ── New NR compatibility: lossy projection of multi-segment role profile ──
-      expect(newNR!.allocationMode).toBe('TIMELINE')
-      expect(newNR!.allocationPercent).toBe(75)
-      expect(newNR!.allocationPct).toBe(75)
-      expect(newNR!.allocationStartWeek).toBe(1)
-      expect(newNR!.allocationEndWeek).toBe(12)
-      expect(newNR!.startWeek).toBe(1)
-      expect(newNR!.endWeek).toBe(12)
+      // ── New NR: no candidate legacy capacity columns are written (issue #418) ──
+      expect(newNR!.allocationMode).toBeUndefined()
+      expect(newNR!.allocationPercent).toBeUndefined()
+      expect(newNR!.allocationStartWeek).toBeUndefined()
+      expect(newNR!.allocationEndWeek).toBeUndefined()
+      expect(newNR!.startWeek).toBeUndefined()
+      expect(newNR!.endWeek).toBeUndefined()
 
       // ── New NR has cloned profile with NAMED_PERSON owner ─────────
       const newNRProfiles = storeRef.current.capacityProfiles.filter(
@@ -3396,14 +3462,14 @@ describe('persisted capacity-profile DTO integration', () => {
       )
       expect(newNR).toBeDefined()
 
-      // Assert every compatibility field explicitly
-      expect(newNR!.allocationMode).toBe('EFFORT')
-      expect(newNR!.allocationPercent).toBe(70)
-      expect(newNR!.allocationPct).toBe(70)
-      expect(newNR!.allocationStartWeek).toBeNull()
-      expect(newNR!.allocationEndWeek).toBeNull()
-      expect(newNR!.startWeek).toBeNull()
-      expect(newNR!.endWeek).toBeNull()
+      // No candidate legacy capacity columns are written (issue #418) — the
+      // capacity state lives in the cloned profile below.
+      expect(newNR!.allocationMode).toBeUndefined()
+      expect(newNR!.allocationPercent).toBeUndefined()
+      expect(newNR!.allocationStartWeek).toBeUndefined()
+      expect(newNR!.allocationEndWeek).toBeUndefined()
+      expect(newNR!.startWeek).toBeUndefined()
+      expect(newNR!.endWeek).toBeUndefined()
 
       // Assert persisted NR profile
       const nrProfile = storeRef.current.capacityProfiles.find(
@@ -3494,8 +3560,9 @@ describe('persisted capacity-profile DTO integration', () => {
         (nr: any) => nr.id !== 'drift-a-nr-1' && nr.resourceTypeId === rtId,
       )
       expect(newNR).toBeDefined()
-      expect(newNR!.allocationMode).toBe('EFFORT')
-      expect(newNR!.allocationPercent).toBe(70)
+      // No candidate legacy capacity columns are written (issue #418).
+      expect(newNR!.allocationMode).toBeUndefined()
+      expect(newNR!.allocationPercent).toBeUndefined()
 
       // No CAPACITY_PLAN exit — role profile not replaced
       expect(

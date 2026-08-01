@@ -66,7 +66,7 @@ async function loadSchedulerInput(projectId: string, hoursPerDay: number): Promi
         },
       },
     }),
-    resolveSchedulerCapacity(prisma, projectId, hoursPerDay),
+    resolveSchedulerCapacity(prisma, projectId),
     prisma.timelineEntry.findMany({
       where: { projectId, isManual: true },
     }),
@@ -256,6 +256,21 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   const topN = typeof body.topN === 'number' && body.topN > 0 ? body.topN : 5
+
+  // ── 1b. Validate request-supplied countRanges before any data loading ────
+  // Request-shape validation must not depend on database state (issue #418:
+  // capacity resolution may fail closed on integrity violations, but a
+  // malformed request is rejected identically regardless).
+  if (body.constraints?.countRanges != null) {
+    const rawRanges = body.constraints.countRanges
+    const structurallyInvalid = !Array.isArray(rawRanges)
+      || rawRanges.some(range => !range || typeof range.resourceTypeId !== 'string'
+        || !Number.isInteger(range.min) || !Number.isInteger(range.max)
+        || range.min < 1 || range.max < range.min)
+    if (structurallyInvalid) {
+      res.status(400).json({ error: 'Invalid constraints.countRanges' }); return
+    }
+  }
 
   // ── 2. Load scheduler input ───────────────────────────────────────────────
   const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay)

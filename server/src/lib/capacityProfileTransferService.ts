@@ -111,7 +111,7 @@ export async function transferToManualCapacity(
   // ── 2. Load all profiles and named resources for this role ────────────
   const namedResources = await tx.namedResource.findMany({
     where: { resourceTypeId },
-    select: { id: true, name: true, allocationMode: true },
+    select: { id: true, name: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   })
   const namedResourceIds = namedResources.map(nr => nr.id)
@@ -177,7 +177,7 @@ export async function transferToManualCapacity(
       // No profile at all — check via planner provenance
       const provenance = plannerProvenanceFrom(plannerAuthority, resourceTypeId)
       const kind = classifyNamedResource(
-        { id: nr.id, allocationMode: nr.allocationMode ?? null },
+        { id: nr.id },
         [],
         provenance,
       )
@@ -276,7 +276,13 @@ export async function transferToManualCapacity(
     }
   }
 
-  // ── 6. Update legacy compatibility projections ───────────────────────
+  // ── 6. No legacy compatibility projections ──────────────────────────
+  // Issue #418: candidate ResourceType/NamedResource columns are never
+  // written at runtime. Transferred profiles keep their authoritative
+  // defaultPercent/segments; the scheduler authority rule (profile source
+  // MANUAL + planningBasis CAPACITY_PROFILE + transfer provenance marker)
+  // suppresses independent capacity contribution of transferred planned
+  // resources, so the manual ROLE profile is the sole authority.
   const roleSegments = roleProfile.segments ?? []
   const roleProjection = projectCapacityProfileToLegacyAllocation({
     planningBasis: 'capacityProfile',
@@ -288,39 +294,6 @@ export async function transferToManualCapacity(
       startWeek: s.startWeek, endWeek: s.endWeek, capacityPercent: s.capacityPercent,
     })),
   })
-  if (roleProjection) {
-    await tx.resourceType.update({
-      where: { id: resourceTypeId },
-      data: {
-        allocationMode: roleProjection.allocationMode,
-        allocationPercent: roleProjection.allocationPercent ?? 0,
-        allocationStartWeek: roleProjection.allocationStartWeek,
-        allocationEndWeek: roleProjection.allocationEndWeek,
-      },
-    })
-  }
-
-  for (const profile of plannerProfiles) {
-    if (!profile.namedResourceId) continue
-
-    // Transferred planned resources project to zero legacy capacity on the
-    // NamedResource compatibility fields. The profile's own defaultPercent
-    // and segments are preserved (they retain identity and segment shape).
-    // The scheduler authority rule suppresses independent capacity contribution
-    // from these profiles, so the manual ROLE profile is the sole authority.
-    await tx.namedResource.update({
-      where: { id: profile.namedResourceId },
-      data: {
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: 0,
-        allocationPct: 0,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        startWeek: null,
-        endWeek: null,
-      },
-    })
-  }
 
   // ── 7. Update legacy metadata on transferred profiles ────────────────
   await writeTransferLegacyMetadata(tx, roleProfile, roleProjection, roleSegments)

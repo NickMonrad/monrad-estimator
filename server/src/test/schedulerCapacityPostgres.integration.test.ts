@@ -60,11 +60,16 @@ beforeAll(async () => {
   })
   projectId = project.id
 
-  // ── Legacy-only resource type (no profile, count=2) ───────────────────
+  // ── Role-only resource type (count=2, demand-following ROLE profile) ──
   const rtLegacy = await prisma.resourceType.create({
     data: { name: 'LegacyRole', category: 'ENGINEERING', count: 2, hoursPerDay: 8, allocationMode: 'EFFORT', projectId },
   })
   rtLegacyId = rtLegacy.id
+  // Profile-first (issue #418): a role without a persisted profile fails
+  // closed — the fixture carries an authoritative demand-following profile.
+  await prisma.capacityProfile.create({
+    data: { projectId, resourceTypeId: rtLegacy.id, namedResourceId: null, ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100 },
+  })
 
   // ── Profile-backed fixed NR with stale legacy window ──────────────────
   const rtFixed = await prisma.resourceType.create({
@@ -114,11 +119,14 @@ beforeAll(async () => {
     data: { projectId, name: 'Conflicting Plan', targetWeeks: 10, periodWeeks: 4, isActive: true, periods: { create: [{ periodIndex: 0, startWeek: 0, endWeek: 9, entries: { create: [{ resourceTypeId: rtCapPlan.id, headcount: 1, demandFTE: 1, utilisationPct: 100 }] } }] } },
   })
 
-  // ── CAPACITY_PLAN RT without profile (plan fallback applies) ──────────
+  // ── CAPACITY_PLAN RT with a ROLE profile (plan fallback removed, #418) ──
   const rtCapPlanOnly = await prisma.resourceType.create({
     data: { name: 'CapPlanOnly', category: 'ENGINEERING', count: 1, hoursPerDay: 8, allocationMode: 'CAPACITY_PLAN', projectId },
   })
   rtCapPlanOnlyId = rtCapPlanOnly.id
+  await prisma.capacityProfile.create({
+    data: { projectId, resourceTypeId: rtCapPlanOnly.id, namedResourceId: null, ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, segments: { create: [{ startWeek: 0, endWeek: 9, capacityPercent: 100, source: 'SQUAD_PLANNER' }] } },
+  })
 
   // ── Squad Planner composition fixture ────────────────────────────
   const rtSquad = await prisma.resourceType.create({
@@ -132,9 +140,11 @@ beforeAll(async () => {
   const nrSP2 = await prisma.namedResource.create({
     data: { resourceTypeId: rtSquad.id, name: 'SP Planned 2', allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 50 },
   })
-  // Aggregate ROLE profile (SQUAD_PLANNER source)
+  // Aggregate ROLE profile (SQUAD_PLANNER source). Segmentless CAPACITY_PROFILE
+  // ROLE is invalid under the single structural rule set, so the 150% profile
+  // carries an explicit segment.
   await prisma.capacityProfile.create({
-    data: { projectId, resourceTypeId: rtSquad.id, namedResourceId: null, ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 150 },
+    data: { projectId, resourceTypeId: rtSquad.id, namedResourceId: null, ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 150, segments: { create: [{ startWeek: 0, endWeek: 10, capacityPercent: 150, source: 'SQUAD_PLANNER' }] } },
   })
   await prisma.capacityProfile.create({
     data: { projectId, resourceTypeId: null, namedResourceId: nrSP1.id, ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, segments: { create: [{ startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' }] } },
@@ -186,7 +196,7 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
   it('1. profile overrides stale legacy window', async () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === rtProfileFixedId)!
     expect(rt).toBeDefined()
     expect(rt.namedResources).toHaveLength(1)
@@ -202,7 +212,7 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
   it('2. segmented profile with zero gap is preserved', async () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === rtProfileSegmentedId)!
     const nr = rt.namedResources[0]
     expect(nr.capacitySegments).toHaveLength(2)
@@ -214,7 +224,7 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
   it('3. role profile populates roleSegments and drives capacity', async () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === rtRoleId)!
     expect(rt.roleSegments).toBeDefined()
     expect(rt.roleSegments!.length).toBe(1)
@@ -225,18 +235,20 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     expect(getWeeklyCapacity(rt, 7, 8)).toBe(0) // after window
   })
 
-  it('4. legacy-only RT retains phantom slots', async () => {
+  it('4. role-only RT with demand-following profile drives capacity from the profile', async () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === rtLegacyId)!
-    expect(rt.roleSegments).toBeUndefined()
-    expect(getWeeklyCapacity(rt, 0, 8)).toBe(80) // 2 phantom × 40
+    // Issue #418: no legacy fallback — the ROLE profile is authoritative.
+    expect(rt.roleSegments).toBeDefined()
+    expect(rt.roleSegments![0]).toEqual({ startWeek: 0, endWeek: Infinity, allocationPercent: 100 })
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(40) // 100% × 8 × 5, not 2 phantom × 40
   })
   it('5. profile suppresses conflicting active Capacity Plan — profile NR keeps 25%, no extra synthetics from 1-trajectory plan', async () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === rtCapPlanWithProfileId)!
     expect(rt).toBeDefined()
     // The plan has 1 trajectory at headcount=1. The single profiled NR keeps
@@ -247,22 +259,22 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     expect(rt.namedResources[0].capacitySegments![0].allocationPercent).toBe(25)
     // 25% × 8 × 5 = 10h/week (not the plan's 100% × 40 = 40h/week)
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(10)
-    expect(rt.capacityPlanResolved).toBe(true)
   })
 
-  it('6. CAPACITY_PLAN without profile uses plan fallback', async () => {
+  it('6. CAPACITY_PLAN role profile drives capacity — plan fallback removed (issue #418)', async () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === rtCapPlanOnlyId)!
     expect(rt).toBeDefined()
-    // No profile, so capacity plan fallback should apply
+    // The ROLE profile is the only resolution source — no plan fallback.
+    expect(rt.roleSegments).toEqual([{ startWeek: 0, endWeek: 9, allocationPercent: 100 }])
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(40)
   })
 
   it('7. Timeline schedule and GET return consistent weekly capacity with parity assertions', async () => {
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
 
     const rtProfile = resolved.resourceTypes.find(r => r.id === rtProfileFixedId)!
     const rtRole = resolved.resourceTypes.find(r => r.id === rtRoleId)!
@@ -320,7 +332,7 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     expect(getWeeklyCapacity(rtSquad, 0, 8)).toBe(60) // 100% + 50%
 
     // Deterministic
-    const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved2 = await resolveSchedulerCapacity(prisma, projectId)
     expect(resolved.resourceTypes).toEqual(resolved2.resourceTypes)
   })
 
@@ -328,7 +340,6 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
     const { deriveNamedResourceAssignments } = await import('../lib/namedResourceAssignments.js')
-    const { materializeCapacityPlanResources } = await import('../lib/capacityPlanMaterialisation.js')
 
     // Verify persisted profiles have correct sources
     const profiles = await prisma.capacityProfile.findMany({ where: { projectId, resourceTypeId: rtSquadPlannerId } })
@@ -348,7 +359,7 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
       expect(p.source).toBe('SQUAD_PLANNER')
     }
     // Resolve
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === rtSquadPlannerId)!
 
     // Resolver returns empty roleSegments (suppressed Squad Planner overlap)
@@ -363,7 +374,6 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     expect(getWeeklyCapacity(rt, 0, 8)).toBe(60)
 
     // Named-resource assignment parity
-    const capacityPlanByRt = materializeCapacityPlanResources([])
     const assignments = deriveNamedResourceAssignments({
       resourceTypes: [rt],
       weeklyDemand: Array.from({ length: 8 }, (_, w) => ({
@@ -371,7 +381,6 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
         resourceTypeName: 'SquadPlannerRole',
         demandDays: 10,
       })),
-      capacityPlanByRt,
     })
     const rtAssign = assignments.get(rtSquadPlannerId)!
     // Per-NR actualAllocatedDays: debug for 80 vs 60 issue
@@ -382,7 +391,7 @@ describeIf('Scheduler capacity PostgreSQL integration', () => {
     expect(rtAssign.unallocatedDays).toBeCloseTo(20, 5) // 10d demand - 7.5d capacity = 2.5d/wk × 8
 
     // Deterministic
-    const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved2 = await resolveSchedulerCapacity(prisma, projectId)
     expect(resolved.resourceTypes).toEqual(resolved2.resourceTypes)
   })
 })

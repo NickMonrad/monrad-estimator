@@ -631,8 +631,10 @@ describe('POST /api/projects/:id/clone', () => {
     expect(nrData).toHaveLength(1)
     expect(nrData[0].name).toBe('Alice')
     expect(nrData[0].resourceTypeId).toBe('rt-c-1')
-    expect(nrData[0].startWeek).toBe(1)
-    expect(nrData[0].endWeek).toBe(10)
+    // Candidate legacy capacity columns are no longer copied by clone
+    // (issue #418) — capacity state is cloned losslessly via profiles.
+    expect(nrData[0].startWeek).toBeUndefined()
+    expect(nrData[0].endWeek).toBeUndefined()
   })
 
   // ── Overhead RT remapping ────────────────────────────────────────────

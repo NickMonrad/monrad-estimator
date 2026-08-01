@@ -598,9 +598,10 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       { pricingModel: 'PRO_RATA', allocationPct: 80, startWeek: 2, endWeek: 10 })
 
     // ── Capacity profiles (11) ───────────────────────────────────────────
-    // ROLE — scalar shape (single segment, same window)
+    // ROLE — scalar shape (single segment, same window). Segmented with
+    // windows → CAPACITY_PROFILE under the single structural rule set.
     const cpRoleScalarId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', startWeek: 0, endWeek: 10, defaultPercent: 50 })
+      { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL', startWeek: 0, endWeek: 10, defaultPercent: 50 })
     await createSegment(cpRoleScalarId, crypto.randomUUID(), 0, 10, 50, 'MANUAL')
 
     // ROLE — window shape (no segments = empty)
@@ -608,18 +609,18 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       { planningBasis: 'AVAILABILITY_WINDOW', source: 'FIXED', startWeek: 2, endWeek: 8 })
     // No segments created — window-only shape
 
-    // NAMED_PERSON — multi-segment, discontinuous
+    // NAMED_PERSON — multi-segment, discontinuous (segmented → CAPACITY_PROFILE)
     const cpNamedMultiId = await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, nrJohnId,
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', startWeek: 0, endWeek: 12 })
+      { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL', startWeek: 0, endWeek: 12 })
     await createSegment(cpNamedMultiId, crypto.randomUUID(), 0, 3, 100, 'MANUAL')
     await createSegment(cpNamedMultiId, crypto.randomUUID(), 4, 4, 50, 'MANUAL')   // single-week
     await createSegment(cpNamedMultiId, crypto.randomUUID(), 5, 5, 0, 'MANUAL')    // zero-capacity gap
     await createSegment(cpNamedMultiId, crypto.randomUUID(), 6, 8, 75, 'FIXED')    // gap at week 9
     await createSegment(cpNamedMultiId, crypto.randomUUID(), 10, 12, 90, 'AVAILABILITY_WINDOW')
 
-    // PLANNED_RESOURCE — scalar shape
+    // PLANNED_RESOURCE — scalar shape (segmented → CAPACITY_PROFILE)
     const cpPlannedScalarId = await createProfile(srcProjectId, crypto.randomUUID(), 'PLANNED_RESOURCE', null, nrJaneId,
-      { planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'SQUAD_PLANNER', startWeek: 0, endWeek: 10, defaultPercent: 80 })
+      { planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', startWeek: 0, endWeek: 10, defaultPercent: 80 })
     await createSegment(cpPlannedScalarId, crypto.randomUUID(), 0, 10, 80, 'MANUAL')
     // DB_NULL legacy — must use a unique owner FK due to #361 constraints
     const cpDbNullNrId = crypto.randomUUID()
@@ -627,7 +628,7 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       data: { id: cpDbNullNrId, name: 'Temp Clone dbnull', resourceTypeId: rtEngId },
     })
     const cpDbNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, cpDbNullNrId,
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL' },
       Prisma.DbNull)
     await createSegment(cpDbNullId, crypto.randomUUID(), 0, 5, 30, 'MANUAL')
 
@@ -997,8 +998,8 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     }
   })
 
-  // ── Test A10: Resource-type fields preserved ────────────────────────
-  it('A10 — resource-type category, count, dayRate, allocationMode preserved', async () => {
+  // ── Test A10: Resource-type independent fields preserved ────────────
+  it('A10 — resource-type category, count, dayRate preserved; candidate columns not copied', async () => {
     const cloneProjectId = cloneResponse.body.id
 
     const srcRTs = await prisma.resourceType.findMany({ where: { projectId: srcProjectId }, orderBy: { id: 'asc' } })
@@ -1016,10 +1017,13 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       expect(cloneRT!.count).toBe(srcRT.count)
       expect(cloneRT!.hoursPerDay).toBe(srcRT.hoursPerDay)
       expect(cloneRT!.dayRate).toBe(srcRT.dayRate)
-      expect(cloneRT!.allocationMode).toBe(srcRT.allocationMode)
-      expect(cloneRT!.allocationPercent).toBe(srcRT.allocationPercent)
-      expect(cloneRT!.allocationStartWeek).toBe(srcRT.allocationStartWeek)
-      expect(cloneRT!.allocationEndWeek).toBe(srcRT.allocationEndWeek)
+      // Issue #418: the candidate legacy capacity columns are never copied —
+      // the clone's rows keep the schema defaults; capacity follows via the
+      // cloned capacity profiles.
+      expect(cloneRT!.allocationMode).toBe('TIMELINE')
+      expect(cloneRT!.allocationPercent).toBe(100)
+      expect(cloneRT!.allocationStartWeek).toBeNull()
+      expect(cloneRT!.allocationEndWeek).toBeNull()
     }
   })
   // ── Test A11: Discounts endpoint parity via production HTTP GET ──────
@@ -1629,9 +1633,10 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
     nrBobId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'Bob',
       { pricingModel: 'ACTUAL_DAYS', allocationPct: 100 })
 
-    // Create a valid ROLE capacity profile (FK-safe: has resourceTypeId, no namedResourceId)
+    // Create a valid ROLE capacity profile (FK-safe: has resourceTypeId, no
+    // namedResourceId). Segmented → CAPACITY_PROFILE.
     cpRoleId = await createProfile(srcProjectId, crypto.randomUUID(), 'ROLE', rtEngId, null,
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', startWeek: 0, endWeek: 10, defaultPercent: 100 })
+      { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL', startWeek: 0, endWeek: 10, defaultPercent: 100 })
     await createSegment(cpRoleId, crypto.randomUUID(), 0, 10, 100, 'MANUAL')
 
     // Create another valid NAMED_PERSON profile so more data exists before the
