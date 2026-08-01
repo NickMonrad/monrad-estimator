@@ -1179,6 +1179,24 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     // ── Rollback ──────────────────────────────────────────────────
     await rollbackProjectSnapshot({ projectId, snapshotId, userId, db: prisma })
 
+    // Post-snapshot resource types survive the rollback with their identity
+    // fields but no capacity authority (the rollback replaces profiles
+    // exactly). Issue #418: a role without a profile fails closed on reads,
+    // so the test repairs extraRtId with a fresh role profile before the
+    // read-parity assertions.
+    const repairProfileId = 'prof-extra-repair'
+    await createProfile(
+      projectId, repairProfileId, 'ROLE', extraRtId, null,
+      {
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+      },
+      { allocationMode: 'EFFORT', allocationPercent: 100 },
+    )
+
     // ── Verify exact restoration ──────────────────────────────────
 
     const discountsAfterRollback = await prisma.projectDiscount.findMany({
@@ -1267,8 +1285,10 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       include: { segments: { orderBy: { startWeek: 'asc' as const } } },
       orderBy: { ownerKind: 'asc' as const },
     })
-    // Exactly 9 profiles restored, no extras (4 original + 5 new JSON state profiles)
-    expect(profiles).toHaveLength(9)
+    // Exactly 10 snapshot profiles restored, no extras (4 original + 5 new
+    // JSON state profiles + Bob's legacy-shaped profile) plus the repair
+    // profile for the surviving post-snapshot role.
+    expect(profiles).toHaveLength(11)
 
     // ROLE profile: exact original values
     const roleRow = profiles.find(p => p.id === profileRoleId)!
@@ -1484,11 +1504,13 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       allocationStartWeek: 2,
       allocationEndWeek: 7,
     })
-    expect(canonicalAfter.capacityProfiles).toEqual(canonicalBefore.capacityProfiles)
+    expect(canonicalAfter.capacityProfiles.filter(p => p.resourceTypeId !== extraRtId))
+      .toEqual(canonicalBefore.capacityProfiles)
     expect(canonicalAfter.timelineEntries).toEqual(canonicalBefore.timelineEntries)
     expect(canonicalAfter.storyTimelineEntries).toEqual(canonicalBefore.storyTimelineEntries)
     expect(canonicalAfter.overheadItems).toEqual(canonicalBefore.overheadItems)
-    expect(canonicalAfter.dbNullProfileIds.sort()).toEqual(canonicalBefore.dbNullProfileIds.sort())
+    expect(canonicalAfter.dbNullProfileIds.filter(id => id !== repairProfileId).sort())
+      .toEqual(canonicalBefore.dbNullProfileIds.sort())
 
     // ── HTTP read-parity assertions (real auth, real ownership, real PostgreSQL) ──
     // Re-fetch Resource Profile after rollback
