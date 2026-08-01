@@ -682,7 +682,7 @@ describe('buildResourceCapacityProfileMap', () => {
 
   // ─── Duplicate handling ───────────────────────────────────────────────
 
-  it('duplicate identical role profiles: sorted by ID, first wins', () => {
+  it('duplicate identical role profiles fail closed (no smallest-ID selection)', () => {
     const project = makeProject({
       resourceTypes: [
         makeResourceType({
@@ -725,12 +725,12 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
-    const data = result.roleProfiles.get('rt-dup')!
-    // Both are exact duplicates → smallest ID (cp-a) wins
-    expect(data.resolutionSource).toBe('PROFILE')
-    expect(data.defaultPercent).toBe(75)
+    // Semantically identical duplicate rows are an integrity conflict too
+    // (issue #418 PR 1 review round 3): no canonical row is selected.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/rt-dup/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-a/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-b/)
   })
 
   it('duplicate conflicting role profiles: fall back to legacy with warning', () => {
@@ -781,7 +781,7 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
-  it('duplicate identical named resource profiles: sorted by ID, first wins', () => {
+  it('duplicate identical named resource profiles fail closed (no smallest-ID selection)', () => {
     const nrId = 'nr-dup'
     const project = makeProject({
       resourceTypes: [
@@ -831,13 +831,12 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    // Explicit-only role (no ROLE profile needed): just the NR entry
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
-    expect(result.roleProfiles.has('rt-1')).toBe(false)
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('PROFILE')
-    // cp-nr-a wins (smaller ID)
+    // Semantically identical duplicate rows are an integrity conflict too
+    // (issue #418 PR 1 review round 3): no canonical row is selected.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(new RegExp(nrId))
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-nr-a/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-nr-b/)
   })
 
   it('duplicate conflicting named resource profiles: fall back to legacy with warning', () => {
@@ -987,7 +986,7 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
-  it('identical duplicates with same ownerKind resolve deterministically (smallest ID wins)', () => {
+  it('identical duplicates with same ownerKind fail closed', () => {
     const nrId = 'nr-dup-same-kind'
     const project = makeProject({
       resourceTypes: [
@@ -1037,16 +1036,15 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    // Explicit-only role: just the NR entry
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('PROFILE')
-    expect(nrData.resourceIdentity).toBe('NAMED_PERSON')
-    // cp-a wins (smaller ID)
+    // Semantically identical duplicate rows are an integrity conflict too
+    // (issue #418 PR 1 review round 3): no canonical row is selected.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(new RegExp(nrId))
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-a/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-b/)
   })
 
-  it('identical duplicates with same ownerKind PLANNED_RESOURCE resolve deterministically', () => {
+  it('identical duplicates with same ownerKind PLANNED_RESOURCE fail closed', () => {
     const nrId = 'nr-dup-planned'
     const project = makeProject({
       resourceTypes: [
@@ -1110,13 +1108,12 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    // Role + single NR entry
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('PROFILE')
-    expect(nrData.resourceIdentity).toBe('PLANNED_RESOURCE')
-    // cp-a wins (smaller ID)
+    // Semantically identical duplicate rows are an integrity conflict too
+    // (issue #418 PR 1 review round 3): no canonical row is selected.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(new RegExp(nrId))
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-a/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-y/)
   })
 
   // ─── Key collision detection ──────────────────────────────────────────

@@ -11,8 +11,8 @@
  * An explicit-only role (every named resource carries a NAMED_PERSON profile and
  * no planner ownership exists) is the single supported state without a ROLE profile.
  *
- * Duplicate profiles are classified deterministically: semantically identical
- * duplicates resolve to the smallest persisted ID; conflicting duplicates fail closed.
+ * Any duplicate physical owner fails closed with a CapacityIntegrityError —
+ * semantically identical duplicate rows are just as conflicting as divergent ones.
  *
  * Returns collision-safe separate maps for role-level and named/planned-resource profiles.
  */
@@ -118,37 +118,14 @@ export interface ProfileClassification {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Check whether two segments are semantically equal (ignoring id/capacityProfileId/source metadata). */
-function segmentFieldsEqual(
-  a: { startWeek: number; endWeek: number; capacityPercent: number },
-  b: { startWeek: number; endWeek: number; capacityPercent: number },
-): boolean {
-  return a.startWeek === b.startWeek && a.endWeek === b.endWeek && a.capacityPercent === b.capacityPercent
-}
-
-/** Check whether two arrays of segments are semantically equal. */
-function arraysEqualByContent(
-  a: ReadonlyArray<{ startWeek: number; endWeek: number; capacityPercent: number }>,
-  b: ReadonlyArray<{ startWeek: number; endWeek: number; capacityPercent: number }>,
-): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    if (!segmentFieldsEqual(a[i], b[i])) return false
-  }
-  return true
-}
-
-/** Sort segments deterministically (startWeek asc, endWeek asc, capacityPercent asc). */
-function sortSegments<T extends { startWeek: number; endWeek: number; capacityPercent: number }>(segs: T[]): T[] {
-  return [...segs].sort((a, b) => a.startWeek - b.startWeek || a.endWeek - b.endWeek || a.capacityPercent - b.capacityPercent)
-}
-
 /**
  * Classify a group of persisted profiles for the same owner.
  *
  * - NONE: no profiles exist.
- * - VALID: exactly one profile, or multiple semantically identical ones (smallest ID wins).
- * - CONFLICT: multiple profiles with conflicting data — the caller fails closed.
+ * - VALID: exactly one profile.
+ * - CONFLICT: more than one physical row for the same owner — the caller
+ *   fails closed. Duplicate rows are never compared for semantic equality
+ *   and no canonical row is selected (issue #418 PR 1 review round 3).
  */
 function classifyProfiles(
   profiles: PersistedProfile[],
@@ -156,25 +133,10 @@ function classifyProfiles(
   if (profiles.length === 0) return { kind: 'NONE' }
   if (profiles.length === 1) return { kind: 'VALID', profile: profiles[0] }
 
-  const sorted = [...profiles].sort((a, b) => a.id.localeCompare(b.id))
-  const first = sorted[0]
-
-  const allExact = sorted.every(p =>
-    p.ownerKind === first.ownerKind &&
-    p.planningBasis === first.planningBasis &&
-    p.source === first.source &&
-    p.defaultPercent === first.defaultPercent &&
-    p.startWeek === first.startWeek &&
-    p.endWeek === first.endWeek &&
-    arraysEqualByContent(
-      sortSegments(p.segments ?? []),
-      sortSegments(first.segments ?? []),
-    )
-  )
-
-  if (allExact) return { kind: 'VALID', profile: first }
-
-  return { kind: 'CONFLICT', ids: sorted.map(p => p.id) }
+  return {
+    kind: 'CONFLICT',
+    ids: [...profiles].sort((a, b) => a.id.localeCompare(b.id)).map(p => p.id),
+  }
 }
 
 /** Convert a resolved persisted profile DTO to CapacityProfileResourceData. */
@@ -218,13 +180,12 @@ function profileDtoToData(
  * Persisted owner-specific CapacityProfile rows are the only resolution source.
  * The builder fails closed with a CapacityIntegrityError when:
  *  - a profile references an owner outside the project or has malformed owner shape;
- *  - an owner has conflicting duplicate profiles;
+ *  - an owner has more than one physical profile row (duplicate owner) —
+ *    identical duplicates fail closed exactly like conflicting ones;
  *  - a named resource has no valid profile;
  *  - a role has no valid ROLE profile unless every named resource of that role
  *    carries a NAMED_PERSON profile (explicit-only role, the one supported
  *    no-ROLE-profile state).
- *
- * VALID exact duplicates resolve deterministically (smallest persisted ID wins).
  *
  * Returns separate roleProfiles and namedResourceProfiles maps for collision-safe lookups.
  */
@@ -322,7 +283,7 @@ export function buildResourceCapacityProfileMap(
   for (const [rtId, classification] of rtClassifications) {
     if (classification.kind === 'CONFLICT') {
       throw new CapacityIntegrityError(
-        `Conflicting duplicate capacity profiles for role "${rtId}": ${(classification.ids ?? []).join(', ')}. ` +
+        `Duplicate capacity profiles for role "${rtId}": ${(classification.ids ?? []).join(', ')}. ` +
         'Run the capacity profile audit/repair workflow before retrying this operation.',
       )
     }
@@ -341,7 +302,7 @@ export function buildResourceCapacityProfileMap(
   for (const [nrId, classification] of nrClassifications) {
     if (classification.kind === 'CONFLICT') {
       throw new CapacityIntegrityError(
-        `Conflicting duplicate capacity profiles for named resource "${nrId}": ${(classification.ids ?? []).join(', ')}. ` +
+        `Duplicate capacity profiles for named resource "${nrId}": ${(classification.ids ?? []).join(', ')}. ` +
         'Run the capacity profile audit/repair workflow before retrying this operation.',
       )
     }

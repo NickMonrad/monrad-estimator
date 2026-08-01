@@ -319,4 +319,62 @@ describe('shared structural rule set (single authoritative validator)', () => {
       'valid',
     )
   })
+
+  it('rejects a duplicate physical owner through persisted validation, owner loading and the runtime adapter', async () => {
+    // One fixture, semantically identical rows, consumed by every validator.
+    const duplicateA = personProfile({ id: 'cp-nr-dup-a' })
+    const duplicateB = personProfile({ id: 'cp-nr-dup-b' })
+
+    // 1. Persisted validation — aggregate duplicate-owner check.
+    const persisted = validatePersistedCapacityProfiles(
+      [duplicateA as never, duplicateB as never],
+      context,
+    )
+    expect(persisted.errors.join('; ')).toMatch(/duplicate physical owner/)
+
+    // 2. Owner-profile loading (mutation path) — more than one row rejects.
+    const tx = {
+      capacityProfile: {
+        findMany: async () => [duplicateA, duplicateB],
+      },
+    }
+    await expect(
+      loadAndValidateOwnerProfile({
+        tx: tx as never,
+        projectId: PROJECT_ID,
+        ownerKind: 'NAMED_PERSON',
+        ownerId: NR_ID,
+      }),
+    ).rejects.toThrow(CapacityIntegrityError)
+
+    // 3. Runtime adapter — duplicate rows fail closed before DTO conversion.
+    const project = {
+      id: PROJECT_ID,
+      hoursPerDay: 8,
+      resourceTypes: [{
+        id: RT_ID,
+        name: 'Engineer',
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        count: 1,
+        hoursPerDay: 8,
+        namedResources: [{
+          id: NR_ID,
+          name: 'Alice',
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
+        }],
+      }],
+      capacityProfiles: [duplicateA, duplicateB],
+    }
+    expect(() => buildResourceCapacityProfileMap(project as never)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project as never)).toThrow(/cp-nr-dup-a/)
+    expect(() => buildResourceCapacityProfileMap(project as never)).toThrow(/cp-nr-dup-b/)
+  })
 })
