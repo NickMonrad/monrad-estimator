@@ -954,6 +954,18 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       allocationStartWeek: 2,
       allocationEndWeek: 7,
     })
+    // Profile-first (issue #418): every owner must carry a profile.
+    await createProfile(
+      projectId, 'prof-extra-nr', 'NAMED_PERSON', null, 'nr-extra',
+      {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 45,
+        startWeek: 2,
+        endWeek: 7,
+      },
+      Prisma.DbNull,
+    )
     extraProfileId = await createProfile(
       projectId, 'prof-extra-owner', 'ROLE', extraRtId, null,
       {
@@ -1004,11 +1016,17 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       data: { startWeek: 1, endWeek: 6, capacityPercent: 50 },
     })
 
-    // Delete PLANNED_RESOURCE profile entirely
+    // Mutate PLANNED_RESOURCE profile (issue #418: deleting an owner's only
+    // profile would leave fail-closed integrity state; the rollback still
+    // restores the original captured profile).
     await prisma.capacitySegment.deleteMany({
       where: { capacityProfileId: profilePlannedId },
     })
-    await prisma.capacityProfile.delete({ where: { id: profilePlannedId } })
+    await createSegment(profilePlannedId, 'seg-planned-mut', 0, 3, 100)
+    await prisma.capacityProfile.update({
+      where: { id: profilePlannedId },
+      data: { planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 90 },
+    })
     // Create an extra profile not in the snapshot (use NAMED_PERSON with temp NR to avoid owner FK conflict)
     const tempExtraNr = await createNamedResource(
       projectId, rtDesId, 'nr-temp-extra', 'Temp Extra',
@@ -1097,11 +1115,16 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       where: { capacityProfileId: profileArrayNullId },
     })
 
-    // String legacy profile: delete entirely
+    // String legacy profile: mutate in place (issue #418 — owner must stay
+    // profiled; the rollback restores the original values).
     await prisma.capacitySegment.deleteMany({
       where: { capacityProfileId: profileStringId },
     })
-    await prisma.capacityProfile.delete({ where: { id: profileStringId } })
+    await createSegment(profileStringId, 'seg-string-mut', 3, 5, 60)
+    await prisma.capacityProfile.update({
+      where: { id: profileStringId },
+      data: { defaultPercent: 80 },
+    })
 
     // Boolean legacy profile: change fields
     await prisma.capacityProfile.update({
@@ -1744,12 +1767,13 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     expect(profileB!.segments[0].startWeek).toBe(1)
     expect(profileB!.segments[1].capacityPercent).toBe(50)
 
-    // No duplicate profiles
+    // No duplicate profiles: the ROLE profile and Eve's named-person profile
+    // survive the rollback exactly once each.
     const allProfiles = await prisma.capacityProfile.findMany({
       where: { projectId },
     })
-    expect(allProfiles).toHaveLength(1)
-    expect(allProfiles[0].id).toBe('prof-b-a')
+    expect(allProfiles).toHaveLength(2)
+    expect(allProfiles.map((p: { id: string }) => p.id).sort()).toEqual(['prof-b-a', 'prof-b-eve'])
 
     // DB_NULL semantics preserved
     const dbNullIds = await detectDbNullProfileIds(projectId)
