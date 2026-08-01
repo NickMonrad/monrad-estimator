@@ -997,8 +997,8 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     }
   })
 
-  // ── Test A10: Resource-type fields preserved ────────────────────────
-  it('A10 — resource-type category, count, dayRate, allocationMode preserved', async () => {
+  // ── Test A10: Resource-type independent fields preserved ────────────
+  it('A10 — resource-type category, count, dayRate preserved; candidate columns not copied', async () => {
     const cloneProjectId = cloneResponse.body.id
 
     const srcRTs = await prisma.resourceType.findMany({ where: { projectId: srcProjectId }, orderBy: { id: 'asc' } })
@@ -1016,10 +1016,13 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       expect(cloneRT!.count).toBe(srcRT.count)
       expect(cloneRT!.hoursPerDay).toBe(srcRT.hoursPerDay)
       expect(cloneRT!.dayRate).toBe(srcRT.dayRate)
-      expect(cloneRT!.allocationMode).toBe(srcRT.allocationMode)
-      expect(cloneRT!.allocationPercent).toBe(srcRT.allocationPercent)
-      expect(cloneRT!.allocationStartWeek).toBe(srcRT.allocationStartWeek)
-      expect(cloneRT!.allocationEndWeek).toBe(srcRT.allocationEndWeek)
+      // Issue #418: the candidate legacy capacity columns are never copied —
+      // the clone's rows keep the schema defaults; capacity follows via the
+      // cloned capacity profiles.
+      expect(cloneRT!.allocationMode).toBe('TIMELINE')
+      expect(cloneRT!.allocationPercent).toBe(100)
+      expect(cloneRT!.allocationStartWeek).toBeNull()
+      expect(cloneRT!.allocationEndWeek).toBeNull()
     }
   })
   // ── Test A11: Discounts endpoint parity via production HTTP GET ──────

@@ -522,6 +522,19 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       projectId, rtDesId, 'nr-bob', 'Bob',
       { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
     )
+    // Profile-first (issue #418): every named resource must carry a profile —
+    // missing owner state fails closed, so Bob gets a legacy-shaped profile.
+    await createProfile(
+      projectId, 'prof-bob', 'NAMED_PERSON', null, 'nr-bob',
+      {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+      },
+      { allocationMode: 'TIMELINE', allocationPercent: 100 },
+    )
     // ── 3rd named resource for PLANNED_RESOURCE ownership ──────────
     nrCharlieId = await createNamedResource(
       projectId, rtDevId, 'nr-charlie', 'Charlie',
@@ -756,7 +769,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     snapshotId = snap.id
     canonicalBefore = await captureCanonicalState(projectId)
     expect(canonicalBefore.resourceTypes).toHaveLength(2)
-    expect(canonicalBefore.capacityProfiles).toHaveLength(9)
+    expect(canonicalBefore.capacityProfiles).toHaveLength(10)
 
     // ── Capture Resource Profile & Timeline HTTP responses before mutation ──
     const rpBefore = await request(app)
@@ -805,8 +818,9 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(alice).toBeDefined()
     expect(alice!.pricingModel).toBe('ACTUAL_DAYS')
 
-    // Nine profiles (4 original + 5 new covering all 7 legacy JSON states)
-    expect(data.capacityProfiles).toHaveLength(9)
+    // Ten profiles (4 original + 5 new covering all 7 legacy JSON states +
+    // Bob's legacy-shaped named-person profile)
+    expect(data.capacityProfiles).toHaveLength(10)
 
     // ROLE — DB_NULL, 2 segments
     const roleP = data.capacityProfiles.find(p => p.id === profileRoleId)
@@ -1604,6 +1618,12 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     projectId = await createProject()
     rtId = await createResourceType(projectId, 'rt-b-chain', 'Engineer')
     await createNamedResource(projectId, rtId, 'nr-b-chain', 'Eve')
+    // Profile-first (issue #418): Eve must carry a profile.
+    await createProfile(
+      projectId, 'prof-b-eve', 'NAMED_PERSON', null, 'nr-b-chain',
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
+      Prisma.DbNull,
+    )
 
     // State A: ROLE profile, 100% TIMELINE, no segments
     await createProfile(
@@ -2250,8 +2270,10 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
         allocationPct: nr.id === nrId ? 60 : 100,
         allocationMode: nr.id === nrId ? 'TIMELINE' : 'EFFORT',
         allocationPercent: nr.id === nrId ? 60 : 100,
-        allocationStartWeek: nr.id === nrId ? 0 : null,
-        allocationEndWeek: nr.id === nrId ? 10 : null,
+        // Historical v2 rows carried the availability window on the startWeek/
+        // endWeek aliases; allocationStartWeek/EndWeek were not populated.
+        allocationStartWeek: null,
+        allocationEndWeek: null,
       })),
     } as unknown as SnapshotV2
     v2SnapshotId = (
@@ -2725,6 +2747,18 @@ describeIf('Scenario G — v3 restores scope and scheduling fields', () => {
       allocationStartWeek: 2,
       allocationEndWeek: 6,
     })
+    // Profile-first (issue #418): the role needs an authoritative ROLE profile.
+    await createProfile(
+      projectId, 'prof-g-role', 'ROLE', rtId, null,
+      {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 60,
+        startWeek: 2,
+        endWeek: 6,
+      },
+      { allocationMode: 'TIMELINE', allocationPercent: 60 },
+    )
     const backlog = await createEpicBacklog(projectId, rtId, null)
     epicId = backlog.epicId
     featureId = backlog.featureId

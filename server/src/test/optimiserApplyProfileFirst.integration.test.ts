@@ -64,6 +64,8 @@ async function createScenario(
     allocationMode?: 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
     allocationPercent?: number
     withBacklog?: boolean
+    /** Skip the mapper-provenance profile (scenarios that seed their own). */
+    withProfile?: boolean
   } = {},
 ): Promise<Scenario> {
   const project = await prisma.project.create({
@@ -102,29 +104,32 @@ async function createScenario(
     },
   })
   // Profile-first (issue #418): the NR's capacity state is a persisted
-  // mapper-provenance scalar profile the optimiser may adopt.
-  await prisma.capacityProfile.create({
-    data: {
-      projectId: project.id,
-      resourceTypeId: null,
-      namedResourceId: namedResource.id,
-      ownerKind: 'NAMED_PERSON',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      source: 'AVAILABILITY_WINDOW',
-      defaultPercent: allocationPercent,
-      startWeek,
-      endWeek,
-      legacy: {
-        allocationMode: options.allocationMode ?? 'TIMELINE',
-        allocationPercent,
-        allocationPct: allocationPercent,
-        allocationStartWeek: startWeek,
-        allocationEndWeek: endWeek,
+  // mapper-provenance scalar profile the optimiser may adopt. Scenarios that
+  // seed their own ownership state opt out via withProfile: false.
+  if (options.withProfile !== false) {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId: project.id,
+        resourceTypeId: null,
+        namedResourceId: namedResource.id,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: allocationPercent,
         startWeek,
         endWeek,
+        legacy: {
+          allocationMode: options.allocationMode ?? 'TIMELINE',
+          allocationPercent,
+          allocationPct: allocationPercent,
+          allocationStartWeek: startWeek,
+          allocationEndWeek: endWeek,
+          startWeek,
+          endWeek,
+        },
       },
-    },
-  })
+    })
+  }
 
   if (options.withBacklog) {
     const epic = await prisma.epic.create({
@@ -277,7 +282,7 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
   })
 
   it('rejects segmented explicit ownership before snapshot or mutation', async () => {
-    const scenario = await createScenario('segmented')
+    const scenario = await createScenario('segmented', { withProfile: false })
     const profile = await prisma.capacityProfile.create({
       data: {
         projectId: scenario.projectId,
@@ -403,6 +408,7 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     const scenario = await createScenario('malformed-effort', {
       allocationMode: 'EFFORT',
       startWeek: -3,
+      withProfile: false,
     })
 
     const beforeCount = await prisma.resourceType.findUniqueOrThrow({ where: { id: scenario.resourceTypeId } }).then(r => r.count)
@@ -418,7 +424,7 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     const afterCount = await prisma.resourceType.findUniqueOrThrow({ where: { id: scenario.resourceTypeId } }).then(r => r.count)
     expect(afterCount).toBe(beforeCount)
     expect(await prisma.backlogSnapshot.findMany({ where: { projectId: scenario.projectId } })).toEqual([])
-    expect(await prisma.capacityProfile.findMany({ where: { namedResourceId: scenario.namedResourceId } })).toHaveLength(1)
+    expect(await prisma.capacityProfile.findMany({ where: { namedResourceId: scenario.namedResourceId } })).toEqual([])
   })
 
   it('rolls back snapshot, profile, count, schedule, and cache on a late failure', async () => {
