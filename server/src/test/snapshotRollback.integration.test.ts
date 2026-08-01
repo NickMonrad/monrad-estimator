@@ -1587,11 +1587,15 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       { startWeek: 3, endWeek: 7, capacityPercent: 80 },
     ])
 
-    // ── Bob (no persisted profile) under Designer RT: LEGACY resolutionSource ──
+    // ── Bob under Designer RT: persisted profile (issue #418 — every owner
+    // carries authoritative profile state; no legacy fallback exists) ──
     const desNrs = desRow.namedResources as Array<Record<string, unknown>>
     const bobRow = desNrs.find(nr => nr.name === 'Bob')!
     const bobCp = bobRow.capacityProfile as Record<string, unknown>
-    expect(bobCp.resolutionSource).toBe('LEGACY')
+    expect(bobCp.resolutionSource).toBe('PROFILE')
+    expect(bobCp.planningBasis).toBe('availabilityWindow')
+    expect(bobCp.source).toBe('availabilityWindow')
+    expect(bobCp.defaultPercent).toBe(100)
     expect(bobRow.resourceIdentity).toBe('NAMED_PERSON')
 
     // ── Charlie: PLANNED_RESOURCE identity, PROFILE resolutionSource, 3 segments ──
