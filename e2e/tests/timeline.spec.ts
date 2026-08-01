@@ -448,7 +448,7 @@ test.describe('Starting Team Finder drawer — with resources', () => {
         return { devRtId: devRt.id, devRtCount: devRt.count }
       }, { id: projectId })
 
-      // ── 2. Create named resource with NO_PROFILE ─────────────────────────
+      // ── 2. Create named resource (profile derived from the role default) ──
       const nrResult = await page.evaluate(async ({ id, devRtId }) => {
         const token = localStorage.getItem('token')
         const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
@@ -465,15 +465,23 @@ test.describe('Starting Team Finder drawer — with resources', () => {
 
       // 2b. SQL: the generated profile carries the shared generation
       // provenance (DERIVED + legacy.writer=ROLE_DEFAULT) — #403.
-      const genCp = await db.query(`SELECT source, legacy FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
+      const genCp = await db.query(`SELECT id, source, legacy FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
       expect(genCp.rows).toHaveLength(1)
       expect(genCp.rows[0].source).toBe('DERIVED')
       expect(genCp.rows[0].legacy).toMatchObject({ version: 1, writer: 'ROLE_DEFAULT' })
 
-      // Delete the CapacityProfile so the NR has NO_PROFILE
-      await db.query(`DELETE FROM "CapacitySegment" WHERE "capacityProfileId" IN (SELECT id FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2)`, [nrResult.nrId, projectId])
-      const delResult = await db.query(`DELETE FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
-      if ((delResult.rowCount ?? 0) === 0) throw new Error('No CapacityProfile found to delete')
+      // Convert the generated clone into a mapper-derived scalar profile
+      // (LEGACY_MAPPER_SCALAR) — the supported state the optimiser may ramp
+      // up. A profile-less named resource is an integrity violation since
+      // the runtime cutover (issue #418): missing profiles fail closed.
+      await db.query(
+        `UPDATE "CapacityProfile" SET "source" = 'FIXED', "planningBasis" = 'DEMAND_FOLLOWING', ` +
+        `"defaultPercent" = 100, "startWeek" = NULL, "endWeek" = NULL, ` +
+        `"legacy" = '{"allocationMode":"EFFORT","allocationPercent":100,"allocationPct":100,` +
+        `"allocationStartWeek":null,"allocationEndWeek":null,"startWeek":null,"endWeek":null}'::jsonb ` +
+        `WHERE "id" = $1`,
+        [genCp.rows[0].id],
+      )
 
 
       // ── 4. Push Developer demand past week 0 ─────────────────────────────
@@ -486,12 +494,12 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       await expect(page.getByRole('button', { name: /sequential|parallel/i }).first()).toBeVisible({ timeout: 15_000 })
 
       // ── 3. Capture pre-apply state (after feature delay, before optimiser) ─
-      // 3a. SQL: NamedResource compatibility fields
+      // 3a. SQL: candidate compatibility columns are frozen historical data —
+      // runtime no longer writes them, so they retain the schema defaults.
       const preNrSql = await db.query(`SELECT * FROM "NamedResource" WHERE "id" = $1`, [nrResult.nrId])
       expect(preNrSql.rows).toHaveLength(1)
       const preNr = preNrSql.rows[0]
-      // Derived from the Developer role profile (AVAILABILITY_WINDOW default → TIMELINE compat)
-      expect(preNr.allocationMode).toBe('TIMELINE')
+      expect(preNr.allocationMode).toBe('EFFORT') // schema default — no projection write
       expect(preNr.allocationPercent).toBe(100)
       expect(preNr.allocationPct).toBe(100)
       expect(preNr.allocationStartWeek).toBeNull()
@@ -499,9 +507,11 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(preNr.startWeek).toBeNull()
       expect(preNr.endWeek).toBeNull()
 
-      // 3b. SQL: zero profiles + zero segments
+      // 3b. SQL: the mapper-derived scalar profile (one profile, zero segments)
       const preCpRows = await db.query(`SELECT * FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
-      expect(preCpRows.rows).toHaveLength(0)
+      expect(preCpRows.rows).toHaveLength(1)
+      expect(preCpRows.rows[0].source).toBe('FIXED')
+      expect(preCpRows.rows[0].planningBasis).toBe('DEMAND_FOLLOWING')
       const preSegRows = await db.query(`SELECT cs.* FROM "CapacitySegment" cs JOIN "CapacityProfile" cp ON cs."capacityProfileId" = cp.id WHERE cp."namedResourceId" = $1 AND cp."projectId" = $2`, [nrResult.nrId, projectId])
       expect(preSegRows.rows).toHaveLength(0)
 
@@ -528,9 +538,10 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(preState.devNr).toBeDefined()
       const preRpNr = preState.devNr!
       expect(preRpNr.capacityProfile).toBeDefined()
-      expect(preRpNr.capacityProfile!.resolutionSource).toBe('LEGACY')
-      // The pre-edit DTO is legacy-resolved, so its source mirrors the role.
-      expect(preRpNr.capacityProfile!.source).toBe('availabilityWindow')
+      // Profile-first: the persisted mapper-derived profile is authoritative.
+      expect(preRpNr.capacityProfile!.resolutionSource).toBe('PROFILE')
+      expect(preRpNr.capacityProfile!.source).toBe('fixed')
+      expect(preRpNr.capacityProfile!.planningBasis).toBe('demandFollowing')
 
 
 
@@ -629,18 +640,17 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       const postSegRows = await db.query(`SELECT * FROM "CapacitySegment" WHERE "capacityProfileId" = $1`, [postCp.id])
       expect(postSegRows.rows).toHaveLength(0)
 
-      // 7c. NamedResource compatibility fields equal profile projection
+      // 7c. Candidate compatibility columns stay frozen (no projection writes)
       const postNrSql = await db.query(`SELECT * FROM "NamedResource" WHERE "id" = $1`, [nrResult.nrId])
       expect(postNrSql.rows).toHaveLength(1)
       const postNr = postNrSql.rows[0]
-      // NamedResource compatibility fields: all 7 asserted against authoritative profile
-      expect(postNr.allocationMode).toBe('TIMELINE') // AVAILABILITY_WINDOW projects to TIMELINE
-      expect(postNr.allocationPercent).toBe(postCp.defaultPercent)
-      expect(postNr.allocationPct).toBe(postCp.defaultPercent)
-      expect(postNr.allocationStartWeek).toBe(postCp.startWeek)
-      expect(postNr.allocationEndWeek).toBe(postCp.endWeek)
-      expect(postNr.startWeek).toBe(postCp.startWeek)
-      expect(postNr.endWeek).toBe(postCp.endWeek)
+      expect(postNr.allocationMode).toBe('EFFORT') // unchanged schema default
+      expect(postNr.allocationPercent).toBe(100)
+      expect(postNr.allocationPct).toBe(100)
+      expect(postNr.allocationStartWeek).toBeNull()
+      expect(postNr.allocationEndWeek).toBeNull()
+      expect(postNr.startWeek).toBeNull()
+      expect(postNr.endWeek).toBeNull()
       const postRp = await page.evaluate(async ({ id, nrId }) => {
         const token = localStorage.getItem('token')
         const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
@@ -707,9 +717,16 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(undoResult.status).toBe(200)
 
       // ── 11. Verify exact state restoration (no conditional bypass) ─────
-      // 11a. SQL: profile removed
+      // 11a. SQL: profile restored to the pre-apply mapper-derived scalar
+      // (issue #418 — v4 snapshots capture capacity profiles, so the undo
+      // restores the authoritative profile instead of leaving a bare NR)
       const restCpRows = await db.query(`SELECT * FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
-      expect(restCpRows.rows).toHaveLength(0)
+      expect(restCpRows.rows).toHaveLength(1)
+      expect(restCpRows.rows[0].source).toBe('FIXED')
+      expect(restCpRows.rows[0].planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(restCpRows.rows[0].defaultPercent).toBe(100)
+      expect(restCpRows.rows[0].startWeek).toBeNull()
+      expect(restCpRows.rows[0].endWeek).toBeNull()
       const restSegRows = await db.query(
         `SELECT * FROM "CapacitySegment" WHERE "capacityProfileId" = $1`,
         [createdProfileId],

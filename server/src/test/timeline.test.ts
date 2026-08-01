@@ -101,7 +101,34 @@ const mockEntries = [
   },
 ]
 
-beforeEach(() => vi.clearAllMocks())
+// Profile-first fixtures (issue #418): capacity resolution reads ONLY
+// persisted CapacityProfile state, so every test exercising the resolver
+// must provide ROLE and/or NAMED_PERSON profiles.
+function roleProfile(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'cp-role-1', projectId: 'proj-1', ownerKind: 'ROLE', resourceTypeId: 'rt-1',
+    namedResourceId: null, planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+    defaultPercent: 100, startWeek: null, endWeek: null, legacy: null,
+    segments: [],
+    ...overrides,
+  }
+}
+function namedPersonProfile(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'cp-nr-1', projectId: 'proj-1', ownerKind: 'NAMED_PERSON', resourceTypeId: null,
+    namedResourceId: 'nr-1', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+    defaultPercent: 100, startWeek: null, endWeek: null, legacy: null,
+    segments: [],
+    ...overrides,
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  // Default: no persisted capacity profiles. Profile-first resolution fails
+  // closed, so tests that exercise the resolver provide their own fixtures.
+  vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([])
+})
 
 describe('GET /api/projects/:projectId/timeline', () => {
   it('returns 401 without auth', async () => {
@@ -230,6 +257,13 @@ describe('GET /api/projects/:projectId/timeline', () => {
         { periodIndex: 3, startWeek: 12, endWeek: 16, entries: [{ resourceTypeId: 'rt-security', headcount: 0 }] },
       ],
     } as any)
+    // Explicit-only role: the single NR's profile encodes the plan-shaped
+    // window (weeks 4-11 at 100%) with zero capacity elsewhere.
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([namedPersonProfile({
+      id: 'cp-nr-security', namedResourceId: 'nr-security',
+      planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL', defaultPercent: null,
+      segments: [{ id: 'seg-1', capacityProfileId: 'cp-nr-security', startWeek: 4, endWeek: 11, capacityPercent: 100, source: 'MANUAL' }],
+    })] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -305,6 +339,13 @@ describe('GET /api/projects/:projectId/timeline', () => {
         { periodIndex: 0, startWeek: 0, endWeek: 16, entries: [{ resourceTypeId: 'rt-security', headcount: 0.25 }] },
       ],
     } as any)
+    // ROLE profile carries the 25% plan capacity; the display materialisation
+    // of the plan still produces the synthetic named resource.
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile({
+      id: 'cp-role-security', resourceTypeId: 'rt-security',
+      planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 25,
+      segments: [{ id: 'seg-1', capacityProfileId: 'cp-role-security', startWeek: 0, endWeek: 15, capacityPercent: 25, source: 'SQUAD_PLANNER' }],
+    })] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -319,13 +360,15 @@ describe('GET /api/projects/:projectId/timeline', () => {
     expect(securityCapacity[0]).toBe(1.3)
     expect(securityCapacity[15]).toBe(1.3)
 
+    // Profile-first: the ROLE profile (25%) is represented by the synthetic
+    // aggregate role resource; the plan is only materialised for display.
     expect(res.body.namedResources).toEqual(expect.arrayContaining([
       expect.objectContaining({
         resourceTypeName: 'Security',
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPct: 25,
-        startWeek: 0,
-        endWeek: 15,
+        name: 'Security (Role)',
+        synthetic: true,
+        allocationMode: 'EFFORT',
+        allocationPct: 100,
       }),
     ]))
   })
@@ -383,6 +426,10 @@ describe('GET /api/projects/:projectId/timeline', () => {
       ],
     }] as any)
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as any)
+    // Explicit-only role: Taylor's NAMED_PERSON profile (100%, demand-following).
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([namedPersonProfile({
+      id: 'cp-nr-cloud', namedResourceId: 'nr-cloud',
+    })] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -456,6 +503,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
       allocationMode: 'EFFORT',
       namedResources: [],
     }] as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -520,6 +568,7 @@ describe('GET /api/projects/:projectId/timeline', () => {
       allocationMode: 'EFFORT',
       namedResources: [],
     }] as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -635,6 +684,10 @@ describe('GET /api/projects/:projectId/timeline', () => {
       },
     ] as any)
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      roleProfile({ id: 'cp-role-security', resourceTypeId: 'rt-security' }),
+      roleProfile({ id: 'cp-role-dev', resourceTypeId: 'rt-1' }),
+    ] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -712,6 +765,10 @@ describe('GET /api/projects/:projectId/timeline', () => {
       { id: 'rt-pe', name: 'Principal Engineer - Cloud & DevOps', category: 'ENGINEERING', count: 1, hoursPerDay: 7.6, allocationMode: 'EFFORT', namedResources: [] },
     ] as any)
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      roleProfile({ id: 'cp-role-sec', resourceTypeId: 'rt-sec' }),
+      roleProfile({ id: 'cp-role-pe', resourceTypeId: 'rt-pe' }),
+    ] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -796,6 +853,10 @@ describe('GET /api/projects/:projectId/timeline', () => {
       { id: 'rt-qa', name: 'QA', category: 'ENGINEERING', count: 1, hoursPerDay: 8, allocationMode: 'EFFORT', namedResources: [] },
     ] as any)
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      roleProfile({ id: 'cp-role-dev', resourceTypeId: 'rt-dev' }),
+      roleProfile({ id: 'cp-role-qa', resourceTypeId: 'rt-qa' }),
+    ] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -910,6 +971,12 @@ describe('GET /api/projects/:projectId/timeline', () => {
     vi.mocked(prisma.featureDependency.findMany).mockResolvedValue([])
     vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([])
     vi.mocked(prisma.storyDependency.findMany).mockResolvedValue([])
+    // ROLE profile carries the 1.5 FTE plan capacity (weeks 0-4).
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile({
+      id: 'cp-role-security', resourceTypeId: 'rt-security',
+      planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 150,
+      segments: [{ id: 'seg-1', capacityProfileId: 'cp-role-security', startWeek: 0, endWeek: 4, capacityPercent: 150, source: 'SQUAD_PLANNER' }],
+    })] as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline')
@@ -924,20 +991,16 @@ describe('GET /api/projects/:projectId/timeline', () => {
 
     expect(securityCapacity[0]).toBe(7.5)
     expect(securityCapacity[4]).toBe(7.5)
+    // Profile-first: the ROLE profile (150%) is the scheduling authority and
+    // appears as the synthetic aggregate role resource; plan trajectories are
+    // not duplicated into the response.
     expect(res.body.namedResources).toEqual(expect.arrayContaining([
       expect.objectContaining({
         resourceTypeName: 'Security',
-        allocationMode: 'CAPACITY_PLAN',
+        name: 'Security (Role)',
+        synthetic: true,
+        allocationMode: 'EFFORT',
         allocationPct: 100,
-        startWeek: 0,
-        endWeek: 4,
-      }),
-      expect.objectContaining({
-        resourceTypeName: 'Security',
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPct: 100,
-        startWeek: 0,
-        endWeek: 4,
       }),
     ]))
   })
@@ -1085,6 +1148,7 @@ describe('POST /api/projects/:projectId/timeline/schedule', () => {
 
   it('calculates duration correctly: 16h, 1 resource, 8h/day = 2 days = 1 week', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
     vi.mocked(prisma.epic.findMany).mockResolvedValue([
       {
         id: 'epic-1',
@@ -1141,6 +1205,7 @@ describe('POST /api/projects/:projectId/timeline/schedule', () => {
   it('returns entries for a project with tasks and updates startDate if provided', async () => {
     const updatedProject = { ...mockProject, startDate: new Date('2026-04-01T00:00:00.000Z') }
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
     vi.mocked(prisma.project.update).mockResolvedValue(updatedProject as any)
     vi.mocked(prisma.epic.findMany).mockResolvedValue(mockEpicsWithFeatures as any)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
@@ -1314,6 +1379,7 @@ describe('POST /schedule — DAG algorithm', () => {
     const featB = makeFeature('feat-b', 'Feature B', 1, [makeTask('t2', 40)])
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
     vi.mocked(prisma.epic.findMany).mockResolvedValue([makeEpic({ features: [featA, featB] })] as any)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
     vi.mocked(prisma.timelineEntry.findMany)
@@ -1342,6 +1408,7 @@ describe('POST /schedule — DAG algorithm', () => {
     const featB = makeFeature('feat-b', 'Feature B', 1, [makeTask('t2', 40)])
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
     vi.mocked(prisma.epic.findMany).mockResolvedValue([makeEpic({ featureMode: 'parallel', features: [featA, featB] })] as any)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
     vi.mocked(prisma.timelineEntry.findMany)
@@ -1369,6 +1436,7 @@ describe('POST /schedule — DAG algorithm', () => {
     const featA = makeFeature('feat-a', 'Feature A', 0, [makeTask('t1', 40)])
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
     vi.mocked(prisma.epic.findMany).mockResolvedValue([makeEpic({ timelineStartWeek: 4, features: [featA] })] as any)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
     vi.mocked(prisma.timelineEntry.findMany)
@@ -1393,6 +1461,7 @@ describe('POST /schedule — DAG algorithm', () => {
     const featB = makeFeature('feat-b', 'Feature B', 0, [makeTask('t2', 40)], [{ featureId: 'feat-b', dependsOnId: 'feat-a' }])
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
     vi.mocked(prisma.epic.findMany).mockResolvedValue([
       makeEpic({ id: 'epic-1', name: 'Epic 1', features: [featA] }),
       makeEpic({ id: 'epic-2', name: 'Epic 2', order: 1, featureMode: 'parallel', features: [featB] }),
@@ -1422,6 +1491,7 @@ describe('POST /schedule — DAG algorithm', () => {
     const featA = makeFeature('feat-a', 'Feature A', 0, [makeTask('t1', 40)])
 
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([roleProfile()] as never)
     vi.mocked(prisma.epic.findMany).mockResolvedValue([makeEpic({ features: [featA] })] as any)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue(mockResourceTypes as any)
     // Return a manual entry for feat-a

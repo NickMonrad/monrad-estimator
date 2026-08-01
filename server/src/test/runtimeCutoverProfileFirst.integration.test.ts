@@ -147,6 +147,8 @@ async function createRuntimeResourceType(name: string) {
     .post(`/api/projects/${projectId}/resource-types`)
     .set('Authorization', authHeader)
     .send({ name, category: 'ENGINEERING' })
+  // eslint-disable-next-line no-console
+  if (response.status !== 201) console.error('DBG rt:', response.status, JSON.stringify(response.body).slice(0, 200), 'projectId=', projectId)
   expect(response.status).toBe(201)
   return response.body
 }
@@ -481,12 +483,14 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .send({ planningBasis: 'AVAILABILITY_WINDOW', defaultPercent: 75, startWeek: 4, endWeek: 12 })
     expect(rtPut.status).toBe(200)
     expect(await getProfileId('ROLE', resourceTypeId)).toBe(roleProfile.id)
+    // Issue #418: first-class profile writes never touch the candidate
+    // columns — the stale seeded values stay frozen, the profile is authority.
     const rtAfter = await prisma.resourceType.findUniqueOrThrow({ where: { id: resourceTypeId } })
     expect(rtAfter).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 75,
-      allocationStartWeek: 4,
-      allocationEndWeek: 12,
+      allocationMode: 'EFFORT',
+      allocationPercent: 20,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
     })
 
     // First-class NAMED_PERSON write
@@ -496,15 +500,17 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .send({ planningBasis: 'AVAILABILITY_WINDOW', defaultPercent: 85, startWeek: 4, endWeek: 12 })
     expect(nrPut.status).toBe(200)
     expect(await getProfileId('NAMED_PERSON', initialNr.id)).toBe(nrProfile.id)
+    // Issue #418: first-class profile writes never touch the candidate
+    // columns — the stale seeded values stay frozen, the profile is authority.
     const nrAfter = await prisma.namedResource.findUniqueOrThrow({ where: { id: initialNr.id } })
     expect(nrAfter).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 85,
-      allocationPct: 85,
-      allocationStartWeek: 4,
-      allocationEndWeek: 12,
-      startWeek: 4,
-      endWeek: 12,
+      allocationMode: 'EFFORT',
+      allocationPercent: 20,
+      allocationPct: 20,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
     })
 
     // Legacy capacity request fields are rejected on the non-capacity routes (#403)
@@ -535,12 +541,14 @@ describeIf('profile-first runtime cutover (#364)', () => {
       .set('Authorization', authHeader)
       .send({ name: 'Profile-derived creation' })
     expect(createNr.status).toBe(201)
+    // Issue #418: identity creation returns the raw row — candidate columns
+    // stay at schema defaults; the inherited capacity lives in the profile.
     expect(createNr.body).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 75,
-      allocationPct: 75,
-      allocationStartWeek: 4,
-      allocationEndWeek: 12,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
     })
 
     // Count increase derives the inherited NR from the authoritative ROLE profile
@@ -556,14 +564,17 @@ describeIf('profile-first runtime cutover (#364)', () => {
 
     const increasedResources = await prisma.namedResource.findMany({ where: { resourceTypeId } })
     const inherited = increasedResources.find(resource => !existingIds.has(resource.id))
+    // Issue #418: count-increase NR creation writes identity only — the
+    // candidate legacy capacity columns keep their schema defaults and are
+    // never projected from the role profile.
     expect(inherited).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 75,
-      allocationPct: 75,
-      allocationStartWeek: 4,
-      allocationEndWeek: 12,
-      startWeek: 4,
-      endWeek: 12,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
     })
     const inheritedProfile = await prisma.capacityProfile.findFirstOrThrow({
       where: { projectId, namedResourceId: inherited!.id, resourceTypeId: null },

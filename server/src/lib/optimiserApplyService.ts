@@ -10,10 +10,6 @@ import { resolveSchedulerCapacity } from './schedulerCapacityResolver.js'
 
 import { Prisma, type PrismaClient } from '@prisma/client'
 import { prisma } from './prisma.js'
-import {
-  projectCapacityProfileToLegacyAllocation,
-  type LegacyAllocationProjection,
-} from './capacityProfileLegacyProjection.js'
 import { buildSnapshot } from './projectSnapshotService.js'
 import { pruneSnapshots } from './snapshotUtils.js'
 import {
@@ -52,13 +48,6 @@ export interface OptimiserNamedResourceState {
   id: string
   name: string
   resourceTypeId: string
-  startWeek: number | null
-  endWeek: number | null
-  allocationPct: number
-  allocationMode: string
-  allocationPercent: number
-  allocationStartWeek: number | null
-  allocationEndWeek: number | null
 }
 
 export interface OptimiserResourceTypeState {
@@ -68,7 +57,7 @@ export interface OptimiserResourceTypeState {
 }
 
 export type OptimiserRampUpClassification =
-  | { outcome: 'NO_PROFILE'; profileId: null }
+  | { outcome: 'MISSING_PROFILE'; profileId: null }
   | { outcome: 'LEGACY_MAPPER_SCALAR'; profileId: string }
   | { outcome: 'OPTIMISER_DERIVED_SCALAR'; profileId: string }
   | { outcome: 'EXPLICIT_SCALAR_PROTECTED' }
@@ -79,7 +68,7 @@ export type OptimiserRampUpClassification =
   | { outcome: 'MALFORMED_SCALAR_STATE' }
 
 type OptimiserWritableRampUpClassification = Extract<OptimiserRampUpClassification,
-  { outcome: 'NO_PROFILE' | 'LEGACY_MAPPER_SCALAR' | 'OPTIMISER_DERIVED_SCALAR' }>
+  { outcome: 'LEGACY_MAPPER_SCALAR' | 'OPTIMISER_DERIVED_SCALAR' }>
 
 export interface RampUpProfileWrite {
   profileId: string | null
@@ -88,7 +77,6 @@ export interface RampUpProfileWrite {
   startWeek: number
   endWeek: number | null
   defaultPercent: number
-  projection: LegacyAllocationProjection
 }
 
 export type OptimiserMutationIntent =
@@ -218,10 +206,15 @@ function hasValidAvailabilityWindow(profile: Pick<PersistedOptimiserProfile, 'de
     && (profile.startWeek == null || profile.endWeek == null || profile.startWeek <= profile.endWeek)
 }
 
-/** Proves that a scalar NAMED_PERSON profile came from the legacy mapper. */
+/**
+ * Proves that a scalar NAMED_PERSON profile came from the legacy mapper.
+ *
+ * The check is profile-internal (issue #418): the persisted `legacy` payload
+ * carries the mapper's source values and the profile shape must agree with
+ * them. Candidate NamedResource columns are never consulted.
+ */
 export function isValidNamedResourceMapperProvenance(
   profile: PersistedOptimiserProfile,
-  namedResource: OptimiserNamedResourceState,
 ): boolean {
   if (profile.ownerKind !== 'NAMED_PERSON') return false
   if (profile.namedResourceId == null || profile.resourceTypeId != null) return false
@@ -258,13 +251,6 @@ export function isValidNamedResourceMapperProvenance(
   return profile.defaultPercent === expectedPercent
     && profile.startWeek === expectedStart
     && profile.endWeek === expectedEnd
-    && profile.legacy.allocationMode === namedResource.allocationMode
-    && profile.legacy.allocationPercent === namedResource.allocationPercent
-    && profile.legacy.allocationStartWeek === namedResource.allocationStartWeek
-    && profile.legacy.allocationEndWeek === namedResource.allocationEndWeek
-    && profile.legacy.allocationPct === namedResource.allocationPct
-    && profile.legacy.startWeek === namedResource.startWeek
-    && profile.legacy.endWeek === namedResource.endWeek
 }
 
 function isOptimiserDerivedProfile(profile: PersistedOptimiserProfile): boolean {
@@ -280,96 +266,18 @@ function isOptimiserDerivedProfile(profile: PersistedOptimiserProfile): boolean 
 }
 
 /**
- * Validate that a named resource with no persisted profile represents a
- * coherent scalar state that can be promoted to an authoritative profile.
+ * Classify an owner for optimiser ramp-up.
  *
- * Requirements (review #360, finding 2):
- * - allocationMode must be EFFORT, TIMELINE or FULL_PROJECT.
- * - For EFFORT: effective percent is always 100 regardless of stored fields.
- * - For TIMELINE/FULL_PROJECT: allocationPercent and/or allocationPct must
- *   be present, finite, in [0, 100], and not contradictory.
- * - Week values must be finite, non-negative integers when present.
- * - Contradictory alias pairs (allocationPercent vs allocationPct,
- *   allocationStartWeek vs startWeek, allocationEndWeek vs endWeek)
- *   must match when both are present.
- * - If both start and end are present, start must not be after end.
+ * Missing profile state fails closed (issue #418): a named resource without a
+ * persisted profile is an integrity violation — the optimiser never promotes
+ * scalar legacy state into a profile.
  */
-export function validateNoProfileScalarState(
-  nr: OptimiserNamedResourceState,
-): { valid: true } | { valid: false; reason: string } {
-  const mode = nr.allocationMode
-  if (mode !== 'EFFORT' && mode !== 'TIMELINE' && mode !== 'FULL_PROJECT') {
-    return { valid: false, reason: `Unsupported allocation mode "${mode}". Use EFFORT, TIMELINE or FULL_PROJECT.` }
-  }
-
-  // TIMELINE / FULL_PROJECT require a valid percentage
-  if (mode !== 'EFFORT') {
-    const hasAllocPct = nr.allocationPercent != null
-    const hasAllocPctAlias = nr.allocationPct != null
-
-    if (!hasAllocPct && !hasAllocPctAlias) {
-      return { valid: false, reason: `Missing allocation percent for mode "${mode}".` }
-    }
-
-    if (hasAllocPct) {
-      if (!Number.isFinite(nr.allocationPercent) || nr.allocationPercent! < 0 || nr.allocationPercent! > 100) {
-        return { valid: false, reason: `allocationPercent ${nr.allocationPercent} is invalid; must be a finite number between 0 and 100.` }
-      }
-    }
-    if (hasAllocPctAlias) {
-      if (!Number.isFinite(nr.allocationPct) || nr.allocationPct! < 0 || nr.allocationPct! > 100) {
-        return { valid: false, reason: `allocationPct ${nr.allocationPct} is invalid; must be a finite number between 0 and 100.` }
-      }
-    }
-    if (hasAllocPct && hasAllocPctAlias && nr.allocationPercent !== nr.allocationPct) {
-      return { valid: false, reason: `Contradictory allocationPercent (${nr.allocationPercent}) and allocationPct (${nr.allocationPct}).` }
-    }
-  }
-
-  // All modes: validate week fields, alias consistency, window validity
-  const weekFields: Array<{ key: string; value: number | null | undefined; label: string }> = [
-    { key: 'startWeek', value: nr.startWeek, label: 'startWeek' },
-    { key: 'endWeek', value: nr.endWeek, label: 'endWeek' },
-    { key: 'allocationStartWeek', value: nr.allocationStartWeek, label: 'allocationStartWeek' },
-    { key: 'allocationEndWeek', value: nr.allocationEndWeek, label: 'allocationEndWeek' },
-  ]
-  for (const f of weekFields) {
-    if (f.value != null) {
-      if (!Number.isFinite(f.value) || !Number.isInteger(f.value) || f.value < 0) {
-        return { valid: false, reason: `${f.label} ${f.value} is invalid; must be a non-negative integer.` }
-      }
-    }
-  }
-
-  // Contradictory alias pairs
-  if (nr.allocationStartWeek != null && nr.startWeek != null && nr.allocationStartWeek !== nr.startWeek) {
-    return { valid: false, reason: `Contradictory allocationStartWeek (${nr.allocationStartWeek}) and startWeek (${nr.startWeek}).` }
-  }
-  if (nr.allocationEndWeek != null && nr.endWeek != null && nr.allocationEndWeek !== nr.endWeek) {
-    return { valid: false, reason: `Contradictory allocationEndWeek (${nr.allocationEndWeek}) and endWeek (${nr.endWeek}).` }
-  }
-
-  // Window validity: start must not be after end
-  const resolvedStart = nr.allocationStartWeek ?? nr.startWeek
-  const resolvedEnd = nr.allocationEndWeek ?? nr.endWeek
-  if (resolvedStart != null && resolvedEnd != null && resolvedStart > resolvedEnd) {
-    return { valid: false, reason: `Start week ${resolvedStart} is after end week ${resolvedEnd}.` }
-  }
-
-  return { valid: true }
-}
-
 export function classifyOptimiserRampUpOwner(
   profiles: readonly PersistedOptimiserProfile[],
   namedResource: OptimiserNamedResourceState,
 ): OptimiserRampUpClassification {
   if (profiles.length === 0) {
-    if (namedResource.allocationMode === 'CAPACITY_PLAN') {
-      return { outcome: 'PLANNER_MANAGED_PROTECTED' }
-    }
-    const validation = validateNoProfileScalarState(namedResource)
-    if (!validation.valid) return { outcome: 'MALFORMED_SCALAR_STATE' }
-    return { outcome: 'NO_PROFILE', profileId: null }
+    return { outcome: 'MISSING_PROFILE', profileId: null }
   }
   if (profiles.length !== 1) return { outcome: 'AMBIGUOUS_OR_DUPLICATE' }
 
@@ -386,7 +294,7 @@ export function classifyOptimiserRampUpOwner(
     return { outcome: 'CAPACITY_PROFILE_PROTECTED' }
   }
   if (profile.segments.length > 0) return { outcome: 'SEGMENTED_PROTECTED' }
-  if (isValidNamedResourceMapperProvenance(profile, namedResource)) {
+  if (isValidNamedResourceMapperProvenance(profile)) {
     return { outcome: 'LEGACY_MAPPER_SCALAR', profileId: profile.id }
   }
   if (isOptimiserDerivedProfile(profile)) {
@@ -398,46 +306,32 @@ export function classifyOptimiserRampUpOwner(
 function isOptimiserWritableRampUpClassification(
   classification: OptimiserRampUpClassification,
 ): classification is OptimiserWritableRampUpClassification {
-  return classification.outcome === 'NO_PROFILE'
-    || classification.outcome === 'LEGACY_MAPPER_SCALAR'
+  return classification.outcome === 'LEGACY_MAPPER_SCALAR'
     || classification.outcome === 'OPTIMISER_DERIVED_SCALAR'
 }
 
 function effectiveCurrentStart(
   classification: OptimiserRampUpClassification,
   profile: PersistedOptimiserProfile | undefined,
-  namedResource: OptimiserNamedResourceState,
 ): number | null | undefined {
   if (classification.outcome === 'AMBIGUOUS_OR_DUPLICATE') return undefined
-  if (profile) return profile.startWeek
-  return namedResource.allocationStartWeek ?? namedResource.startWeek ?? null
+  return profile?.startWeek ?? null
 }
 
 function effectiveScalarPercent(
-  classification: OptimiserRampUpClassification,
   profile: PersistedOptimiserProfile | undefined,
-  namedResource: OptimiserNamedResourceState,
 ): number {
-  if (classification.outcome === 'NO_PROFILE') {
-    return namedResource.allocationMode === 'EFFORT'
-      ? 100
-      : namedResource.allocationPercent ?? namedResource.allocationPct ?? 100
-  }
-
   const mapperMode = profile && isRecord(profile.legacy)
     ? profile.legacy.allocationMode
     : undefined
   if (mapperMode === 'EFFORT') return 100
-  return profile?.defaultPercent ?? namedResource.allocationPercent ?? namedResource.allocationPct ?? 100
+  return profile?.defaultPercent ?? 100
 }
 
 function effectiveScalarEnd(
   profile: PersistedOptimiserProfile | undefined,
-  namedResource: OptimiserNamedResourceState,
 ): number | null {
-  return profile
-    ? profile.endWeek
-    : namedResource.allocationEndWeek ?? namedResource.endWeek ?? null
+  return profile?.endWeek ?? null
 }
 
 export function buildOptimiserRampUpProfileWrite(
@@ -446,7 +340,7 @@ export function buildOptimiserRampUpProfileWrite(
   profile: PersistedOptimiserProfile | undefined,
   suggestedStartWeek: number,
 ): RampUpProfileWrite {
-  const endWeek = effectiveScalarEnd(profile, namedResource)
+  const endWeek = effectiveScalarEnd(profile)
   if (endWeek != null && suggestedStartWeek > endWeek) {
     throw new OptimiserApplyConflictError([{
       resourceTypeId: namedResource.resourceTypeId,
@@ -457,16 +351,7 @@ export function buildOptimiserRampUpProfileWrite(
     }])
   }
 
-  const defaultPercent = effectiveScalarPercent(classification, profile, namedResource)
-  const projection = projectCapacityProfileToLegacyAllocation({
-    planningBasis: 'availabilityWindow',
-    source: 'derived',
-    defaultPercent,
-    startWeek: suggestedStartWeek,
-    endWeek,
-    segments: [],
-  })
-  if (!projection) throw new Error('Optimiser profile projection unexpectedly returned null')
+  const defaultPercent = effectiveScalarPercent(profile)
 
   return {
     profileId: classification.profileId,
@@ -475,7 +360,6 @@ export function buildOptimiserRampUpProfileWrite(
     startWeek: suggestedStartWeek,
     endWeek,
     defaultPercent,
-    projection,
   }
 }
 
@@ -486,6 +370,8 @@ function conflictForClassification(
 ): ProtectedConflictInfo {
   const prefix = `${resourceType.name} / ${namedResource.name}`
   switch (classification.outcome) {
+    case 'MISSING_PROFILE':
+      return { resourceTypeId: resourceType.id, resourceTypeName: resourceType.name, namedResourceName: namedResource.name, code: classification.outcome, message: `${prefix} has no persisted capacity profile. Run the capacity profile backfill/repair workflow before retrying.` }
     case 'SEGMENTED_PROTECTED':
       return { resourceTypeId: resourceType.id, resourceTypeName: resourceType.name, namedResourceName: namedResource.name, code: classification.outcome, message: `${prefix} has segmented capacity and cannot be flattened by Resource Optimiser.` }
     case 'CAPACITY_PROFILE_PROTECTED':
@@ -540,7 +426,7 @@ export function buildOptimiserMutationIntent(input: {
         const profiles = input.profilesByNamedResourceId.get(namedResource.id) ?? []
         const profile = profiles.length === 1 ? profiles[0] : undefined
         const classification = classifyOptimiserRampUpOwner(profiles, namedResource)
-        const currentStart = effectiveCurrentStart(classification, profile, namedResource)
+        const currentStart = effectiveCurrentStart(classification, profile)
 
         if (currentStart === candidateEntry.suggestedStartWeek) continue
         if (!isOptimiserWritableRampUpClassification(classification)) {
@@ -594,13 +480,6 @@ async function loadOptimiserApplyPlan(
         id: true,
         name: true,
         resourceTypeId: true,
-        startWeek: true,
-        endWeek: true,
-        allocationPct: true,
-        allocationMode: true,
-        allocationPercent: true,
-        allocationStartWeek: true,
-        allocationEndWeek: true,
       },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     }),
@@ -699,7 +578,7 @@ async function loadSchedulerInput(
         },
       },
     }),
-    resolveSchedulerCapacity(db, projectId, hoursPerDay),
+    resolveSchedulerCapacity(db, projectId),
     db.timelineEntry.findMany({ where: { projectId, isManual: true } }),
     db.storyTimelineEntry.findMany({ where: { projectId, isManual: true } }),
     db.epicDependency.findMany({
@@ -747,19 +626,6 @@ async function writeRampUpProfile(
   } else {
     await tx.capacityProfile.create({ data: { projectId, ...data } })
   }
-
-  await tx.namedResource.update({
-    where: { id: write.namedResourceId },
-    data: {
-      allocationMode: write.projection.allocationMode,
-      allocationPercent: write.projection.allocationPercent ?? write.defaultPercent,
-      allocationPct: write.projection.allocationPercent ?? write.defaultPercent,
-      allocationStartWeek: write.projection.allocationStartWeek,
-      allocationEndWeek: write.projection.allocationEndWeek,
-      startWeek: write.projection.allocationStartWeek,
-      endWeek: write.projection.allocationEndWeek,
-    },
-  })
 }
 
 let preTransactionSeam: (() => void | Promise<void>) | null = null

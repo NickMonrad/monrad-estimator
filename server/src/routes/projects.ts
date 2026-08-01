@@ -155,10 +155,6 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
           count: rt.count,
           hoursPerDay: rt.hoursPerDay,
           dayRate: rt.dayRate,
-          allocationMode: rt.allocationMode,
-          allocationPercent: rt.allocationPercent,
-          allocationStartWeek: rt.allocationStartWeek,
-          allocationEndWeek: rt.allocationEndWeek,
           proposedName: rt.proposedName,
           globalTypeId: rt.globalTypeId,
           projectId: newProject.id,
@@ -166,18 +162,12 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
       })
       rtIdMap.set(rt.id, newRt.id)
 
-      // Copy named resources
+      // Copy named resources (identity and independent metadata only;
+      // capacity state is cloned losslessly via capacity profiles below)
       for (const nr of rt.namedResources) {
         const newNr = await tx.namedResource.create({
           data: {
             name: nr.name,
-            startWeek: nr.startWeek,
-            endWeek: nr.endWeek,
-            allocationPct: nr.allocationPct,
-            allocationMode: nr.allocationMode,
-            allocationPercent: nr.allocationPercent,
-            allocationStartWeek: nr.allocationStartWeek,
-            allocationEndWeek: nr.allocationEndWeek,
             pricingModel: nr.pricingModel,
             resourceTypeId: newRt.id,
           },

@@ -536,7 +536,7 @@ export async function buildProjectPlanningModel(
   })
 
   // ── 3. Resolve scheduler capacity (profile-first) ─────────────────────
-  const resolved = await resolveSchedulerCapacity(prisma, projectId, project.hoursPerDay)
+  const resolved = await resolveSchedulerCapacity(prisma, projectId)
   const capacityResourceTypes = resolved.resourceTypes
   const capacityPlanByRt = resolved.capacityPlanByRt
   const profileBackedNamedResourceIds = new Set(resolved.meta.profileBackedNamedResourceIds)
@@ -625,32 +625,45 @@ export async function buildProjectPlanningModel(
   }))
 
   // ── 8. Build resource type planning facts ────────────────────────────
-  const resourceTypeFacts: ResourceTypePlanningFact[] = prismaResourceTypes.map(rt => ({
-    id: rt.id,
-    name: rt.name,
-    category: rt.category,
-    count: rt.count,
-    hoursPerDay: rt.hoursPerDay,
-    dayRate: rt.dayRate,
-    allocationMode: rt.allocationMode,
-    allocationPercent: rt.allocationPercent,
-    allocationStartWeek: rt.allocationStartWeek,
-    allocationEndWeek: rt.allocationEndWeek,
-    namedResources: (rt.namedResources ?? []).map(nr => ({
-      id: nr.id,
-      name: nr.name,
-      startWeek: nr.startWeek,
-      endWeek: nr.endWeek,
-      allocationMode: nr.allocationMode,
-      allocationPercent: nr.allocationPercent,
-      allocationStartWeek: nr.allocationStartWeek,
-      allocationEndWeek: nr.allocationEndWeek,
-      pricingModel: nr.pricingModel,
-      synthetic: false,
-    })),
-    capacityProfileBacked: capacityProfileBackedResourceTypeIds.has(rt.id),
-    capacityPlanMaterialized: capacityPlanByRt.get(rt.id),
-  }))
+  // Capacity-bearing fact fields (allocationMode/allocationPercent/windows and
+  // per-NR availability) come from the profile-derived scheduler DTOs, never
+  // from ResourceType/NamedResource candidate columns (issue #418).
+  const resolvedRTById = new Map(capacityResourceTypes.map(rt => [rt.id, rt]))
+  const resourceTypeFacts: ResourceTypePlanningFact[] = prismaResourceTypes.map(rt => {
+    const resolvedRT = resolvedRTById.get(rt.id)
+    const resolvedNRs = resolvedRT?.namedResources ?? []
+    const resolvedNRById = new Map(resolvedNRs.map(nr => [nr.id, nr]))
+    return {
+      id: rt.id,
+      name: rt.name,
+      category: rt.category,
+      count: rt.count,
+      hoursPerDay: rt.hoursPerDay,
+      dayRate: rt.dayRate,
+      allocationMode: resolvedRT?.allocationMode ?? 'EFFORT',
+      allocationPercent: null,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      namedResources: (rt.namedResources ?? []).map(nr => {
+        const resolvedNR = resolvedNRById.get(nr.id)
+        return {
+          id: nr.id,
+          name: nr.name,
+          startWeek: resolvedNR?.startWeek ?? null,
+          endWeek: resolvedNR?.endWeek ?? null,
+          allocationMode: resolvedNR?.allocationMode ?? 'EFFORT',
+          allocationPercent: resolvedNR?.allocationPercent ?? 100,
+          allocationStartWeek: resolvedNR?.allocationStartWeek ?? null,
+          allocationEndWeek: resolvedNR?.allocationEndWeek ?? null,
+          pricingModel: nr.pricingModel,
+          synthetic: false,
+          capacitySegments: resolvedNR?.capacitySegments,
+        }
+      }),
+      capacityProfileBacked: capacityProfileBackedResourceTypeIds.has(rt.id),
+      capacityPlanMaterialized: capacityPlanByRt.get(rt.id),
+    }
+  })
 
   // Apply capacity plan fallback for CAPACITY_PLAN RTs with no named resources
   const enrichedFacts = applyCapacityPlanFallback(resourceTypeFacts, capacityPlanByRt)
@@ -728,7 +741,6 @@ export async function buildProjectPlanningModel(
       capacityProfileBacked: capacityProfileBackedResourceTypeIds.has(rt.id),
     })) as unknown as Parameters<typeof deriveNamedResourceAssignments>[0]['resourceTypes'],
     weeklyDemand,
-    capacityPlanByRt,
   })
 
   // ── 14. Compute parallel warnings (profile-aware) ────────────────────

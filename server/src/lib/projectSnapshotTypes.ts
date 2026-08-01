@@ -5,6 +5,10 @@
  *   v1 — Epic-tree array (legacy; no schemaVersion wrapper)
  *   v2 — Full project state with schemaVersion: 2
  *   v3 — V2 + capacityProfiles + optional exact capacityPlans/weeklyDemandCache
+ *   v4 — V3 without the candidate ResourceType/NamedResource legacy capacity
+ *        fields (issue #418). New snapshots are v4; v1/v2/v3 remain readable
+ *        historical input. Capacity state lives exclusively in
+ *        capacityProfiles/capacitySegments.
  *
  * All types mirror the shapes produced by buildSnapshot() selects and consumed
  * by the rollback restore code.
@@ -259,6 +263,27 @@ export type SnapshotCapacityPlan = {
 }
 
 
+// ─── V4 types — profile-only capacity state (issue #418) ────────────────────
+
+/**
+ * V4 ResourceType snapshot row: the candidate legacy capacity columns are
+ * omitted. Independent metadata (count, hoursPerDay, dayRate, identity) and
+ * capacity state in capacityProfiles remain.
+ */
+export type SnapshotResourceTypeV4 = Omit<
+  SnapshotResourceType,
+  'allocationMode' | 'allocationPercent' | 'allocationStartWeek' | 'allocationEndWeek'
+>
+
+/**
+ * V4 NamedResource snapshot row: the candidate legacy capacity columns are
+ * omitted. Identity and pricingModel remain.
+ */
+export type SnapshotNamedResourceV4 = Omit<
+  SnapshotNamedResource,
+  'startWeek' | 'endWeek' | 'allocationPct' | 'allocationMode' | 'allocationPercent' | 'allocationStartWeek' | 'allocationEndWeek'
+>
+
 // ─── Version-specific shapes ─────────────────────────────────────────────────
 
 /** V1 is epic-tree-only: either a bare array (historical) or a wrapper resolved
@@ -285,7 +310,13 @@ export type SnapshotV3 = Omit<SnapshotV2, 'schemaVersion'> & {
   capacityPlans?: SnapshotCapacityPlan[]
 }
 
-export type SnapshotData = SnapshotV1 | SnapshotV2 | SnapshotV3
+export type SnapshotV4 = Omit<SnapshotV3, 'schemaVersion' | 'resourceTypes' | 'namedResources'> & {
+  schemaVersion: 4
+  resourceTypes: SnapshotResourceTypeV4[]
+  namedResources: SnapshotNamedResourceV4[]
+}
+
+export type SnapshotData = SnapshotV1 | SnapshotV2 | SnapshotV3 | SnapshotV4
 
 // ─── Error class ─────────────────────────────────────────────────────────────
 
@@ -348,6 +379,24 @@ export function isSnapshotV3(value: unknown): value is SnapshotV3 {
   )
 }
 
+export function isSnapshotV4(value: unknown): value is SnapshotV4 {
+  if (typeof value !== 'object' || value === null) return false
+  const obj = value as Record<string, unknown>
+  if (obj.schemaVersion !== 4) return false
+  return (
+    Array.isArray(obj.epics) &&
+    (obj.project === null || typeof obj.project === 'object') &&
+    Array.isArray(obj.resourceTypes) &&
+    Array.isArray(obj.namedResources) &&
+    Array.isArray(obj.timelineEntries) &&
+    Array.isArray(obj.storyTimelineEntries) &&
+    Array.isArray(obj.epicDependencies) &&
+    Array.isArray(obj.featureDependencies) &&
+    Array.isArray(obj.overheadItems) &&
+    Array.isArray(obj.capacityProfiles)
+  )
+}
+
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
 /**
@@ -357,6 +406,7 @@ export function isSnapshotV3(value: unknown): value is SnapshotV3 {
  * - Object without schemaVersion + with epics → normalised to V1 array.
  * - schemaVersion 2 → SnapshotV2.
  * - schemaVersion 3 → SnapshotV3.
+ * - schemaVersion 4 → SnapshotV4.
  * - Unknown schemaVersion → SnapshotSchemaError.
  * - Malformed → SnapshotSchemaError.
  *
@@ -386,6 +436,11 @@ export function parseSnapshotData(value: unknown): SnapshotData {
   }
 
   const sv = obj.schemaVersion
+
+  if (sv === 4) {
+    if (isSnapshotV4(value)) return value as SnapshotV4
+    throw new SnapshotSchemaError('Data has schemaVersion 4 but structure is invalid')
+  }
 
   if (sv === 3) {
     if (isSnapshotV3(value)) return value as SnapshotV3

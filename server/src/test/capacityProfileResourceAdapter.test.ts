@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceAdapter.js'
+import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 
 // ── Helper to create a minimal project-like object ────────────────────────────
 
 function makeProject(overrides?: Record<string, unknown>) {
   return {
     id: 'proj-1',
+    projectId: 'proj-1',
     hoursPerDay: 8,
     resourceTypes: [],
     capacityPlans: [],
@@ -17,6 +19,7 @@ function makeProject(overrides?: Record<string, unknown>) {
 function makeResourceType(overrides?: Record<string, unknown>) {
   return {
     id: 'rt-1',
+    projectId: 'proj-1',
     name: 'Engineer',
     allocationMode: 'EFFORT',
     allocationPercent: 100,
@@ -33,6 +36,7 @@ function makeResourceType(overrides?: Record<string, unknown>) {
 function makeNamedResource(overrides?: Record<string, unknown>) {
   return {
     id: 'nr-1',
+    projectId: 'proj-1',
     name: 'Alice',
     allocationMode: 'EFFORT',
     allocationPercent: 100,
@@ -53,39 +57,34 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(0)
   })
 
-  it('returns legacy-derived data for a role-level resource type (no persisted)', () => {
+  it('fails closed when a role has no persisted profile (no legacy fallback, issue #418)', () => {
     const project = makeProject({
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'EFFORT',
           allocationPercent: 100,
         }),
       ],
     })
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
-    const data = result.roleProfiles.get('rt-1')
-    expect(data).toBeDefined()
-    // EFFORT → planningBasis: demandFollowing, source: fixed
-    expect(data!.planningBasis).toBe('demandFollowing')
-    expect(data!.source).toBe('fixed')
-    expect(data!.segments).toHaveLength(0)
-    expect(data!.resolutionSource).toBe('LEGACY')
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
-  it('returns legacy-derived data for role AND named person independently (no persisted)', () => {
+  it('fails closed when a named resource has no persisted profile (issue #418)', () => {
     const project = makeProject({
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'EFFORT',
           allocationPercent: 100,
           namedResources: [
             makeNamedResource({
               id: 'nr-1',
+              projectId: 'proj-1',
               name: 'Alice',
               allocationMode: 'EFFORT',
             }),
@@ -93,21 +92,7 @@ describe('buildResourceCapacityProfileMap', () => {
         }),
       ],
     })
-    const result = buildResourceCapacityProfileMap(project)
-    // New behavior: produces BOTH role entry keyed by rt-1 AND NR entry keyed by nr-1
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
-    expect(result.roleProfiles.has('rt-1')).toBe(true)
-    expect(result.namedResourceProfiles.has('nr-1')).toBe(true)
-
-    const roleData = result.roleProfiles.get('rt-1')!
-    expect(roleData.planningBasis).toBe('demandFollowing')
-    expect(roleData.source).toBe('fixed')
-    expect(roleData.resolutionSource).toBe('LEGACY')
-
-    const nrData = result.namedResourceProfiles.get('nr-1')!
-    expect(nrData.planningBasis).toBe('demandFollowing')
-    expect(nrData.source).toBe('fixed')
-    expect(nrData.resolutionSource).toBe('LEGACY')
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
   it('returns persisted profile data when profiles exist and reconcile', () => {
@@ -117,6 +102,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'TIMELINE',
           allocationPercent: 75,
@@ -127,6 +113,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-1',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
@@ -156,6 +143,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'EFFORT',
           allocationPercent: 100,
@@ -164,6 +152,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-1',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
@@ -175,6 +164,7 @@ describe('buildResourceCapacityProfileMap', () => {
           segments: [
             {
               id: 'seg-1',
+              projectId: 'proj-1',
               capacityProfileId: 'cp-1',
               startWeek: 0,
               endWeek: 7,
@@ -203,6 +193,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'TIMELINE',
           allocationPercent: 100,
@@ -222,34 +213,32 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-1',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
-          resourceTypeId: 'rt-1',
+          resourceTypeId: null,
           namedResourceId: nrId,
-          planningBasis: 'AVAILABILITY_WINDOW',
-          source: 'AVAILABILITY_WINDOW',
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL',
           defaultPercent: 100,
           startWeek: 0,
           endWeek: 7,
           segments: [
-            { id: 'seg-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 3, capacityPercent: 50, source: 'AVAILABILITY_WINDOW' },
-            { id: 'seg-2', capacityProfileId: 'cp-1', startWeek: 4, endWeek: 7, capacityPercent: 100, source: 'AVAILABILITY_WINDOW' },
+            { id: 'seg-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 3, capacityPercent: 50, source: 'MANUAL' },
+            { id: 'seg-2', capacityProfileId: 'cp-1', startWeek: 4, endWeek: 7, capacityPercent: 100, source: 'MANUAL' },
           ],
         },
       ],
     })
     const result = buildResourceCapacityProfileMap(project)
-    // Now includes BOTH role entry and NR entry
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
+    // Explicit-only role: every NR carries a NAMED_PERSON profile, so no ROLE
+    // profile is required — there is no role entry (issue #418).
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
     expect(result.namedResourceProfiles.has(nrId)).toBe(true)
-    expect(result.roleProfiles.has('rt-1')).toBe(true)
+    expect(result.roleProfiles.has('rt-1')).toBe(false)
 
-    // Role entry is legacy-derived
-    const roleData = result.roleProfiles.get('rt-1')!
-    expect(roleData.resolutionSource).toBe('LEGACY')
-
-    // NR entry is profile-first
+    // NR entry is profile-first (segmented CAPACITY_PROFILE)
     const data = result.namedResourceProfiles.get(nrId)!
-    expect(data.planningBasis).toBe('availabilityWindow')
+    expect(data.planningBasis).toBe('capacityProfile')
     expect(data.segments).toHaveLength(2)
     expect(data.segments[0].capacityPercent).toBe(50)
     expect(data.segments[1].capacityPercent).toBe(100)
@@ -262,6 +251,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -276,27 +266,27 @@ describe('buildResourceCapacityProfileMap', () => {
           ],
         }),
       ],
-      capacityPlans: [
-        {
-          id: 'plan-1',
-          isActive: true,
-          periods: [
-            {
-              periodIndex: 0,
-              startWeek: 0,
-              endWeek: 7,
-              entries: [
-                { resourceTypeId: 'rt-1', headcount: 1, demandFTE: 1, utilisationPct: 100 },
-              ],
-            },
-          ],
-        },
-      ],
       capacityProfiles: [
         {
-          id: 'cp-1',
-          ownerKind: 'PLANNED_RESOURCE',
+          id: 'cp-role',
+          projectId: 'proj-1',
+          ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
+          namedResourceId: null,
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          segments: [
+            { id: 'role-seg-1', capacityProfileId: 'cp-role', startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          ],
+        },
+        {
+          id: 'cp-1',
+          projectId: 'proj-1',
+          ownerKind: 'PLANNED_RESOURCE',
+          resourceTypeId: null,
           namedResourceId: nrId,
           planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER',
@@ -311,7 +301,6 @@ describe('buildResourceCapacityProfileMap', () => {
     })
 
     const result = buildResourceCapacityProfileMap(project)
-    // Now includes BOTH role and NR entry
     expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
     expect(result.namedResourceProfiles.has(nrId)).toBe(true)
     expect(result.roleProfiles.has('rt-1')).toBe(true)
@@ -330,10 +319,26 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'EFFORT',
           allocationPercent: 100,
         }),
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-1',
+          projectId: 'proj-1',
+          ownerKind: 'ROLE',
+          resourceTypeId: 'rt-1',
+          namedResourceId: null,
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          segments: [],
+        },
       ],
     })
     const result = buildResourceCapacityProfileMap(project)
@@ -342,7 +347,7 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(data.planningBasis).toBe('demandFollowing')
     expect(data.startWeek).toBeNull()
     expect(data.endWeek).toBeNull()
-    expect(data.resolutionSource).toBe('LEGACY')
+    expect(data.resolutionSource).toBe('PROFILE')
   })
 
   it('named resource with null window (demandFollowing) preserves null authoritative data', () => {
@@ -350,10 +355,12 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
               id: 'nr-1',
+              projectId: 'proj-1',
               name: 'Alice',
               allocationMode: 'EFFORT',
               allocationStartWeek: null,
@@ -364,6 +371,34 @@ describe('buildResourceCapacityProfileMap', () => {
           ],
         }),
       ],
+      capacityProfiles: [
+        {
+          id: 'cp-role',
+          projectId: 'proj-1',
+          ownerKind: 'ROLE',
+          resourceTypeId: 'rt-1',
+          namedResourceId: null,
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          segments: [],
+        },
+        {
+          id: 'cp-nr',
+          projectId: 'proj-1',
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: 'nr-1',
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          segments: [],
+        },
+      ],
     })
     const result = buildResourceCapacityProfileMap(project)
     const nrData = result.namedResourceProfiles.get('nr-1')!
@@ -371,7 +406,7 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(nrData.planningBasis).toBe('demandFollowing')
     expect(nrData.startWeek).toBeNull()
     expect(nrData.endWeek).toBeNull()
-    expect(nrData.resolutionSource).toBe('LEGACY')
+    expect(nrData.resolutionSource).toBe('PROFILE')
   })
 
   // ─── Role + NR coexistence ─────────────────────────────────────────────
@@ -407,6 +442,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-role',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: rtId,
           namedResourceId: null,
@@ -421,7 +457,21 @@ describe('buildResourceCapacityProfileMap', () => {
           ],
         },
         {
+          id: 'cp-inherited',
+          projectId: 'proj-1',
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: nrInherited,
+          planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED',
+          defaultPercent: 70,
+          startWeek: null,
+          endWeek: null,
+          segments: [],
+        },
+        {
           id: 'cp-explicit',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrExplicit,
@@ -449,8 +499,8 @@ describe('buildResourceCapacityProfileMap', () => {
     ])
 
     const inheritedData = result.namedResourceProfiles.get(nrInherited)!
-    expect(inheritedData.resolutionSource).toBe('LEGACY')
-    expect(inheritedData.planningBasis).toBe('capacityProfile')
+    expect(inheritedData.resolutionSource).toBe('PROFILE')
+    expect(inheritedData.planningBasis).toBe('demandFollowing')
     expect(inheritedData.defaultPercent).toBe(70)
     expect(inheritedData.segments).toEqual([])
 
@@ -465,7 +515,7 @@ describe('buildResourceCapacityProfileMap', () => {
 
   // ─── Active plan fallback ──────────────────────────────────────────────
 
-  it('active capacity plan fallback: produces ACTIVE_CAPACITY_PLAN when NR windows are stale', () => {
+  it('fails closed when role and NR have no persisted profiles — plan fallback removed (issue #418)', () => {
     const rtId = 'rt-plan'
     const nrId = 'nr-plan-1'
 
@@ -484,7 +534,7 @@ describe('buildResourceCapacityProfileMap', () => {
               name: 'Plan NR',
               allocationMode: 'CAPACITY_PLAN',
               allocationPercent: 100,
-              startWeek: null,  // stale — no window set
+              startWeek: null,
               endWeek: null,
             }),
           ],
@@ -493,6 +543,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityPlans: [
         {
           id: 'plan-act-1',
+          projectId: 'proj-1',
           isActive: true,
           periods: [
             {
@@ -501,39 +552,13 @@ describe('buildResourceCapacityProfileMap', () => {
               endWeek: 4,
               entries: [{ resourceTypeId: rtId, headcount: 1, demandFTE: 1, utilisationPct: 100 }],
             },
-            {
-              periodIndex: 1,
-              startWeek: 4,
-              endWeek: 8,
-              entries: [{ resourceTypeId: rtId, headcount: 0.5, demandFTE: 0.5, utilisationPct: 100 }],
-            },
           ],
         },
       ],
     })
-    const result = buildResourceCapacityProfileMap(project)
-    // RT has stale windows → shouldFallbackToActiveCapacityPlan returns true
-    // Entries: role aggregate + existing NR mapped to its trajectory (1 trajectory with 2 segments)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
-
-    const roleData = result.roleProfiles.get(rtId)!
-    expect(roleData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
-    expect(roleData.planningBasis).toBe('capacityProfile')
-    expect(roleData.source).toBe('squadPlanner')
-    // Role gets non-overlapping aggregate role capacity: 1.0 FTE (100%) then 0.5 FTE (50%)
-    expect(roleData.segments).toHaveLength(2)
-    expect(roleData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 100 })
-    expect(roleData.segments[1]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 50 })
-    expect(roleData.defaultPercent).toBeNull()
-    expect(roleData.startWeek).toBe(0)
-    expect(roleData.endWeek).toBe(7)
-    // Existing NR gets its trajectory segments (capacity changes from 100% to 50% at week 4)
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
-    expect(nrData.segments).toHaveLength(2)
-    expect(nrData.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 100 })
-    expect(nrData.segments[1]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 50 })
-    // No extra generated planned resource — single trajectory maps to existing NR
+    // The active-capacity-plan fallback was removed in #418: missing profiles
+    // fail closed instead of synthesising trajectories from the plan.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
   it('active capacity plan fallback: preserves persisted profile when present', () => {
@@ -564,6 +589,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityPlans: [
         {
           id: 'plan-act-2',
+          projectId: 'proj-1',
           isActive: true,
           periods: [
             {
@@ -579,6 +605,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-persist-1',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -593,11 +620,10 @@ describe('buildResourceCapacityProfileMap', () => {
     })
 
     const result = buildResourceCapacityProfileMap(project)
-    // Role entry gets ACTIVE_CAPACITY_PLAN (stale), NR gets PROFILE (persisted wins)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
-
-    const roleData = result.roleProfiles.get(rtId)!
-    expect(roleData.resolutionSource).toBe('ACTIVE_CAPACITY_PLAN')
+    // Explicit-only role: the single NR has a NAMED_PERSON profile, so no
+    // ROLE profile is required and no plan fallback is attempted (issue #418).
+    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
+    expect(result.roleProfiles.has(rtId)).toBe(false)
 
     const nrData = result.namedResourceProfiles.get(nrId)!
     expect(nrData.resolutionSource).toBe('PROFILE')
@@ -635,6 +661,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityPlans: [
         {
           id: 'plan-ok',
+          projectId: 'proj-1',
           isActive: true,
           periods: [
             {
@@ -648,21 +675,19 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    // shouldFallbackToActiveCapacityPlan returns false (NR windows match plan)
-    // Entries remain LEGACY (not overridden by ACTIVE_CAPACITY_PLAN)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2)
-    expect(result.roleProfiles.get(rtId)!.resolutionSource).toBe('LEGACY')
-    expect(result.namedResourceProfiles.get(nrId)!.resolutionSource).toBe('LEGACY')
+    // With no persisted profiles the adapter fails closed — no legacy or
+    // plan-fallback path exists anymore (issue #418).
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
   // ─── Duplicate handling ───────────────────────────────────────────────
 
-  it('duplicate identical role profiles: sorted by ID, first wins', () => {
+  it('duplicate identical role profiles fail closed (no smallest-ID selection)', () => {
     const project = makeProject({
       resourceTypes: [
         makeResourceType({
           id: 'rt-dup',
+          projectId: 'proj-1',
           name: 'Dup RT',
           allocationMode: 'TIMELINE',
           allocationPercent: 75,
@@ -673,6 +698,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-b',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-dup',
           namedResourceId: null,
@@ -685,6 +711,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-a',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-dup',
           namedResourceId: null,
@@ -698,12 +725,12 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
-    const data = result.roleProfiles.get('rt-dup')!
-    // Both are exact duplicates → smallest ID (cp-a) wins
-    expect(data.resolutionSource).toBe('PROFILE')
-    expect(data.defaultPercent).toBe(75)
+    // Semantically identical duplicate rows are an integrity conflict too
+    // (issue #418 PR 1 review round 3): no canonical row is selected.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/rt-dup/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-a/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-b/)
   })
 
   it('duplicate conflicting role profiles: fall back to legacy with warning', () => {
@@ -711,6 +738,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-conflict',
+          projectId: 'proj-1',
           name: 'Conflict RT',
           allocationMode: 'TIMELINE',
           allocationPercent: 100,
@@ -721,6 +749,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-x',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-conflict',
           namedResourceId: null,
@@ -733,6 +762,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-y',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-conflict',
           namedResourceId: null,
@@ -746,22 +776,18 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(1)
-    const data = result.roleProfiles.get('rt-conflict')!
-    // Conflict → fallback to legacy
-    expect(data.resolutionSource).toBe('LEGACY')
-    // Legacy has TIMELINE/100%/0-10
-    expect(data.planningBasis).toBe('availabilityWindow')
-    expect(data.source).toBe('availabilityWindow')
+    // Conflicting duplicate role profiles fail closed instead of falling
+    // back to legacy columns (issue #418).
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
-  it('duplicate identical named resource profiles: sorted by ID, first wins', () => {
+  it('duplicate identical named resource profiles fail closed (no smallest-ID selection)', () => {
     const nrId = 'nr-dup'
     const project = makeProject({
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -778,6 +804,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-nr-b',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -790,6 +817,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-nr-a',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -803,11 +831,12 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('PROFILE')
-    // cp-nr-a wins (smaller ID)
+    // Semantically identical duplicate rows are an integrity conflict too
+    // (issue #418 PR 1 review round 3): no canonical row is selected.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(new RegExp(nrId))
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-nr-a/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-nr-b/)
   })
 
   it('duplicate conflicting named resource profiles: fall back to legacy with warning', () => {
@@ -816,6 +845,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -830,6 +860,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-nr-x',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -842,6 +873,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-nr-y',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -855,12 +887,8 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('LEGACY')
-    // Legacy has demandFollowing from EFFORT mode
-    expect(nrData.planningBasis).toBe('demandFollowing')
+    // Conflicting duplicate named-resource profiles fail closed (issue #418).
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
   // ─── Owner kind mismatch handling ────────────────────────────────────
@@ -870,6 +898,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -890,6 +919,7 @@ describe('buildResourceCapacityProfileMap', () => {
     const project = makeOwnerKindProject(nrId, [
       {
         id: 'cp-a',
+        projectId: 'proj-1',
         ownerKind: 'NAMED_PERSON',
         resourceTypeId: null,
         namedResourceId: nrId,
@@ -902,6 +932,7 @@ describe('buildResourceCapacityProfileMap', () => {
       },
       {
         id: 'cp-b',
+        projectId: 'proj-1',
         ownerKind: 'PLANNED_RESOURCE',
         resourceTypeId: null,
         namedResourceId: nrId,
@@ -914,11 +945,9 @@ describe('buildResourceCapacityProfileMap', () => {
       },
     ])
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('LEGACY')
-    expect(nrData.resourceIdentity).toBe('NAMED_PERSON')
+    // Owner-kind mismatch between duplicate profiles is a hard integrity
+    // conflict — fail closed (issue #418).
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
   it('ownerKind mismatch between duplicate profiles produces CONFLICT — reverse order B then A', () => {
@@ -926,6 +955,7 @@ describe('buildResourceCapacityProfileMap', () => {
     const project = makeOwnerKindProject(nrId, [
       {
         id: 'cp-b',
+        projectId: 'proj-1',
         ownerKind: 'PLANNED_RESOURCE',
         resourceTypeId: null,
         namedResourceId: nrId,
@@ -938,6 +968,7 @@ describe('buildResourceCapacityProfileMap', () => {
       },
       {
         id: 'cp-a',
+        projectId: 'proj-1',
         ownerKind: 'NAMED_PERSON',
         resourceTypeId: null,
         namedResourceId: nrId,
@@ -950,19 +981,18 @@ describe('buildResourceCapacityProfileMap', () => {
       },
     ])
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('LEGACY')
-    expect(nrData.resourceIdentity).toBe('NAMED_PERSON')
+    // Owner-kind mismatch between duplicate profiles is a hard integrity
+    // conflict — fail closed regardless of order (issue #418).
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
   })
 
-  it('identical duplicates with same ownerKind resolve deterministically (smallest ID wins)', () => {
+  it('identical duplicates with same ownerKind fail closed', () => {
     const nrId = 'nr-dup-same-kind'
     const project = makeProject({
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -979,6 +1009,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-b',  // larger ID — should lose
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -991,6 +1022,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-a',  // smaller ID — wins
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -1004,20 +1036,21 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('PROFILE')
-    expect(nrData.resourceIdentity).toBe('NAMED_PERSON')
-    // cp-a wins (smaller ID)
+    // Semantically identical duplicate rows are an integrity conflict too
+    // (issue #418 PR 1 review round 3): no canonical row is selected.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(new RegExp(nrId))
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-a/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-b/)
   })
 
-  it('identical duplicates with same ownerKind PLANNED_RESOURCE resolve deterministically', () => {
+  it('identical duplicates with same ownerKind PLANNED_RESOURCE fail closed', () => {
     const nrId = 'nr-dup-planned'
     const project = makeProject({
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -1034,7 +1067,21 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
       capacityProfiles: [
         {
+          id: 'cp-role',
+          projectId: 'proj-1',
+          ownerKind: 'ROLE',
+          resourceTypeId: 'rt-1',
+          namedResourceId: null,
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'MANUAL',
+          defaultPercent: 100,
+          startWeek: 0,
+          endWeek: 4,
+          segments: [],
+        },
+        {
           id: 'cp-y',  // larger ID — should lose
+          projectId: 'proj-1',
           ownerKind: 'PLANNED_RESOURCE',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -1047,6 +1094,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-a',  // smaller ID — wins
+          projectId: 'proj-1',
           ownerKind: 'PLANNED_RESOURCE',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -1060,12 +1108,12 @@ describe('buildResourceCapacityProfileMap', () => {
       ],
     })
 
-    const result = buildResourceCapacityProfileMap(project)
-    expect(result.roleProfiles.size + result.namedResourceProfiles.size).toBe(2) // role + NR
-    const nrData = result.namedResourceProfiles.get(nrId)!
-    expect(nrData.resolutionSource).toBe('PROFILE')
-    expect(nrData.resourceIdentity).toBe('PLANNED_RESOURCE')
-    // cp-a wins (smaller ID)
+    // Semantically identical duplicate rows are an integrity conflict too
+    // (issue #418 PR 1 review round 3): no canonical row is selected.
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(CapacityIntegrityError)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(new RegExp(nrId))
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-a/)
+    expect(() => buildResourceCapacityProfileMap(project)).toThrow(/cp-y/)
   })
 
   // ─── Key collision detection ──────────────────────────────────────────
@@ -1091,6 +1139,34 @@ describe('buildResourceCapacityProfileMap', () => {
             ],
           }),
         ],
+        capacityProfiles: [
+          {
+            id: 'cp-role',
+            projectId: 'proj-1',
+            ownerKind: 'ROLE',
+            resourceTypeId: collidingId,
+            namedResourceId: null,
+            planningBasis: 'DEMAND_FOLLOWING',
+            source: 'FIXED',
+            defaultPercent: 100,
+            startWeek: null,
+            endWeek: null,
+            segments: [],
+          },
+          {
+            id: 'cp-nr',
+            projectId: 'proj-1',
+            ownerKind: 'NAMED_PERSON',
+            resourceTypeId: null,
+            namedResourceId: collidingId,
+            planningBasis: 'DEMAND_FOLLOWING',
+            source: 'FIXED',
+            defaultPercent: 100,
+            startWeek: null,
+            endWeek: null,
+            segments: [],
+          },
+        ],
       })
       const result = buildResourceCapacityProfileMap(project)
       // With separate role/NR maps, both entries coexist — no collision
@@ -1098,9 +1174,9 @@ describe('buildResourceCapacityProfileMap', () => {
       expect(result.roleProfiles.has(collidingId)).toBe(true)
       expect(result.namedResourceProfiles.has(collidingId)).toBe(true)
       const roleData = result.roleProfiles.get(collidingId)!
-      expect(roleData.resolutionSource).toBe('LEGACY')
+      expect(roleData.resolutionSource).toBe('PROFILE')
       const nrData = result.namedResourceProfiles.get(collidingId)!
-      expect(nrData.resolutionSource).toBe('LEGACY')
+      expect(nrData.resolutionSource).toBe('PROFILE')
       // No warnings emitted — separate maps avoid collision
       expect(warnings.some(w => w.includes('Key collision'))).toBe(false)
     } finally {
@@ -1117,6 +1193,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-com',
+          projectId: 'proj-1',
           name: 'Commercial RT',
           allocationMode: 'TIMELINE',
           allocationPercent: 75,
@@ -1125,6 +1202,7 @@ describe('buildResourceCapacityProfileMap', () => {
           namedResources: [
             makeNamedResource({
               id: 'nr-com',
+              projectId: 'proj-1',
               name: 'Commercial NR',
               allocationMode: 'TIMELINE',
               allocationPercent: 75,
@@ -1139,6 +1217,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-com-role',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-com',
           namedResourceId: null,
@@ -1151,6 +1230,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-com-nr',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: 'nr-com',

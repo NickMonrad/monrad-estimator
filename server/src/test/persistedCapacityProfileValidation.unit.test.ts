@@ -28,12 +28,21 @@ function profile(overrides: Record<string, unknown> = {}) {
     resourceTypeId: 'rt-1',
     namedResourceId: null,
     ownerKind: 'ROLE',
-    planningBasis: 'DEMAND_FOLLOWING',
-    source: 'FIXED',
+    // Segmented fixtures use CAPACITY_PROFILE: the authoritative rules
+    // require segments on CAPACITY_PROFILE and forbid them on the scalar
+    // bases (DEMAND_FOLLOWING / WHOLE_PROJECT_ALLOCATION / AVAILABILITY_WINDOW).
+    planningBasis: 'CAPACITY_PROFILE',
+    source: 'SQUAD_PLANNER',
     defaultPercent: null,
     startWeek: null,
     endWeek: null,
-    segments: [],
+    segments: [{
+      id: 'seg-1',
+      startWeek: 0,
+      endWeek: 8,
+      capacityPercent: 100,
+      source: 'SQUAD_PLANNER',
+    }],
     ...overrides,
   }
 }

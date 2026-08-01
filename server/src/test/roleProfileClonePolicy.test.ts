@@ -63,24 +63,32 @@ describe('roleProfileClonePolicy', () => {
 })
 
 describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 finding 1)', () => {
-  const oldRoleDefault = {
-    allocationMode: 'TIMELINE',
-    allocationPercent: 75,
-    allocationStartWeek: 4,
-    allocationEndWeek: 12,
+  // The old role default is now the authoritative old role PROFILE shape
+  // (issue #418): classification compares profile shapes, never candidate
+  // ResourceType/NamedResource columns.
+  const oldRoleProfile = {
+    planningBasis: 'AVAILABILITY_WINDOW',
+    defaultPercent: 75,
+    startWeek: 4,
+    endWeek: 12,
+    segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
   }
 
   it('classifies a generated segmented clone (DERIVED + ROLE_DEFAULT) as inherited', () => {
     const result = classifyNRsForRoleUpdate(
-      [{ id: 'nr-1', allocationMode: 'TIMELINE', allocationPercent: 75, allocationPct: 75, allocationStartWeek: 4, allocationEndWeek: 12, startWeek: 4, endWeek: 12 }],
+      [{ id: 'nr-1' }],
       [{
         namedResourceId: 'nr-1',
         ownerKind: 'NAMED_PERSON',
         source: 'DERIVED',
         legacy: ROLE_DEFAULT_CLONE_LEGACY,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 4,
+        endWeek: 12,
         segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
       }],
-      oldRoleDefault,
+      oldRoleProfile,
     )
     expect(result.inheritedNRIds).toEqual(['nr-1'])
     expect(result.explicitNRIds).toEqual([])
@@ -88,15 +96,19 @@ describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 findin
 
   it('still protects a user-edited segmented profile (source MANUAL)', () => {
     const result = classifyNRsForRoleUpdate(
-      [{ id: 'nr-1', allocationMode: 'TIMELINE', allocationPercent: 75, allocationPct: 75, allocationStartWeek: 4, allocationEndWeek: 12, startWeek: 4, endWeek: 12 }],
+      [{ id: 'nr-1' }],
       [{
         namedResourceId: 'nr-1',
         ownerKind: 'NAMED_PERSON',
         source: 'MANUAL',
         legacy: ROLE_DEFAULT_CLONE_LEGACY,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 4,
+        endWeek: 12,
         segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
       }],
-      oldRoleDefault,
+      oldRoleProfile,
     )
     expect(result.explicitNRIds).toEqual(['nr-1'])
     expect(result.inheritedNRIds).toEqual([])
@@ -104,15 +116,19 @@ describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 findin
 
   it('still protects optimiser-derived segmented profiles', () => {
     const result = classifyNRsForRoleUpdate(
-      [{ id: 'nr-1', allocationMode: 'TIMELINE', allocationPercent: 75, allocationPct: 75, allocationStartWeek: 4, allocationEndWeek: 12, startWeek: 4, endWeek: 12 }],
+      [{ id: 'nr-1' }],
       [{
         namedResourceId: 'nr-1',
         ownerKind: 'NAMED_PERSON',
         source: 'DERIVED',
         legacy: { version: 1, writer: 'RESOURCE_OPTIMISER' },
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 4,
+        endWeek: 12,
         segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
       }],
-      oldRoleDefault,
+      oldRoleProfile,
     )
     expect(result.explicitNRIds).toEqual(['nr-1'])
     expect(result.inheritedNRIds).toEqual([])
@@ -120,31 +136,39 @@ describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 findin
 
   it('still protects planner-owned and ambiguous profiles', () => {
     for (const profile of [
-      { namedResourceId: 'nr-1', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', legacy: {}, segments: [] },
-      { namedResourceId: 'nr-1', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', legacy: {}, segments: [] },
-      { namedResourceId: 'nr-1', ownerKind: 'NAMED_PERSON', source: 'DERIVED', legacy: null, segments: [] },
+      { namedResourceId: 'nr-1', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', legacy: {}, segments: [], planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: 'nr-1', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', legacy: {}, segments: [], planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: 'nr-1', ownerKind: 'NAMED_PERSON', source: 'DERIVED', legacy: null, segments: [], planningBasis: 'DEMAND_FOLLOWING' },
     ]) {
       const result = classifyNRsForRoleUpdate(
-        [{ id: 'nr-1', allocationMode: 'TIMELINE', allocationPercent: 75, allocationPct: 75, allocationStartWeek: 4, allocationEndWeek: 12, startWeek: 4, endWeek: 12 }],
+        [{ id: 'nr-1' }],
         [profile],
-        oldRoleDefault,
+        oldRoleProfile,
       )
       expect(result.explicitNRIds).toEqual(['nr-1'])
       expect(result.inheritedNRIds).toEqual([])
     }
   })
 
-  it('keeps a generated segmented clone protected once it no longer matches the role default', () => {
+  it('keeps a generated segmented clone protected once its profile shape diverges from the role default', () => {
+    // The clone's authoritative profile shape differs from the old role
+    // profile shape (defaultPercent 40 vs 75) — profile-shape comparison
+    // classifies it explicit, exactly as the former legacy-column equality
+    // did for a diverged NR.
     const result = classifyNRsForRoleUpdate(
-      [{ id: 'nr-1', allocationMode: 'TIMELINE', allocationPercent: 40, allocationPct: 40, allocationStartWeek: 4, allocationEndWeek: 12, startWeek: 4, endWeek: 12 }],
+      [{ id: 'nr-1' }],
       [{
         namedResourceId: 'nr-1',
         ownerKind: 'NAMED_PERSON',
         source: 'DERIVED',
         legacy: ROLE_DEFAULT_CLONE_LEGACY,
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: 40,
+        startWeek: 4,
+        endWeek: 12,
         segments: [{ startWeek: 0, endWeek: 4, capacityPercent: 100 }],
       }],
-      oldRoleDefault,
+      oldRoleProfile,
     )
     expect(result.explicitNRIds).toEqual(['nr-1'])
     expect(result.inheritedNRIds).toEqual([])

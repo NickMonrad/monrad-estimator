@@ -105,7 +105,7 @@ describe('loadAndValidateOwnerProfile', () => {
       })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'NAMED_PERSON', ownerId: 'nr-1',
-      })).rejects.toThrow(/no segments but segments are required/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('accepts CAPACITY_PROFILE with valid segments', async () => {
@@ -183,7 +183,7 @@ describe('loadAndValidateOwnerProfile', () => {
       const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, ownerKind: 'NAMED_PERSON' })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'NAMED_PERSON', ownerId: 'nr-surplus',
-      })).rejects.toThrow(/no segments but segments are required/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('3. rejects ROLE with same shape', async () => {
@@ -195,7 +195,7 @@ describe('loadAndValidateOwnerProfile', () => {
       })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'ROLE', ownerId: 'rt-1',
-      })).rejects.toThrow(/no segments but segments are required/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('4. accepts canonical MANUAL source (transferred state)', async () => {
@@ -212,42 +212,42 @@ describe('loadAndValidateOwnerProfile', () => {
       const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, source: 'FIXED' })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE', ownerId: 'nr-surplus',
-      })).rejects.toThrow(/no segments but segments are required/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('5. rejects null defaultPercent', async () => {
       const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, defaultPercent: null })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE', ownerId: 'nr-surplus',
-      })).rejects.toThrow(/no segments but segments are required/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('6. rejects negative defaultPercent', async () => {
       const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, defaultPercent: -1 })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE', ownerId: 'nr-surplus',
-      })).rejects.toThrow(/invalid defaultPercent/)
+      })).rejects.toThrow(/defaultPercent -1 must be finite and non-negative/)
     })
 
     it('7. rejects non-zero defaultPercent', async () => {
       const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, defaultPercent: 50 })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE', ownerId: 'nr-surplus',
-      })).rejects.toThrow(/no segments but segments are required/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('8. rejects non-null startWeek', async () => {
       const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, startWeek: 2 })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE', ownerId: 'nr-surplus',
-      })).rejects.toThrow(/CAPACITY_PROFILE profile.*must not have startWeek/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('9. rejects non-null endWeek', async () => {
       const tx = makeTx([makeValidProfile({ ...zeroCapacityProfile, endWeek: 5 })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE', ownerId: 'nr-surplus',
-      })).rejects.toThrow(/CAPACITY_PROFILE profile.*must not have endWeek/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('10. rejects incorrect owner FK shape (resourceTypeId set)', async () => {
@@ -274,7 +274,7 @@ describe('loadAndValidateOwnerProfile', () => {
       })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'NAMED_PERSON', ownerId: 'nr-1',
-      })).rejects.toThrow(/no segments but segments are required/)
+      })).rejects.toThrow(/CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state/)
     })
 
     it('13. valid segmented planner profile still accepted', async () => {
@@ -318,7 +318,7 @@ describe('loadAndValidateOwnerProfile', () => {
       })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'NAMED_PERSON', ownerId: 'nr-1',
-      })).rejects.toThrow(/duplicate range/)
+      })).rejects.toThrow(/duplicate segment/)
     })
   })
 
@@ -330,7 +330,7 @@ describe('loadAndValidateOwnerProfile', () => {
       })])
       await expect(loadAndValidateOwnerProfile({
         tx, projectId: 'proj-1', ownerKind: 'NAMED_PERSON', ownerId: 'nr-1',
-      })).rejects.toThrow(/startWeek.*after endWeek/)
+      })).rejects.toThrow(/startWeek 10 must not exceed endWeek 5/)
     })
   })
 })

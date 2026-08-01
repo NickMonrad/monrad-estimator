@@ -28,6 +28,7 @@ function mockProject(overrides: Record<string, unknown>) {
     ownerId: userId,
     resourceTypes: [],
     capacityPlans: [],
+    capacityProfiles: [],
     ...overrides,
   } as any
 }
@@ -125,6 +126,13 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
   it('returns demandFollowing role profile for EFFORT resource type', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
       resourceTypes: [mockRt('rt-1', 'Engineer', { allocationMode: 'EFFORT' })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
     }))
 
     const res = await request(app)
@@ -150,6 +158,15 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
         allocationStartWeek: 2,
         allocationEndWeek: 10,
       })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 75,
+        startWeek: 2,
+        endWeek: 10,
+      })],
     }))
 
     const res = await request(app)
@@ -170,6 +187,13 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
   it('returns wholeProjectAllocation for FULL_PROJECT resource', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject({
       resourceTypes: [mockRt('rt-1', 'PM', { allocationMode: 'FULL_PROJECT' })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
     }))
 
     const res = await request(app)
@@ -188,6 +212,13 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
       resourceTypes: [mockRt('rt-1', 'Engineer', {
         allocationMode: 'EFFORT',
         namedResources: [mockNr('nr-1', 'Alice')],
+      })],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
       })],
     }))
 
@@ -219,6 +250,14 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
           ],
         },
       ],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        segments: [mockPersistedSegment({ id: 'seg-1', endWeek: 7 })],
+      })],
     }))
 
     const res = await request(app)
@@ -254,6 +293,13 @@ describe('GET /api/projects/:projectId/capacity-profiles', () => {
           ],
         },
       ],
+      capacityProfiles: [mockPersistedProfile('cp-1', {
+        resourceTypeId: 'rt-1',
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      })],
     }))
 
     const res = await request(app)
@@ -459,11 +505,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    // rt-2 has no persisted profile → completeness check fails → legacy fallback
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles).toHaveLength(2)
-    const ids = res.body.capacityProfiles.map((p: any) => p.id)
-    expect(ids).not.toContain('cp-1')
+    // rt-2 has no persisted profile → completeness check fails closed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   // Falls back to legacy — duplicate owner keys fail structural validation
@@ -492,9 +538,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    // Falls back to legacy — duplicate means reconciliation fails
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+    // Duplicate owner rows fail closed — no legacy fallback.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('falls back to legacy when persisted profile references non-existent resource type', async () => {
@@ -513,8 +561,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+    // Orphan owner reference fails closed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('falls back to legacy when persisted profile has both resourceTypeId and namedResourceId', async () => {
@@ -537,13 +588,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    // RT has named resource → legacy fallback returns named-person profile
-    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
-    expect(res.body.capacityProfiles[0].owner.id).toBe('nr-1')
-    // Corrupt persisted profile id is NOT exposed
-    const ids = res.body.capacityProfiles.map((p: any) => p.id)
-    expect(ids).not.toContain('cp-1')
+    // Exactly-one-FK violation fails closed — the corrupt profile id is not exposed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('falls back to legacy when persisted profile has invalid source enum', async () => {
@@ -562,8 +611,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+    // Invalid source enum fails closed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('falls back to legacy when ROLE profile is missing resourceTypeId', async () => {
@@ -583,8 +635,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+    // Owner-kind shape violation fails closed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('falls back to legacy when segment ranges overlap', async () => {
@@ -617,9 +672,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    // Overlapping segments fail structural validation → fallback
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+    // Overlapping segments fail closed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('falls back to legacy when segment has duplicate week range', async () => {
@@ -652,9 +709,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    // Duplicate week range fails structural validation → fallback
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].id).toBe('rt-1')
+    // Duplicate week range fails closed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('performs no database writes on persisted-read path', async () => {
@@ -742,13 +801,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    // Incomplete named-resource coverage → legacy fallback
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles).toHaveLength(2)
-    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
-    expect(res.body.capacityProfiles[1].owner.kind).toBe('namedPerson')
-    const ids = res.body.capacityProfiles.map((p: any) => p.id)
-    expect(ids).not.toContain('cp-1')
+    // Incomplete named-resource coverage fails closed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('falls back when planner-owned named profiles omit the aggregate ROLE profile', async () => {
@@ -771,11 +828,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles[0].owner.kind).toBe('namedPerson')
-    expect(res.body.capacityProfiles[0].owner.id).toBe('nr-1')
-    expect(res.body.capacityProfiles[0].legacy).toBeDefined()
-    expect(res.body.capacityProfiles[0].id).toBe('nr-1')
+    // Planner-owned named profiles without the aggregate ROLE profile fail closed.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('accepts explicit-only named-resource coverage without an aggregate ROLE profile', async () => {
@@ -879,18 +936,11 @@ describe('persisted profiles', () => {
       .get('/api/projects/proj-1/capacity-profiles')
       .set('Authorization', authHeader)
 
-    // Legacy fallback must include all owners
-    expect(res.status).toBe(200)
-    expect(res.body.capacityProfiles).toHaveLength(3)
-    const ownerKinds = res.body.capacityProfiles.map((p: any) => p.owner.kind)
-    const ownerIds = res.body.capacityProfiles.map((p: any) => p.owner.id)
-    // Alice and Bob as namedPerson owners
-    expect(ownerKinds.filter((k: string) => k === 'namedPerson')).toHaveLength(2)
-    // Designer as role owner
-    expect(ownerKinds.filter((k: string) => k === 'role')).toHaveLength(1)
-    expect(ownerIds).toContain('nr-1')
-    expect(ownerIds).toContain('nr-2')
-    expect(ownerIds).toContain('rt-2')
+    // Incomplete coverage fails closed — no legacy fallback preserving owners.
+    // Issue #418: missing/conflicting/malformed persisted profile state fails
+    // closed with a 409 — there is no legacy mapper fallback.
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
 })

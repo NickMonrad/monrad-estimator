@@ -13,17 +13,24 @@ import {
   isLegacyV1Snapshot,
   isSnapshotV2,
   isSnapshotV3,
+  isSnapshotV4,
   SnapshotSchemaError,
   type SnapshotData,
   type SnapshotV2,
   type SnapshotV3,
+  type SnapshotV4,
 } from './projectSnapshotTypes.js'
 import {
   validateSnapshotV3,
+  SnapshotValidationError,
 } from './projectSnapshotValidation.js'
 import {
   recreateV2CapacityProfiles,
   recreateV3CapacityProfiles,
+  loadRetainedRoleProfiles,
+  validateRetainedRoleProfiles,
+  translateV2SnapshotProfiles,
+  type RetainedRoleProfile,
 } from './projectSnapshotCapacity.js'
 import { pruneSnapshots } from './snapshotUtils.js'
 import {
@@ -100,11 +107,18 @@ function parseWeeklyDemandCache(value: Prisma.JsonValue | null | undefined): Rec
 
 // ─── buildSnapshot (public) ───────────────────────────────────────────────────
 
-/** Build the full project snapshot (schemaVersion 3) with ordered capacity profiles. */
+/**
+ * Build the full project snapshot (schemaVersion 4) with ordered capacity
+ * profiles.
+ *
+ * v4 omits the candidate ResourceType/NamedResource legacy capacity columns:
+ * all capacity state is captured by capacityProfiles/capacitySegments
+ * (issue #418). v1/v2/v3 snapshots remain readable historical input.
+ */
 export async function buildSnapshot(
   projectId: string,
   db: SnapshotDbClient = prisma,
-): Promise<SnapshotV3> {
+): Promise<SnapshotV4> {
   const [
     epics,
     project,
@@ -128,17 +142,12 @@ export async function buildSnapshot(
       select: {
         id: true, name: true, category: true, count: true, hoursPerDay: true,
         dayRate: true, globalTypeId: true,
-        allocationMode: true, allocationPercent: true,
-        allocationStartWeek: true, allocationEndWeek: true,
       },
     }),
     db.namedResource.findMany({
       where: { resourceType: { projectId } },
       select: {
         id: true, resourceTypeId: true, name: true,
-        startWeek: true, endWeek: true, allocationPct: true,
-        allocationMode: true, allocationPercent: true,
-        allocationStartWeek: true, allocationEndWeek: true,
         pricingModel: true,
       },
     }),
@@ -212,8 +221,8 @@ export async function buildSnapshot(
       }
     : null
 
-  const snapshot: SnapshotV3 = {
-    schemaVersion: 3 as const,
+  const snapshot: SnapshotV4 = {
+    schemaVersion: 4 as const,
     epics,
     project: projectFields,
     resourceTypes,
@@ -237,14 +246,19 @@ export async function buildSnapshot(
 // ─── restoreSnapshotCommonState ───────────────────────────────────────────────
 
 /**
- * Restore the common snapshot state shared across v2 and v3 rollbacks.
+ * Restore the common snapshot state shared across v2/v3/v4 rollbacks.
  * Handles ResourceTypes, NamedResources, epics, project fields, timeline
  * entries, story timeline entries, dependencies, and overhead items.
+ *
+ * Capacity state is restored exclusively through capacity profiles:
+ * the candidate ResourceType/NamedResource legacy capacity columns are
+ * historical input (v2/v3) or absent (v4) and are never written during
+ * restoration (issue #418).
  */
 export async function restoreSnapshotCommonState(
   tx: SnapshotDbClient,
   projectId: string,
-  data: Omit<SnapshotV2, 'schemaVersion'>,
+  data: Omit<SnapshotV2, 'schemaVersion'> | Omit<SnapshotV4, 'schemaVersion'>,
 ): Promise<void> {
   // 1. Restore ResourceTypes FIRST so task FKs resolve correctly when recreating epics
   const rtNameMap = new Map<string, string>()
@@ -258,10 +272,6 @@ export async function restoreSnapshotCommonState(
         hoursPerDay: rt.hoursPerDay,
         dayRate: rt.dayRate,
         globalTypeId: rt.globalTypeId,
-        allocationMode: rt.allocationMode,
-        allocationPercent: rt.allocationPercent,
-        allocationStartWeek: rt.allocationStartWeek,
-        allocationEndWeek: rt.allocationEndWeek,
       },
       create: {
         id: rt.id,
@@ -271,10 +281,6 @@ export async function restoreSnapshotCommonState(
         hoursPerDay: rt.hoursPerDay,
         dayRate: rt.dayRate,
         globalTypeId: rt.globalTypeId,
-        allocationMode: rt.allocationMode,
-        allocationPercent: rt.allocationPercent,
-        allocationStartWeek: rt.allocationStartWeek,
-        allocationEndWeek: rt.allocationEndWeek,
         projectId,
       },
     })
@@ -303,26 +309,12 @@ export async function restoreSnapshotCommonState(
       update: {
         name: nr.name,
         resourceTypeId: nr.resourceTypeId,
-        startWeek: nr.startWeek,
-        endWeek: nr.endWeek,
-        allocationPct: nr.allocationPct,
-        allocationMode: nr.allocationMode,
-        allocationPercent: nr.allocationPercent,
-        allocationStartWeek: nr.allocationStartWeek,
-        allocationEndWeek: nr.allocationEndWeek,
         pricingModel: nr.pricingModel,
       },
       create: {
         id: nr.id,
         resourceTypeId: nr.resourceTypeId,
         name: nr.name,
-        startWeek: nr.startWeek,
-        endWeek: nr.endWeek,
-        allocationPct: nr.allocationPct,
-        allocationMode: nr.allocationMode,
-        allocationPercent: nr.allocationPercent,
-        allocationStartWeek: nr.allocationStartWeek,
-        allocationEndWeek: nr.allocationEndWeek,
         pricingModel: nr.pricingModel,
       },
     })
@@ -527,6 +519,34 @@ async function restoreSnapshotCapacityPlans(
   }
 }
 
+/**
+ * Load and validate the ROLE profiles of post-snapshot resource types inside
+ * the rollback transaction, before any destructive write. The established
+ * rollback contract retains post-snapshot resource types (identity preserved)
+ * while exactly replacing captured state; since issue #418 every surviving
+ * owner must carry valid authoritative ownership, so the retained role's
+ * profile is preserved atomically. Malformed/duplicate/ambiguous surviving
+ * ownership fails closed before any state changes.
+ */
+async function loadAndValidateRetainedRoleProfiles(
+  tx: SnapshotDbClient,
+  projectId: string,
+  snapshot: SnapshotV2 | SnapshotV3 | SnapshotV4,
+): Promise<RetainedRoleProfile[]> {
+  const { retainedResourceTypeIds, profiles } = await loadRetainedRoleProfiles(
+    tx,
+    projectId,
+    new Set(snapshot.resourceTypes.map(rt => rt.id)),
+  )
+  const errors = validateRetainedRoleProfiles(retainedResourceTypeIds, profiles, projectId)
+  if (errors.length > 0) {
+    throw new RollbackPreflightError(
+      `Cannot rollback: surviving post-snapshot ownership is invalid — ${errors.join('; ')}`,
+    )
+  }
+  return profiles
+}
+
 // ─── rollbackProjectSnapshot (the authoritative rollback operation) ───────────
 
 /**
@@ -582,8 +602,19 @@ export async function rollbackProjectSnapshot({
     throw e
   }
 
-  // 3. V3: validation + pre-flight checks before any writes
-  if (isSnapshotV3(parsedData)) {
+  // 3. Validation + pre-flight checks before any writes. V2 payloads are
+  // translated with the same shared helper the readiness command uses, so
+  // rollback and readiness always agree on translatability (issue #418 PR 1
+  // review); untranslatable v2 capacity fails before any destructive write.
+  if (isSnapshotV2(parsedData)) {
+    const { errors: translationErrors } = translateV2SnapshotProfiles(parsedData, projectId)
+    if (translationErrors.length > 0) {
+      throw new SnapshotValidationError(
+        `V2 snapshot capacity translation failed: ${translationErrors.join('; ')}`,
+      )
+    }
+  }
+  if (isSnapshotV3(parsedData) || isSnapshotV4(parsedData)) {
     validateSnapshotV3(parsedData)
 
     // Cross-project owner ID collision check
@@ -701,12 +732,25 @@ export async function rollbackProjectSnapshot({
       // V1 does NOT touch resource types, named resources, capacity profiles, or segments
     } else if (isSnapshotV2(parsedData)) {
       // --- V2: full-state restore + capacity profile cleanup ---
+      // Retained post-snapshot resource types keep their validated ROLE
+      // profiles atomically (issue #418 PR 1 review) — loaded and validated
+      // before any destructive write below.
+      const retained = await loadAndValidateRetainedRoleProfiles(tx, projectId, parsedData)
       await restoreSnapshotCommonState(tx, projectId, parsedData)
-      await recreateV2CapacityProfiles(tx, projectId, parsedData)
+      await recreateV2CapacityProfiles(tx, projectId, parsedData, retained)
     } else if (isSnapshotV3(parsedData)) {
       // --- V3: full-state restore + exact profile/segment and plan replacement ---
+      const retained = await loadAndValidateRetainedRoleProfiles(tx, projectId, parsedData)
       await restoreSnapshotCommonState(tx, projectId, parsedData)
-      await recreateV3CapacityProfiles(tx, projectId, parsedData)
+      await recreateV3CapacityProfiles(tx, projectId, parsedData, retained)
+      await restoreSnapshotCapacityPlans(tx, projectId, parsedData.capacityPlans)
+    } else if (isSnapshotV4(parsedData)) {
+      // --- V4: full-state restore + exact profile/segment and plan replacement ---
+      // Capacity state is exclusively profile-based; the candidate legacy
+      // columns are absent from v4 payloads (issue #418).
+      const retained = await loadAndValidateRetainedRoleProfiles(tx, projectId, parsedData)
+      await restoreSnapshotCommonState(tx, projectId, parsedData)
+      await recreateV3CapacityProfiles(tx, projectId, parsedData, retained)
       await restoreSnapshotCapacityPlans(tx, projectId, parsedData.capacityPlans)
     }
 

@@ -1,7 +1,7 @@
 /**
- * projectSnapshotValidation.ts — V3 snapshot validation for pre-rollback checks.
+ * projectSnapshotValidation.ts — Snapshot payload validation for pre-rollback checks.
  *
- * Validates that a SnapshotV3 payload is structurally sound before
+ * Validates that a SnapshotV3/V4 payload is structurally sound before
  * committing destructive work (rollback).  Duplicate owners are preserved;
  * duplicate profile/segment IDs are rejected.
  *
@@ -10,6 +10,7 @@
 
 import type {
   SnapshotV3,
+  SnapshotV4,
   SnapshotCapacityProfile,
   SnapshotCapacitySegment,
   SnapshotJsonValue,
@@ -135,7 +136,7 @@ export function validateSnapshotJsonValue(
 }
 
 /**
- * Validate a SnapshotV3 payload for structural soundness.
+ * Validate a SnapshotV3 or SnapshotV4 payload for structural soundness.
  *
  * Checks performed:
  *  - Non-empty unique resourceTypes IDs
@@ -157,6 +158,9 @@ export function validateSnapshotJsonValue(
  *  - Segment capacityPercent is finite >= 0
  *  - Segment source is a supported enum value
  *
+ * The legacy capacity fields carried by v3 rows are historical input and are
+ * not validated here; v4 rows omit them entirely (issue #418).
+ *
  * Explicitly NOT rejected:
  *  - Duplicate owners (same resourceTypeId / namedResourceId across profiles)
  *  - Overlapping or discontinuous segments
@@ -165,7 +169,7 @@ export function validateSnapshotJsonValue(
  *
  * @throws SnapshotValidationError on first invalid value.
  */
-export function validateSnapshotV3(snapshot: SnapshotV3): void {
+export function validateSnapshotV3(snapshot: SnapshotV3 | SnapshotV4): void {
   const { capacityProfiles, resourceTypes, namedResources, overheadItems } = snapshot
 
   // ── resourceTypes structure ──────────────────────────────────────────────

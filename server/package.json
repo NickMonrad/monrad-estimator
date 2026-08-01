@@ -25,6 +25,7 @@
     "capacity-profiles:audit:json": "tsx src/scripts/auditCapacityProfileOwnership.ts --json",
     "capacity-profiles:audit:repair": "tsx src/scripts/auditCapacityProfileOwnership.ts --repair-identical",
     "capacity-profiles:audit:repair:json": "tsx src/scripts/auditCapacityProfileOwnership.ts --repair-identical --json",
+    "capacity-profiles:readiness": "tsx src/scripts/checkProductionMigrationReadiness.ts",
     "test:ownership-invariants-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileOwnershipInvariants.integration.test.ts",
     "test:runtime-cutover-integration": "vitest run --config vitest.integration.config.ts src/test/runtimeCutoverProfileFirst.integration.test.ts",
     "test:transfer-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileTransfer.integration.test.ts",

@@ -293,6 +293,65 @@ async function createPlannerProfile(
   }
 }
 
+// Mirrors the production mapper (routes/resourceTypes.ts POST): the ROLE
+// profile that every mapper-created resource type carries. A resource type
+// with no ROLE profile is only legal when every named resource carries a
+// NAMED_PERSON profile (issue #418 fail-closed adapter).
+async function createMapperRoleProfile(projectId: string, resourceTypeId: string, id: string): Promise<void> {
+  await prisma.capacityProfile.create({
+    data: {
+      id,
+      projectId,
+      ownerKind: 'ROLE',
+      resourceTypeId,
+      namedResourceId: null,
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      legacy: {
+        allocationMode: 'TIMELINE',
+        allocationPercent: 100,
+        allocationPct: null,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+      },
+    },
+  })
+}
+
+// Mirrors the production mapper (routes/resourceTypes.ts POST): an explicit
+// named person always carries an authoritative NAMED_PERSON profile. Under
+// the #418 fail-closed resolver every persisted NR must resolve a profile.
+async function createMapperPersonProfile(projectId: string, namedResourceId: string, id: string): Promise<void> {
+  await prisma.capacityProfile.create({
+    data: {
+      id,
+      projectId,
+      ownerKind: 'NAMED_PERSON',
+      resourceTypeId: null,
+      namedResourceId,
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      legacy: {
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationPct: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        startWeek: null,
+        endWeek: null,
+      },
+    },
+  })
+}
+
 async function createDiscount(
   projectId: string,
   resourceTypeId: string | null,
@@ -762,6 +821,8 @@ describeIf('Scenario 3 — Resource Profile parity via production GET', () => {
       allocationMode: 'TIMELINE',
       allocationPercent: 100,
     })
+    await createMapperPersonProfile(projectId, 'nr-rp-1', 'prof-rp-1')
+    await createMapperPersonProfile(projectId, 'nr-rp-2', 'prof-rp-2')
     await createEpicBacklog(projectId, rtId)
 
     const applyRes = await request(app)
@@ -771,6 +832,7 @@ describeIf('Scenario 3 — Resource Profile parity via production GET', () => {
         { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 2 },
         { periodIndex: 1, startWeek: 4, endWeek: 8, headcount: 1 },
       ], { name: 'RP Parity' }))
+    // eslint-disable-next-line no-console
     expect(applyRes.status).toBe(201)
   })
 
@@ -903,6 +965,7 @@ describeIf('Scenario 4 — Export parity via client buildProfileCsv', () => {
       allocationPercent: 100,
       pricingModel: 'ACTUAL_DAYS',
     })
+    await createMapperPersonProfile(projectId, 'nr-export-1', 'prof-export-1')
     await createEpicBacklog(projectId, rtId)
 
     const applyRes = await request(app)
@@ -1577,18 +1640,14 @@ describeIf('Scenario 6 — Timeline parity against applied plan', () => {
       allocationMode: 'TIMELINE',
       dayRate: 400,
     })
+    // Mapper-created RTs always carry a ROLE profile; a profile-less role
+    // with no named resources fails the #418 completeness check.
+    await createMapperRoleProfile(projectId, rtB, 'prof-tl-b-role')
 
-    // Named resources: 2 for rtA (one will be surplus in period 1-3)
-    await createNamedResource(projectId, rtA, 'nr-tl-a1', 'Alice Eng', {
-      allocationMode: 'TIMELINE', allocationPercent: 100,
-    })
-    await createNamedResource(projectId, rtA, 'nr-tl-a2', 'Bob Eng', {
-      allocationMode: 'TIMELINE', allocationPercent: 100,
-    })
-    await createNamedResource(projectId, rtB, 'nr-tl-b1', 'Charlie QA', {
-      allocationMode: 'TIMELINE', allocationPercent: 100,
-    })
-
+    // No pre-existing named resources: the apply creates the planned
+    // resources ('Engineer 1'/'Engineer 2'), so weekly capacity assertions
+    // isolate planner capacity (issue #418 — pre-existing explicit people
+    // with mapper profiles would ADD their own capacity on top).
     const backlog = await createEpicBacklog(projectId, rtA)
     await prisma.task.create({
       data: {
@@ -1660,6 +1719,8 @@ describeIf('Scenario 6 — Timeline parity against applied plan', () => {
     const res = await request(app)
       .get(`/api/projects/${projectId}/timeline`)
       .set('Authorization', authHeader)
+    // eslint-disable-next-line no-console
+    if (res.status !== 200) console.error('DBG tl:', res.status, JSON.stringify(res.body).slice(0, 300))
     expect(res.status).toBe(200)
 
     const body = res.body as Record<string, unknown>
@@ -1706,9 +1767,11 @@ describeIf('Scenario 6 — Timeline parity against applied plan', () => {
     const qaCapacity = weeklyCapacity!.filter(
       (r: Record<string, unknown>) => r.resourceTypeName === 'QA',
     )
-    // QA was seeded with count=2, TIMELINE, 100% — capacity = 2 × 5 = 10 days/wk
+    // QA carries the mapper ROLE profile (AVAILABILITY_WINDOW, 100% = one
+    // FTE) — profile-first capacity is 1 × 5 = 5 days/wk, not count × 5
+    // (issue #418: the role profile is the capacity authority).
     for (const row of qaCapacity) {
-      expect(row.capacityDays).toBe(10)
+      expect(row.capacityDays).toBe(5)
     }
 
     // ── Named resource stability ─────────────────────────────────────────

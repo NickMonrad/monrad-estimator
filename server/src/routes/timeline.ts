@@ -283,7 +283,6 @@ function buildResponse(
   const namedResourceAssignments = deriveNamedResourceAssignments({
     resourceTypes,
     weeklyDemand,
-    capacityPlanByRt,
   })
 
   const namedResourcesList = resourceTypes
@@ -527,7 +526,7 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
     .filter(e => e.isActive !== false)
     .map(e => ({ ...e, features: e.features.filter(f => f.isActive !== false) }))
   // Use shared profile-first capacity resolver
-  const resolved = await resolveSchedulerCapacity(prisma, project.id, project.hoursPerDay)
+  const resolved = await resolveSchedulerCapacity(prisma, project.id)
   const resourceTypes = resolved.resourceTypes
   const capacityPlanByRt = resolved.capacityPlanByRt
   const warningResourceTypes = buildWarningResourceTypes(resourceTypes as ResourceTypeWithNamed[], capacityPlanByRt)
@@ -728,6 +727,11 @@ router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) =
   const projectId = project.id
   const hpd = project.hoursPerDay
 
+  // Profile-first capacity resolution — CSV capacity values derive from
+  // authoritative profiles, never from candidate columns (issue #418).
+  const resolved = await resolveSchedulerCapacity(prisma, projectId)
+  const capacityResourceTypes = resolved.resourceTypes
+
   // Section 1 — Gantt
   const timelineEntries = await prisma.timelineEntry.findMany({
     where: { projectId },
@@ -770,7 +774,7 @@ router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) =
       return { rtName, week, demandDays }
     }).sort((a, b) => a.week - b.week || a.rtName.localeCompare(b.rtName))
 
-    const rtByName = new Map(project.resourceTypes.map(rt => [rt.name, rt as ResourceTypeWithNamed]))
+    const rtByName = new Map(capacityResourceTypes.map(rt => [rt.name, rt as ResourceTypeWithNamed]))
     for (const { rtName, week, demandDays } of cacheEntries) {
       const rt = rtByName.get(rtName)
       const capacityHours = rt ? getWeeklyCapacity(rt, week, hpd) : hpd * 5
@@ -820,11 +824,15 @@ router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) =
     rtWeeks.get(task.resourceTypeId)!.ends.push(entry.endWeek)
   }
 
-  const namedResources = await prisma.namedResource.findMany({
-    where: { resourceType: { projectId } },
-    include: { resourceType: true },
-    orderBy: [{ resourceType: { name: 'asc' } }, { name: 'asc' }],
-  })
+  // Named resources come from the profile-derived scheduler DTOs: every
+  // allocation field is projected from the authoritative profile (issue #418).
+  const namedResources = capacityResourceTypes.flatMap(rt =>
+    (rt.namedResources ?? []).map(nr => ({
+      ...nr,
+      resourceTypeId: rt.id,
+      resourceTypeName: rt.name,
+    })),
+  )
 
   function allocationModeLabel(mode: string): string {
     if (mode === 'EFFORT') return 'T&M'
@@ -835,7 +843,7 @@ router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) =
   const nrRows: string[] = ['Name,ResourceType,AllocationType,AllocationPct,StartWeek,EndWeek']
   for (const nr of namedResources) {
     const name = nr.name.replace(/,/g, ' ')
-    const rtName = nr.resourceType.name.replace(/,/g, ' ')
+    const rtName = nr.resourceTypeName.replace(/,/g, ' ')
     const modeLabel = allocationModeLabel(nr.allocationMode)
     const pct = nr.allocationPercent
 

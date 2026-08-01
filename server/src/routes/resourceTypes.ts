@@ -3,11 +3,9 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
-import { toLegacyAllocationPct } from '../lib/resolveRoleDefaultForMutation.js'
 import { resolveRTPatchState } from '../lib/resolveRTPatchState.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 import { loadAndValidateOwnerProfile } from '../lib/ownerProfileLoader.js'
-import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 import {
   rejectLegacyCapacityFields,
   isPlannerOwnedProfile,
@@ -218,31 +216,6 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       const inheritedIds = new Set(state.classification.inheritedNRIds)
 
-      // ── Derive legacy compatibility shape from the validated ROLE profile ──
-      const effLegacy = projectCapacityProfileToLegacyAllocation({
-        planningBasis: roleProfile.planningBasis,
-        defaultPercent: roleProfile.defaultPercent,
-        startWeek: roleProfile.startWeek,
-        endWeek: roleProfile.endWeek,
-        segments: roleProfile.segments.map((s: any) => ({
-          startWeek: s.startWeek,
-          endWeek: s.endWeek,
-          capacityPercent: s.capacityPercent,
-          source: s.source,
-        })),
-        source: roleProfile.source,
-      })
-      if (!effLegacy) {
-        throw new Error('Failed to project role profile to legacy values')
-      }
-      const effectiveLegacyMode = {
-        allocationMode: effLegacy.allocationMode,
-        allocationPercent: effLegacy.allocationPercent ?? 100,
-        allocationStartWeek: effLegacy.allocationStartWeek,
-        allocationEndWeek: effLegacy.allocationEndWeek,
-      }
-      const effectiveAllocPct = toLegacyAllocationPct(effLegacy.allocationPercent ?? 100)
-
       // ── Count increase ─────────────────────────────────────────
       if (count > currentCount) {
         // Aggregate ROLE capacity above 100% per person cannot be represented
@@ -254,14 +227,7 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
             data: {
               name: `${rt.name} ${n}`,
               resourceTypeId: rt.id,
-              allocationMode: effectiveLegacyMode.allocationMode,
-              allocationPercent: effectiveLegacyMode.allocationPercent,
-              allocationStartWeek: effectiveLegacyMode.allocationStartWeek,
-              allocationEndWeek: effectiveLegacyMode.allocationEndWeek,
-              allocationPct: effectiveAllocPct,
-              startWeek: effectiveLegacyMode.allocationStartWeek,
-              endWeek: effectiveLegacyMode.allocationEndWeek,
-            } as any,
+            },
           })
           const segs = roleProfile.segments
           await tx.capacityProfile.create({

@@ -2,15 +2,8 @@ import { Router, Response } from 'express'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { materializeCapacityPlanResources } from '../lib/capacityPlanMaterialisation.js'
 import {
-  mapProjectToCapacityProfiles,
   mapPersistedProfilesToDTOs,
-} from '../lib/capacityProfileMapping.js'
-import type {
-  CapacityProfileResourceTypeLike,
-  CapacityProfileNamedResourceLike,
-  CapacityPlanSlotInput,
 } from '../lib/capacityProfileMapping.js'
 import {
   validatePersistedCapacityProfiles,
@@ -66,91 +59,65 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   // ── Persisted-authority path: validate structural integrity first ─────
-  if (project.capacityProfiles && project.capacityProfiles.length > 0) {
-    const resourceTypeIds = new Set(project.resourceTypes.map(rt => rt.id))
-    const namedResourceIds = new Set(
-      project.resourceTypes.flatMap(rt => rt.namedResources.map(nr => nr.id)),
-    )
+  // Issue #418: there is no legacy mapper fallback. Missing, malformed or
+  // conflicting profile state fails closed with an actionable error.
+  const resourceTypeIds = new Set(project.resourceTypes.map(rt => rt.id))
+  const namedResourceIds = new Set(
+    project.resourceTypes.flatMap(rt => rt.namedResources.map(nr => nr.id)),
+  )
 
-    const validation = validatePersistedCapacityProfiles(
-      project.capacityProfiles as Parameters<typeof validatePersistedCapacityProfiles>[0],
-      { projectId, resourceTypeIds, namedResourceIds },
-    )
+  const validation = validatePersistedCapacityProfiles(
+    project.capacityProfiles as Parameters<typeof validatePersistedCapacityProfiles>[0],
+    { projectId, resourceTypeIds, namedResourceIds },
+  )
 
-    if (validation.valid) {
-      const completenessErrors = checkPersistedCompleteness({
-        resourceTypes: project.resourceTypes.map(rt => ({
-          id: rt.id,
-          name: rt.name,
-          namedResources: rt.namedResources.map(nr => ({ id: nr.id, name: nr.name })),
-        })),
-        capacityProfiles: project.capacityProfiles.map(profile => ({
-          resourceTypeId: profile.resourceTypeId,
-          namedResourceId: profile.namedResourceId,
-          ownerKind: String(profile.ownerKind),
-          source: String(profile.source),
-          planningBasis: String(profile.planningBasis),
-        })),
-      })
+  if (!validation.valid) {
+    res.status(409).json({
+      error: 'Persisted capacity profiles are invalid: ' + validation.errors.join('; '),
+      code: 'CAPACITY_INTEGRITY_ERROR',
+    })
+    return
+  }
 
-      // Persisted state is authoritative only when structural validation and
-      // complete owner coverage both succeed.
-      if (completenessErrors.length === 0) {
-        const resourceTypeById = new Map<string, { id: string; name: string }>()
-        const namedResourceById = new Map<string, { id: string; name: string; resourceTypeId: string }>()
-        for (const rt of project.resourceTypes) {
-          resourceTypeById.set(rt.id, { id: rt.id, name: rt.name })
-          for (const nr of rt.namedResources) {
-            namedResourceById.set(nr.id, { id: nr.id, name: nr.name, resourceTypeId: rt.id })
-          }
-        }
+  const completenessErrors = checkPersistedCompleteness({
+    resourceTypes: project.resourceTypes.map(rt => ({
+      id: rt.id,
+      name: rt.name,
+      namedResources: rt.namedResources.map(nr => ({ id: nr.id, name: nr.name })),
+    })),
+    capacityProfiles: project.capacityProfiles.map(profile => ({
+      resourceTypeId: profile.resourceTypeId,
+      namedResourceId: profile.namedResourceId,
+      ownerKind: String(profile.ownerKind),
+      source: String(profile.source),
+      planningBasis: String(profile.planningBasis),
+    })),
+  })
 
-        res.json({
-          capacityProfiles: mapPersistedProfilesToDTOs(
-            project.capacityProfiles,
-            resourceTypeById,
-            namedResourceById,
-          ),
-        })
-        return
-      }
+  if (completenessErrors.length > 0) {
+    res.status(409).json({
+      error: 'Persisted capacity profiles are incomplete: ' + completenessErrors.join('; '),
+      code: 'CAPACITY_INTEGRITY_ERROR',
+    })
+    return
+  }
 
-      console.warn(
-        `[capacity-profiles] Incomplete persisted set for project ${projectId}: ` +
-        completenessErrors.join('; ') + '. Falling back to legacy mapper.',
-      )
-    } else {
-      console.warn(
-        `[capacity-profiles] Validation failed for project ${projectId}: ` +
-        validation.errors.join('; ') + '. Falling back to legacy mapper.',
-      )
+  const resourceTypeById = new Map<string, { id: string; name: string }>()
+  const namedResourceById = new Map<string, { id: string; name: string; resourceTypeId: string }>()
+  for (const rt of project.resourceTypes) {
+    resourceTypeById.set(rt.id, { id: rt.id, name: rt.name })
+    for (const nr of rt.namedResources) {
+      namedResourceById.set(nr.id, { id: nr.id, name: nr.name, resourceTypeId: rt.id })
     }
   }
 
-  // ── Fallback: derive profiles from project data via legacy mapper ────
-  const activePlan = project.capacityPlans?.[0] ?? null
-  const capacityPlanByRt = materializeCapacityPlanResources(activePlan?.periods ?? [])
-
-  const capacityPlanSlotsByResourceTypeId = new Map<string, CapacityPlanSlotInput[]>(
-    Array.from(capacityPlanByRt.entries()).map(([rtId, materialized]) => [
-      rtId,
-      materialized.slotWindows,
-    ]),
-  )
-
-  const namedResourcesByResourceTypeId = new Map<string, CapacityProfileNamedResourceLike[]>()
-  for (const rt of project.resourceTypes) {
-    namedResourcesByResourceTypeId.set(rt.id, rt.namedResources as CapacityProfileNamedResourceLike[])
-  }
-
-  const legacyProfiles = mapProjectToCapacityProfiles({
-    projectId,
-    resourceTypes: project.resourceTypes as CapacityProfileResourceTypeLike[],
-    namedResourcesByResourceTypeId,
-    capacityPlanSlotsByResourceTypeId,
+  res.json({
+    capacityProfiles: mapPersistedProfilesToDTOs(
+      project.capacityProfiles,
+      resourceTypeById,
+      namedResourceById,
+    ),
   })
-
-  res.json({ capacityProfiles: legacyProfiles })
 }))
 
 // ─── POST transfer-to-manual (must be registered before parameterised routes) ──

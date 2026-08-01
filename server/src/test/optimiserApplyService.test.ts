@@ -6,7 +6,6 @@ import {
   buildOptimiserRampUpProfileWrite,
   classifyOptimiserRampUpOwner,
   isValidOptimiserScopeForApply,
-  validateNoProfileScalarState,
   isValidNamedResourceMapperProvenance,
   type OptimiserNamedResourceState,
   type PersistedOptimiserProfile,
@@ -17,13 +16,6 @@ function namedResource(overrides: Partial<OptimiserNamedResourceState> = {}): Op
     id: 'nr-dev',
     name: 'Alice',
     resourceTypeId: 'rt-dev',
-    startWeek: null,
-    endWeek: null,
-    allocationPct: 100,
-    allocationMode: 'EFFORT',
-    allocationPercent: 100,
-    allocationStartWeek: null,
-    allocationEndWeek: null,
     ...overrides,
   }
 }
@@ -59,29 +51,28 @@ function mapperLegacy(overrides: Record<string, unknown> = {}) {
 }
 
 describe('classifyOptimiserRampUpOwner', () => {
-  it('allows a named person without a persisted profile', () => {
-    expect(classifyOptimiserRampUpOwner([], namedResource()).outcome).toBe('NO_PROFILE')
+  it('fails closed for a named person without a persisted profile (issue #418)', () => {
+    expect(classifyOptimiserRampUpOwner([], namedResource()).outcome).toBe('MISSING_PROFILE')
   })
 
-  it('proves and allows a mapper-derived scalar profile only while legacy fields match', () => {
-    const mappedOwner = namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 60,
-      allocationPct: 60,
-      allocationStartWeek: 2,
-      allocationEndWeek: 10,
-      startWeek: 2,
-      endWeek: 10,
-    })
+  it('proves and allows a mapper-derived scalar profile (profile-internal check, issue #418)', () => {
     const mapped = profile({
       source: 'AVAILABILITY_WINDOW',
       legacy: mapperLegacy(),
     })
 
-    expect(isValidNamedResourceMapperProvenance(mapped, mappedOwner)).toBe(true)
-    expect(classifyOptimiserRampUpOwner([mapped], mappedOwner).outcome).toBe('LEGACY_MAPPER_SCALAR')
-    expect(isValidNamedResourceMapperProvenance(mapped, namedResource())).toBe(false)
-    expect(classifyOptimiserRampUpOwner([mapped], namedResource()).outcome).toBe('EXPLICIT_SCALAR_PROTECTED')
+    // The provenance check is profile-internal: candidate NamedResource
+    // columns are never consulted.
+    expect(isValidNamedResourceMapperProvenance(mapped)).toBe(true)
+    expect(classifyOptimiserRampUpOwner([mapped], namedResource()).outcome).toBe('LEGACY_MAPPER_SCALAR')
+
+    const divergent = profile({
+      source: 'AVAILABILITY_WINDOW',
+      legacy: mapperLegacy(),
+      defaultPercent: 80,
+    })
+    expect(isValidNamedResourceMapperProvenance(divergent)).toBe(false)
+    expect(classifyOptimiserRampUpOwner([divergent], namedResource()).outcome).toBe('EXPLICIT_SCALAR_PROTECTED')
   })
 
   it('allows only marked optimiser-derived scalar profiles', () => {
@@ -167,212 +158,50 @@ describe('isValidOptimiserScopeForApply', () => {
   })
 })
 
-describe('validateNoProfileScalarState', () => {
-  it('accepts valid EFFORT state', () => {
-    expect(validateNoProfileScalarState(namedResource({ allocationMode: 'EFFORT' }))).toEqual({ valid: true })
-  })
-
-  it('accepts EFFORT with null percentage fields', () => {
-    // TypeScript cast: dynamically test null/undefined runtime values that
-    // could reach the service via deserialised API payloads.
-    const nr = namedResource() as unknown as Record<string, unknown>
-    nr.allocationMode = 'EFFORT'
-    nr.allocationPercent = null
-    nr.allocationPct = null
-    expect(validateNoProfileScalarState(nr as unknown as OptimiserNamedResourceState)).toEqual({ valid: true })
-  })
-
-  it('rejects EFFORT with negative start week', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'EFFORT',
-      startWeek: -1,
-    }))).toEqual({ valid: false, reason: expect.stringContaining('startWeek') })
-  })
-
-  it('rejects EFFORT with fractional start week', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'EFFORT',
-      startWeek: 2.5,
-    }))).toEqual({ valid: false, reason: expect.stringContaining('startWeek') })
-  })
-
-  it('rejects EFFORT with start after end week', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'EFFORT',
-      allocationStartWeek: 10,
-      allocationEndWeek: 5,
-    }))).toEqual({ valid: false, reason: expect.stringContaining('after') })
-  })
-
-  it('rejects EFFORT with contradictory start aliases', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'EFFORT',
-      startWeek: 1,
-      allocationStartWeek: 3,
-    }))).toEqual({ valid: false, reason: expect.stringContaining('Contradictory') })
-  })
-
-  it('rejects EFFORT with contradictory end aliases', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'EFFORT',
-      endWeek: 10,
-      allocationEndWeek: 12,
-    }))).toEqual({ valid: false, reason: expect.stringContaining('Contradictory') })
-  })
-
-  it('rejects EFFORT with negative allocationEndWeek', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'EFFORT',
-      allocationEndWeek: -5,
-    }))).toEqual({ valid: false, reason: expect.stringContaining('allocationEndWeek') })
-  })
-
-  it('accepts valid TIMELINE with allocationPercent', () => {
-    expect(validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 80,
-      allocationPct: 80,
-    }))).toEqual({ valid: true })
-  })
-  it('accepts valid TIMELINE with allocationPct only', () => {
-    const nr = namedResource() as unknown as Record<string, unknown>
-    nr.allocationMode = 'TIMELINE'
-    nr.allocationPercent = null
-    nr.allocationPct = 75
-    expect(validateNoProfileScalarState(nr as unknown as OptimiserNamedResourceState)).toEqual({ valid: true })
-  })
-
-  it('accepts valid FULL_PROJECT with allocationPercent only', () => {
-    const nr = namedResource() as unknown as Record<string, unknown>
-    nr.allocationMode = 'FULL_PROJECT'
-    nr.allocationPercent = 100
-    nr.allocationPct = null
-    expect(validateNoProfileScalarState(nr as unknown as OptimiserNamedResourceState)).toEqual({ valid: true })
-  })
-
-  it('rejects CAPACITY_PLAN mode', () => {
-    const result = validateNoProfileScalarState(namedResource({ allocationMode: 'CAPACITY_PLAN' }))
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('CAPACITY_PLAN') })
-  })
-
-  it('rejects unsupported mode XYZ', () => {
-    const result = validateNoProfileScalarState(namedResource({ allocationMode: 'XYZ' as never }))
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('XYZ') })
-  })
-
-  it('rejects missing allocation percent for TIMELINE', () => {
-    const nr = namedResource() as unknown as Record<string, unknown>
-    nr.allocationMode = 'TIMELINE'
-    nr.allocationPercent = null
-    nr.allocationPct = null
-    const result = validateNoProfileScalarState(nr as unknown as OptimiserNamedResourceState)
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('Missing allocation percent') })
-  })
-
-  it('rejects contradictory allocationPercent and allocationPct', () => {
-    const result = validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 80,
-      allocationPct: 50,
-    }))
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('Contradictory') })
-  })
-
-  it('rejects start week after end week', () => {
-    const result = validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 80,
-      allocationPct: 80,
-      startWeek: 10,
-      endWeek: 5,
-      allocationStartWeek: 10,
-      allocationEndWeek: 5,
-    }))
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('after') })
-  })
-
-  it('rejects contradictory startWeek and allocationStartWeek', () => {
-    const result = validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 80,
-      allocationPct: 80,
-      startWeek: 1,
-      allocationStartWeek: 3,
-    }))
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('Contradictory') })
-  })
-
-  it('rejects negative start week', () => {
-    const result = validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 80,
-      allocationPct: 80,
-      allocationStartWeek: -1,
-    }))
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('-1') })
-  })
-
-  it('rejects percentage over 100', () => {
-    const result = validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 150,
-      allocationPct: 150,
-    }))
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('150') })
-  })
-
-  it('rejects non-finite percentage', () => {
-    const result = validateNoProfileScalarState(namedResource({
-      allocationMode: 'TIMELINE',
-      allocationPercent: Infinity,
-      allocationPct: Infinity,
-    }))
-    expect(result).toEqual({ valid: false, reason: expect.stringContaining('Infinity') })
-  })
-})
-
 describe('buildOptimiserRampUpProfileWrite', () => {
   it('creates profile-first scalar availability and preserves EFFORT as 100 percent', () => {
-    const classification = classifyOptimiserRampUpOwner([], namedResource())
-    if (classification.outcome !== 'NO_PROFILE') throw new Error('Expected eligible owner')
+    const persisted = profile({
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      legacy: mapperLegacy({ allocationMode: 'EFFORT', allocationPercent: null, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null }),
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+    })
+    const classification = classifyOptimiserRampUpOwner([persisted], namedResource())
+    if (classification.outcome !== 'LEGACY_MAPPER_SCALAR') throw new Error('Expected eligible owner')
 
-    const write = buildOptimiserRampUpProfileWrite(
-      classification,
-      namedResource({ allocationPercent: 35, allocationPct: 35 }),
-      undefined,
-      4,
-    )
+    const write = buildOptimiserRampUpProfileWrite(classification, namedResource(), persisted, 4)
 
-    expect(write).toMatchObject({
-      profileId: null,
+    expect(write).toEqual({
+      profileId: 'profile-1',
+      namedResourceId: 'nr-dev',
+      resourceTypeId: 'rt-dev',
       startWeek: 4,
       endWeek: null,
       defaultPercent: 100,
-      projection: {
-        allocationMode: 'TIMELINE',
-        allocationPercent: 100,
-        allocationStartWeek: 4,
-        allocationEndWeek: null,
-        lossy: false,
-      },
     })
   })
 
-  it.each(['TIMELINE', 'FULL_PROJECT'])('preserves %s scalar percent and end boundary', allocationMode => {
-    const classification = classifyOptimiserRampUpOwner([], namedResource({ allocationMode }))
-    if (classification.outcome !== 'NO_PROFILE') throw new Error('Expected eligible owner')
+  it.each([
+    ['TIMELINE', 'AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
+    ['FULL_PROJECT', 'FIXED', 'WHOLE_PROJECT_ALLOCATION'],
+  ])('preserves %s scalar percent and end boundary', (allocationMode, source, planningBasis) => {
+    const persisted = profile({
+      source,
+      planningBasis,
+      legacy: mapperLegacy({ allocationMode, allocationPercent: 65, allocationPct: 65, allocationEndWeek: 12, endWeek: 12 }),
+      defaultPercent: 65,
+      endWeek: 12,
+    })
+    const classification = classifyOptimiserRampUpOwner([persisted], namedResource())
+    if (classification.outcome !== 'LEGACY_MAPPER_SCALAR') throw new Error('Expected eligible owner')
 
-    const write = buildOptimiserRampUpProfileWrite(
-      classification,
-      namedResource({ allocationMode, allocationPercent: 65, allocationEndWeek: 12 }),
-      undefined,
-      5,
-    )
+    const write = buildOptimiserRampUpProfileWrite(classification, namedResource(), persisted, 5)
 
     expect(write.defaultPercent).toBe(65)
     expect(write.endWeek).toBe(12)
-    expect(write.projection.allocationStartWeek).toBe(5)
-    expect(write.projection.allocationEndWeek).toBe(12)
+    expect(write.startWeek).toBe(5)
   })
 
   it('retains the profile ID on optimiser reapply', () => {
@@ -392,13 +221,20 @@ describe('buildOptimiserRampUpProfileWrite', () => {
   })
 
   it('rejects a ramp-up week after the preserved end boundary', () => {
-    const classification = classifyOptimiserRampUpOwner([], namedResource())
-    if (classification.outcome !== 'NO_PROFILE') throw new Error('Expected eligible owner')
+    const persisted = profile({
+      source: 'AVAILABILITY_WINDOW',
+      legacy: mapperLegacy({ allocationEndWeek: 3, endWeek: 3 }),
+      defaultPercent: 60,
+      startWeek: 2,
+      endWeek: 3,
+    })
+    const classification = classifyOptimiserRampUpOwner([persisted], namedResource())
+    if (classification.outcome !== 'LEGACY_MAPPER_SCALAR') throw new Error('Expected eligible owner')
 
     expect(() => buildOptimiserRampUpProfileWrite(
       classification,
-      namedResource({ allocationEndWeek: 3 }),
-      undefined,
+      namedResource(),
+      persisted,
       4,
     )).toThrow(OptimiserApplyConflictError)
   })
@@ -406,12 +242,17 @@ describe('buildOptimiserRampUpProfileWrite', () => {
 
 describe('buildOptimiserMutationIntent', () => {
   it('emits no writes for unchanged full-candidate entries', () => {
+    const persisted = profile({
+      source: 'AVAILABILITY_WINDOW',
+      legacy: mapperLegacy({ allocationStartWeek: 3, startWeek: 3 }),
+      startWeek: 3,
+    })
     expect(buildOptimiserMutationIntent({
       candidate: [{ resourceTypeId: 'rt-dev', count: 2, suggestedStartWeek: 3 }],
       optimiserScopeResourceTypeIds: new Set(['rt-dev']),
       resourceTypes: [{ id: 'rt-dev', name: 'Developer', count: 2 }],
-      namedResources: [namedResource({ allocationStartWeek: 3 })],
-      profilesByNamedResourceId: new Map(),
+      namedResources: [namedResource()],
+      profilesByNamedResourceId: new Map([['nr-dev', [persisted]]]),
       plannerManagedResourceTypeIds: new Set(),
     }).intents).toEqual([])
   })
@@ -426,7 +267,7 @@ describe('buildOptimiserMutationIntent', () => {
         { id: 'rt-dev', name: 'Developer', count: 2 },
         { id: 'rt-test', name: 'Tester', count: 1 },
       ],
-      namedResources: [namedResource({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 3 })],
+      namedResources: [namedResource()],
       optimiserScopeResourceTypeIds: new Set(),
       profilesByNamedResourceId: new Map(),
       plannerManagedResourceTypeIds: new Set(['rt-dev']),
