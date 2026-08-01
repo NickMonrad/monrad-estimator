@@ -64,11 +64,28 @@ untouched. `CapacityProfile.legacy` remains in place (retirement tracked by
 - Historical snapshots remain restorable:
   - **v1** — epic-tree restore only (unchanged contract).
   - **v2** — full-state restore; the captured legacy capacity values are
-    translated into deterministic profiles by `recreateV2CapacityProfiles`.
+    translated into deterministic profiles by `recreateV2CapacityProfiles`
+    via the shared pure `translateV2SnapshotProfiles` helper (the same rules
+    the readiness command applies, so readiness and rollback always agree).
     The candidate columns are treated as historical input only and are never
-    written back during restoration.
+    written back during restoration. Mode mapping: `EFFORT`/absent →
+    `DEMAND_FOLLOWING`/`FIXED`; `TIMELINE` → `AVAILABILITY_WINDOW`/
+    `AVAILABILITY_WINDOW`; `FULL_PROJECT` → `WHOLE_PROJECT_ALLOCATION`/
+    `FIXED`; `CAPACITY_PLAN` → `AVAILABILITY_WINDOW`/`LEGACY` preserving the
+    captured start/end window. A `CAPACITY_PLAN` owner without a captured
+    window cannot be translated without guessing and is rejected before any
+    rollback write (a segmentless `CAPACITY_PROFILE` role/person profile is
+    invalid authority).
   - **v3** — full-state restore with exact profile/segment/plan replacement.
   - **v4** — same exact replacement as v3.
+- **Rollback ownership contract (v2/v3/v4):** the transaction leaves every
+  surviving `ResourceType` and `NamedResource` with valid authoritative
+  ownership. Captured owners are exactly replaced from the snapshot;
+  post-snapshot named resources are pruned; post-snapshot resource types are
+  retained by identity **and** keep their validated ROLE profile (and its
+  segments) atomically, with exact IDs. A surviving post-snapshot role whose
+  ownership is missing, duplicated or structurally invalid fails the rollback
+  before any destructive write.
 - Restore never recreates or requires the candidate database columns.
 
 ## Readiness command
@@ -100,8 +117,11 @@ npm run capacity-profiles:readiness        # from the repository root
     authoritative validation rules;
   - historical snapshot parseability and translatability
     (`parseSnapshotData`, v2 translation validation, `validateSnapshotV3`) —
-    every stored `BacklogSnapshot` and `TemplateSnapshot` must parse as
-    v1/v2/v3/v4 and carry translatable capacity values.
+    every stored project `BacklogSnapshot` must parse as v1/v2/v3/v4 and
+    carry translatable capacity values. `TemplateSnapshot` rows are
+    deliberately **not** inspected: they store `FeatureTemplate` objects
+    (raw template state), not project snapshots, so they can never contain
+    `ResourceType`/`NamedResource`/`CapacityProfile` capacity state.
 - Reports project/entity identifiers without credentials or unrelated
   sensitive data.
 

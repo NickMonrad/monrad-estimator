@@ -477,13 +477,56 @@ describeIf('Scenario 1 — Successful transfer', () => {
 
     // Transferred planned resources carry an explicit zero segment (issue
     // #418: zero capacity expressed through the DTO, never legacy fields),
-    // so they cannot contribute independent capacity.
+    // so they cannot contribute independent capacity. Every compatibility
+    // capacity output is consistently zero (issue #418 PR 1 review): the
+    // preserved profile is untouched — this is presentation-only.
     for (const nr of rt!.namedResources) {
       if (nr.name.includes('Transfer Engineer')) {
         expect(nr.capacitySegments).toEqual([
           { startWeek: 0, endWeek: Infinity, allocationPercent: 0 },
         ])
+        expect(nr.allocationPct).toBe(0)
+        expect(nr.allocationPercent).toBe(0)
+        expect(nr.allocationMode).toBe('CAPACITY_PLAN')
+        expect(nr.startWeek).toBeNull()
+        expect(nr.endWeek).toBeNull()
+        expect(nr.allocationStartWeek).toBeNull()
+        expect(nr.allocationEndWeek).toBeNull()
       }
+    }
+    // The preserved underlying profiles still carry their original non-zero
+    // data (identity and segments are not destroyed by suppression).
+    const preservedProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
+      include: { segments: true },
+    })
+    expect(preservedProfiles.length).toBeGreaterThanOrEqual(1)
+    for (const profile of preservedProfiles) {
+      expect(profile.segments.length).toBeGreaterThan(0)
+      expect(profile.segments.some(seg => seg.capacityPercent > 0)).toBe(true)
+    }
+  })
+
+  it('Timeline response is internally consistent for transferred resources', async () => {
+    const res = await request(app)
+      .get(`/api/projects/${projectId}/timeline`)
+      .set('Authorization', authHeader)
+    expect(res.status).toBe(200)
+    const namedResources = (res.body.namedResources ?? []) as Array<Record<string, unknown>>
+    const transferred = namedResources.filter(nr =>
+      String(nr.name).includes('Transfer Engineer'),
+    )
+    expect(transferred.length).toBeGreaterThan(0)
+    for (const nr of transferred) {
+      // Zero contribution everywhere: percentage zero, no window, mode
+      // cannot imply capacity.
+      expect(nr.allocationPercent).toBe(0)
+      expect(nr.allocationPct).toBe(0)
+      expect(nr.allocationMode).toBe('CAPACITY_PLAN')
+      expect(nr.startWeek).toBeNull()
+      expect(nr.endWeek).toBeNull()
+      expect(nr.allocationStartWeek).toBeNull()
+      expect(nr.allocationEndWeek).toBeNull()
     }
   })
 

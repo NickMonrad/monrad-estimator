@@ -13,7 +13,7 @@
  * All tests are skipped unless INTEGRATION_TEST=true.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
 import type { $Enums } from '@prisma/client'
@@ -31,16 +31,51 @@ const describeIf = runIntegration ? describe : describe.skip
 
 let prisma: PrismaClient
 
+/** Project/user ids created by fixtures; removed after every test so the
+ * whole-database readiness check never sees another test's broken state. */
+const createdProjectIds: string[] = []
+const createdUserIds: string[] = []
+
 beforeAll(async () => {
   if (!runIntegration) return
   prisma = new PrismaClient({
     adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
   })
   await prisma.$connect()
+  // The readiness check is whole-database; start from a clean slate so a
+  // previous interrupted run can never leak fixtures into this file. Order
+  // respects the RESTRICT FKs that reference User.
+  await prisma.backlogSnapshot.deleteMany({})
+  await prisma.featureTemplate.deleteMany({})
+  await prisma.project.deleteMany({})
+  await prisma.customer.deleteMany({})
+  await prisma.documentTemplate.deleteMany({})
+  await prisma.user.deleteMany({})
+})
+
+afterEach(async () => {
+  if (!runIntegration) return
+  // Full ordered wipe (the DB is disposable and dedicated to this file) so
+  // every test starts from the same clean slate regardless of tracking.
+  await prisma.backlogSnapshot.deleteMany({})
+  await prisma.featureTemplate.deleteMany({})
+  await prisma.project.deleteMany({})
+  await prisma.customer.deleteMany({})
+  await prisma.documentTemplate.deleteMany({})
+  await prisma.user.deleteMany({})
+  createdProjectIds.length = 0
+  createdUserIds.length = 0
+  createdTemplateIds.length = 0
 })
 
 afterAll(async () => {
   if (!runIntegration) return
+  await prisma.backlogSnapshot.deleteMany({})
+  await prisma.featureTemplate.deleteMany({})
+  await prisma.project.deleteMany({})
+  await prisma.customer.deleteMany({})
+  await prisma.documentTemplate.deleteMany({})
+  await prisma.user.deleteMany({})
   await prisma.$disconnect()
 })
 
@@ -52,6 +87,7 @@ async function createProject(name: string, ownerId: string): Promise<string> {
   const project = await prisma.project.create({
     data: { name: `${name}-${Date.now()}-${fixtureCounter++}`, ownerId },
   })
+  createdProjectIds.push(project.id)
   return project.id
 }
 
@@ -63,6 +99,7 @@ async function createUserProjectPair(): Promise<{ userId: string; projectId: str
       password: '$2b$10$placeholder',
     },
   })
+  createdUserIds.push(user.id)
   const project = await prisma.project.create({
     data: { name: `Readiness-${Date.now()}-${fixtureCounter++}`, ownerId: user.id },
   })
@@ -141,6 +178,43 @@ async function createBacklogSnapshot(projectId: string, payload: unknown): Promi
   return snapshot.id
 }
 
+/**
+ * Create a normal TemplateSnapshot through the real stored shape: the
+ * template routes store the full FeatureTemplate object (raw template
+ * state, not a project snapshot).
+ */
+const createdTemplateIds: string[] = []
+
+async function createTemplateSnapshot(): Promise<string> {
+  const template = await prisma.featureTemplate.create({
+    data: {
+      name: `Readiness template ${Date.now()}-${fixtureCounter++}`,
+      category: 'DEV',
+      tasks: {
+        create: [{
+          name: 'Tpl Task',
+          order: 0,
+          hoursSmall: 8,
+          hoursMedium: 8,
+          hoursLarge: 8,
+          resourceTypeName: 'Engineer',
+        }],
+      },
+    },
+    include: { tasks: true },
+  })
+  createdTemplateIds.push(template.id)
+  const snapshot = await prisma.templateSnapshot.create({
+    data: {
+      templateId: template.id,
+      label: 'readiness fixture template snapshot',
+      trigger: 'manual_edit',
+      snapshot: template as object,
+    },
+  })
+  return snapshot.id
+}
+
 function v2SnapshotFixture(_projectId: string) {
   return {
     schemaVersion: 2,
@@ -170,6 +244,45 @@ function v2SnapshotFixture(_projectId: string) {
       allocationPercent: 100,
       allocationStartWeek: 2,
       allocationEndWeek: 9,
+      pricingModel: 'ACTUAL_DAYS',
+    }],
+    timelineEntries: [],
+    storyTimelineEntries: [],
+    epicDependencies: [],
+    featureDependencies: [],
+    overheadItems: [],
+  }
+}
+
+function v2CapacityPlanSnapshotFixture(_projectId: string) {
+  return {
+    schemaVersion: 2,
+    epics: [],
+    project: null,
+    resourceTypes: [{
+      id: 'rt-v2-plan',
+      name: 'Planned Legacy Role',
+      category: 'ENGINEERING',
+      count: 2,
+      hoursPerDay: null,
+      dayRate: null,
+      allocationMode: 'CAPACITY_PLAN',
+      globalTypeId: null,
+      allocationPercent: 100,
+      allocationStartWeek: 0,
+      allocationEndWeek: 10,
+    }],
+    namedResources: [{
+      id: 'nr-v2-plan',
+      resourceTypeId: 'rt-v2-plan',
+      name: 'Planned Legacy Person',
+      startWeek: 1,
+      endWeek: 8,
+      allocationPct: 100,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
       pricingModel: 'ACTUAL_DAYS',
     }],
     timelineEntries: [],
@@ -258,14 +371,62 @@ describeIf('readiness — valid database', () => {
     await createNamedPersonWithProfile(projectId, rtId, 'Readiness Person')
     await createBacklogSnapshot(projectId, v2SnapshotFixture(projectId))
     await createBacklogSnapshot(projectId, v3SnapshotFixture(projectId))
+    // Normal template snapshots (FeatureTemplate objects) must never block
+    // readiness — they are not project snapshots (issue #418 PR 1 review).
+    await createTemplateSnapshot()
   })
 
   it('passes and reports a clean summary', async () => {
     const report = await runProductionMigrationReadiness(prisma)
+    // eslint-disable-next-line no-console
+    if (!report.passed) console.error('DBG report:', formatReadinessReport(report).split('\n').filter(l => l.includes('❌') || l.includes('-')).join(' | '))
     expect(report.passed).toBe(true)
     const text = formatReadinessReport(report)
     expect(text).toContain('READINESS PASSED')
     expect(text).toContain('READ-ONLY')
+  })
+})
+
+describeIf('readiness — template snapshots are excluded', () => {
+  it('malformed template snapshot rows never block readiness', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Template Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Template Person')
+
+    // A TemplateSnapshot whose payload would never parse as a project
+    // snapshot (it is a raw FeatureTemplate object).
+    const template = await prisma.featureTemplate.create({
+      data: {
+        name: `Ignored template ${Date.now()}-${fixtureCounter++}`,
+        category: 'DEV',
+      },
+    })
+    await prisma.templateSnapshot.create({
+      data: {
+        templateId: template.id,
+        label: 'ignored',
+        trigger: 'manual_edit',
+        snapshot: { id: template.id, name: template.name, tasks: [] } as object,
+      },
+    })
+
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(true)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('READINESS PASSED')
+  })
+
+  it('malformed BacklogSnapshot still fails', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Malformed Snapshot Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Malformed Snapshot Person')
+    await createTemplateSnapshot()
+    await createBacklogSnapshot(projectId, { schemaVersion: 99, epics: [] })
+
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('unsupported or malformed snapshot data')
   })
 })
 
@@ -299,26 +460,22 @@ describeIf('readiness — blockers fail closed', () => {
     expect(text).toContain('lacks exactly one persisted ROLE profile')
   })
 
-  it('malformed owner shape fails', async () => {
+  it('malformed window shape fails', async () => {
+    // A window reversal passes the DB-level check constraints but fails the
+    // structural validator (startWeek must not exceed endWeek).
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'Malformed Role')
-    await prisma.capacityProfile.create({
-      data: {
-        projectId,
-        ownerKind: 'NAMED_PERSON',
-        resourceTypeId: rtId,
-        namedResourceId: null,
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 100,
-        startWeek: null,
-        endWeek: null,
-      },
+    const roleProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId: rtId },
+    })
+    await prisma.capacityProfile.update({
+      where: { id: roleProfile.id },
+      data: { startWeek: 8, endWeek: 3 },
     })
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('must have exactly one owner FK')
+    expect(text).toContain('startWeek 8 must not exceed endWeek 3')
   })
 
   it('cross-project ownership fails', async () => {
@@ -343,29 +500,28 @@ describeIf('readiness — blockers fail closed', () => {
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('does not match expected')
+    expect(text).toContain('not found in project')
   })
 
-  it('duplicate owner fails', async () => {
+  it('out-of-range named-person percent fails', async () => {
+    // A named-person percent above 100 passes the DB constraints (no check
+    // constraint on the value) but fails the structural validator.
+    // (Duplicate physical owners are impossible under the migration-managed
+    // partial unique indexes, so they are not fixture-representable.)
     const { projectId } = await createUserProjectPair()
-    const rtId = await createRoleWithProfile(projectId, 'Duplicated Role')
-    await prisma.capacityProfile.create({
-      data: {
-        projectId,
-        ownerKind: 'ROLE',
-        resourceTypeId: rtId,
-        namedResourceId: null,
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'FIXED',
-        defaultPercent: 50,
-        startWeek: null,
-        endWeek: null,
-      },
+    const rtId = await createRoleWithProfile(projectId, 'Overallocated Role')
+    const nrId = await createNamedPersonWithProfile(projectId, rtId, 'Overallocated Person')
+    const nrProfile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, namedResourceId: nrId },
+    })
+    await prisma.capacityProfile.update({
+      where: { id: nrProfile.id },
+      data: { defaultPercent: 150 },
     })
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('duplicate physical owner')
+    expect(text).toContain('must be in range [0,100]')
   })
 
   it('invalid segment state fails', async () => {
@@ -400,6 +556,33 @@ describeIf('readiness — blockers fail closed', () => {
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
     expect(text).toContain('unknown allocationMode')
+  })
+
+  it('translatable v2 CAPACITY_PLAN snapshot passes (same rules as rollback)', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Plan Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Plan Person')
+    await createBacklogSnapshot(projectId, v2CapacityPlanSnapshotFixture(projectId))
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(true)
+    expect(formatReadinessReport(report)).toContain('READINESS PASSED')
+  })
+
+  it('v2 CAPACITY_PLAN without a captured window is untranslatable and fails', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'No Window Plan Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'No Window Plan Person')
+    const badV2 = v2CapacityPlanSnapshotFixture(projectId)
+    badV2.resourceTypes[0] = {
+      ...badV2.resourceTypes[0],
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    } as unknown as (typeof badV2.resourceTypes)[0]
+    await createBacklogSnapshot(projectId, badV2)
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('CAPACITY_PLAN without a captured start/end window')
   })
 
   it('unsupported snapshot schema fails', async () => {

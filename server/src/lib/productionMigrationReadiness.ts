@@ -35,6 +35,7 @@ import {
   validatePersistedCapacityProfiles,
   checkPersistedCompleteness,
 } from './persistedCapacityProfileValidation.js'
+import { translateV2SnapshotProfiles } from './projectSnapshotCapacity.js'
 import {
   parseSnapshotData,
   isLegacyV1Snapshot,
@@ -67,62 +68,14 @@ export class ReadinessError extends Error {
 
 /**
  * Validate that a historical v2 snapshot's legacy capacity values are
- * structurally translatable to authoritative profiles (the same input
- * recreateV2CapacityProfiles consumes). Read-only: nothing is written.
- *
- * The v2→profile mapping is total for known enum values; translatability
- * fails only when the captured values are structurally unusable.
+ * structurally translatable to authoritative profiles. This delegates to the
+ * exact shared translation helper used by rollback
+ * (`translateV2SnapshotProfiles`), so readiness and rollback always agree on
+ * whether a v2 payload is translatable (issue #418 PR 1 review). Read-only:
+ * nothing is written.
  */
-export function validateV2SnapshotTranslation(v2: SnapshotV2): string[] {
-  const errors: string[] = []
-  const KNOWN_MODES = new Set(['EFFORT', 'TIMELINE', 'FULL_PROJECT', 'CAPACITY_PLAN'])
-
-  for (let i = 0; i < v2.resourceTypes.length; i++) {
-    const rt = v2.resourceTypes[i]
-    const pfx = `v2 snapshot resourceTypes[${i}] (${rt.name})`
-    if (rt.allocationMode != null && !KNOWN_MODES.has(rt.allocationMode)) {
-      errors.push(`${pfx}: unknown allocationMode "${String(rt.allocationMode)}"`)
-    }
-    if (rt.allocationPercent != null && !Number.isFinite(rt.allocationPercent)) {
-      errors.push(`${pfx}: allocationPercent must be finite`)
-    }
-    for (const [key, value] of [
-      ['allocationStartWeek', rt.allocationStartWeek],
-      ['allocationEndWeek', rt.allocationEndWeek],
-    ] as const) {
-      if (value != null && (!Number.isFinite(value) || !Number.isInteger(value) || value < 0)) {
-        errors.push(`${pfx}: ${key} must be a non-negative integer or null`)
-      }
-    }
-  }
-
-  for (let i = 0; i < v2.namedResources.length; i++) {
-    const nr = v2.namedResources[i]
-    const pfx = `v2 snapshot namedResources[${i}] (${nr.name})`
-    if (nr.allocationMode != null && !KNOWN_MODES.has(nr.allocationMode)) {
-      errors.push(`${pfx}: unknown allocationMode "${String(nr.allocationMode)}"`)
-    }
-    for (const [key, value] of [
-      ['allocationPercent', nr.allocationPercent],
-      ['allocationPct', nr.allocationPct],
-    ] as const) {
-      if (value != null && !Number.isFinite(value)) {
-        errors.push(`${pfx}: ${key} must be finite`)
-      }
-    }
-    for (const [key, value] of [
-      ['allocationStartWeek', nr.allocationStartWeek],
-      ['allocationEndWeek', nr.allocationEndWeek],
-      ['startWeek', nr.startWeek],
-      ['endWeek', nr.endWeek],
-    ] as const) {
-      if (value != null && (!Number.isFinite(value) || !Number.isInteger(value) || value < 0)) {
-        errors.push(`${pfx}: ${key} must be a non-negative integer or null`)
-      }
-    }
-  }
-
-  return errors
+export function validateV2SnapshotTranslation(v2: SnapshotV2, projectId: string): string[] {
+  return translateV2SnapshotProfiles(v2, projectId).errors
 }
 
 // ─── Section checks ──────────────────────────────────────────────────────────
@@ -198,10 +151,13 @@ async function checkProjectCompleteness(prisma: PrismaClient): Promise<Readiness
 }
 
 async function checkSnapshots(prisma: PrismaClient): Promise<ReadinessSection> {
-  const [backlogSnapshots, templateSnapshots] = await Promise.all([
-    prisma.backlogSnapshot.findMany({ select: { id: true, projectId: true } }),
-    prisma.templateSnapshot.findMany({ select: { id: true, templateId: true } }),
-  ])
+  // Only project snapshots can carry ResourceType/NamedResource/CapacityProfile
+  // state. TemplateSnapshot rows store FeatureTemplate objects (raw template
+  // state, not project snapshots) and are deliberately NOT inspected — a
+  // normal template snapshot must never block the migration readiness check.
+  const backlogSnapshots = await prisma.backlogSnapshot.findMany({
+    select: { id: true, projectId: true },
+  })
 
   const blockers: string[] = []
   for (const snapshot of backlogSnapshots) {
@@ -213,18 +169,11 @@ async function checkSnapshots(prisma: PrismaClient): Promise<ReadinessSection> {
       blockers.push(`backlog snapshot ${snapshot.id}: row vanished during check`)
       continue
     }
-    blockers.push(...validateStoredSnapshot(raw.snapshot, `backlog snapshot ${snapshot.id} (project ${snapshot.projectId})`))
-  }
-  for (const snapshot of templateSnapshots) {
-    const raw = await prisma.templateSnapshot.findUnique({
-      where: { id: snapshot.id },
-      select: { snapshot: true },
-    })
-    if (!raw) {
-      blockers.push(`template snapshot ${snapshot.id}: row vanished during check`)
-      continue
-    }
-    blockers.push(...validateStoredSnapshot(raw.snapshot, `template snapshot ${snapshot.id} (template ${snapshot.templateId})`))
+    blockers.push(...validateStoredSnapshot(
+      raw.snapshot,
+      `backlog snapshot ${snapshot.id} (project ${snapshot.projectId})`,
+      snapshot.projectId,
+    ))
   }
 
   return {
@@ -234,7 +183,7 @@ async function checkSnapshots(prisma: PrismaClient): Promise<ReadinessSection> {
   }
 }
 
-function validateStoredSnapshot(raw: unknown, label: string): string[] {
+function validateStoredSnapshot(raw: unknown, label: string, projectId: string): string[] {
   let parsed: unknown
   try {
     parsed = parseSnapshotData(raw)
@@ -246,7 +195,7 @@ function validateStoredSnapshot(raw: unknown, label: string): string[] {
 
   if (isLegacyV1Snapshot(parsed)) return []
   if (isSnapshotV2(parsed)) {
-    return validateV2SnapshotTranslation(parsed).map(error => `${label}: ${error}`)
+    return validateV2SnapshotTranslation(parsed, projectId).map(error => `${label}: ${error}`)
   }
   try {
     validateSnapshotV3(parsed as Parameters<typeof validateSnapshotV3>[0])

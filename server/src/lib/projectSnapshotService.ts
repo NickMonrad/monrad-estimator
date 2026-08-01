@@ -22,10 +22,15 @@ import {
 } from './projectSnapshotTypes.js'
 import {
   validateSnapshotV3,
+  SnapshotValidationError,
 } from './projectSnapshotValidation.js'
 import {
   recreateV2CapacityProfiles,
   recreateV3CapacityProfiles,
+  loadRetainedRoleProfiles,
+  validateRetainedRoleProfiles,
+  translateV2SnapshotProfiles,
+  type RetainedRoleProfile,
 } from './projectSnapshotCapacity.js'
 import { pruneSnapshots } from './snapshotUtils.js'
 import {
@@ -514,6 +519,34 @@ async function restoreSnapshotCapacityPlans(
   }
 }
 
+/**
+ * Load and validate the ROLE profiles of post-snapshot resource types inside
+ * the rollback transaction, before any destructive write. The established
+ * rollback contract retains post-snapshot resource types (identity preserved)
+ * while exactly replacing captured state; since issue #418 every surviving
+ * owner must carry valid authoritative ownership, so the retained role's
+ * profile is preserved atomically. Malformed/duplicate/ambiguous surviving
+ * ownership fails closed before any state changes.
+ */
+async function loadAndValidateRetainedRoleProfiles(
+  tx: SnapshotDbClient,
+  projectId: string,
+  snapshot: SnapshotV2 | SnapshotV3 | SnapshotV4,
+): Promise<RetainedRoleProfile[]> {
+  const { retainedResourceTypeIds, profiles } = await loadRetainedRoleProfiles(
+    tx,
+    projectId,
+    new Set(snapshot.resourceTypes.map(rt => rt.id)),
+  )
+  const errors = validateRetainedRoleProfiles(retainedResourceTypeIds, profiles, projectId)
+  if (errors.length > 0) {
+    throw new RollbackPreflightError(
+      `Cannot rollback: surviving post-snapshot ownership is invalid — ${errors.join('; ')}`,
+    )
+  }
+  return profiles
+}
+
 // ─── rollbackProjectSnapshot (the authoritative rollback operation) ───────────
 
 /**
@@ -569,7 +602,18 @@ export async function rollbackProjectSnapshot({
     throw e
   }
 
-  // 3. V3/V4: validation + pre-flight checks before any writes
+  // 3. Validation + pre-flight checks before any writes. V2 payloads are
+  // translated with the same shared helper the readiness command uses, so
+  // rollback and readiness always agree on translatability (issue #418 PR 1
+  // review); untranslatable v2 capacity fails before any destructive write.
+  if (isSnapshotV2(parsedData)) {
+    const { errors: translationErrors } = translateV2SnapshotProfiles(parsedData, projectId)
+    if (translationErrors.length > 0) {
+      throw new SnapshotValidationError(
+        `V2 snapshot capacity translation failed: ${translationErrors.join('; ')}`,
+      )
+    }
+  }
   if (isSnapshotV3(parsedData) || isSnapshotV4(parsedData)) {
     validateSnapshotV3(parsedData)
 
@@ -688,19 +732,25 @@ export async function rollbackProjectSnapshot({
       // V1 does NOT touch resource types, named resources, capacity profiles, or segments
     } else if (isSnapshotV2(parsedData)) {
       // --- V2: full-state restore + capacity profile cleanup ---
+      // Retained post-snapshot resource types keep their validated ROLE
+      // profiles atomically (issue #418 PR 1 review) — loaded and validated
+      // before any destructive write below.
+      const retained = await loadAndValidateRetainedRoleProfiles(tx, projectId, parsedData)
       await restoreSnapshotCommonState(tx, projectId, parsedData)
-      await recreateV2CapacityProfiles(tx, projectId, parsedData)
+      await recreateV2CapacityProfiles(tx, projectId, parsedData, retained)
     } else if (isSnapshotV3(parsedData)) {
       // --- V3: full-state restore + exact profile/segment and plan replacement ---
+      const retained = await loadAndValidateRetainedRoleProfiles(tx, projectId, parsedData)
       await restoreSnapshotCommonState(tx, projectId, parsedData)
-      await recreateV3CapacityProfiles(tx, projectId, parsedData)
+      await recreateV3CapacityProfiles(tx, projectId, parsedData, retained)
       await restoreSnapshotCapacityPlans(tx, projectId, parsedData.capacityPlans)
     } else if (isSnapshotV4(parsedData)) {
       // --- V4: full-state restore + exact profile/segment and plan replacement ---
       // Capacity state is exclusively profile-based; the candidate legacy
       // columns are absent from v4 payloads (issue #418).
+      const retained = await loadAndValidateRetainedRoleProfiles(tx, projectId, parsedData)
       await restoreSnapshotCommonState(tx, projectId, parsedData)
-      await recreateV3CapacityProfiles(tx, projectId, parsedData)
+      await recreateV3CapacityProfiles(tx, projectId, parsedData, retained)
       await restoreSnapshotCapacityPlans(tx, projectId, parsedData.capacityPlans)
     }
 

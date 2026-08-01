@@ -1457,7 +1457,21 @@ describe('transfer provenance suppression (issue #411)', () => {
     // segment (issue #411) — it never falls through to legacy columns.
     const nr = rt.namedResources[0]
     expect(nr.capacitySegments).toEqual([{ startWeek: 0, endWeek: Infinity, allocationPercent: 0 }])
+    // Every scheduler/Timeline compatibility capacity output represents zero
+    // contribution (issue #418 PR 1 review): percentage zero and no window
+    // may advertise independent capacity.
     expect(nr.allocationPct).toBe(0)
+    expect(nr.allocationPercent).toBe(0)
+    expect(nr.allocationMode).toBe('CAPACITY_PLAN')
+    expect(nr.startWeek).toBeNull()
+    expect(nr.endWeek).toBeNull()
+    expect(nr.allocationStartWeek).toBeNull()
+    expect(nr.allocationEndWeek).toBeNull()
+    // Exact weekly capacity comes exclusively from the manual ROLE profile.
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    for (let week = 0; week <= 10; week++) {
+      expect(getWeeklyCapacity(rt, week, 8)).toBe(40)
+    }
   })
 
   it('2. unrelated manual planned-resource WITHOUT transfer provenance remains authoritative', async () => {

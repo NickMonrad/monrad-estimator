@@ -150,34 +150,23 @@ function buildProfileBackedNR(
  */
 function buildTransferredZeroNR(
   nr: { id: string; name: string; pricingModel?: string | null },
-  profile: CapacityProfileResourceData,
+  _profile: CapacityProfileResourceData,
 ): SchedulerNamedResource {
-  const projection = projectCapacityProfileToLegacyAllocation({
-    planningBasis: profile.planningBasis,
-    source: profile.source,
-    defaultPercent: profile.defaultPercent,
-    startWeek: profile.startWeek,
-    endWeek: profile.endWeek,
-    segments: profile.segments.map(s => ({
-      startWeek: s.startWeek,
-      endWeek: s.endWeek,
-      capacityPercent: s.capacityPercent,
-    })),
-  })
-
-  const allocationMode = projection?.allocationMode ?? 'CAPACITY_PLAN'
-  const allocationPercent = projection?.allocationPercent ?? 0
-
+  // The transferred planned resource is deliberately suppressed under the
+  // manual ROLE authority (issue #411): every compatibility capacity output
+  // must represent zero contribution so scheduler, Timeline and Resource
+  // Profile views stay consistent (issue #418 PR 1 review). The preserved
+  // underlying profile is untouched — this is presentation-only.
   return {
     id: nr.id,
     name: nr.name,
-    startWeek: projection?.allocationStartWeek ?? null,
-    endWeek: projection?.allocationEndWeek ?? null,
+    startWeek: null,
+    endWeek: null,
     allocationPct: 0,
-    allocationMode,
-    allocationPercent,
-    allocationStartWeek: projection?.allocationStartWeek ?? null,
-    allocationEndWeek: projection?.allocationEndWeek ?? null,
+    allocationMode: 'CAPACITY_PLAN',
+    allocationPercent: 0,
+    allocationStartWeek: null,
+    allocationEndWeek: null,
     pricingModel: nr.pricingModel ?? undefined,
     // Explicit zero segment: the ROLE profile is the authority; this resource
     // must not contribute independent capacity and must not fall through to
