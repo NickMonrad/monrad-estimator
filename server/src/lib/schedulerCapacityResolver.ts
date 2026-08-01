@@ -359,7 +359,16 @@ export async function resolveSchedulerCapacity(
       hoursPerDay: rt.hoursPerDay ?? null,
       allocationMode: roleProjection?.allocationMode ?? 'EFFORT',
       namedResources,
-      roleSegments: useRoleSegments ? profileDataToSchedulerSegments(roleProfile) : (roleProfileValid ? [] : undefined),
+      // No roleSegments → getWeeklyCapacity falls back to phantom count slots
+      // (legacy semantics). A role without a ROLE profile is legal only as an
+      // explicit-only role whose every NR is profile-backed (adapter-enforced),
+      // so the profile-derived NR capacity is the complete authority — never
+      // phantom slots on top of it (issue #418).
+      roleSegments: useRoleSegments
+        ? profileDataToSchedulerSegments(roleProfile)
+        : roleProfileValid
+          ? []
+          : [],
     }
   })
 

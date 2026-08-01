@@ -477,7 +477,7 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       await db.query(
         `UPDATE "CapacityProfile" SET "source" = 'FIXED', "planningBasis" = 'DEMAND_FOLLOWING', ` +
         `"defaultPercent" = 100, "startWeek" = NULL, "endWeek" = NULL, ` +
-        `"legacy" = '{"allocationMode":"EFFORT","allocationPercent":100,"allocationPct":100,'` +
+        `"legacy" = '{"allocationMode":"EFFORT","allocationPercent":100,"allocationPct":100,` +
         `"allocationStartWeek":null,"allocationEndWeek":null,"startWeek":null,"endWeek":null}'::jsonb ` +
         `WHERE "id" = $1`,
         [genCp.rows[0].id],
@@ -717,9 +717,16 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(undoResult.status).toBe(200)
 
       // ── 11. Verify exact state restoration (no conditional bypass) ─────
-      // 11a. SQL: profile removed
+      // 11a. SQL: profile restored to the pre-apply mapper-derived scalar
+      // (issue #418 — v4 snapshots capture capacity profiles, so the undo
+      // restores the authoritative profile instead of leaving a bare NR)
       const restCpRows = await db.query(`SELECT * FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
-      expect(restCpRows.rows).toHaveLength(0)
+      expect(restCpRows.rows).toHaveLength(1)
+      expect(restCpRows.rows[0].source).toBe('FIXED')
+      expect(restCpRows.rows[0].planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(restCpRows.rows[0].defaultPercent).toBe(100)
+      expect(restCpRows.rows[0].startWeek).toBeNull()
+      expect(restCpRows.rows[0].endWeek).toBeNull()
       const restSegRows = await db.query(
         `SELECT * FROM "CapacitySegment" WHERE "capacityProfileId" = $1`,
         [createdProfileId],

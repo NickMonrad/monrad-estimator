@@ -1126,7 +1126,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     })
   })
 
-  it('still appends synthetic actual assignments that have no persisted named resource', async () => {
+  it('does not append phantom synthetics when every named resource resolves a profile', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       id: 'proj-1',
       ownerId: userId,
@@ -1211,18 +1211,16 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(res.status).toBe(200)
 
     const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
-    expect(devRow.namedResources).toEqual(expect.arrayContaining([
+    // Issue #418: the role carries no ROLE profile and its only named
+    // resource resolves an explicit NAMED_PERSON profile — an explicit-only
+    // role. The profile-derived NR capacity is the complete authority, so
+    // count-based phantom synthetics must NOT be appended on top.
+    expect(devRow.namedResources).toEqual([
       expect.objectContaining({
         id: 'nr-1',
         actualAllocatedDays: 5,
       }),
-      expect.objectContaining({
-        id: 'rt-dev-synthetic-2',
-        name: 'Developer 2',
-        synthetic: true,
-        actualAllocatedDays: 5,
-      }),
-    ]))
+    ])
   })
   it('uses shared computePlanningWindow and handles null startDate', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({

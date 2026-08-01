@@ -252,11 +252,13 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     // capacity state lives in capacityProfiles.
     expect(snapNamedResources.find(row => row.id === scenario.namedResourceId)?.startWeek).toBeUndefined()
     expect(snapCapacityProfiles).toHaveLength(1)
+    // V4 snapshots store the raw persisted profile rows (restore writes them
+    // back verbatim) — enums are the persisted form, not DTO-cased.
     expect(snapCapacityProfiles[0]).toMatchObject({
       ownerKind: 'NAMED_PERSON',
       namedResourceId: scenario.namedResourceId,
-      planningBasis: 'availabilityWindow',
-      source: 'availabilityWindow',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
       defaultPercent: 80,
       startWeek: 1,
       endWeek: 12,
@@ -371,20 +373,17 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
 
   it('revalidates ownership in-transaction and preserves a concurrent explicit profile', async () => {
     const scenario = await createScenario('race')
+    // One profile per named resource is enforced by a partial unique index,
+    // so the concurrent change mutates the existing mapper profile into an
+    // explicit MANUAL profile instead of inserting a second row.
     let concurrentProfileId = ''
     __setOptimiserPreTransactionSeam(async () => {
-      const concurrent = await prisma.capacityProfile.create({
-        data: {
-          projectId: scenario.projectId,
-          resourceTypeId: null,
-          namedResourceId: scenario.namedResourceId,
-          ownerKind: 'NAMED_PERSON',
-          planningBasis: 'AVAILABILITY_WINDOW',
-          source: 'MANUAL',
-          defaultPercent: 70,
-          startWeek: 1,
-          endWeek: 12,
-        },
+      const existing = await prisma.capacityProfile.findFirstOrThrow({
+        where: { namedResourceId: scenario.namedResourceId },
+      })
+      const concurrent = await prisma.capacityProfile.update({
+        where: { id: existing.id },
+        data: { source: 'MANUAL', defaultPercent: 70 },
       })
       concurrentProfileId = concurrent.id
     })
@@ -392,9 +391,10 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     try {
       const response = await applyScenario(scenario, 3, 4)
       expect(response.status).toBe(409)
-      // The mapper profile plus the concurrent manual profile make ownership
-      // ambiguous — fail closed.
-      expect(response.body.conflicts[0].code).toBe('AMBIGUOUS_OR_DUPLICATE')
+      // The concurrent mutation removed the mapper provenance inside the
+      // preflight window — the in-transaction revalidation sees an explicit
+      // MANUAL profile and fails closed.
+      expect(response.body.conflicts[0].code).toBe('EXPLICIT_SCALAR_PROTECTED')
     } finally {
       __setOptimiserPreTransactionSeam(null)
     }

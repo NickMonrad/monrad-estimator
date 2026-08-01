@@ -475,10 +475,14 @@ describeIf('Scenario 1 — Successful transfer', () => {
     expect(rt!.roleSegments).toBeDefined()
     expect(rt!.roleSegments!.length).toBeGreaterThan(0)
 
-    // Verify transferred planned resources don't contribute independent segments
+    // Transferred planned resources carry an explicit zero segment (issue
+    // #418: zero capacity expressed through the DTO, never legacy fields),
+    // so they cannot contribute independent capacity.
     for (const nr of rt!.namedResources) {
       if (nr.name.includes('Transfer Engineer')) {
-        expect(nr.capacitySegments).toBeUndefined()
+        expect(nr.capacitySegments).toEqual([
+          { startWeek: 0, endWeek: Infinity, allocationPercent: 0 },
+        ])
       }
     }
   })
@@ -825,7 +829,7 @@ describeIf('Scenario 7 — Compatibility projection', () => {
     await createSegment('cp-nr-s7', 4, 7, 50)
   })
 
-  it('projects role profile to ResourceType legacy fields', async () => {
+  it('freezes ResourceType candidate columns during transfer', async () => {
     const res = await request(app)
       .post(`/api/projects/${projectId}/capacity-profiles/transfer-to-manual`)
       .set('Authorization', authHeader)
@@ -833,19 +837,22 @@ describeIf('Scenario 7 — Compatibility projection', () => {
 
     expect(res.status).toBe(200)
 
+    // Issue #418: transfer never writes candidate columns — the seeded
+    // defaults stay frozen; the transferred MANUAL profiles are authority.
     const rt = await prisma.resourceType.findUnique({
       where: { id: rtId },
       select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
     })
     expect(rt).toBeDefined()
-    // Multi-segment projects to CAPACITY_PLAN, merged range, lossy
-    expect(rt!.allocationMode).toBe('CAPACITY_PLAN')
-    expect(rt!.allocationPercent).toBeGreaterThan(0)
-    expect(rt!.allocationStartWeek).toBe(0)
-    expect(rt!.allocationEndWeek).toBe(7)
+    expect(rt!.allocationMode).toBe('TIMELINE')
+    expect(rt!.allocationPercent).toBe(100)
+    expect(rt!.allocationStartWeek).toBeNull()
+    expect(rt!.allocationEndWeek).toBeNull()
   })
 
-  it('projects resource profile to NamedResource legacy fields', async () => {
+  it('freezes NamedResource candidate columns during transfer', async () => {
+    // The NR was seeded with CAPACITY_PLAN — it stays frozen; the transferred
+    // MANUAL PLANNED_RESOURCE profile carries the (now zeroed) capacity.
     const nrs = await fetchNamedResources(rtId)
     const nr = nrs.find(n => n.id === nrId)
     expect(nr).toBeDefined()

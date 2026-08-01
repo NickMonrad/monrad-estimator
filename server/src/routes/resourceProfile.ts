@@ -447,9 +447,12 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           let nrAllocatedDays: number
           if (nrMode === 'CAPACITY_PLAN') {
             if (actualNamedResource?.capacitySegments && actualNamedResource.capacitySegments.length > 0) {
-              // Calculate from actual capacity segments
+              // Calculate from actual capacity segments. Open-ended zero
+              // segments (endWeek Infinity — the transfer-to-manual zero
+              // marker) must not produce Infinity × 0 = NaN days.
               nrAllocatedDays = round2(
                 actualNamedResource.capacitySegments.reduce((sum, seg) => {
+                  if (!Number.isFinite(seg.endWeek)) return sum
                   const weeks = Math.max(0, seg.endWeek - seg.startWeek + 1)
                   return sum + weeks * 5 * (seg.allocationPercent / 100)
                 }, 0)

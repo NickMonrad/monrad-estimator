@@ -520,13 +520,14 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.status).toBe(200)
 
     const after = await readCanonicalState(scalarNrId, scalarProfileId)
-    // The compatibility projection must be exact
-    expect(after.nr?.allocationStartWeek).toBe(4)
-    expect(after.nr?.allocationEndWeek).toBe(9)
-    expect(after.nr?.startWeek).toBe(4)
-    expect(after.nr?.endWeek).toBe(9)
-    expect(after.nr?.allocationPercent).toBe(70)
-    expect(after.nr?.allocationPct).toBe(70)
+    // Issue #418: candidate columns are never written by profile endpoints —
+    // they stay frozen at schema defaults. The capacity lives in the profile.
+    expect(after.nr?.allocationStartWeek).toBeNull()
+    expect(after.nr?.allocationEndWeek).toBeNull()
+    expect(after.nr?.startWeek).toBeNull()
+    expect(after.nr?.endWeek).toBeNull()
+    expect(after.nr?.allocationPercent).toBe(50) // frozen at seeded value
+    expect(after.nr?.allocationPct).toBe(50)
     expect(after.profile?.planningBasis).toBe('AVAILABILITY_WINDOW')
     expect(after.profile?.defaultPercent).toBe(70)
     expect(after.profile?.startWeek).toBe(4)

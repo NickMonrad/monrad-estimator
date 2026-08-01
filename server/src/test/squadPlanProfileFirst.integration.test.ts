@@ -757,21 +757,23 @@ describeIf('Scenario 3 — Resizing from 2 headcount to 1 produces surplus PLANN
     })
     expect(projectedSurplus.actualAllocatedDays).toBe(0)
 
+    // The zero capacity is expressed through the PROFILE-derived DTO, never
+    // through the frozen candidate columns (issue #418).
     expect(getWeeklyCapacity({
       id: rtId,
       name: 'Engineer',
       count: 1,
       hoursPerDay: 8,
       namedResources: [{
-        id: surplus!.id,
-        name: surplus!.name,
-        startWeek: surplus!.startWeek,
-        endWeek: surplus!.endWeek,
-        allocationPct: surplus!.allocationPct,
-        allocationMode: surplus!.allocationMode,
-        allocationPercent: surplus!.allocationPercent,
-        allocationStartWeek: surplus!.allocationStartWeek,
-        allocationEndWeek: surplus!.allocationEndWeek,
+        id: projectedSurplus.id,
+        name: projectedSurplus.name,
+        startWeek: projectedSurplus.startWeek,
+        endWeek: projectedSurplus.endWeek,
+        allocationPct: projectedSurplus.allocationPct,
+        allocationMode: projectedSurplus.allocationMode,
+        allocationPercent: projectedSurplus.allocationPercent,
+        allocationStartWeek: projectedSurplus.allocationStartWeek,
+        allocationEndWeek: projectedSurplus.allocationEndWeek,
       }],
     }, 0, 8)).toBe(0)
   })
@@ -889,11 +891,13 @@ describeIf('Scenario 5 — Explicit NAMED_PERSON + shortfall creates planner pla
     expect(alice!.allocationMode).toBe('EFFORT')
     expect(alice!.allocationPercent).toBe(100)
 
-    // Planner placeholders have CAPACITY_PLAN allocationMode
+    // Planner placeholders: candidate columns stay frozen at schema defaults
+    // (issue #418 — capacity is expressed exclusively through profiles)
     const plannerNRs = nrs.filter(nr => nr.id !== aliceNrId)
     expect(plannerNRs).toHaveLength(2)
     for (const nr of plannerNRs) {
-      expect(nr.allocationMode).toBe('CAPACITY_PLAN')
+      expect(nr.allocationMode).toBe('EFFORT')
+      expect(nr.allocationPercent).toBe(100)
       expect(nr.resourceTypeId).toBe(rtId)
     }
   })
@@ -1077,13 +1081,16 @@ describeIf('Scenario 7 — Omitted planner roles lose capacity on replacement', 
     })
     expect(await fetchSegments(omittedRole!.id)).toHaveLength(0)
 
+    // The planner-managed count is zeroed on omission; the compatibility
+    // allocation fields stay frozen at seeded values (issue #418: zero
+    // capacity is expressed exclusively through the profiles below).
     const omittedResourceType = await prisma.resourceType.findUnique({
       where: { id: omittedRtId },
     })
     expect(omittedResourceType).toMatchObject({
       count: 0,
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 0,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
       allocationStartWeek: null,
       allocationEndWeek: null,
     })
@@ -1093,9 +1100,9 @@ describeIf('Scenario 7 — Omitted planner roles lose capacity on replacement', 
     })
     expect(omittedNamedResources).toHaveLength(1)
     expect(omittedNamedResources[0]).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 0,
-      allocationPct: 0,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationPct: 100,
       allocationStartWeek: null,
       allocationEndWeek: null,
       startWeek: null,
@@ -1107,15 +1114,26 @@ describeIf('Scenario 7 — Omitted planner roles lose capacity on replacement', 
     )
     expect(omittedProfile).toMatchObject({ defaultPercent: 0, startWeek: null, endWeek: null })
     expect(await fetchSegments(omittedProfile!.id)).toHaveLength(0)
+    // The zero capacity is enforced by the profile-derived DTO (zero-capacity
+    // ROLE profile → roleSegments [], zero-capacity PLANNED_RESOURCE profile),
+    // never by the frozen candidate columns (issue #418).
     expect(getWeeklyCapacity({
       id: omittedRtId,
       name: 'QA',
-      count: 0,
+      count: 2,
       hoursPerDay: 8,
-      namedResources: omittedNamedResources.map(nr => ({
-        ...nr,
-        allocationPct: nr.allocationPct,
-      })),
+      roleSegments: [],
+      namedResources: [{
+        id: omittedNamedResources[0].id,
+        name: omittedNamedResources[0].name,
+        startWeek: null,
+        endWeek: null,
+        allocationPct: 0,
+        allocationMode: 'CAPACITY_PLAN' as const,
+        allocationPercent: 0,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      }],
     }, 0, 8)).toBe(0)
   })
 })
@@ -1334,12 +1352,15 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
     expect(await fetchSegments(plannedB!.id)).toHaveLength(0)
   })
 
-  it('clears role B named resource compatibility aliases', async () => {
+  it('freezes role B named resource compatibility aliases at seeded values', async () => {
+    // Issue #418: candidate columns are never written; the zero capacity of
+    // the omitted role is expressed exclusively through the zero-capacity
+    // PLANNED_RESOURCE profile asserted above.
     const nr = await prisma.namedResource.findUnique({ where: { id: nrB } })
     expect(nr).toMatchObject({
       allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 0,
-      allocationPct: 0,
+      allocationPercent: 100,
+      allocationPct: 100,
       allocationStartWeek: null,
       allocationEndWeek: null,
       startWeek: null,
@@ -1370,14 +1391,17 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
       .toHaveLength(1)
   })
 
-  it('clears role B resource type compatibility fields', async () => {
+  it('freezes role B resource type compatibility fields at seeded values', async () => {
+    // The planner-managed count is zeroed on omission; the compatibility
+    // allocation fields stay frozen at seeded values (issue #418: role B's
+    // zero capacity is expressed through its zero-capacity ROLE profile).
     const rt = await prisma.resourceType.findUnique({ where: { id: rtB } })
     expect(rt).toMatchObject({
       count: 0,
       allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 0,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
+      allocationPercent: 100,
+      allocationStartWeek: 0,
+      allocationEndWeek: 8,
     })
   })
 })
@@ -1617,8 +1641,8 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
 // After a profile-first apply, GET /capacity-profiles must return the
 // persisted-authority DTO path when the persisted set is structurally valid
 // and complete. Deleting the planner ROLE profile (making the set incomplete)
-// causes a fallback to the legacy mapper. Restoring exactly one ROLE profile
-// restores the authority path.
+// fails closed with 409 (issue #418 — the legacy mapper fallback was retired).
+// Restoring exactly one ROLE profile restores the authority path.
 //
 // Also verifies explicit-only policy co-existence: when explicit NAMED_PERSON
 // profiles exist alongside planner profiles, the completeness check accepts
@@ -1725,10 +1749,12 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     expect(explicitDto!.legacy).toBeDefined()
   })
 
-  it('falls back to legacy mapper when planner ROLE profile is removed', async () => {
+  it('fails closed when planner ROLE profile is removed', async () => {
     if (!runIntegration) return
 
-    // Remove the planner ROLE profile, making the persisted set incomplete
+    // Remove the planner ROLE profile, making the persisted set incomplete.
+    // The #418 adapter rejects the missing role (the planned resources are
+    // PLANNED_RESOURCE, not explicit NAMED_PERSON) — no legacy fallback.
     await prisma.capacityProfile.delete({ where: { id: plannerProfileId } })
     // Also remove any orphan segments
     await prisma.capacitySegment.deleteMany({
@@ -1738,20 +1764,8 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     const res = await request(app)
       .get(`/api/projects/${projectId}/capacity-profiles`)
       .set('Authorization', authHeader)
-    expect(res.status).toBe(200)
-
-    const profiles = res.body.capacityProfiles as Array<Record<string, unknown>>
-    expect(Array.isArray(profiles)).toBe(true)
-
-    // Legacy mapping emits named-resource owners while retaining the
-    // compatibility field shape. The persisted profile ID must be absent.
-    expect(profiles.every(
-      (p: Record<string, unknown>) =>
-        p.legacy != null &&
-        Object.prototype.hasOwnProperty.call(p.legacy as Record<string, unknown>, 'allocationMode'),
-    )).toBe(true)
-    expect(profiles.some((p: Record<string, unknown>) => p.id === 'cp-explicit-designer')).toBe(false)
-    expect(profiles.some((p: Record<string, unknown>) => p.id === explicitNrId)).toBe(true)
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('restores persisted-authority path when ROLE profile is restored', async () => {
@@ -2166,12 +2180,14 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     const firstPlanAfter = await prisma.capacityPlan.findUnique({ where: { id: firstPlanId! } })
     expect(firstPlanAfter?.isActive).toBe(false)
 
-    // ── Assert omitted RT legacy compatibility fields zeroed ────────────
+    // ── Assert omitted RT: planner-managed count zeroed, compatibility
+    //    allocation fields frozen (issue #418: the zero capacity is
+    //    expressed exclusively through the zero profiles below) ──
     const rtAfter = await prisma.resourceType.findUnique({ where: { id: rtOmitted } })
     expect(rtAfter).toMatchObject({
       allocationMode: 'CAPACITY_PLAN',
       count: 0,
-      allocationPercent: 0,
+      allocationPercent: 100,
       allocationStartWeek: null,
       allocationEndWeek: null,
     })
@@ -2184,11 +2200,12 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     })
     expect(omittedRtNRsAfter.length).toBe(1) // unchanged from pre-capture
     expect(omittedRtNRsAfter[0].id).toBe(expectedOmittedNRId)
-    // Compatibility fields zeroed
+    // Candidate columns stay frozen at schema defaults (issue #418 — zero
+    // capacity is expressed exclusively through the PLANNED_RESOURCE profile)
     expect(omittedRtNRsAfter[0]).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 0,
-      allocationPct: 0,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationPct: 100,
       allocationStartWeek: null,
       allocationEndWeek: null,
       startWeek: null,
@@ -2487,7 +2504,9 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     // headcount=1 for 1 period → 1 NamedResource
     expect(nrsAfter.length).toBe(1)
     const nrAfter = nrsAfter[0]
-    expect(nrAfter.allocationMode).toBe('CAPACITY_PLAN')
+    // Candidate columns stay frozen at schema defaults (issue #418) — the
+    // CAPACITY_PLAN capacity lives in the PLANNED_RESOURCE profile below.
+    expect(nrAfter.allocationMode).toBe('EFFORT')
     expect(nrAfter.allocationPercent).toBe(100)
  
     // ── Assert PLANNED_RESOURCE profiles ──────────────────────────────

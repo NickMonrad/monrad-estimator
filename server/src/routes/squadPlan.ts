@@ -1,4 +1,5 @@
 import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 
 /**
  * squadPlan.ts — Express routes for the Capacity Planner (squad sizing).
@@ -67,6 +68,16 @@ type SlotWindow = {
 
 type PlannerInputLoadOptions = {
   includeCapacityPlanMaterialization?: boolean
+  /**
+   * Squad Planner apply precomputes the timeline BEFORE the plan's profiles
+   * are written. Pre-apply state legitimately contains unprofiled owners the
+   * planner is about to adopt, which the fail-closed resolver (issue #418)
+   * rejects. With this flag the precompute tolerates CapacityIntegrityError
+   * and falls back to legacy-shaped DTOs from the raw rows — the persisted
+   * state is never read through this path afterwards. All other consumers
+   * (timeline GET, resource profile, optimiser) stay fail-closed.
+   */
+  permissivePreApply?: boolean
 }
 
 type PlannerInputResourceType = SchedulerResourceType & {
@@ -174,6 +185,43 @@ function buildWeeklyDemandCacheFromPlannerResult(
   return weeklyDemandCache
 }
 
+/** Pre-apply fallback: legacy-shaped scheduler DTOs from raw rows. */
+async function loadPermissivePreApplyCapacity(projectId: string): Promise<ReturnType<typeof resolveSchedulerCapacity>> {
+  const resourceTypes = (await prisma.resourceType.findMany({
+    where: { projectId },
+    orderBy: { name: 'asc' },
+    include: { namedResources: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
+  })) as Array<Record<string, any>>
+  return {
+    resourceTypes: resourceTypes.map(rt => ({
+      id: rt.id,
+      name: rt.name,
+      count: rt.count,
+      hoursPerDay: rt.hoursPerDay ?? null,
+      allocationMode: rt.allocationMode ?? 'EFFORT',
+      namedResources: (rt.namedResources ?? []).map((nr: Record<string, any>) => ({
+        id: nr.id,
+        name: nr.name,
+        startWeek: nr.startWeek ?? null,
+        endWeek: nr.endWeek ?? null,
+        allocationPct: nr.allocationPct ?? 100,
+        allocationMode: nr.allocationMode ?? 'EFFORT',
+        allocationPercent: nr.allocationPercent ?? 100,
+        allocationStartWeek: nr.allocationStartWeek ?? null,
+        allocationEndWeek: nr.allocationEndWeek ?? null,
+        pricingModel: nr.pricingModel ?? undefined,
+      })),
+    })) as SchedulerResourceType[],
+    meta: {
+      profileBackedCount: 0,
+      legacyCount: 0,
+      profileBackedNamedResourceIds: [],
+      roleProfileRTIds: [],
+    },
+    capacityPlanByRt: new Map(),
+  }
+}
+
 export function buildReplayPlannerResourceTypes(
   resourceTypes: SchedulerResourceType[],
   slotWindowsByRt: Map<string, CapacityPlanSlotWindow[]>,
@@ -211,7 +259,7 @@ async function loadSchedulerInput(
   hoursPerDay: number,
   options: PlannerInputLoadOptions = {},
 ): Promise<SchedulerInput> {
-  const { includeCapacityPlanMaterialization = true } = options
+  const { includeCapacityPlanMaterialization = true, permissivePreApply = false } = options
   const [allEpics, resolved, manualFeatures, manualStories, epicDeps] = await Promise.all([
     prisma.epic.findMany({
       where: { projectId },
@@ -232,7 +280,11 @@ async function loadSchedulerInput(
         },
       },
     }),
-    resolveSchedulerCapacity(prisma, projectId),
+    resolveSchedulerCapacity(prisma, projectId).catch(error => {
+      // Pre-apply timeline precompute tolerance (see permissivePreApply).
+      if (!permissivePreApply || !(error instanceof CapacityIntegrityError)) throw error
+      return loadPermissivePreApplyCapacity(projectId)
+    }),
     prisma.timelineEntry.findMany({
       where: { projectId, isManual: true },
     }),
@@ -565,6 +617,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       const maxParallelism = clientMaxParallelism ?? 2
       const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay, {
         includeCapacityPlanMaterialization: false,
+        permissivePreApply: true,
       })
       const replayResourceTypes = buildReplayPlannerResourceTypes(
         schedulerInput.resourceTypes,
@@ -658,7 +711,9 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       }
     } else {
       // ── Legacy fallback: re-run scheduler ──────────────────────────────
-      const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay)
+      const schedulerInput = await loadSchedulerInput(projectId, project.hoursPerDay, {
+        permissivePreApply: true,
+      })
 
       if (clientLevellingResult?.epicStartWeeks) {
         epicStartWeeks = new Map(Object.entries(clientLevellingResult.epicStartWeeks).map(([k, v]) => [k, Number(v)]))
