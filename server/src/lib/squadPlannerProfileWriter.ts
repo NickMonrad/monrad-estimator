@@ -1064,6 +1064,15 @@ export async function writePlannerProfiles(
         [{ resourceTypeId: rp.resourceTypeId, resourceTypeName: 'role' }],
       )
     }
+    // The authoritative structural rules require segments on CAPACITY_PROFILE
+    // roles (the canonical segmentless zero state is PLANNED_RESOURCE only).
+    // Zero-capacity roles (omitted / zero-headcount RTs) therefore carry an
+    // explicit zero segment instead of being written segmentless.
+    const roleIsZeroCapacity = rp.segments.length === 0 && (rp.defaultPercent == null || rp.defaultPercent === 0)
+    const roleSegments = roleIsZeroCapacity
+      ? [{ startWeek: 0, endWeek: 0, capacityPercent: 0 }]
+      : rp.segments
+    const roleDefaultPercent = roleIsZeroCapacity ? 0 : rp.defaultPercent
     const profile = existing
       ? await tx.capacityProfile.update({
           where: { id: existing.id },
@@ -1073,7 +1082,7 @@ export async function writePlannerProfiles(
             ownerKind: 'ROLE',
             planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
-            defaultPercent: rp.defaultPercent,
+            defaultPercent: roleDefaultPercent,
             startWeek: rp.startWeek,
             endWeek: rp.endWeek,
           },
@@ -1086,15 +1095,15 @@ export async function writePlannerProfiles(
             ownerKind: 'ROLE',
             planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
-            defaultPercent: rp.defaultPercent,
+            defaultPercent: roleDefaultPercent,
             startWeek: rp.startWeek,
             endWeek: rp.endWeek,
           },
         })
     await tx.capacitySegment.deleteMany({ where: { capacityProfileId: profile.id } })
-    if (rp.segments.length > 0) {
+    if (roleSegments.length > 0) {
       await tx.capacitySegment.createMany({
-        data: rp.segments.map(s => ({
+        data: roleSegments.map(s => ({
           capacityProfileId: profile.id,
           startWeek: s.startWeek,
           endWeek: s.endWeek,
@@ -1102,7 +1111,7 @@ export async function writePlannerProfiles(
           source: prismaSource,
         })),
       })
-      segmentsWritten += rp.segments.length
+      segmentsWritten += roleSegments.length
     }
     roleProfilesWritten++
   }

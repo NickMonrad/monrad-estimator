@@ -7,6 +7,7 @@ import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 function makeProject(overrides?: Record<string, unknown>) {
   return {
     id: 'proj-1',
+    projectId: 'proj-1',
     hoursPerDay: 8,
     resourceTypes: [],
     capacityPlans: [],
@@ -18,6 +19,7 @@ function makeProject(overrides?: Record<string, unknown>) {
 function makeResourceType(overrides?: Record<string, unknown>) {
   return {
     id: 'rt-1',
+    projectId: 'proj-1',
     name: 'Engineer',
     allocationMode: 'EFFORT',
     allocationPercent: 100,
@@ -34,6 +36,7 @@ function makeResourceType(overrides?: Record<string, unknown>) {
 function makeNamedResource(overrides?: Record<string, unknown>) {
   return {
     id: 'nr-1',
+    projectId: 'proj-1',
     name: 'Alice',
     allocationMode: 'EFFORT',
     allocationPercent: 100,
@@ -59,6 +62,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'EFFORT',
           allocationPercent: 100,
@@ -73,12 +77,14 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'EFFORT',
           allocationPercent: 100,
           namedResources: [
             makeNamedResource({
               id: 'nr-1',
+              projectId: 'proj-1',
               name: 'Alice',
               allocationMode: 'EFFORT',
             }),
@@ -96,6 +102,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'TIMELINE',
           allocationPercent: 75,
@@ -106,6 +113,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-1',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
@@ -135,6 +143,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'EFFORT',
           allocationPercent: 100,
@@ -143,6 +152,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-1',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
@@ -154,6 +164,7 @@ describe('buildResourceCapacityProfileMap', () => {
           segments: [
             {
               id: 'seg-1',
+              projectId: 'proj-1',
               capacityProfileId: 'cp-1',
               startWeek: 0,
               endWeek: 7,
@@ -182,6 +193,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'TIMELINE',
           allocationPercent: 100,
@@ -201,17 +213,18 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-1',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
-          planningBasis: 'AVAILABILITY_WINDOW',
-          source: 'AVAILABILITY_WINDOW',
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL',
           defaultPercent: 100,
           startWeek: 0,
           endWeek: 7,
           segments: [
-            { id: 'seg-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 3, capacityPercent: 50, source: 'AVAILABILITY_WINDOW' },
-            { id: 'seg-2', capacityProfileId: 'cp-1', startWeek: 4, endWeek: 7, capacityPercent: 100, source: 'AVAILABILITY_WINDOW' },
+            { id: 'seg-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 3, capacityPercent: 50, source: 'MANUAL' },
+            { id: 'seg-2', capacityProfileId: 'cp-1', startWeek: 4, endWeek: 7, capacityPercent: 100, source: 'MANUAL' },
           ],
         },
       ],
@@ -223,9 +236,9 @@ describe('buildResourceCapacityProfileMap', () => {
     expect(result.namedResourceProfiles.has(nrId)).toBe(true)
     expect(result.roleProfiles.has('rt-1')).toBe(false)
 
-    // NR entry is profile-first
+    // NR entry is profile-first (segmented CAPACITY_PROFILE)
     const data = result.namedResourceProfiles.get(nrId)!
-    expect(data.planningBasis).toBe('availabilityWindow')
+    expect(data.planningBasis).toBe('capacityProfile')
     expect(data.segments).toHaveLength(2)
     expect(data.segments[0].capacityPercent).toBe(50)
     expect(data.segments[1].capacityPercent).toBe(100)
@@ -238,6 +251,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -255,6 +269,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-role',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
@@ -269,6 +284,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-1',
+          projectId: 'proj-1',
           ownerKind: 'PLANNED_RESOURCE',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -303,6 +319,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           allocationMode: 'EFFORT',
           allocationPercent: 100,
@@ -311,6 +328,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-1',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
@@ -337,10 +355,12 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
               id: 'nr-1',
+              projectId: 'proj-1',
               name: 'Alice',
               allocationMode: 'EFFORT',
               allocationStartWeek: null,
@@ -354,6 +374,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-role',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
@@ -366,6 +387,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-nr',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: 'nr-1',
@@ -420,6 +442,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-role',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: rtId,
           namedResourceId: null,
@@ -435,6 +458,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-inherited',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrInherited,
@@ -447,6 +471,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-explicit',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrExplicit,
@@ -518,6 +543,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityPlans: [
         {
           id: 'plan-act-1',
+          projectId: 'proj-1',
           isActive: true,
           periods: [
             {
@@ -563,6 +589,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityPlans: [
         {
           id: 'plan-act-2',
+          projectId: 'proj-1',
           isActive: true,
           periods: [
             {
@@ -578,6 +605,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-persist-1',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -633,6 +661,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityPlans: [
         {
           id: 'plan-ok',
+          projectId: 'proj-1',
           isActive: true,
           periods: [
             {
@@ -658,6 +687,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-dup',
+          projectId: 'proj-1',
           name: 'Dup RT',
           allocationMode: 'TIMELINE',
           allocationPercent: 75,
@@ -668,6 +698,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-b',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-dup',
           namedResourceId: null,
@@ -680,6 +711,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-a',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-dup',
           namedResourceId: null,
@@ -706,6 +738,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-conflict',
+          projectId: 'proj-1',
           name: 'Conflict RT',
           allocationMode: 'TIMELINE',
           allocationPercent: 100,
@@ -716,6 +749,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-x',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-conflict',
           namedResourceId: null,
@@ -728,6 +762,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-y',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-conflict',
           namedResourceId: null,
@@ -752,6 +787,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -768,6 +804,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-nr-b',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -780,6 +817,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-nr-a',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -808,6 +846,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -822,6 +861,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-nr-x',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -834,6 +874,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-nr-y',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -858,6 +899,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -878,6 +920,7 @@ describe('buildResourceCapacityProfileMap', () => {
     const project = makeOwnerKindProject(nrId, [
       {
         id: 'cp-a',
+        projectId: 'proj-1',
         ownerKind: 'NAMED_PERSON',
         resourceTypeId: null,
         namedResourceId: nrId,
@@ -890,6 +933,7 @@ describe('buildResourceCapacityProfileMap', () => {
       },
       {
         id: 'cp-b',
+        projectId: 'proj-1',
         ownerKind: 'PLANNED_RESOURCE',
         resourceTypeId: null,
         namedResourceId: nrId,
@@ -912,6 +956,7 @@ describe('buildResourceCapacityProfileMap', () => {
     const project = makeOwnerKindProject(nrId, [
       {
         id: 'cp-b',
+        projectId: 'proj-1',
         ownerKind: 'PLANNED_RESOURCE',
         resourceTypeId: null,
         namedResourceId: nrId,
@@ -924,6 +969,7 @@ describe('buildResourceCapacityProfileMap', () => {
       },
       {
         id: 'cp-a',
+        projectId: 'proj-1',
         ownerKind: 'NAMED_PERSON',
         resourceTypeId: null,
         namedResourceId: nrId,
@@ -947,6 +993,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -963,6 +1010,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-b',  // larger ID — should lose
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -975,6 +1023,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-a',  // smaller ID — wins
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -1003,6 +1052,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-1',
+          projectId: 'proj-1',
           name: 'Engineer',
           namedResources: [
             makeNamedResource({
@@ -1020,6 +1070,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-role',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
@@ -1032,6 +1083,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-y',  // larger ID — should lose
+          projectId: 'proj-1',
           ownerKind: 'PLANNED_RESOURCE',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -1044,6 +1096,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-a',  // smaller ID — wins
+          projectId: 'proj-1',
           ownerKind: 'PLANNED_RESOURCE',
           resourceTypeId: null,
           namedResourceId: nrId,
@@ -1092,6 +1145,7 @@ describe('buildResourceCapacityProfileMap', () => {
         capacityProfiles: [
           {
             id: 'cp-role',
+            projectId: 'proj-1',
             ownerKind: 'ROLE',
             resourceTypeId: collidingId,
             namedResourceId: null,
@@ -1104,6 +1158,7 @@ describe('buildResourceCapacityProfileMap', () => {
           },
           {
             id: 'cp-nr',
+            projectId: 'proj-1',
             ownerKind: 'NAMED_PERSON',
             resourceTypeId: null,
             namedResourceId: collidingId,
@@ -1141,6 +1196,7 @@ describe('buildResourceCapacityProfileMap', () => {
       resourceTypes: [
         makeResourceType({
           id: 'rt-com',
+          projectId: 'proj-1',
           name: 'Commercial RT',
           allocationMode: 'TIMELINE',
           allocationPercent: 75,
@@ -1149,6 +1205,7 @@ describe('buildResourceCapacityProfileMap', () => {
           namedResources: [
             makeNamedResource({
               id: 'nr-com',
+              projectId: 'proj-1',
               name: 'Commercial NR',
               allocationMode: 'TIMELINE',
               allocationPercent: 75,
@@ -1163,6 +1220,7 @@ describe('buildResourceCapacityProfileMap', () => {
       capacityProfiles: [
         {
           id: 'cp-com-role',
+          projectId: 'proj-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-com',
           namedResourceId: null,
@@ -1175,6 +1233,7 @@ describe('buildResourceCapacityProfileMap', () => {
         },
         {
           id: 'cp-com-nr',
+          projectId: 'proj-1',
           ownerKind: 'NAMED_PERSON',
           resourceTypeId: null,
           namedResourceId: 'nr-com',

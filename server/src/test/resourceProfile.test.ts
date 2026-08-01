@@ -2512,10 +2512,12 @@ describe('profile-first read adoption integration', () => {
       const storyId = 'story-multi'
 
       const cpId = 'cp-multi-1'
+      // Contiguous non-overlapping ranges (inclusive-overlap rule: a segment
+      // starting at a prior segment's endWeek would share that week).
       const segments = [
-        { id: 'cs-multi-1', capacityProfileId: cpId, startWeek: 0, endWeek: 4, capacityPercent: 50, source: 'MANUAL' },
-        { id: 'cs-multi-2', capacityProfileId: cpId, startWeek: 4, endWeek: 8, capacityPercent: 100, source: 'MANUAL' },
-        { id: 'cs-multi-3', capacityProfileId: cpId, startWeek: 8, endWeek: 12, capacityPercent: 75, source: 'MANUAL' },
+        { id: 'cs-multi-1', capacityProfileId: cpId, startWeek: 0, endWeek: 3, capacityPercent: 50, source: 'MANUAL' },
+        { id: 'cs-multi-2', capacityProfileId: cpId, startWeek: 4, endWeek: 7, capacityPercent: 100, source: 'MANUAL' },
+        { id: 'cs-multi-3', capacityProfileId: cpId, startWeek: 8, endWeek: 11, capacityPercent: 75, source: 'MANUAL' },
       ]
 
       vi.mocked(prisma.project.findFirst).mockResolvedValue({
@@ -2587,9 +2589,9 @@ describe('profile-first read adoption integration', () => {
       expect(nr.id).toBe(nrId)
       expect(nr.capacityProfile).toBeDefined()
       expect(nr.capacityProfile.segments).toHaveLength(3)
-      expect(nr.capacityProfile.segments[0]).toMatchObject({ startWeek: 0, endWeek: 4, capacityPercent: 50 })
-      expect(nr.capacityProfile.segments[1]).toMatchObject({ startWeek: 4, endWeek: 8, capacityPercent: 100 })
-      expect(nr.capacityProfile.segments[2]).toMatchObject({ startWeek: 8, endWeek: 12, capacityPercent: 75 })
+      expect(nr.capacityProfile.segments[0]).toMatchObject({ startWeek: 0, endWeek: 3, capacityPercent: 50 })
+      expect(nr.capacityProfile.segments[1]).toMatchObject({ startWeek: 4, endWeek: 7, capacityPercent: 100 })
+      expect(nr.capacityProfile.segments[2]).toMatchObject({ startWeek: 8, endWeek: 11, capacityPercent: 75 })
     })
   })
 
@@ -2665,8 +2667,8 @@ describe('profile-first read adoption integration', () => {
             startWeek: null,
             endWeek: null,
             segments: [
-              { id: 'cs-planned-1', capacityProfileId: 'cp-planned-1', startWeek: 0, endWeek: 4, capacityPercent: 50, source: 'SQUAD_PLANNER' },
-              { id: 'cs-planned-2', capacityProfileId: 'cp-planned-1', startWeek: 4, endWeek: 8, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+              { id: 'cs-planned-1', capacityProfileId: 'cp-planned-1', startWeek: 0, endWeek: 3, capacityPercent: 50, source: 'SQUAD_PLANNER' },
+              { id: 'cs-planned-2', capacityProfileId: 'cp-planned-1', startWeek: 4, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' },
             ],
           },
         ],

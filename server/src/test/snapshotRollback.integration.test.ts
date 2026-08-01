@@ -556,10 +556,12 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     )
 
     // ── ROLE profile for Developer — DB_NULL legacy ───────────────
+    // Segmented profile → CAPACITY_PROFILE (DEMAND_FOLLOWING forbids segments
+    // under the single authoritative structural rule set).
     profileRoleId = await createProfile(
       projectId, 'prof-role', 'ROLE', rtDevId, null,
       {
-        planningBasis: 'DEMAND_FOLLOWING',
+        planningBasis: 'CAPACITY_PROFILE',
         source: 'MANUAL',
         defaultPercent: null,
         startWeek: null,
@@ -576,7 +578,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     profileNamedId = await createProfile(
       projectId, 'prof-named', 'NAMED_PERSON', null, nrAliceId,
       {
-        planningBasis: 'AVAILABILITY_WINDOW',
+        planningBasis: 'CAPACITY_PROFILE',
         source: 'SQUAD_PLANNER',
         defaultPercent: 100,
         startWeek: 2,
@@ -588,7 +590,8 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     await createSegment(profileNamedId, segmentNamed1, 2, 5, 100)
 
     // ── PLANNED_RESOURCE (synthetic) — VALUE(number) legacy ───────
-    // Discontinuous, overlapping, and >100% segments to test fidelity
+    // Discontinuous and overlapping segments to test fidelity (>100% is
+    // illegal app state for non-ROLE owners under the single rule set).
     profilePlannedId = await createProfile(
       projectId, 'prof-planned', 'PLANNED_RESOURCE', null, nrDaveId,
       {
@@ -603,7 +606,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     segmentPlanned1 = 'seg-planned-1'
     segmentPlanned2 = 'seg-planned-2'
     segmentPlanned3 = 'seg-planned-3'
-    await createSegment(profilePlannedId, segmentPlanned1, 0, 1, 200)
+    await createSegment(profilePlannedId, segmentPlanned1, 0, 1, 100)
     await createSegment(profilePlannedId, segmentPlanned2, 3, 6, 75)
     await createSegment(profilePlannedId, segmentPlanned3, 8, 8, 25)
     // ── PLANNED_RESOURCE with persisted named resource (Charlie) ──
@@ -647,17 +650,19 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     // ── (1) ROLE for Designer — JSON_NULL legacy ──────────────────
     profileJsonNullId = await createProfile(
       projectId, 'prof-json-null', 'ROLE', rtDesId, null,
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
+      { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL' },
       Prisma.JsonNull,
     )
     segmentJsonNull1 = 'seg-json-null-1'
     await createSegment(profileJsonNullId, segmentJsonNull1, 3, 7, 80)
 
     // ── (2) NAMED_PERSON for Eve — VALUE(nested-null object) legacy ──
+    // Windowed AND segmented → CAPACITY_PROFILE under the single structural
+    // rule set (AVAILABILITY_WINDOW forbids segments).
     profileNestedObjId = await createProfile(
       projectId, 'prof-nested-obj', 'NAMED_PERSON', null, nrEveId,
       {
-        planningBasis: 'AVAILABILITY_WINDOW',
+        planningBasis: 'CAPACITY_PROFILE',
         source: 'SQUAD_PLANNER',
         defaultPercent: 50,
         startWeek: 1,
@@ -836,7 +841,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(roleP).toBeDefined()
     expect(roleP!.id).toBe(profileRoleId)
     expect(roleP!.resourceTypeId).toBe(rtDevId)
-    expect(roleP!.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(roleP!.planningBasis).toBe('CAPACITY_PROFILE')
     expect(roleP!.source).toBe('MANUAL')
     expect(roleP!.defaultPercent).toBeNull()
     expect(roleP!.legacy.kind).toBe('DB_NULL')
@@ -865,7 +870,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       expect(plannedP!.legacy.value).toBe(42)
     }
     expect(plannedP!.segments).toHaveLength(3)
-    expect(plannedP!.segments[0].capacityPercent).toBe(200)
+    expect(plannedP!.segments[0].capacityPercent).toBe(100)
     expect(plannedP!.segments[2].startWeek).toBe(8)
     expect(plannedP!.segments[2].endWeek).toBe(8)
 
@@ -978,7 +983,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     extraProfileId = await createProfile(
       projectId, 'prof-extra-owner', 'ROLE', extraRtId, null,
       {
-        planningBasis: 'AVAILABILITY_WINDOW',
+        planningBasis: 'CAPACITY_PROFILE',
         source: 'MANUAL',
         defaultPercent: 45,
         startWeek: 2,
@@ -1027,11 +1032,11 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
 
     // Mutate PLANNED_RESOURCE profile (issue #418: deleting an owner's only
     // profile would leave fail-closed integrity state; the rollback still
-    // restores the original captured profile).
+    // restores the original captured profile). DEMAND_FOLLOWING forbids
+    // segments, so the mutated state is segmentless.
     await prisma.capacitySegment.deleteMany({
       where: { capacityProfileId: profilePlannedId },
     })
-    await createSegment(profilePlannedId, 'seg-planned-mut', 0, 3, 100)
     await prisma.capacityProfile.update({
       where: { id: profilePlannedId },
       data: { planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 90 },
@@ -1086,7 +1091,12 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       data: { name: 'Dev Mutated' },
     })
 
-    // ── Mutate Alice allocation compatibility fields for B-state ──
+    // ── Mutate Alice's candidate compatibility columns for B-state ──
+    // PR 1 retired normal runtime reads of these columns: reads derive from
+    // the persisted CAPACITY_PROFILE, so this mutation must be invisible to
+    // the Resource Profile / Timeline responses captured afterwards. The
+    // profile mutation below (defaultPercent 50, window 1-6, segment 1-6@50)
+    // is what the captured responses must reflect.
     await prisma.namedResource.update({
       where: { id: nrAliceId },
       data: {
@@ -1113,15 +1123,25 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     await prisma.capacitySegment.deleteMany({
       where: { capacityProfileId: profileNestedObjId },
     })
-    await createSegment(profileNestedObjId, 'seg-nested-mut', 0, 2, 200)
+    await createSegment(profileNestedObjId, 'seg-nested-mut', 0, 2, 100)
     await prisma.capacityProfile.update({
       where: { id: profileNestedObjId },
       data: { defaultPercent: 80, startWeek: 2, endWeek: 8 },
     })
 
-    // Null-containing array profile: delete segments only
+    // Null-containing array profile: drop segments AND move to a
+    // segmentless-valid basis (segmentless CAPACITY_PROFILE is restricted to
+    // the canonical zero-capacity PLANNED_RESOURCE state).
     await prisma.capacitySegment.deleteMany({
       where: { capacityProfileId: profileArrayNullId },
+    })
+    await prisma.capacityProfile.update({
+      where: { id: profileArrayNullId },
+      data: {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 60,
+      },
     })
 
     // String legacy profile: mutate in place (issue #418 — owner must stay
@@ -1135,36 +1155,52 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       data: { defaultPercent: 80 },
     })
 
-    // Boolean legacy profile: change fields
+    // Boolean legacy profile: change fields, drop its segment (a
+    // segmentless-valid basis must not carry segments)
+    await prisma.capacitySegment.deleteMany({
+      where: { capacityProfileId: profileBoolId },
+    })
     await prisma.capacityProfile.update({
       where: { id: profileBoolId },
-      data: { planningBasis: 'AVAILABILITY_WINDOW', defaultPercent: 50 },
+      data: {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 50,
+      },
     })
 
     // ── Capture B-state HTTP responses (after mutations, before rollback) ──
-    const rpB = await request(app)
+    const rpBRes = await request(app)
       .get(`/api/projects/${projectId}/resource-profile`)
       .set('Authorization', authHeader)
-      .expect(200)
+    if (rpBRes.status !== 200) console.log('RPB409BODY', JSON.stringify(rpBRes.body))
+    expect(rpBRes.status).toBe(200)
+    const rpB = rpBRes as unknown as { body: unknown }
     resourceProfileAfterMutation = rpB.body
     const tlB = await request(app)
       .get(`/api/projects/${projectId}/timeline`)
       .set('Authorization', authHeader)
       .expect(200)
     timelineAfterMutation = tlB.body
-    // Assert B-state timeline shows mutated Alice allocation
+    // Assert B-state timeline derives from Alice's PROFILE, ignoring the
+    // mutated candidate columns: CAPACITY_PROFILE/SQUAD_PLANNER projects to
+    // CAPACITY_PLAN at defaultPercent 100 within the profile window 2-8.
+    // Assert B-state timeline derives from Alice's PROFILE, ignoring the
+    // mutated candidate columns: CAPACITY_PROFILE/SQUAD_PLANNER projects to
+    // CAPACITY_PLAN at the mutated segment 1-6 @ 50% (single-segment lossless
+    // projection — NOT the candidate-column TIMELINE/50/1-6 write).
     const tlBNamedResources = (timelineAfterMutation as Record<string, unknown>).namedResources as Array<Record<string, unknown>>
     const aliceTLB = tlBNamedResources.find(nr => nr.id === nrAliceId)!
-    expect(aliceTLB.allocationMode).toBe('TIMELINE')
+    expect(aliceTLB.allocationMode).toBe('CAPACITY_PLAN')
     expect(aliceTLB.allocationPercent).toBe(50)
     expect(aliceTLB.allocationStartWeek).toBe(1)
     expect(aliceTLB.allocationEndWeek).toBe(6)
-    // Assert B-state Resource Profile shows mutated Alice allocation
+    // Assert B-state Resource Profile does the same
     const rpBRows = (resourceProfileAfterMutation as Record<string, unknown>).resourceRows as Array<Record<string, unknown>>
     const rpBDevRow = rpBRows.find((r: Record<string, unknown>) => r.resourceTypeId === rtDevId)!
     const rpBDevNrs = rpBDevRow.namedResources as Array<Record<string, unknown>>
     const aliceRPB = rpBDevNrs.find((nr: Record<string, unknown>) => nr.id === nrAliceId)!
-    expect(aliceRPB.allocationMode).toBe('TIMELINE')
+    expect(aliceRPB.allocationMode).toBe('CAPACITY_PLAN')
     expect(aliceRPB.allocationPercent).toBe(50)
     expect(aliceRPB.allocationStartWeek).toBe(1)
     expect(aliceRPB.allocationEndWeek).toBe(6)
@@ -1291,7 +1327,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const retainedRole = profiles.find(p => p.id === extraProfileId)!
     expect(retainedRole.ownerKind).toBe('ROLE')
     expect(retainedRole.resourceTypeId).toBe(extraRtId)
-    expect(retainedRole.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(retainedRole.planningBasis).toBe('CAPACITY_PROFILE')
     expect(retainedRole.source).toBe('MANUAL')
     expect(retainedRole.defaultPercent).toBe(45)
     expect(retainedRole.startWeek).toBe(2)
@@ -1319,7 +1355,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const roleRow = profiles.find(p => p.id === profileRoleId)!
     expect(roleRow.ownerKind).toBe('ROLE')
     expect(roleRow.resourceTypeId).toBe(rtDevId)
-    expect(roleRow.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(roleRow.planningBasis).toBe('CAPACITY_PROFILE')
     expect(roleRow.source).toBe('MANUAL')
     expect(roleRow.defaultPercent).toBeNull()
     expect(roleRow.segments).toHaveLength(2)
@@ -1331,7 +1367,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const namedRow = profiles.find(p => p.id === profileNamedId)!
     expect(namedRow.ownerKind).toBe('NAMED_PERSON')
     expect(namedRow.namedResourceId).toBe(nrAliceId)
-    expect(namedRow.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(namedRow.planningBasis).toBe('CAPACITY_PROFILE')
     expect(namedRow.defaultPercent).toBe(100)
     expect(namedRow.segments).toHaveLength(1)
 
@@ -1339,7 +1375,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const plannedRow = profiles.find(p => p.id === profilePlannedId)!
     expect(plannedRow.ownerKind).toBe('PLANNED_RESOURCE')
     expect(plannedRow.segments).toHaveLength(3)
-    expect(plannedRow.segments[0].capacityPercent).toBe(200)
+    expect(plannedRow.segments[0].capacityPercent).toBe(100)
     expect(plannedRow.segments[2].startWeek).toBe(8)
     expect(plannedRow.segments[2].endWeek).toBe(8)
 
@@ -1357,7 +1393,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const jsonNullRow = profiles.find(p => p.id === profileJsonNullId)!
     expect(jsonNullRow.ownerKind).toBe('ROLE')
     expect(jsonNullRow.resourceTypeId).toBe(rtDesId)
-    expect(jsonNullRow.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(jsonNullRow.planningBasis).toBe('CAPACITY_PROFILE')
     expect(jsonNullRow.source).toBe('MANUAL')
     expect(jsonNullRow.defaultPercent).toBeNull()
     expect(jsonNullRow.startWeek).toBeNull()
@@ -1371,7 +1407,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const nestedObjRow = profiles.find(p => p.id === profileNestedObjId)!
     expect(nestedObjRow.ownerKind).toBe('NAMED_PERSON')
     expect(nestedObjRow.namedResourceId).toBe(nrEveId)
-    expect(nestedObjRow.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(nestedObjRow.planningBasis).toBe('CAPACITY_PROFILE')
     expect(nestedObjRow.source).toBe('SQUAD_PLANNER')
     expect(nestedObjRow.defaultPercent).toBe(50)
     expect(nestedObjRow.startWeek).toBe(1)
@@ -1565,7 +1601,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const devRow = afterRows.find(r => r.resourceTypeId === rtDevId)!
     const devCp = devRow.capacityProfile as Record<string, unknown>
     expect(devCp.resolutionSource).toBe('PROFILE')
-    expect(devCp.planningBasis).toBe('demandFollowing')
+    expect(devCp.planningBasis).toBe('capacityProfile')
     expect(devCp.source).toBe('manual')
     expect(devCp.defaultPercent).toBeNull()
     expect(devCp.startWeek).toBeNull()
@@ -1581,7 +1617,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(aliceRow.resourceIdentity).toBe('NAMED_PERSON')
     const aliceCp = aliceRow.capacityProfile as Record<string, unknown>
     expect(aliceCp.resolutionSource).toBe('PROFILE')
-    expect(aliceCp.planningBasis).toBe('availabilityWindow')
+    expect(aliceCp.planningBasis).toBe('capacityProfile')
     expect(aliceCp.source).toBe('squadPlanner')
     expect(aliceCp.defaultPercent).toBe(100)
     expect(aliceCp.startWeek).toBe(2)
@@ -1597,7 +1633,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     const desCp = desRow.capacityProfile as Record<string, unknown> | undefined
     expect(desCp).toBeDefined()
     expect(desCp!.resolutionSource).toBe('PROFILE')
-    expect(desCp!.planningBasis).toBe('demandFollowing')
+    expect(desCp!.planningBasis).toBe('capacityProfile')
     expect(desCp!.source).toBe('manual')
     expect(desCp!.defaultPercent).toBeNull()
     expect(desCp!.startWeek).toBeNull()
@@ -1705,7 +1741,7 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     await createProfile(
       projectId, 'prof-b-a', 'ROLE', rtId, null,
       {
-        planningBasis: 'DEMAND_FOLLOWING',
+        planningBasis: 'AVAILABILITY_WINDOW',
         source: 'MANUAL',
         defaultPercent: 100,
         startWeek: 0,
@@ -1724,14 +1760,14 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     })
     snapA = snapARec.id
 
-    // State B: change profile to 75% AVAILABILITY_WINDOW, add segments
+    // State B: change profile to 75% segmented CAPACITY_PROFILE
     await prisma.capacityProfile.update({
       where: { id: 'prof-b-a' },
       data: {
-        planningBasis: 'AVAILABILITY_WINDOW',
+        planningBasis: 'CAPACITY_PROFILE',
         defaultPercent: 75,
-        startWeek: 1,
-        endWeek: 8,
+        startWeek: null,
+        endWeek: null,
       },
     })
     const seg = await prisma.capacitySegment.findFirst({
@@ -1760,7 +1796,7 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     // B-state ROLE profile: AVAILABILITY_WINDOW, 75%, with segments
     const bRoleRow = (rpB.body.resourceRows as Array<Record<string, unknown>>).find(r => r.resourceTypeId === rtId)!
     const bRoleCp = bRoleRow.capacityProfile as Record<string, unknown>
-    expect(bRoleCp.planningBasis).toBe('availabilityWindow')
+    expect(bRoleCp.planningBasis).toBe('capacityProfile')
     expect(bRoleCp.defaultPercent).toBe(75)
     expect(bRoleCp.segments).toHaveLength(2)
     const tlB = await request(app)
@@ -1777,7 +1813,7 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
       include: { segments: { orderBy: { startWeek: 'asc' as const } } },
     })
     expect(profileA).not.toBeNull()
-    expect(profileA!.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(profileA!.planningBasis).toBe('AVAILABILITY_WINDOW')
     expect(profileA!.defaultPercent).toBe(100)
     expect(profileA!.segments).toHaveLength(0)
 
@@ -1798,7 +1834,7 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     expect(preData.schemaVersion).toBe(4)
     const bProfile = preData.capacityProfiles.find(p => p.id === 'prof-b-a')
     expect(bProfile).toBeDefined()
-    expect(bProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(bProfile!.planningBasis).toBe('CAPACITY_PROFILE')
     expect(bProfile!.defaultPercent).toBe(75)
     expect(bProfile!.segments).toHaveLength(2)
     expect(bProfile!.segments[0].capacityPercent).toBe(75)
@@ -1814,7 +1850,7 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
       include: { segments: { orderBy: { startWeek: 'asc' as const } } },
     })
     expect(profileB).not.toBeNull()
-    expect(profileB!.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(profileB!.planningBasis).toBe('CAPACITY_PROFILE')
     expect(profileB!.defaultPercent).toBe(75)
     expect(profileB!.segments).toHaveLength(2)
     expect(profileB!.segments[0].startWeek).toBe(1)
@@ -2757,6 +2793,334 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     expect(await prisma.capacityProfile.count({ where: { projectId: projectId2 } })).toBe(profileCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })).toBe(snapshotCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2, trigger: 'pre_rollback' } })).toBe(0)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario H — real v2 EFFORT / FULL_PROJECT rollback with stale window aliases
+// (issue #418 PR 1 review round 2: EFFORT/FULL_PROJECT never used windows, so
+// the deterministic translation discards them → valid DEMAND_FOLLOWING /
+// WHOLE_PROJECT_ALLOCATION profiles with null start/end).
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario H — v2 EFFORT/FULL_PROJECT discard stale windows', () => {
+  let projectId: string
+  let effortRtId: string
+  let fullRtId: string
+  let effortNrId: string
+  let fullNrId: string
+  let v2SnapshotId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    effortRtId = await createResourceType(projectId, 'rt-h-effort', 'Effort Role', {
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationStartWeek: 2,
+      allocationEndWeek: 9,
+    })
+    fullRtId = await createResourceType(projectId, 'rt-h-full', 'Full Role', {
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 80,
+      allocationStartWeek: 1,
+      allocationEndWeek: 7,
+    })
+    effortNrId = await createNamedResource(projectId, effortRtId, 'nr-h-effort', 'Effort Person', {
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      startWeek: 3,
+      endWeek: 8,
+    })
+    fullNrId = await createNamedResource(projectId, fullRtId, 'nr-h-full', 'Full Person', {
+      allocationMode: 'FULL_PROJECT',
+      allocationPercent: 80,
+      startWeek: 1,
+      endWeek: 5,
+    })
+    await createEpicBacklog(projectId, effortRtId, null)
+
+    // Stale persisted profiles that DIFFER from v2-derived state
+    await createProfile(
+      projectId, 'prof-h-stale-effort', 'ROLE', effortRtId, null,
+      { planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', defaultPercent: 60, startWeek: 0, endWeek: 4 },
+      Prisma.DbNull,
+    )
+    await createProfile(
+      projectId, 'prof-h-stale-full', 'ROLE', fullRtId, null,
+      { planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', defaultPercent: 40, startWeek: 1, endWeek: 3 },
+      Prisma.DbNull,
+    )
+    await createProfile(
+      projectId, 'prof-h-stale-effort-nr', 'NAMED_PERSON', null, effortNrId,
+      { planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', defaultPercent: 60, startWeek: 0, endWeek: 4 },
+      Prisma.DbNull,
+    )
+    await createProfile(
+      projectId, 'prof-h-stale-full-nr', 'NAMED_PERSON', null, fullNrId,
+      { planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', defaultPercent: 40, startWeek: 1, endWeek: 3 },
+      Prisma.DbNull,
+    )
+
+    const v4Data = await buildSnapshot(projectId, prisma)
+    const v2Data: SnapshotV2 = {
+      ...v4Data,
+      schemaVersion: 2,
+      resourceTypes: (v4Data.resourceTypes as Array<Record<string, unknown>>).map(rt => ({
+        ...rt,
+        allocationMode: rt.id === effortRtId ? 'EFFORT' : rt.id === fullRtId ? 'FULL_PROJECT' : 'EFFORT',
+        allocationPercent: rt.id === effortRtId ? 100 : rt.id === fullRtId ? 80 : 100,
+        allocationStartWeek: rt.id === effortRtId ? 2 : rt.id === fullRtId ? 1 : null,
+        allocationEndWeek: rt.id === effortRtId ? 9 : rt.id === fullRtId ? 7 : null,
+      })),
+      namedResources: (v4Data.namedResources as Array<Record<string, unknown>>).map(nr => ({
+        ...nr,
+        startWeek: nr.id === effortNrId ? 3 : nr.id === fullNrId ? 1 : null,
+        endWeek: nr.id === effortNrId ? 8 : nr.id === fullNrId ? 5 : null,
+        allocationPct: nr.id === effortNrId ? 100 : nr.id === fullNrId ? 80 : 100,
+        allocationMode: nr.id === effortNrId ? 'EFFORT' : nr.id === fullNrId ? 'FULL_PROJECT' : 'EFFORT',
+        allocationPercent: nr.id === effortNrId ? 100 : nr.id === fullNrId ? 80 : 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      })),
+    } as unknown as SnapshotV2
+    v2SnapshotId = (
+      await prisma.backlogSnapshot.create({
+        data: {
+          projectId,
+          label: 'v2 EFFORT/FULL_PROJECT snapshot for Scenario H',
+          trigger: 'manual',
+          snapshot: v2Data as unknown as object,
+          createdById: userId,
+        },
+      })
+    ).id
+  })
+
+  it('rollback translates EFFORT/FULL_PROJECT with null windows and reads load immediately', async () => {
+    // Candidate-column state before rollback (must stay frozen)
+    const effortRtBefore = await prisma.resourceType.findUniqueOrThrow({ where: { id: effortRtId } })
+    const fullNrBefore = await prisma.namedResource.findUniqueOrThrow({ where: { id: fullNrId } })
+
+    await rollbackProjectSnapshot({
+      projectId, snapshotId: v2SnapshotId, userId, db: prisma,
+    })
+
+    const profiles = await prisma.capacityProfile.findMany({
+      where: { projectId },
+      include: { segments: true },
+    })
+    expect(profiles).toHaveLength(4)
+
+    // EFFORT → DEMAND_FOLLOWING / FIXED, stale windows DISCARDED
+    const effortRole = profiles.find(p => p.resourceTypeId === effortRtId)!
+    expect(effortRole.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(effortRole.source).toBe('FIXED')
+    expect(effortRole.startWeek).toBeNull()
+    expect(effortRole.endWeek).toBeNull()
+    expect(effortRole.segments).toHaveLength(0)
+    const effortNr = profiles.find(p => p.namedResourceId === effortNrId)!
+    expect(effortNr.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(effortNr.startWeek).toBeNull()
+    expect(effortNr.endWeek).toBeNull()
+
+    // FULL_PROJECT → WHOLE_PROJECT_ALLOCATION / FIXED, stale windows DISCARDED
+    const fullRole = profiles.find(p => p.resourceTypeId === fullRtId)!
+    expect(fullRole.planningBasis).toBe('WHOLE_PROJECT_ALLOCATION')
+    expect(fullRole.source).toBe('FIXED')
+    expect(fullRole.defaultPercent).toBe(80)
+    expect(fullRole.startWeek).toBeNull()
+    expect(fullRole.endWeek).toBeNull()
+    const fullNr = profiles.find(p => p.namedResourceId === fullNrId)!
+    expect(fullNr.planningBasis).toBe('WHOLE_PROJECT_ALLOCATION')
+    expect(fullNr.defaultPercent).toBe(80)
+    expect(fullNr.startWeek).toBeNull()
+    expect(fullNr.endWeek).toBeNull()
+
+    // The translated set passes the single authoritative structural validator.
+    const { validatePersistedCapacityProfiles } = await import('../lib/persistedCapacityProfileValidation.js')
+    const validation = validatePersistedCapacityProfiles(
+      profiles.map(p => ({
+        id: p.id,
+        projectId: p.projectId,
+        resourceTypeId: p.resourceTypeId,
+        namedResourceId: p.namedResourceId,
+        ownerKind: p.ownerKind,
+        planningBasis: p.planningBasis,
+        source: p.source,
+        defaultPercent: p.defaultPercent,
+        startWeek: p.startWeek,
+        endWeek: p.endWeek,
+        segments: p.segments,
+      })),
+      {
+        projectId,
+        resourceTypeIds: new Set([effortRtId, fullRtId]),
+        namedResourceIds: new Set([effortNrId, fullNrId]),
+      },
+    )
+    expect(validation.errors).toEqual([])
+
+    // Resource Profile, Timeline and scheduler load immediately.
+    await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+      .expect(200)
+    await request(app)
+      .get(`/api/projects/${projectId}/timeline`)
+      .set('Authorization', authHeader)
+      .expect(200)
+    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
+    const resolved = await resolveSchedulerCapacity(prisma as any, projectId)
+    expect(resolved.resourceTypes).toHaveLength(2)
+
+    // Candidate database columns remain unchanged (frozen).
+    const effortRtAfter = await prisma.resourceType.findUniqueOrThrow({ where: { id: effortRtId } })
+    const fullNrAfter = await prisma.namedResource.findUniqueOrThrow({ where: { id: fullNrId } })
+    expect(effortRtAfter.allocationMode).toBe(effortRtBefore.allocationMode)
+    expect(effortRtAfter.allocationPercent).toBe(effortRtBefore.allocationPercent)
+    expect(effortRtAfter.allocationStartWeek).toBe(effortRtBefore.allocationStartWeek)
+    expect(effortRtAfter.allocationEndWeek).toBe(effortRtBefore.allocationEndWeek)
+    expect(fullNrAfter.allocationMode).toBe(fullNrBefore.allocationMode)
+    expect(fullNrAfter.allocationPercent).toBe(fullNrBefore.allocationPercent)
+    expect(fullNrAfter.allocationPct).toBe(fullNrBefore.allocationPct)
+    expect(fullNrAfter.startWeek).toBe(fullNrBefore.startWeek)
+    expect(fullNrAfter.endWeek).toBe(fullNrBefore.endWeek)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario I — orphan v2 NamedResource rejected before writes + runtime reads
+// fail closed on malformed persisted profiles
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario I — orphan v2 owner rejection and fail-closed reads', () => {
+  it('rejects orphan v2 NamedResource before any write', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-i-present', 'Present Role', {
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+    })
+    await createNamedResource(projectId, rtId, 'nr-i-present', 'Present Person')
+    await createEpicBacklog(projectId, rtId, null)
+    await createProfile(
+      projectId, 'prof-i-role', 'ROLE', rtId, null,
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
+      Prisma.DbNull,
+    )
+    await createProfile(
+      projectId, 'prof-i-nr', 'NAMED_PERSON', null, 'nr-i-present',
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
+      Prisma.DbNull,
+    )
+
+    const v4Data = await buildSnapshot(projectId, prisma)
+    const v2Data = {
+      ...v4Data,
+      schemaVersion: 2,
+      resourceTypes: (v4Data.resourceTypes as Array<Record<string, unknown>>).map(rt => ({
+        ...rt,
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      })),
+      namedResources: [
+        ...(v4Data.namedResources as Array<Record<string, unknown>>).map(nr => ({
+          ...nr,
+          startWeek: null,
+          endWeek: null,
+          allocationPct: 100,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+        })),
+        {
+          id: 'nr-i-orphan',
+          resourceTypeId: 'rt-i-missing', // absent from the snapshot
+          name: 'Orphan Person',
+          startWeek: null,
+          endWeek: null,
+          allocationPct: 100,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+        },
+      ],
+    } as unknown as SnapshotV2
+    const orphanSnap = (
+      await prisma.backlogSnapshot.create({
+        data: {
+          projectId,
+          label: 'orphan v2',
+          trigger: 'manual',
+          snapshot: v2Data as unknown as object,
+          createdById: userId,
+        },
+      })
+    ).id
+    const profileCountBefore = await prisma.capacityProfile.count({ where: { projectId } })
+    const snapshotCountBefore = await prisma.backlogSnapshot.count({ where: { projectId } })
+
+    // Rollback fails BEFORE any write, identifying the orphan owner and the
+    // missing parent ResourceType.
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: orphanSnap, userId, db: prisma }),
+    ).rejects.toThrow(SnapshotValidationError)
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: orphanSnap, userId, db: prisma }),
+    ).rejects.toThrow(/nr-i-orphan/)
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: orphanSnap, userId, db: prisma }),
+    ).rejects.toThrow(/rt-i-missing/)
+
+    // No state changed, no pre_rollback snapshot committed.
+    expect(await prisma.capacityProfile.count({ where: { projectId } })).toBe(profileCountBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId } })).toBe(snapshotCountBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId, trigger: 'pre_rollback' } })).toBe(0)
+  })
+
+  it('malformed persisted profiles fail closed through Resource Profile, Timeline and scheduler', async () => {
+    if (!runIntegration) return
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-i-bad', 'Bad Role', {
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+    })
+    await createNamedResource(projectId, rtId, 'nr-i-bad', 'Bad Person')
+    await createEpicBacklog(projectId, rtId, null)
+    const badProfileId = await createProfile(
+      projectId, 'prof-i-bad', 'ROLE', rtId, null,
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
+      Prisma.DbNull,
+    )
+    await createProfile(
+      projectId, 'prof-i-bad-nr', 'NAMED_PERSON', null, 'nr-i-bad',
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
+      Prisma.DbNull,
+    )
+    // Corrupt the persisted ROLE profile: DEMAND_FOLLOWING must not carry windows.
+    await prisma.capacityProfile.update({
+      where: { id: badProfileId },
+      data: { startWeek: 2, endWeek: 9 },
+    })
+
+    // Resource Profile fails closed (409), Timeline fails closed (non-200),
+    // scheduler resolution throws — no malformed DTO is ever produced.
+    const rp = await request(app)
+      .get(`/api/projects/${projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+    expect(rp.status).toBe(409)
+    const tl = await request(app)
+      .get(`/api/projects/${projectId}/timeline`)
+      .set('Authorization', authHeader)
+    expect(tl.status).not.toBe(200)
+    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
+    await expect(resolveSchedulerCapacity(prisma as any, projectId)).rejects.toThrow()
   })
 })
 

@@ -21,6 +21,7 @@ import {
   mapPersistedProfilesToDTOs,
 } from './capacityProfileMapping.js'
 import { CapacityIntegrityError } from './capacityIntegrityError.js'
+import { validateProfileStructure } from './capacityProfileStructureValidation.js'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -255,6 +256,24 @@ export function buildResourceCapacityProfileMap(
     const rawByRT = new Map<string, PersistedProfile[]>()
     const rawByNR = new Map<string, PersistedProfile[]>()
     for (const cp of rawProfiles) {
+      // Every persisted profile must satisfy the single authoritative
+      // structural rule set (same rules readiness, mutations and v2
+      // translation apply) BEFORE it can be converted into a runtime DTO.
+      const structuralErrors = validateProfileStructure(
+        cp as unknown as Parameters<typeof validateProfileStructure>[0],
+        {
+          projectId: project.id,
+          resourceTypeIds: rtIds,
+          namedResourceIds: nrIds,
+        },
+      )
+      if (structuralErrors.length > 0) {
+        throw new CapacityIntegrityError(
+          `Capacity profile ${cp.id} is structurally invalid: ${structuralErrors.join('; ')}. ` +
+          'Run the capacity profile audit/repair workflow before retrying this operation.',
+        )
+      }
+
       const hasRt = cp.resourceTypeId != null
       const hasNr = cp.namedResourceId != null
       if (cp.ownerKind === 'ROLE' && hasRt && !hasNr) {

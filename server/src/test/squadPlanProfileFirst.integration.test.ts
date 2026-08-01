@@ -1079,7 +1079,13 @@ describeIf('Scenario 7 — Omitted planner roles lose capacity on replacement', 
       planningBasis: 'CAPACITY_PROFILE',
       source: 'SQUAD_PLANNER',
     })
-    expect(await fetchSegments(omittedRole!.id)).toHaveLength(0)
+    // Explicit zero segment: segmentless CAPACITY_PROFILE ROLE is invalid
+    // under the single authoritative rule set (issue #418 PR 1 round 2).
+    expect(await fetchSegments(omittedRole!.id)).toMatchObject([{
+      startWeek: 0,
+      endWeek: 0,
+      capacityPercent: 0,
+    }])
 
     // The planner-managed count is zeroed on omission; the compatibility
     // allocation fields stay frozen at seeded values (issue #418: zero
@@ -1334,7 +1340,13 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
       startWeek: null,
       endWeek: null,
     })
-    expect(await fetchSegments(roleBProfile!.id)).toHaveLength(0)
+    // Explicit zero segment: segmentless CAPACITY_PROFILE ROLE is invalid
+    // under the single authoritative rule set (issue #418 PR 1 round 2).
+    expect(await fetchSegments(roleBProfile!.id)).toMatchObject([{
+      startWeek: 0,
+      endWeek: 0,
+      capacityPercent: 0,
+    }])
   })
 
   it('clears role B legacy named resource to zero-capacity PLANNED_RESOURCE', async () => {
@@ -2230,12 +2242,17 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     expect(omittedRoleProfile.ownerKind).toBe('ROLE')
     expect(omittedRoleProfile.endWeek).toBeNull()
 
-    // Exactly zero segments on the ROLE profile
+    // Exactly one explicit zero segment on the ROLE profile (segmentless
+    // CAPACITY_PROFILE ROLE is invalid under the single rule set)
     const omittedRoleSegments = await prisma.capacitySegment.findMany({
       where: { capacityProfileId: omittedRoleProfile.id },
       orderBy: { startWeek: 'asc' },
     })
-    expect(omittedRoleSegments).toHaveLength(0)
+    expect(omittedRoleSegments).toMatchObject([{
+      startWeek: 0,
+      endWeek: 0,
+      capacityPercent: 0,
+    }])
     expect(omittedRoleProfile.startWeek).toBeNull()
 
     // ── Direct DB: assert PLANNED_RESOURCE profiles for omitted NRs ────
@@ -2284,8 +2301,13 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     expect(roleCPs[0].source).toBe('squadPlanner')
     expect(roleCPs[0].planningBasis).toBe('capacityProfile')
     expect(roleCPs[0].defaultPercent).toBe(0)
-    const cpRoleSegments = (roleCPs[0].segments as Array<unknown>) ?? []
-    expect(cpRoleSegments.length).toBe(0)
+    // Explicit zero segment (segmentless CAPACITY_PROFILE ROLE is invalid)
+    const cpRoleSegments = (roleCPs[0].segments as Array<Record<string, unknown>>) ?? []
+    expect(cpRoleSegments).toMatchObject([{
+      startWeek: 0,
+      endWeek: 0,
+      capacityPercent: 0,
+    }])
  
     // Every expected PLANNED_RESOURCE owner returned exactly once
     // Uses independently captured expectedOmittedNRId

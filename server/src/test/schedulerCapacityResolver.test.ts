@@ -908,7 +908,7 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
           source: 'MANUAL', defaultPercent: null,
           startWeek: null, endWeek: null, legacy: null,
           segments: [
-            { startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'MANUAL' },
+            { startWeek: 0, endWeek: 2, capacityPercent: 100, source: 'MANUAL' },
             { startWeek: 3, endWeek: 6, capacityPercent: 50, source: 'MANUAL' },
             { startWeek: 8, endWeek: 11, capacityPercent: 100, source: 'MANUAL' },
           ],
@@ -991,7 +991,9 @@ describe('Squad Planner composition and ordering (remediation)', () => {
           ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER', defaultPercent: 150,
           startWeek: null, endWeek: null, legacy: null,
-          segments: [],
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 150, source: 'SQUAD_PLANNER' },
+          ],
         },
         // Planned-resource profile 1 (100%) — SQUAD_PLANNER is real DB value
         {
@@ -1001,7 +1003,7 @@ describe('Squad Planner composition and ordering (remediation)', () => {
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
           segments: [
-            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'squadPlanner' },
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' },
           ],
         },
         // Planned-resource profile 2 (50%) — SQUAD_PLANNER is real DB value
@@ -1012,7 +1014,7 @@ describe('Squad Planner composition and ordering (remediation)', () => {
           source: 'SQUAD_PLANNER', defaultPercent: 50,
           startWeek: null, endWeek: null, legacy: null,
           segments: [
-            { startWeek: 0, endWeek: 10, capacityPercent: 50, source: 'squadPlanner' },
+            { startWeek: 0, endWeek: 10, capacityPercent: 50, source: 'SQUAD_PLANNER' },
           ],
         },
       ],
@@ -1198,7 +1200,9 @@ describe('SQUAD_PLANNER to squadPlanner normalisation (remediation)', () => {
           ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
-          segments: [],
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          ],
         },
         {
           id: 'cp-nr-src', projectId: 'proj-1',
@@ -1207,7 +1211,7 @@ describe('SQUAD_PLANNER to squadPlanner normalisation (remediation)', () => {
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
           segments: [
-            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'squadPlanner' },
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' },
           ],
         },
       ],
@@ -1251,7 +1255,9 @@ describe('overlap suppression precision (remediation)', () => {
           ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
-          segments: [],
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          ],
         },
         // Manual PLANNED_RESOURCE (source: MANUAL, not SQUAD_PLANNER)
         {
@@ -1309,7 +1315,9 @@ describe('overlap suppression precision (remediation)', () => {
           ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
-          segments: [],
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          ],
         },
         // Manually authored planned-resource profile (not Squad Planner,
         // not transfer provenance) — must NOT suppress the SP ROLE profile
@@ -1383,7 +1391,7 @@ describe('overlap suppression precision (remediation)', () => {
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
           segments: [
-            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'squadPlanner' },
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' },
           ],
         },
       ],

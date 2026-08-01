@@ -245,9 +245,13 @@ function isNonNegativeInteger(value: unknown): value is number {
  * (never the active CapacityPlan, never sync/reconciliation tooling).
  *
  * Mode mapping (shared by readiness and rollback — single source of truth):
- *   - null/undefined/EFFORT  → DEMAND_FOLLOWING / FIXED
- *   - TIMELINE               → AVAILABILITY_WINDOW / AVAILABILITY_WINDOW
- *   - FULL_PROJECT           → WHOLE_PROJECT_ALLOCATION / FIXED
+ *   - null/undefined/EFFORT  → DEMAND_FOLLOWING / FIXED, windows DISCARDED
+ *                              (EFFORT did not use them — stale aliases in the
+ *                              captured payload are ignored)
+ *   - FULL_PROJECT           → WHOLE_PROJECT_ALLOCATION / FIXED, windows
+ *                              DISCARDED (FULL_PROJECT did not use them)
+ *   - TIMELINE               → AVAILABILITY_WINDOW / AVAILABILITY_WINDOW,
+ *                              preserving the captured window
  *   - CAPACITY_PLAN          → AVAILABILITY_WINDOW / LEGACY, preserving the
  *                              captured window (a segmentless CAPACITY_PROFILE
  *                              ROLE/NAMED_PERSON profile is invalid authority;
@@ -255,8 +259,12 @@ function isNonNegativeInteger(value: unknown): value is number {
  *                              window cannot be translated without guessing
  *                              and is rejected).
  *
- * The complete translated set is structurally validated; errors are returned
- * for the caller to reject before any destructive write.
+ * Every NamedResource must reference a ResourceType included in the same
+ * snapshot (orphan rows are rejected with a clear error before any write).
+ *
+ * The complete translated set is structurally validated through the single
+ * authoritative validator; errors are returned for the caller to reject
+ * before any destructive write.
  */
 export function translateV2SnapshotProfiles(
   snapshot: SnapshotV2,
@@ -293,6 +301,7 @@ export function translateV2SnapshotProfiles(
     if (rt.allocationPercent != null && !Number.isFinite(rt.allocationPercent)) {
       errors.push(`${prefix}: allocationPercent must be finite`)
     }
+    const rtModeUsesWindows = rt.allocationMode === 'TIMELINE' || rt.allocationMode === 'CAPACITY_PLAN'
     for (const [key, value] of [
       ['allocationStartWeek', rt.allocationStartWeek],
       ['allocationEndWeek', rt.allocationEndWeek],
@@ -301,7 +310,10 @@ export function translateV2SnapshotProfiles(
         errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
       }
     }
+    // Window aliases are only meaningful for the modes that used them;
+    // EFFORT/FULL_PROJECT stale aliases are discarded, never validated.
     if (
+      rtModeUsesWindows &&
       rt.allocationStartWeek != null &&
       rt.allocationEndWeek != null &&
       rt.allocationStartWeek > rt.allocationEndWeek
@@ -315,6 +327,12 @@ export function translateV2SnapshotProfiles(
       )
     }
     const { basis, source } = modeBasisSource(rt.allocationMode)
+    // EFFORT / FULL_PROJECT never used window aliases — deterministic
+    // translation discards them so the resulting DEMAND_FOLLOWING /
+    // WHOLE_PROJECT_ALLOCATION profile is structurally valid.
+    const modeDiscardsWindows = rt.allocationMode === 'EFFORT' || rt.allocationMode === 'FULL_PROJECT' || rt.allocationMode == null
+    const roleStartWeek = modeDiscardsWindows ? null : rt.allocationStartWeek
+    const roleEndWeek = modeDiscardsWindows ? null : rt.allocationEndWeek
     profiles.push({
       id: `snapshot-v2-role-${rt.id}`,
       projectId,
@@ -324,8 +342,8 @@ export function translateV2SnapshotProfiles(
       planningBasis: basis,
       source,
       defaultPercent: rt.allocationPercent,
-      startWeek: rt.allocationStartWeek,
-      endWeek: rt.allocationEndWeek,
+      startWeek: roleStartWeek,
+      endWeek: roleEndWeek,
       legacy: {
         allocationMode: rt.allocationMode,
         allocationPercent: rt.allocationPercent,
@@ -338,7 +356,23 @@ export function translateV2SnapshotProfiles(
   for (let i = 0; i < snapshot.namedResources.length; i++) {
     const nr = snapshot.namedResources[i]
     const prefix = `v2 snapshot namedResources[${i}] (${nr.name})`
-    const parentRt = nr.resourceTypeId ? rtById.get(nr.resourceTypeId) : undefined
+    // ── Orphan-owner rejection: every NamedResource must reference a
+    // ResourceType included in the same snapshot (issue #418 PR 1 review).
+    if (!nr.resourceTypeId) {
+      errors.push(
+        `${prefix}: named resource "${nr.id}" has no resourceTypeId and cannot be ` +
+        'translated into authoritative ownership',
+      )
+      continue
+    }
+    if (!rtById.has(nr.resourceTypeId)) {
+      errors.push(
+        `${prefix}: named resource "${nr.id}" references resource type "${nr.resourceTypeId}" ` +
+        'which is absent from this snapshot — orphan ownership cannot be translated',
+      )
+      continue
+    }
+    const parentRt = rtById.get(nr.resourceTypeId)
     const mode = nr.allocationMode ?? parentRt?.allocationMode ?? null
     if (mode != null && !KNOWN_V2_MODES.has(mode)) {
       errors.push(`${prefix}: unknown allocationMode "${String(mode)}"`)
@@ -362,7 +396,8 @@ export function translateV2SnapshotProfiles(
     }
     const effectiveStart = nr.allocationStartWeek ?? nr.startWeek
     const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek
-    if (effectiveStart != null && effectiveEnd != null && effectiveStart > effectiveEnd) {
+    const nrModeUsesWindows = mode === 'TIMELINE' || mode === 'CAPACITY_PLAN'
+    if (nrModeUsesWindows && effectiveStart != null && effectiveEnd != null && effectiveStart > effectiveEnd) {
       errors.push(`${prefix}: allocation window start must not exceed end`)
     }
     if (mode === 'CAPACITY_PLAN' && (effectiveStart == null || effectiveEnd == null)) {
@@ -373,6 +408,12 @@ export function translateV2SnapshotProfiles(
     }
     const { basis, source } = modeBasisSource(mode)
     const effectivePercent = nr.allocationPercent ?? nr.allocationPct
+    // EFFORT / FULL_PROJECT never used window aliases — discard them so the
+    // resulting DEMAND_FOLLOWING / WHOLE_PROJECT_ALLOCATION profile is
+    // structurally valid.
+    const modeDiscardsWindows = mode === 'EFFORT' || mode === 'FULL_PROJECT' || mode == null
+    const namedStartWeek = modeDiscardsWindows ? null : effectiveStart
+    const namedEndWeek = modeDiscardsWindows ? null : effectiveEnd
     profiles.push({
       id: `snapshot-v2-named-${nr.id}`,
       projectId,
@@ -382,8 +423,8 @@ export function translateV2SnapshotProfiles(
       planningBasis: basis,
       source,
       defaultPercent: effectivePercent,
-      startWeek: effectiveStart,
-      endWeek: effectiveEnd,
+      startWeek: namedStartWeek,
+      endWeek: namedEndWeek,
       legacy: {
         allocationMode: mode,
         allocationPct: nr.allocationPct,

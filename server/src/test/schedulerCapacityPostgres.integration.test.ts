@@ -140,9 +140,11 @@ beforeAll(async () => {
   const nrSP2 = await prisma.namedResource.create({
     data: { resourceTypeId: rtSquad.id, name: 'SP Planned 2', allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 50 },
   })
-  // Aggregate ROLE profile (SQUAD_PLANNER source)
+  // Aggregate ROLE profile (SQUAD_PLANNER source). Segmentless CAPACITY_PROFILE
+  // ROLE is invalid under the single structural rule set, so the 150% profile
+  // carries an explicit segment.
   await prisma.capacityProfile.create({
-    data: { projectId, resourceTypeId: rtSquad.id, namedResourceId: null, ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 150 },
+    data: { projectId, resourceTypeId: rtSquad.id, namedResourceId: null, ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 150, segments: { create: [{ startWeek: 0, endWeek: 10, capacityPercent: 150, source: 'SQUAD_PLANNER' }] } },
   })
   await prisma.capacityProfile.create({
     data: { projectId, resourceTypeId: null, namedResourceId: nrSP1.id, ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER', defaultPercent: 100, segments: { create: [{ startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'SQUAD_PLANNER' }] } },

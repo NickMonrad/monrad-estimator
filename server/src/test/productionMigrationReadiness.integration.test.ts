@@ -585,6 +585,127 @@ describeIf('readiness — blockers fail closed', () => {
     expect(text).toContain('CAPACITY_PLAN without a captured start/end window')
   })
 
+  it('v2 EFFORT and FULL_PROJECT rows with stale window aliases are translatable', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Stale Alias Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Stale Alias Person')
+
+    // EFFORT RT + EFFORT NR and FULL_PROJECT RT + FULL_PROJECT NR, both
+    // carrying stale window aliases the recorded mode never used.
+    const v2Data = {
+      schemaVersion: 2,
+      epics: [],
+      project: null,
+      resourceTypes: [{
+        id: 'rt-v2-effort',
+        name: 'Effort Role',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: null,
+        dayRate: null,
+        allocationMode: 'EFFORT',
+        globalTypeId: null,
+        allocationPercent: 100,
+        allocationStartWeek: 2, // stale — EFFORT did not use windows
+        allocationEndWeek: 9, // stale
+      }, {
+        id: 'rt-v2-full',
+        name: 'Full Role',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: null,
+        dayRate: null,
+        allocationMode: 'FULL_PROJECT',
+        globalTypeId: null,
+        allocationPercent: 80,
+        allocationStartWeek: 1, // stale
+        allocationEndWeek: 7, // stale
+      }],
+      namedResources: [{
+        id: 'nr-v2-effort',
+        resourceTypeId: 'rt-v2-effort',
+        name: 'Effort Person',
+        startWeek: 3, // stale
+        endWeek: 8, // stale
+        allocationPct: 100,
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+      }, {
+        id: 'nr-v2-full',
+        resourceTypeId: 'rt-v2-full',
+        name: 'Full Person',
+        startWeek: 1, // stale
+        endWeek: 5, // stale
+        allocationPct: 80,
+        allocationMode: 'FULL_PROJECT',
+        allocationPercent: 80,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+      }],
+      timelineEntries: [],
+      storyTimelineEntries: [],
+      epicDependencies: [],
+      featureDependencies: [],
+      overheadItems: [],
+    }
+    await createBacklogSnapshot(projectId, v2Data)
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(true)
+    expect(formatReadinessReport(report)).toContain('READINESS PASSED')
+  })
+
+  it('orphan v2 NamedResource (missing parent ResourceType) fails readiness', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Orphan Owner Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Orphan Owner Person')
+    const v2Data = {
+      schemaVersion: 2,
+      epics: [],
+      project: null,
+      resourceTypes: [{ // a DIFFERENT RT id than the NR references
+        id: 'rt-v2-present',
+        name: 'Present Role',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: null,
+        dayRate: null,
+        allocationMode: 'EFFORT',
+        globalTypeId: null,
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      }],
+      namedResources: [{
+        id: 'nr-v2-orphan',
+        resourceTypeId: 'rt-v2-missing', // absent from the snapshot
+        name: 'Orphan Person',
+        startWeek: null,
+        endWeek: null,
+        allocationPct: 100,
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+      }],
+      timelineEntries: [],
+      storyTimelineEntries: [],
+      epicDependencies: [],
+      featureDependencies: [],
+      overheadItems: [],
+    }
+    await createBacklogSnapshot(projectId, v2Data)
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('nr-v2-orphan')
+    expect(text).toContain('rt-v2-missing')
+  })
+
   it('unsupported snapshot schema fails', async () => {
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'Unsupported Snapshot Role')
@@ -594,6 +715,82 @@ describeIf('readiness — blockers fail closed', () => {
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
     expect(text).toContain('unsupported or malformed snapshot data')
+  })
+
+  it('persisted DEMAND_FOLLOWING with stale windows fails with owner identification', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Stale Window Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Stale Window Person')
+    // Corrupt the persisted ROLE profile: DEMAND_FOLLOWING must not carry windows.
+    const profile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId: rtId },
+    })
+    await prisma.capacityProfile.update({
+      where: { id: profile.id },
+      data: { startWeek: 2, endWeek: 9 },
+    })
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain(profile.id)
+    expect(text).toContain('DEMAND_FOLLOWING must not have startWeek')
+  })
+
+  it('persisted DEMAND_FOLLOWING with segments fails', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Segmented Scalar Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Segmented Scalar Person')
+    const profile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId: rtId },
+    })
+    await prisma.capacitySegment.create({
+      data: {
+        capacityProfileId: profile.id,
+        startWeek: 0,
+        endWeek: 5,
+        capacityPercent: 100,
+        source: 'FIXED',
+      },
+    })
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain(profile.id)
+    expect(text).toContain('DEMAND_FOLLOWING must not have segments')
+  })
+
+  it('persisted WHOLE_PROJECT_ALLOCATION with stale windows fails', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Stale Whole Role', {
+      planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+      source: 'FIXED',
+    })
+    await createNamedPersonWithProfile(projectId, rtId, 'Stale Whole Person')
+    const profile = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, resourceTypeId: rtId },
+    })
+    await prisma.capacityProfile.update({
+      where: { id: profile.id },
+      data: { startWeek: 1, endWeek: 6 },
+    })
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain(profile.id)
+    expect(text).toContain('WHOLE_PROJECT_ALLOCATION must not have startWeek')
+  })
+
+  it('persisted segmentless CAPACITY_PROFILE ROLE fails', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Segmentless Plan Role', {
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+    })
+    await createNamedPersonWithProfile(projectId, rtId, 'Segmentless Plan Person')
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('CAPACITY_PROFILE with no segments is only valid as the canonical zero-capacity PLANNED_RESOURCE state')
   })
 })
 
