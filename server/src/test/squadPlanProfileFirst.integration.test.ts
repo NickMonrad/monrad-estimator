@@ -540,9 +540,8 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
     const { deriveNamedResourceAssignments } = await import('../lib/namedResourceAssignments.js')
-    const { materializeCapacityPlanResources } = await import('../lib/capacityPlanMaterialisation.js')
 
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === rtId)!
 
     // Overlap suppression: aggregate ROLE profile from Squad Planner must
@@ -552,14 +551,12 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(rt.namedResources).toHaveLength(2)
 
     // Named-resource assignment parity
-    const capacityPlanByRt2 = materializeCapacityPlanResources([])
     const assignments2 = deriveNamedResourceAssignments({
       resourceTypes: [rt],
       weeklyDemand: [
         { week: 0, resourceTypeName: 'Engineer', demandDays: 10 },
         { week: 8, resourceTypeName: 'Engineer', demandDays: 10 },
       ],
-      capacityPlanByRt: capacityPlanByRt2,
     })
     const rtAssign = assignments2.get(rtId)!
     expect(rtAssign.actualAllocatedDays).toBeCloseTo(10, 5)
@@ -616,7 +613,7 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(getW8.capacityDays).toBe(scheduleW8.capacityDays)
 
     // Deterministic
-    const resolved2 = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved2 = await resolveSchedulerCapacity(prisma, projectId)
     expect(resolved.resourceTypes).toEqual(resolved2.resourceTypes)
   })
 })
@@ -731,10 +728,12 @@ describeIf('Scenario 3 — Resizing from 2 headcount to 1 produces surplus PLANN
     const surplus = await prisma.namedResource.findUnique({
       where: { id: surplusProfile!.namedResourceId! },
     })
+    // Issue #418: candidate legacy columns are never written — the zero
+    // capacity is expressed exclusively through the persisted profile.
     expect(surplus).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 0,
-      allocationPct: 0,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationPct: 100,
       allocationStartWeek: null,
       allocationEndWeek: null,
       startWeek: null,

@@ -67,6 +67,45 @@ const mockProject = {
   name: 'Test Project',
 }
 
+const mockCapacityProfiles = (
+  rtId = 'rt-dev',
+  namedResourceId: string | null = 'nr-capacity-plan',
+  roleSource: 'FIXED' | 'SQUAD_PLANNER' = 'FIXED',
+) => [
+  {
+    id: 'cp-role',
+    projectId: 'proj-1',
+    resourceTypeId: rtId,
+    namedResourceId: null,
+    ownerKind: 'ROLE',
+    planningBasis: roleSource === 'SQUAD_PLANNER' ? 'CAPACITY_PROFILE' : 'DEMAND_FOLLOWING',
+    source: roleSource,
+    defaultPercent: 100,
+    startWeek: null,
+    endWeek: null,
+    legacy: null,
+    createdAt: new Date(),
+    segments: [],
+  },
+  ...(namedResourceId
+    ? [{
+        id: 'cp-nr',
+        projectId: 'proj-1',
+        resourceTypeId: null,
+        namedResourceId,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        legacy: null,
+        createdAt: new Date(),
+        segments: [],
+      }]
+    : []),
+]
+
 const futureCapacityPlanWindow = {
   id: 'nr-capacity-plan',
   name: 'Developer 1',
@@ -190,6 +229,8 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
         },
       ] as never)
       .mockResolvedValueOnce([] as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue(mockCapacityProfiles() as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
     vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
     vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
@@ -215,6 +256,8 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
 
   it('returns 400 for invalid minFloor payload values', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue(mockCapacityProfiles('rt-dev', null) as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
     vi.mocked(prisma.epic.findMany).mockResolvedValue([] as never)
     vi.mocked(prisma.resourceType.findMany)
       .mockResolvedValueOnce([
@@ -289,8 +332,26 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
   })
 
+/** Where-aware capacityProfile.findMany mock: role vs named-resource queries. */
+function mockCapacityProfilesForApply(rtId = 'rt-dev', namedResourceIds: string[] | null = ['nr-dev']) {
+  const profiles = mockCapacityProfiles(rtId, namedResourceIds?.[0] ?? null, 'SQUAD_PLANNER') as Array<Record<string, unknown>>
+  vi.mocked(prisma.capacityProfile.findMany).mockImplementation((async (args: any) => {
+    const where = args?.where ?? {}
+    if (where.resourceTypeId) {
+      return Promise.resolve(profiles.filter(p => p.resourceTypeId === where.resourceTypeId) as never)
+    }
+    if (where.namedResourceId) {
+      const ids = Array.isArray(where.namedResourceId?.in) ? where.namedResourceId.in : [where.namedResourceId]
+      return Promise.resolve(profiles.filter(p => ids.includes(p.namedResourceId)) as never)
+    }
+    return profiles as never
+  }) as any)
+}
+
   it('refreshes weeklyDemandCache from the applied planner output', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    mockCapacityProfilesForApply()
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
     vi.mocked(prisma.resourceType.findMany)
       .mockResolvedValueOnce([{ id: 'rt-dev' }] as never)
       .mockResolvedValueOnce([
@@ -436,6 +497,8 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
   })
 
   it('replays applied reduced-period capacity into weeklyDemandCache', async () => {
+    mockCapacityProfilesForApply('rt-dev', ['nr-dev-1', 'nr-dev-2'])
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     vi.mocked(prisma.resourceType.findMany)
       .mockResolvedValueOnce([{ id: 'rt-dev' }] as never)
@@ -613,6 +676,8 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
   })
 
   it('returns 500 when buildSnapshot rejects, preventing snapshot persistence and mutation', async () => {
+    mockCapacityProfilesForApply()
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
     vi.mocked(buildSnapshot).mockRejectedValueOnce(new Error('Snapshot null-state rejection'))
@@ -686,6 +751,8 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
     const conflictError = new writerModule.PlannerConflictError('test conflict', [])
     vi.mocked(writerModule.revalidatePlannerPlan).mockRejectedValueOnce(conflictError)
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    mockCapacityProfilesForApply('rt-dev', null)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
     vi.mocked(prisma.backlogSnapshot.create).mockResolvedValue({ id: 'test-snapshot-id' } as never)
     vi.mocked(prisma.backlogSnapshot.delete).mockResolvedValue({ id: 'test-snapshot-id' } as never)

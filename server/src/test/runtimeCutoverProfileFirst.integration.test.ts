@@ -556,14 +556,17 @@ describeIf('profile-first runtime cutover (#364)', () => {
 
     const increasedResources = await prisma.namedResource.findMany({ where: { resourceTypeId } })
     const inherited = increasedResources.find(resource => !existingIds.has(resource.id))
+    // Issue #418: count-increase NR creation writes identity only — the
+    // candidate legacy capacity columns keep their schema defaults and are
+    // never projected from the role profile.
     expect(inherited).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 75,
-      allocationPct: 75,
-      allocationStartWeek: 4,
-      allocationEndWeek: 12,
-      startWeek: 4,
-      endWeek: 12,
+      allocationMode: 'EFFORT',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
     })
     const inheritedProfile = await prisma.capacityProfile.findFirstOrThrow({
       where: { projectId, namedResourceId: inherited!.id, resourceTypeId: null },

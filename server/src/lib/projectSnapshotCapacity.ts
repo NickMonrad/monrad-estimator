@@ -11,7 +11,7 @@
  */
 
 import type { Prisma } from '@prisma/client'
-import type { SnapshotV2, SnapshotV3 } from './projectSnapshotTypes.js'
+import type { SnapshotV2, SnapshotV3, SnapshotV4 } from './projectSnapshotTypes.js'
 import { snapshotJsonValueToPrisma } from './projectSnapshotTypes.js'
 
 // ─── Narrow transaction interface ────────────────────────────────────────────
@@ -151,7 +151,7 @@ export async function recreateV2CapacityProfiles(
 // ─── V3 rollback: exact profile/segment replacement ──────────────────────────
 
 /**
- * During V3 rollback, after restoring all common v2 state (RTs, NRs, epics,
+ * During V3/V4 rollback, after restoring all common v2 state (RTs, NRs, epics,
  * etc.), delete ALL current project capacity profiles/segments and recreate
  * each target profile with exact IDs, projectId forced to the route projectId,
  * owner IDs, enum values, nulls, and legacy. Every segment is recreated with
@@ -162,7 +162,7 @@ export async function recreateV2CapacityProfiles(
 export async function recreateV3CapacityProfiles(
   tx: CapacityProfileTxClient,
   projectId: string,
-  v3: SnapshotV3,
+  v3: SnapshotV3 | SnapshotV4,
 ): Promise<void> {
   // Delete existing segments then profiles (segments cascade but we delete both
   // explicitly for clarity; deleteMany on profile cascades segments but the

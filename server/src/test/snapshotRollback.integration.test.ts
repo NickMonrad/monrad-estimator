@@ -39,6 +39,7 @@ import type {
   SnapshotV1,
   SnapshotV2,
   SnapshotV3,
+  SnapshotV4,
 } from '../lib/projectSnapshotTypes.js'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
@@ -789,8 +790,10 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
   it('captured snapshot has all domains and exact values', async () => {
     const raw = await prisma.backlogSnapshot.findUnique({ where: { id: snapshotId } })
     expect(raw).not.toBeNull()
-    const data = raw!.snapshot as unknown as SnapshotV3
-    expect(data.schemaVersion).toBe(3)
+    // Snapshots are emitted as v4 since issue #418 (candidate legacy columns
+    // omitted; capacity state lives in capacityProfiles).
+    const data = raw!.snapshot as unknown as SnapshotV4
+    expect(data.schemaVersion).toBe(4)
 
     // Resource types
     expect(data.resourceTypes).toHaveLength(2)
@@ -1694,9 +1697,9 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     // Its label includes reference to the rolled-back snapshot
     expect(preSnaps[0].label).toContain('State A')
 
-    // Pre_rollback data contains B's state at v3
-    const preData = preSnaps[0].snapshot as unknown as SnapshotV3
-    expect(preData.schemaVersion).toBe(3)
+    // Pre_rollback data contains B's state at v4
+    const preData = preSnaps[0].snapshot as unknown as SnapshotV4
+    expect(preData.schemaVersion).toBe(4)
     const bProfile = preData.capacityProfiles.find(p => p.id === 'prof-b-a')
     expect(bProfile).toBeDefined()
     expect(bProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
@@ -2226,8 +2229,31 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
       { planningBasis: 'CAPACITY_PROFILE', source: 'DERIVED' },
       Prisma.DbNull,
     )
-    const v3Data = await buildSnapshot(projectId, prisma)
-    const v2Data: SnapshotV2 = { ...v3Data, schemaVersion: 2 }
+    const v4Data = await buildSnapshot(projectId, prisma)
+    // A faithful historical v2 snapshot carries the candidate legacy capacity
+    // columns on ResourceType/NamedResource rows (the v2 restore path derives
+    // profiles from them). Re-add them from the live fixture state.
+    const v2Data: SnapshotV2 = {
+      ...v4Data,
+      schemaVersion: 2,
+      resourceTypes: (v4Data.resourceTypes as Array<Record<string, unknown>>).map(rt => ({
+        ...rt,
+        allocationMode: rt.id === rtId ? 'TIMELINE' : 'EFFORT',
+        allocationPercent: rt.id === rtId ? 60 : 100,
+        allocationStartWeek: rt.id === rtId ? 0 : null,
+        allocationEndWeek: rt.id === rtId ? 10 : null,
+      })),
+      namedResources: (v4Data.namedResources as Array<Record<string, unknown>>).map(nr => ({
+        ...nr,
+        startWeek: nr.id === nrId ? 2 : null,
+        endWeek: nr.id === nrId ? 6 : null,
+        allocationPct: nr.id === nrId ? 60 : 100,
+        allocationMode: nr.id === nrId ? 'TIMELINE' : 'EFFORT',
+        allocationPercent: nr.id === nrId ? 60 : 100,
+        allocationStartWeek: nr.id === nrId ? 0 : null,
+        allocationEndWeek: nr.id === nrId ? 10 : null,
+      })),
+    } as unknown as SnapshotV2
     v2SnapshotId = (
       await prisma.backlogSnapshot.create({
         data: {
@@ -2587,7 +2613,7 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     const newest = preSnaps[preSnaps.length - 1]
     expect(newest.trigger).toBe('pre_rollback')
     const preData = newest.snapshot as unknown as { schemaVersion: number }
-    expect(preData.schemaVersion).toBe(3)
+    expect(preData.schemaVersion).toBe(4)
     // ── Timeline entries — cascade-deleted when epics recreated ────
     const tles = await prisma.timelineEntry.findMany({ where: { projectId } })
     const stles = await prisma.storyTimelineEntry.findMany({ where: { projectId } })

@@ -198,12 +198,11 @@ describe('isLegacyPlannerProfile', () => {
     planningBasis: 'CAPACITY_PROFILE',
   }
 
-  it('requires every legacy planner marker and CAPACITY_PLAN allocation', () => {
-    expect(isLegacyPlannerProfile(legacyProfile, { allocationMode: 'CAPACITY_PLAN' })).toBe(true)
-    expect(isLegacyPlannerProfile(legacyProfile, { allocationMode: 'EFFORT' })).toBe(false)
-    expect(isLegacyPlannerProfile({ ...legacyProfile, source: 'MANUAL' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
-    expect(isLegacyPlannerProfile({ ...legacyProfile, planningBasis: 'DEMAND_FOLLOWING' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
-    expect(isLegacyPlannerProfile({ ...legacyProfile, ownerKind: 'PLANNED_RESOURCE' }, { allocationMode: 'CAPACITY_PLAN' })).toBe(false)
+  it('requires every legacy planner marker (profile state only, issue #418)', () => {
+    expect(isLegacyPlannerProfile(legacyProfile)).toBe(true)
+    expect(isLegacyPlannerProfile({ ...legacyProfile, source: 'MANUAL' })).toBe(false)
+    expect(isLegacyPlannerProfile({ ...legacyProfile, planningBasis: 'DEMAND_FOLLOWING' })).toBe(false)
+    expect(isLegacyPlannerProfile({ ...legacyProfile, ownerKind: 'PLANNED_RESOURCE' })).toBe(false)
   })
 })
 
@@ -562,7 +561,7 @@ describe('isValidMapperProvenance', () => {
 // ─── Shared resource classification tests ──────────────────────────────────
 
 describe('classifyNamedResource', () => {
-  const resource = { allocationMode: 'CAPACITY_PLAN' }
+  const resource = { id: 'nr-1' }
   const legacyProfile = { ownerKind: 'NAMED_PERSON' as const, source: 'SQUAD_PLANNER' as const, planningBasis: 'CAPACITY_PROFILE' as const }
   const plannerProfile = { ownerKind: 'PLANNED_RESOURCE' as const, source: 'SQUAD_PLANNER' as const, planningBasis: 'CAPACITY_PROFILE' as const }
   const manualProfile = { ownerKind: 'NAMED_PERSON' as const, source: 'MANUAL' as const, planningBasis: 'CAPACITY_PROFILE' as const }
@@ -583,16 +582,15 @@ describe('classifyNamedResource', () => {
   })
 
   it('requires prior active-plan provenance for a profile-free CAPACITY_PLAN resource', () => {
-    expect(classifyNamedResource({ allocationMode: 'CAPACITY_PLAN' }, [])).toBe('other')
-    expect(classifyNamedResource(
-      { allocationMode: 'CAPACITY_PLAN' },
+    expect(classifyNamedResource({}, [])).toBe('other')
+    expect(classifyNamedResource({},
       [],
       { priorActivePlan: true },
     )).toBe('capacity_plan_untouched')
   })
 
   it('classifies EFFORT allocation with no profiles as other', () => {
-    expect(classifyNamedResource({ allocationMode: 'EFFORT' }, [])).toBe('other')
+    expect(classifyNamedResource({}, [])).toBe('other')
   })
 
   it('explicit person wins over legacy when both profiles exist', () => {
@@ -611,44 +609,43 @@ describe('classifyNamedResource', () => {
     expect(classifyNamedResource(resource, [importedProfile])).toBe('explicit_person')
   })
 
-  it('non-legacy NAMED_PERSON without CAPACITY_PLAN allocation is explicit_person', () => {
-    expect(classifyNamedResource({ allocationMode: 'EFFORT' }, [legacyProfile])).toBe('explicit_person')
+  it('legacy-adoptable NAMED_PERSON with full planner markers is legacy_adoptable', () => {
+    // Candidate NamedResource columns are no longer consulted (issue #418):
+    // the persisted profile markers alone decide.
+    expect(classifyNamedResource({ id: 'nr-1' }, [legacyProfile])).toBe('legacy_adoptable')
   })
 })
 
 describe('isPlannerManaged', () => {
   it('returns true for legacy_adoptable resources', () => {
-    expect(isPlannerManaged(
-      { allocationMode: 'CAPACITY_PLAN' },
+    expect(isPlannerManaged({},
       [{ ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' }],
     )).toBe(true)
   })
 
   it('returns true for planner_managed resources', () => {
-    expect(isPlannerManaged(
-      { allocationMode: 'CAPACITY_PLAN' },
+    expect(isPlannerManaged({},
       [{ ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' }],
     )).toBe(true)
   })
 
   it('returns true for capacity_plan_untouched resources with provenance', () => {
-    expect(isPlannerManaged(
-      { allocationMode: 'CAPACITY_PLAN' },
+    expect(isPlannerManaged({},
       [],
       { priorActivePlan: true },
     )).toBe(true)
-    expect(isPlannerManaged({ allocationMode: 'CAPACITY_PLAN' }, [])).toBe(false)
+    expect(isPlannerManaged({}, [])).toBe(false)
   })
 
   it('returns false for explicit_person resources', () => {
     expect(isPlannerManaged(
-      { allocationMode: 'EFFORT' },
+      { id: 'nr-1' },
       [{ ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' }],
     )).toBe(false)
   })
 
   it('returns false for other resources', () => {
-    expect(isPlannerManaged({ allocationMode: 'EFFORT' }, [])).toBe(false)
+    expect(isPlannerManaged({ id: 'nr-1' }, [])).toBe(false)
   })
 })
 
@@ -718,7 +715,7 @@ describe('classifyProfileConflicts', () => {
         planningBasis: 'CAPACITY_PROFILE',
       }],
       1,
-      [{ id: 'nr-1', name: 'Planner 1', createdAt: new Date(), allocationMode: 'CAPACITY_PLAN' }],
+      [{ id: 'nr-1', name: 'Planner 1', createdAt: new Date() }],
     )
 
     expect(result.hasConflict).toBe(false)
@@ -779,7 +776,7 @@ describe('buildPlannerResourcePlan', () => {
   it('returns planner resources in deterministic order, excluding explicit people', () => {
     const namedResources = [
       { id: 'nr-alice', name: 'Alice', createdAt: new Date('2026-01-01'), allocationMode: 'MANUAL' },
-      { id: 'nr-bob', name: 'Bob', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' },
+      { id: 'nr-bob', name: 'Bob', createdAt: new Date('2026-01-02') },
     ]
     const profiles = [
       { namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'CAPACITY_PROFILE' },
@@ -821,8 +818,8 @@ describe('buildPlannerResourcePlan', () => {
 
   it('includes legacy-adoptable and capacity-plan-untouched resources as planner-managed', () => {
     const namedResources = [
-      { id: 'nr-legacy', name: 'Legacy', createdAt: baseDate, allocationMode: 'CAPACITY_PLAN' },
-      { id: 'nr-untouched', name: 'Untouched', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' },
+      { id: 'nr-legacy', name: 'Legacy', createdAt: baseDate },
+      { id: 'nr-untouched', name: 'Untouched', createdAt: new Date('2026-01-02') },
     ]
     const profiles = [
       { namedResourceId: 'nr-legacy', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
@@ -858,7 +855,7 @@ describe('buildPlannerResourcePlan', () => {
 
   it('flags duplicate profiles on a planner-managed resource as conflict', () => {
     const namedResources = [
-      { id: 'nr-dupe', name: 'Dupe', createdAt: baseDate, allocationMode: 'CAPACITY_PLAN' },
+      { id: 'nr-dupe', name: 'Dupe', createdAt: baseDate },
     ]
     const profiles = [
       { namedResourceId: 'nr-dupe', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
@@ -873,9 +870,9 @@ describe('buildPlannerResourcePlan', () => {
 
   it('slices planner resources to required count, ignoring surplus', () => {
     const namedResources = [
-      { id: 'nr-1', name: 'First', createdAt: baseDate, allocationMode: 'CAPACITY_PLAN' },
-      { id: 'nr-2', name: 'Second', createdAt: new Date('2026-01-02'), allocationMode: 'CAPACITY_PLAN' },
-      { id: 'nr-3', name: 'Third', createdAt: new Date('2026-01-03'), allocationMode: 'CAPACITY_PLAN' },
+      { id: 'nr-1', name: 'First', createdAt: baseDate },
+      { id: 'nr-2', name: 'Second', createdAt: new Date('2026-01-02') },
+      { id: 'nr-3', name: 'Third', createdAt: new Date('2026-01-03') },
     ]
     const profiles: Array<{ namedResourceId: string | null; ownerKind: string; source: string; planningBasis?: string }> = []
 

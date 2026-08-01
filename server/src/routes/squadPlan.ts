@@ -35,8 +35,6 @@ import {
   findOrCreatePlannedResources,
   writePlannerProfiles,
   materializeProfilesForResourceType,
-  clearSurplusCompatibilityFields,
-  projectCompatibilityFields,
   clearOmittedPlannerCapacity,
   revalidatePlannerPlan,
   capturePlannerAuthority,
@@ -234,7 +232,7 @@ async function loadSchedulerInput(
         },
       },
     }),
-    resolveSchedulerCapacity(prisma, projectId, hoursPerDay),
+    resolveSchedulerCapacity(prisma, projectId),
     prisma.timelineEntry.findMany({
       where: { projectId, isManual: true },
     }),
@@ -784,13 +782,13 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
         include: { periods: { include: { entries: true } } },
       })
 
-      // ── Profile-first: write authoritative profiles directly, project compatibility ──
+      // ── Profile-first: write authoritative profiles directly ────────────
       if (shouldActivate && maxHeadcountByRt) {
-        // Update RT counts and allocation mode for demand RTs
+        // Update RT counts for demand RTs
         for (const [rtId, count] of maxHeadcountByRt) {
           await tx.resourceType.update({
             where: { id: rtId },
-            data: { count: Math.max(1, Math.ceil(count)), allocationMode: 'CAPACITY_PLAN' },
+            data: { count: Math.max(1, Math.ceil(count)) },
           })
         }
 
@@ -835,19 +833,6 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             undefined,
             transactionAuthority ?? undefined,
           )
-
-          // Project compatibility fields from just-written profiles
-          await projectCompatibilityFields(
-            tx,
-            projectId,
-            [materialized.roleProfile],
-            materialized.plannedProfiles,
-          )
-
-          // Clear surplus resource windows so legacy readers see no stale capacity
-          if (materialized.surplusResources.length > 0) {
-            await clearSurplusCompatibilityFields(tx, materialized.surplusResources)
-          }
         }
         await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()), transactionAuthority!)
       }

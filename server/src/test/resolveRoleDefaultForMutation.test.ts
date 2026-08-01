@@ -8,20 +8,11 @@
  * @see resolveRoleDefaultForMutation.ts
  */
 import { describe, expect, it } from 'vitest'
-import { resolveRoleDefaultForMutation, toLegacyAllocationPct } from '../lib/resolveRoleDefaultForMutation.js'
-import type { RoleDefaultResourceTypeLike, RoleProfileLike } from '../lib/resolveRoleDefaultForMutation.js'
+import { resolveRoleDefaultForMutation } from '../lib/resolveRoleDefaultForMutation.js'
+import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
+import type { RoleProfileLike } from '../lib/resolveRoleDefaultForMutation.js'
 
 // ─── Fixture factories ────────────────────────────────────────────────────────
-
-function resourceType(overrides: Partial<RoleDefaultResourceTypeLike> = {}): RoleDefaultResourceTypeLike {
-  return {
-    allocationMode: 'TIMELINE',
-    allocationPercent: 100,
-    allocationStartWeek: null,
-    allocationEndWeek: null,
-    ...overrides,
-  }
-}
 
 function profile(overrides: Partial<RoleProfileLike> = {}): RoleProfileLike {
   return {
@@ -38,32 +29,17 @@ function profile(overrides: Partial<RoleProfileLike> = {}): RoleProfileLike {
 
 describe('resolveRoleDefaultForMutation', () => {
 
-  describe('no profile fallback', () => {
-    it('no role profile, RT TIMELINE/60/W2-W8 → LEGACY TIMELINE/60/W2-W8', () => {
-      const result = resolveRoleDefaultForMutation({
-        resourceType: resourceType({
-          allocationMode: 'TIMELINE',
-          allocationPercent: 60,
-          allocationStartWeek: 2,
-          allocationEndWeek: 8,
-        }),
+  describe('missing profile fails closed', () => {
+    it('no role profile → CapacityIntegrityError (no legacy fallback, issue #418)', () => {
+      expect(() => resolveRoleDefaultForMutation({
         roleProfiles: [],
-      })
-
-      expect(result.source).toBe('LEGACY')
-      expect(result.allocationMode).toBe('TIMELINE')
-      expect(result.allocationPercent).toBe(60)
-      expect(result.allocationStartWeek).toBe(2)
-      expect(result.allocationEndWeek).toBe(8)
-      expect(result.lossy).toBe(false)
-      expect(toLegacyAllocationPct(result.allocationPercent!)).toBe(60)
+      })).toThrow(CapacityIntegrityError)
     })
   })
 
   describe('scalar profile precedence', () => {
     it('RT TIMELINE/100, role DEMAND_FOLLOWING/70 → PROFILE EFFORT/70/null/null', () => {
       const result = resolveRoleDefaultForMutation({
-        resourceType: resourceType({ allocationMode: 'TIMELINE', allocationPercent: 100 }),
         roleProfiles: [profile({
           planningBasis: 'DEMAND_FOLLOWING',
           defaultPercent: 70,
@@ -76,14 +52,12 @@ describe('resolveRoleDefaultForMutation', () => {
       expect(result.allocationPercent).toBe(70)
       expect(result.allocationStartWeek).toBeNull()
       expect(result.allocationEndWeek).toBeNull()
-      expect(toLegacyAllocationPct(result.allocationPercent!)).toBe(70)
     })
   })
 
   describe('availability profile', () => {
     it('role AVAILABILITY_WINDOW/60/W2-W8 → TIMELINE/60/W2-W8', () => {
       const result = resolveRoleDefaultForMutation({
-        resourceType: resourceType({ allocationMode: 'TIMELINE', allocationPercent: 100 }),
         roleProfiles: [profile({
           planningBasis: 'AVAILABILITY_WINDOW',
           defaultPercent: 60,
@@ -103,7 +77,6 @@ describe('resolveRoleDefaultForMutation', () => {
   describe('whole-project profile', () => {
     it('role WHOLE_PROJECT_ALLOCATION/80 → FULL_PROJECT/80/null/null', () => {
       const result = resolveRoleDefaultForMutation({
-        resourceType: resourceType({ allocationMode: 'TIMELINE', allocationPercent: 100 }),
         roleProfiles: [profile({
           planningBasis: 'WHOLE_PROJECT_ALLOCATION',
           defaultPercent: 80,
@@ -121,7 +94,6 @@ describe('resolveRoleDefaultForMutation', () => {
   describe('multi-segment projection', () => {
     it('segmented AVAILABILITY_WINDOW projects deterministically with lossy=true', () => {
       const result = resolveRoleDefaultForMutation({
-        resourceType: resourceType({ allocationMode: 'TIMELINE', allocationPercent: 100 }),
         roleProfiles: [profile({
           planningBasis: 'AVAILABILITY_WINDOW',
           defaultPercent: 75,
@@ -146,7 +118,6 @@ describe('resolveRoleDefaultForMutation', () => {
   describe('duplicate identical role profiles', () => {
     it('semantically identical duplicates resolve deterministically', () => {
       const result = resolveRoleDefaultForMutation({
-        resourceType: resourceType({ allocationMode: 'TIMELINE', allocationPercent: 100 }),
         roleProfiles: [
           profile({ planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 70 }),
           profile({ planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 70 }),
@@ -162,7 +133,6 @@ describe('resolveRoleDefaultForMutation', () => {
   describe('duplicate conflicting role profiles', () => {
     it('conflicting duplicates throw', () => {
       expect(() => resolveRoleDefaultForMutation({
-        resourceType: resourceType({ allocationMode: 'TIMELINE', allocationPercent: 100 }),
         roleProfiles: [
           profile({ planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 70 }),
           profile({ planningBasis: 'AVAILABILITY_WINDOW', defaultPercent: 100, startWeek: 1, endWeek: 10 }),

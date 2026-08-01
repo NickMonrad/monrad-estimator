@@ -84,18 +84,45 @@ async function createScenario(
       allocationPercent: 100,
     },
   })
+  const startWeek = options.startWeek ?? 1
+  const endWeek = options.endWeek ?? 12
+  const allocationPercent = options.allocationPercent ?? 80
   const namedResource = await prisma.namedResource.create({
     data: {
       resourceTypeId: resourceType.id,
       name: `${label} Alice`,
-      startWeek: options.startWeek ?? 1,
-      endWeek: options.endWeek ?? 12,
-      allocationPct: options.allocationPercent ?? 80,
+      startWeek,
+      endWeek,
+      allocationPct: allocationPercent,
       allocationMode: options.allocationMode ?? 'TIMELINE',
-      allocationPercent: options.allocationPercent ?? 80,
-      allocationStartWeek: options.startWeek ?? 1,
-      allocationEndWeek: options.endWeek ?? 12,
+      allocationPercent,
+      allocationStartWeek: startWeek,
+      allocationEndWeek: endWeek,
       pricingModel: 'ACTUAL_DAYS',
+    },
+  })
+  // Profile-first (issue #418): the NR's capacity state is a persisted
+  // mapper-provenance scalar profile the optimiser may adopt.
+  await prisma.capacityProfile.create({
+    data: {
+      projectId: project.id,
+      resourceTypeId: null,
+      namedResourceId: namedResource.id,
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: allocationPercent,
+      startWeek,
+      endWeek,
+      legacy: {
+        allocationMode: options.allocationMode ?? 'TIMELINE',
+        allocationPercent,
+        allocationPct: allocationPercent,
+        allocationStartWeek: startWeek,
+        allocationEndWeek: endWeek,
+        startWeek,
+        endWeek,
+      },
     },
   })
 
@@ -197,13 +224,15 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
       legacy: RESOURCE_OPTIMISER_PROFILE_PROVENANCE,
       segments: [],
     })
+    // Issue #418: the optimiser writes the profile only — candidate legacy
+    // columns on the NamedResource are never modified.
     expect(namedResource).toMatchObject({
-      startWeek: 4,
+      startWeek: 1,
       endWeek: 12,
       allocationPct: 80,
       allocationMode: 'TIMELINE',
       allocationPercent: 80,
-      allocationStartWeek: 4,
+      allocationStartWeek: 1,
       allocationEndWeek: 12,
     })
     expect(project.weeklyDemandCache).toEqual({})
@@ -211,10 +240,23 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     const snapshotData = snapshot.snapshot as Record<string, unknown>
     const snapResourceTypes = snapshotData.resourceTypes as Array<Record<string, unknown>>
     const snapNamedResources = snapshotData.namedResources as Array<Record<string, unknown>>
-    expect(snapshotData.schemaVersion).toBe(3)
+    const snapCapacityProfiles = snapshotData.capacityProfiles as Array<Record<string, unknown>>
+    expect(snapshotData.schemaVersion).toBe(4)
     expect(snapResourceTypes.find(row => row.id === scenario.resourceTypeId)?.count).toBe(2)
-    expect(snapNamedResources.find(row => row.id === scenario.namedResourceId)?.startWeek).toBe(1)
-    expect(snapshotData.capacityProfiles).toEqual([])
+    // V4 snapshots omit the candidate legacy capacity columns (issue #418) —
+    // capacity state lives in capacityProfiles.
+    expect(snapNamedResources.find(row => row.id === scenario.namedResourceId)?.startWeek).toBeUndefined()
+    expect(snapCapacityProfiles).toHaveLength(1)
+    expect(snapCapacityProfiles[0]).toMatchObject({
+      ownerKind: 'NAMED_PERSON',
+      namedResourceId: scenario.namedResourceId,
+      planningBasis: 'availabilityWindow',
+      source: 'availabilityWindow',
+      defaultPercent: 80,
+      startWeek: 1,
+      endWeek: 12,
+      segments: [],
+    })
     expect((snapshotData.project as Record<string, unknown>).weeklyDemandCache).toEqual({ sentinel: 42.5 })
 
     const firstProfileId = profiles[0]!.id
@@ -345,7 +387,9 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     try {
       const response = await applyScenario(scenario, 3, 4)
       expect(response.status).toBe(409)
-      expect(response.body.conflicts[0].code).toBe('EXPLICIT_SCALAR_PROTECTED')
+      // The mapper profile plus the concurrent manual profile make ownership
+      // ambiguous — fail closed.
+      expect(response.body.conflicts[0].code).toBe('AMBIGUOUS_OR_DUPLICATE')
     } finally {
       __setOptimiserPreTransactionSeam(null)
     }
@@ -367,14 +411,14 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     expect(response.status).toBe(409)
     expect(response.body.code).toBe('OPTIMISER_APPLY_CONFLICT')
     expect(response.body.conflicts).toEqual([expect.objectContaining({
-      code: 'MALFORMED_SCALAR_STATE',
+      code: 'MISSING_PROFILE',
     })])
 
     // Verify no snapshot or mutation occurred
     const afterCount = await prisma.resourceType.findUniqueOrThrow({ where: { id: scenario.resourceTypeId } }).then(r => r.count)
     expect(afterCount).toBe(beforeCount)
     expect(await prisma.backlogSnapshot.findMany({ where: { projectId: scenario.projectId } })).toEqual([])
-    expect(await prisma.capacityProfile.findMany({ where: { namedResourceId: scenario.namedResourceId } })).toEqual([])
+    expect(await prisma.capacityProfile.findMany({ where: { namedResourceId: scenario.namedResourceId } })).toHaveLength(1)
   })
 
   it('rolls back snapshot, profile, count, schedule, and cache on a late failure', async () => {
@@ -406,7 +450,15 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
       allocationStartWeek: 1,
       allocationPercent: 80,
     })
-    expect(profiles).toEqual([])
+    // The mapper-provenance profile is untouched by the rolled-back apply.
+    expect(profiles).toHaveLength(1)
+    expect(profiles[0]).toMatchObject({
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 80,
+      startWeek: 1,
+      endWeek: 12,
+    })
     expect(project.weeklyDemandCache).toEqual({ sentinel: 42.5 })
     expect(timelines).toEqual([expect.objectContaining({ startWeek: 99, durationWeeks: 7 })])
     expect(storyTimelines).toEqual([expect.objectContaining({ startWeek: 99, durationWeeks: 7 })])

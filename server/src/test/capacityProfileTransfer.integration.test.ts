@@ -382,7 +382,7 @@ describeIf('Scenario 1 — Successful transfer', () => {
   it('transfers the role and preserves profile IDs', async () => {
     // ── Capture exact pre-transfer scheduler weekly capacity (hours) via the real resolver ──
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
-    const resolvedBefore = await resolveSchedulerCapacity(prisma as any, projectId, 8)
+    const resolvedBefore = await resolveSchedulerCapacity(prisma as any, projectId)
     const rtBefore = resolvedBefore.resourceTypes.find(rt => rt.id === rtId)
     expect(rtBefore).toBeDefined()
     preTransferWeekly = {}
@@ -458,7 +458,7 @@ describeIf('Scenario 1 — Successful transfer', () => {
 
   it('preserves scheduler-visible effective weekly capacity via resolveSchedulerCapacity (exact parity)', async () => {
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
-    const resolved = await resolveSchedulerCapacity(prisma as any, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma as any, projectId)
     const rt = resolved.resourceTypes.find(rt => rt.id === rtId)
     expect(rt).toBeDefined()
 
@@ -538,7 +538,7 @@ describeIf('Scenario 1 — Successful transfer', () => {
 
     // Resolve capacity again — the edited first segment must change exactly
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
-    const resolved = await resolveSchedulerCapacity(prisma as any, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma as any, projectId)
     const rt = resolved.resourceTypes.find(rt => rt.id === rtId)
     expect(rt).toBeDefined()
 
@@ -558,7 +558,7 @@ describeIf('Scenario 1 — Successful transfer', () => {
     }
 
     // Changed value survives another resolution (re-read)
-    const resolvedAgain = await resolveSchedulerCapacity(prisma as any, projectId, 8)
+    const resolvedAgain = await resolveSchedulerCapacity(prisma as any, projectId)
     const rtAgain = resolvedAgain.resourceTypes.find(rt => rt.id === rtId)
     for (let w = 0; w <= 3; w++) {
       expect(getWeeklyCapacity(rtAgain!, w, 8)).toBe(20)

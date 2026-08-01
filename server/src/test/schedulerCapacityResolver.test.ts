@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 
 // ─── Mock client builder ─────────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ function mockClient(overrides: {
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 describe('resolveSchedulerCapacity', () => {
-  it('legacy-only resource types pass through unchanged (no profiles, no plans)', async () => {
+  it('fails closed for legacy-only resource types (no profiles, issue #418)', async () => {
     const client = mockClient({
       resourceTypes: [
         {
@@ -51,14 +52,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-
-    expect(result.resourceTypes).toHaveLength(1)
-    expect(result.resourceTypes[0].id).toBe('rt-1')
-    expect(result.resourceTypes[0].namedResources).toHaveLength(1)
-    expect(result.resourceTypes[0].namedResources[0].capacitySegments).toBeUndefined()
-    expect(result.meta.profileBackedCount).toBe(0)
-    expect(result.meta.legacyCount).toBe(1)
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 
   it('profile-backed named resource gets capacitySegments from profile', async () => {
@@ -94,7 +88,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
 
     expect(result.resourceTypes).toHaveLength(1)
     const nr = result.resourceTypes[0].namedResources[0]
@@ -139,7 +133,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
 
     const nr = result.resourceTypes[0].namedResources[0]
     expect(nr.capacitySegments![0].allocationPercent).toBe(25)
@@ -181,7 +175,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const nr = result.resourceTypes[0].namedResources[0]
     expect(nr.capacitySegments).toHaveLength(2)
     // Week 3 is a gap - scheduler test confirms this produces 0 capacity
@@ -217,7 +211,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const nr = result.resourceTypes[0].namedResources[0]
     expect(nr.capacitySegments).toHaveLength(1)
     expect(nr.capacitySegments![0]).toEqual({ startWeek: 0, endWeek: Infinity, allocationPercent: 75 })
@@ -255,7 +249,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const nr = result.resourceTypes[0].namedResources[0]
     expect(nr.capacitySegments).toHaveLength(1)
     expect(nr.capacitySegments![0]).toEqual({ startWeek: 2, endWeek: 5, allocationPercent: 60 })
@@ -293,7 +287,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const nr = result.resourceTypes[0].namedResources[0]
     // Profile says 50%; legacy says 100% — profile should win
     expect(nr.capacitySegments![0].allocationPercent).toBe(50)
@@ -330,7 +324,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const nr = result.resourceTypes[0].namedResources[0]
     // Profile single segment covers weeks 0-Infinity at 100%
     expect(nr.capacitySegments![0].startWeek).toBe(0)
@@ -361,7 +355,7 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     expect(result.meta.roleProfileRTIds).toContain('rt-1')
     expect(result.resourceTypes[0].namedResources).toHaveLength(0)
     // roleSegments should be populated from the role profile
@@ -408,7 +402,7 @@ describe('resolveSchedulerCapacity', () => {
       },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
     // Role profile should suppress capacity plan fallback
     // No synthetic NRs from capacity plan
@@ -417,7 +411,7 @@ describe('resolveSchedulerCapacity', () => {
     expect(rt.roleSegments).toBeDefined()
   })
 
-  it('capacity plan fallback creates synthetic named resources in scheduler DTO', async () => {
+  it('fails closed without profiles — capacity-plan fallback removed (issue #418)', async () => {
     const client = mockClient({
       resourceTypes: [
         {
@@ -443,16 +437,7 @@ describe('resolveSchedulerCapacity', () => {
       },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const rt = result.resourceTypes[0]
-    // Should have synthetic named resources from capacity plan slots
-    expect(rt.namedResources.length).toBeGreaterThan(0)
-    // Slots should have segments matching capacity plan windows
-    const firstSlot = rt.namedResources[0]
-    expect(firstSlot.capacitySegments).toBeDefined()
-    expect(firstSlot.capacitySegments!.length).toBeGreaterThan(0)
-    expect(firstSlot.capacitySegments![0].allocationPercent).toBe(100)
-    expect(firstSlot.allocationMode).toBe('CAPACITY_PLAN')
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 
 
@@ -481,13 +466,13 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
     expect(rt.roleSegments).toBeDefined()
     expect(rt.roleSegments).toHaveLength(2)
     // Gap between segments produces zero capacity (tested in getWeeklyCapacity)
   })
-  it('legacy-only project produces deterministic repeated results', async () => {
+  it('fails closed deterministically for a legacy-only project (issue #418)', async () => {
     const client = mockClient({
       resourceTypes: [
         {
@@ -508,10 +493,8 @@ describe('resolveSchedulerCapacity', () => {
       ],
     })
 
-    const result1 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    expect(result1.resourceTypes).toEqual(result2.resourceTypes)
-    expect(result1.meta).toEqual(result2.meta)
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 })
 
@@ -547,20 +530,8 @@ describe('resolveSchedulerCapacity mixed trajectories (fix 2)', () => {
       },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const rt = result.resourceTypes[0]
-
-    // Must have 2 trajectories: one matched to existing NR, one generated
-    expect(rt.namedResources.length).toBe(2)
-
-    const existingNR = rt.namedResources.find(nr => nr.id === 'nr-dev-1')
-    expect(existingNR).toBeDefined()
-    expect(existingNR!.capacitySegments).toBeDefined()
-
-    const generatedNR = rt.namedResources.find(nr => nr.id !== 'nr-dev-1')
-    expect(generatedNR).toBeDefined()
-    expect(generatedNR!.allocationMode).toBe('CAPACITY_PLAN')
-    expect(generatedNR!.id).toContain('capacity-plan')
+    // The active-plan fallback was removed in #418: an unprofiled NR fails closed.
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 
   it('more existing NRs than plan trajectories keeps unmatched persisted NRs', async () => {
@@ -610,14 +581,8 @@ describe('resolveSchedulerCapacity mixed trajectories (fix 2)', () => {
       },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const rt = result.resourceTypes[0]
-
-    // 1 trajectory, 3 existing NRs. The trajectory matches NR e1 by index.
-    // NR e2 and e3 are unmatched persisted NRs → kept as-is (LEGACY).
-    expect(rt.namedResources.length).toBe(3)
-    expect(rt.namedResources.find(nr => nr.id === 'nr-e1')?.capacitySegments).toBeDefined()
-    // At least one unmatched NR should still exist (legacy format, no segments)
+    // Unprofiled persisted NRs fail closed — no legacy pass-through (issue #418).
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 
   it('fractional headcount 1.25 FTE produces correct trajectory count', async () => {
@@ -642,26 +607,8 @@ describe('resolveSchedulerCapacity mixed trajectories (fix 2)', () => {
       },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const rt = result.resourceTypes[0]
-
-    // 1.25 FTE = 5 units at 0.25 each, ceil(5/4) = 2 trajectories
-    expect(rt.namedResources.length).toBeGreaterThanOrEqual(2)
-    expect(rt.namedResources.length).toBeLessThanOrEqual(3)
-
-    // Each trajectory should have segments
-    for (const nr of rt.namedResources) {
-      expect(nr.capacitySegments).toBeDefined()
-      expect(nr.capacitySegments!.length).toBeGreaterThan(0)
-    }
-
-    // Total allocation across all NRs should reflect 125% FTE
-    const totalPct = rt.namedResources.reduce((sum, nr) => {
-      const seg = nr.capacitySegments?.[0]
-      return sum + (seg?.allocationPercent ?? 100)
-    }, 0)
-    expect(totalPct).toBeGreaterThanOrEqual(100)
-    expect(totalPct).toBeLessThanOrEqual(200)
+    // Plan-derived trajectories are gone — no profiles means fail closed.
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 
   it('capacity decreasing then increasing produces correct trajectories', async () => {
@@ -694,17 +641,7 @@ describe('resolveSchedulerCapacity mixed trajectories (fix 2)', () => {
       },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const rt = result.resourceTypes[0]
-
-    // Should have multiple trajectories for the wave pattern
-    expect(rt.namedResources.length).toBeGreaterThanOrEqual(2)
-
-    // Trajectories should have segments that change allocation
-    const hasChangingAllocation = rt.namedResources.some(nr =>
-      nr.capacitySegments && nr.capacitySegments.length > 1,
-    )
-    expect(hasChangingAllocation).toBe(true)
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 
   it('discontinuous capacity plan periods produce zero-capacity gaps', async () => {
@@ -733,14 +670,7 @@ describe('resolveSchedulerCapacity mixed trajectories (fix 2)', () => {
       },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const rt = result.resourceTypes[0]
-
-    expect(rt.namedResources.length).toBeGreaterThanOrEqual(2)
-
-    // Gaps in segment coverage → zero capacity between periods
-    const nr1 = rt.namedResources[0]
-    expect(nr1.capacitySegments).toBeDefined()
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 
   it('deterministic IDs and ordering across repeated resolution', async () => {
@@ -774,11 +704,8 @@ describe('resolveSchedulerCapacity mixed trajectories (fix 2)', () => {
       },
     })
 
-    const result1 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-
-    // Same IDs and ordering
-    expect(result1.resourceTypes).toEqual(result2.resourceTypes)
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
+    await expect(resolveSchedulerCapacity(client as any, 'proj-1')).rejects.toThrow(CapacityIntegrityError)
   })
 })
 
@@ -812,8 +739,18 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
       ],
       capacityProfiles: [
         {
+          id: 'cp-a', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-a',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+        {
           id: 'cp-b', projectId: 'proj-1',
-          resourceTypeId: 'rt-mix', namedResourceId: 'nr-b',
+          resourceTypeId: null, namedResourceId: 'nr-b',
           ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
           source: 'MANUAL', defaultPercent: 50,
           startWeek: null, endWeek: null, legacy: null,
@@ -822,43 +759,29 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
           ],
         },
       ],
-      activeCapacityPlan: {
-        id: 'plan-1',
-        periods: [
-          {
-            periodIndex: 0, startWeek: 0, endWeek: 8,
-            entries: [{ resourceTypeId: 'rt-mix', headcount: 2 }],
-          },
-        ],
-      },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
-    // Must have 2 named resources (A and B), not dropped or duplicated
+    // Both NRs are profile-backed; no plan trajectories are synthesised.
     expect(rt.namedResources).toHaveLength(2)
 
     const nrA = rt.namedResources.find(nr => nr.id === 'nr-a')
     const nrB = rt.namedResources.find(nr => nr.id === 'nr-b')
 
-    // A has no profile → uses trajectory A's segments
     expect(nrA).toBeDefined()
     expect(nrA!.capacitySegments).toBeDefined()
-    expect(nrA!.capacitySegments!.length).toBeGreaterThan(0)
+    expect(nrA!.capacitySegments![0].allocationPercent).toBe(100)
 
-    // B has a valid profile → retains its profile segments
     expect(nrB).toBeDefined()
     expect(nrB!.capacitySegments).toBeDefined()
-    // Profile says 50%, trajectory would be about 100%
+    // Profile says 50% — authoritative
     expect(nrB!.capacitySegments![0].allocationPercent).toBe(50)
 
-    // No generated synthetic NR with trajectory B's segments
+    // No generated synthetic NRs from any plan trajectory
     const synthetics = rt.namedResources.filter(nr => nr.id.startsWith('rt-mix-capacity-plan'))
     expect(synthetics).toHaveLength(0)
-
-    // RT is marked as capacity-plan-resolved
-    expect(rt.capacityPlanResolved).toBe(true)
   })
 
   it('unmatched persisted NR preserved when plan has fewer trajectories', async () => {
@@ -898,8 +821,18 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
       ],
       capacityProfiles: [
         {
+          id: 'cp-a', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-a',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+        {
           id: 'cp-b', projectId: 'proj-1',
-          resourceTypeId: 'rt-extra', namedResourceId: 'nr-b',
+          resourceTypeId: null, namedResourceId: 'nr-b',
           ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
           source: 'MANUAL', defaultPercent: 75,
           startWeek: null, endWeek: null, legacy: null,
@@ -907,22 +840,21 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
             { startWeek: 0, endWeek: 10, capacityPercent: 75, source: 'MANUAL' },
           ],
         },
+        {
+          id: 'cp-c', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-c',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [],
+        },
       ],
-      activeCapacityPlan: {
-        id: 'plan-1',
-        periods: [
-          {
-            periodIndex: 0, startWeek: 0, endWeek: 8,
-            entries: [{ resourceTypeId: 'rt-extra', headcount: 2 }],
-          },
-        ],
-      },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
-    // 3 NRs total: 2 matched to trajectories + 1 unmatched persisted (nr-c)
+    // All three NRs are profile-backed and preserved.
     expect(rt.namedResources.length).toBe(3)
 
     const nrA = rt.namedResources.find(nr => nr.id === 'nr-a')
@@ -930,16 +862,15 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
     const nrC = rt.namedResources.find(nr => nr.id === 'nr-c')
 
     expect(nrA).toBeDefined()
-    expect(nrA!.capacitySegments).toBeDefined()   // trajectory A
+    expect(nrA!.capacitySegments).toBeDefined()
 
     expect(nrB).toBeDefined()
-    expect(nrB!.capacitySegments).toBeDefined()    // profile B
+    expect(nrB!.capacitySegments).toBeDefined()
     expect(nrB!.capacitySegments![0].allocationPercent).toBe(75)
 
-    // NR C has no matching trajectory → preserved as-is (LEGACY)
+    // nr-c is demand-following → whole-project fixed segment
     expect(nrC).toBeDefined()
-
-    expect(rt.capacityPlanResolved).toBe(true)
+    expect(nrC!.capacitySegments).toEqual([{ startWeek: 0, endWeek: Infinity, allocationPercent: 100 }])
   })
 
   it('fractional and discontinuous plan with mixed profiles', async () => {
@@ -971,8 +902,20 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
       ],
       capacityProfiles: [
         {
+          id: 'cp-a', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-a',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: null,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'MANUAL' },
+            { startWeek: 3, endWeek: 6, capacityPercent: 50, source: 'MANUAL' },
+            { startWeek: 8, endWeek: 11, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+        {
           id: 'cp-b', projectId: 'proj-1',
-          resourceTypeId: 'rt-disc', namedResourceId: 'nr-b',
+          resourceTypeId: null, namedResourceId: 'nr-b',
           ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
           source: 'MANUAL', defaultPercent: 50,
           startWeek: null, endWeek: null, legacy: null,
@@ -982,26 +925,9 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
           ],
         },
       ],
-      activeCapacityPlan: {
-        id: 'plan-1',
-        periods: [
-          {
-            periodIndex: 0, startWeek: 0, endWeek: 3,
-            entries: [{ resourceTypeId: 'rt-disc', headcount: 2 }],
-          },
-          {
-            periodIndex: 1, startWeek: 3, endWeek: 6,
-            entries: [{ resourceTypeId: 'rt-disc', headcount: 1.25 }],
-          },
-          {
-            periodIndex: 2, startWeek: 8, endWeek: 11,
-            entries: [{ resourceTypeId: 'rt-disc', headcount: 2 }],
-          },
-        ],
-      },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
     // Both NRs present
@@ -1012,17 +938,17 @@ describe('resolveSchedulerCapacity mixed profile/plan (remediation)', () => {
 
     expect(nrA).toBeDefined()
     expect(nrA!.capacitySegments).toBeDefined()
+    // A's profile mirrors the old plan windows: 100% / 50% / 100% with a gap
+    expect(nrA!.capacitySegments).toHaveLength(3)
+    expect(nrA!.capacitySegments![1].allocationPercent).toBe(50)
 
     expect(nrB).toBeDefined()
     expect(nrB!.capacitySegments).toBeDefined()
     // B's profile has 75% in weeks 0-4
     expect(nrB!.capacitySegments![0].allocationPercent).toBe(75)
 
-    // Plan's week 6-7 gap → zero capacity in trajectory (A's segments)
-    expect(rt.capacityPlanResolved).toBe(true)
-
     // Deterministic
-    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1')
     expect(result.resourceTypes).toEqual(result2.resourceTypes)
   })
 })
@@ -1070,7 +996,7 @@ describe('Squad Planner composition and ordering (remediation)', () => {
         // Planned-resource profile 1 (100%) — SQUAD_PLANNER is real DB value
         {
           id: 'cp-pr1', projectId: 'proj-1',
-          resourceTypeId: 'rt-squad', namedResourceId: 'nr-planned-1',
+          resourceTypeId: null, namedResourceId: 'nr-planned-1',
           ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
@@ -1081,7 +1007,7 @@ describe('Squad Planner composition and ordering (remediation)', () => {
         // Planned-resource profile 2 (50%) — SQUAD_PLANNER is real DB value
         {
           id: 'cp-pr2', projectId: 'proj-1',
-          resourceTypeId: 'rt-squad', namedResourceId: 'nr-planned-2',
+          resourceTypeId: null, namedResourceId: 'nr-planned-2',
           ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER', defaultPercent: 50,
           startWeek: null, endWeek: null, legacy: null,
@@ -1093,7 +1019,7 @@ describe('Squad Planner composition and ordering (remediation)', () => {
     })
 
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
     // The aggregate ROLE profile should NOT produce roleSegments when
@@ -1147,11 +1073,20 @@ describe('Squad Planner composition and ordering (remediation)', () => {
           startWeek: 2, endWeek: 6, legacy: null,
           segments: [],
         },
+        // Alice's explicit NAMED_PERSON profile (100%, demand-following)
+        {
+          id: 'cp-nr-alice', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-alice',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING',
+          source: 'FIXED', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [],
+        },
       ],
     })
 
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
     // Standalone manual ROLE profile — roleSegments must be present
@@ -1191,27 +1126,39 @@ describe('Squad Planner composition and ordering (remediation)', () => {
           ],
         },
       ],
-      capacityProfiles: [],
-      activeCapacityPlan: {
-        id: 'plan-1',
-        periods: [
-          {
-            periodIndex: 0, startWeek: 0, endWeek: 8,
-            entries: [{ resourceTypeId: 'rt-order', headcount: 2 }],
-          },
-        ],
-      },
+      capacityProfiles: [
+        {
+          id: 'cp-alpha', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-alpha',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: null,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 8, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+        {
+          id: 'cp-beta', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-beta',
+          ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: null,
+          startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { startWeek: 0, endWeek: 8, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
+      ],
     })
 
-    const result1 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
-    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result1 = await resolveSchedulerCapacity(client as any, 'proj-1')
+    const result2 = await resolveSchedulerCapacity(client as any, 'proj-1')
 
     // NR order should be deterministic: alpha before beta (by id asc)
     const rt = result1.resourceTypes[0]
     expect(rt.namedResources[0].id).toBe('nr-alpha')
     expect(rt.namedResources[1].id).toBe('nr-beta')
 
-    // Trajectory 0 maps to alpha, trajectory 1 maps to beta
+    // Both NRs are profile-backed
     expect(rt.namedResources[0].capacitySegments).toBeDefined()
     expect(rt.namedResources[1].capacitySegments).toBeDefined()
 
@@ -1255,7 +1202,7 @@ describe('SQUAD_PLANNER to squadPlanner normalisation (remediation)', () => {
         },
         {
           id: 'cp-nr-src', projectId: 'proj-1',
-          resourceTypeId: 'rt-src', namedResourceId: 'nr-pr1',
+          resourceTypeId: null, namedResourceId: 'nr-pr1',
           ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
@@ -1266,7 +1213,7 @@ describe('SQUAD_PLANNER to squadPlanner normalisation (remediation)', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
     // The overlap must be detected: ROLE profile suppressed, empty array
@@ -1309,7 +1256,7 @@ describe('overlap suppression precision (remediation)', () => {
         // Manual PLANNED_RESOURCE (source: MANUAL, not SQUAD_PLANNER)
         {
           id: 'cp-nr-manual', projectId: 'proj-1',
-          resourceTypeId: 'rt-overlap', namedResourceId: 'nr-manual',
+          resourceTypeId: null, namedResourceId: 'nr-manual',
           ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
           source: 'MANUAL', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
@@ -1321,7 +1268,7 @@ describe('overlap suppression precision (remediation)', () => {
     })
 
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
     // Squad Planner ROLE must NOT be suppressed by manual PLANNED_RESOURCE
@@ -1364,6 +1311,18 @@ describe('overlap suppression precision (remediation)', () => {
           startWeek: null, endWeek: null, legacy: null,
           segments: [],
         },
+        // Manually authored planned-resource profile (not Squad Planner,
+        // not transfer provenance) — must NOT suppress the SP ROLE profile
+        {
+          id: 'cp-nr-fallback', projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: 'nr-fallback',
+          ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
+          source: 'MANUAL', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: { writer: 'manual-editor' },
+          segments: [
+            { startWeek: 0, endWeek: 8, capacityPercent: 100, source: 'MANUAL' },
+          ],
+        },
       ],
       activeCapacityPlan: {
         id: 'plan-fallback',
@@ -1376,13 +1335,15 @@ describe('overlap suppression precision (remediation)', () => {
       },
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
-    // The active plan produces ACTIVE_CAPACITY_PLAN profiles for the NR,
-    // not PROFILE. The Squad Planner ROLE must not be suppressed.
+    // A non-Squad-Planner planned-resource profile must not suppress the
+    // Squad Planner ROLE profile (overlap suppression is provenance-scoped).
     expect(rt.roleSegments).toBeDefined()
     expect(rt.roleSegments!.length).toBeGreaterThan(0)
+    expect(rt.namedResources).toHaveLength(1)
+    expect(rt.namedResources[0].capacitySegments).toBeDefined()
   })
 
   it('non-Squad-Planner ROLE not suppressed by Squad Planner planned resource', async () => {
@@ -1417,7 +1378,7 @@ describe('overlap suppression precision (remediation)', () => {
         // Squad Planner planned-resource profile
         {
           id: 'cp-nr-sp', projectId: 'proj-1',
-          resourceTypeId: 'rt-mixed', namedResourceId: 'nr-sp-pr',
+          resourceTypeId: null, namedResourceId: 'nr-sp-pr',
           ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
           source: 'SQUAD_PLANNER', defaultPercent: 100,
           startWeek: null, endWeek: null, legacy: null,
@@ -1428,7 +1389,7 @@ describe('overlap suppression precision (remediation)', () => {
       ],
     })
 
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
     // Manual ROLE must NOT be suppressed by a Squad Planner PR
@@ -1485,22 +1446,23 @@ describe('transfer provenance suppression (issue #411)', () => {
 
   it('1. transferred planned-resource with transfer provenance is suppressed (no double count)', async () => {
     const client = makeTransferredFixture({ writer: 'transfer-to-manual' })
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
     // ROLE segments are authoritative
     expect(rt.roleSegments).toBeDefined()
     expect(rt.roleSegments!.length).toBeGreaterThan(0)
 
-    // The transferred planned resource is suppressed → no capacitySegments,
-    // and its legacy fields (allocationPercent 0) contribute zero.
+    // The transferred planned resource is suppressed with an explicit zero
+    // segment (issue #411) — it never falls through to legacy columns.
     const nr = rt.namedResources[0]
-    expect(nr.capacitySegments).toBeUndefined()
+    expect(nr.capacitySegments).toEqual([{ startWeek: 0, endWeek: Infinity, allocationPercent: 0 }])
+    expect(nr.allocationPct).toBe(0)
   })
 
   it('2. unrelated manual planned-resource WITHOUT transfer provenance remains authoritative', async () => {
     const client = makeTransferredFixture({ writer: 'manual-editor' })
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
     const nr = rt.namedResources[0]
 
@@ -1513,7 +1475,7 @@ describe('transfer provenance suppression (issue #411)', () => {
   it('3. malformed/ambiguous provenance shape does not silently suppress', async () => {
     // legacy present but writer missing → not transfer provenance
     const client = makeTransferredFixture({})
-    const result = await resolveSchedulerCapacity(client as any, 'proj-1', 8)
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const nr = result.resourceTypes[0].namedResources[0]
 
     expect(nr.capacitySegments).toBeDefined()

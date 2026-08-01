@@ -525,7 +525,7 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
     const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
     const { getWeeklyCapacity } = await import('../lib/scheduler.js')
 
-    const resolved = await resolveSchedulerCapacity(prisma, projectId, 8)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
     const rt = resolved.resourceTypes.find(r => r.id === roleRtId)!
     expect(rt).toBeDefined()
 
@@ -854,6 +854,46 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
       ),
     )
 
+    // Profile-first fixture (issue #418): the initial ROLE profile plus a
+    // system-generated ROLE_DEFAULT clone for the inherited NR. Profile-less
+    // named resources fail closed, and candidate columns are never consulted.
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: inheritanceRole.id,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 60,
+        startWeek: null,
+        endWeek: null,
+        legacy: {
+          allocationMode: 'EFFORT',
+          allocationPercent: 60,
+          allocationPct: 60,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
+        },
+      },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: null,
+        namedResourceId: inherited.id,
+        ownerKind: 'NAMED_PERSON',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'DERIVED',
+        defaultPercent: 60,
+        startWeek: null,
+        endWeek: null,
+        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+      },
+    })
+
     const scalarCreate = await request(app)
       .put(`/api/projects/${projectId}/capacity-profiles/NAMED_PERSON/${manualScalar.id}`)
       .set('Authorization', authHeader)
@@ -925,10 +965,20 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
       .set('Authorization', authHeader)
       .send({ planningBasis: 'WHOLE_PROJECT_ALLOCATION', defaultPercent: 80 })
     expect(firstEdit.status).toBe(200)
+    // Issue #418: the inherited NR's candidate columns are never written —
+    // the ROLE_DEFAULT clone profile follows the role default in place.
     expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: inherited.id } })).toMatchObject({
-      allocationMode: 'FULL_PROJECT',
-      allocationPercent: 80,
-      allocationPct: 80,
+      allocationMode: 'EFFORT',
+      allocationPercent: 60,
+      allocationPct: 60,
+    })
+    const inheritedCloneAfterFirst = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, namedResourceId: inherited.id },
+    })
+    expect(inheritedCloneAfterFirst).toMatchObject({
+      planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+      source: 'DERIVED',
+      defaultPercent: 80,
     })
     expect((await prisma.project.findUniqueOrThrow({
       where: { id: projectId },
@@ -949,18 +999,22 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
         endWeek: 8,
       })
     expect(secondEdit.status).toBe(200)
+    // Candidate columns remain untouched; the clone profile follows the role.
     expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: inherited.id } })).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 70,
-      allocationPct: 70,
-      allocationStartWeek: 2,
-      allocationEndWeek: 8,
+      allocationMode: 'EFFORT',
+      allocationPercent: 60,
+      allocationPct: 60,
+    })
+    const inheritedCloneAfterSecond = await prisma.capacityProfile.findFirstOrThrow({
+      where: { projectId, namedResourceId: inherited.id },
+    })
+    expect(inheritedCloneAfterSecond).toMatchObject({
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'DERIVED',
+      defaultPercent: 70,
       startWeek: 2,
       endWeek: 8,
     })
-    expect(await prisma.capacityProfile.findMany({
-      where: { namedResourceId: inherited.id },
-    })).toEqual([])
 
     expect(canonicalize(await prisma.capacityProfile.findMany({
       where: { namedResourceId: { in: explicitIds } },

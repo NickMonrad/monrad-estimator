@@ -11,14 +11,111 @@ const testCtx = vi.hoisted(() => {
   return shared
 })
 
-// Mock the adapter to return empty maps by default (existing tests don't assert on capacityProfile)
+// Mock the adapter by default with a synthesis that derives profile data from
+// persisted capacityProfiles when present, else from the resource type's own
+// legacy-shaped allocation fields. This mirrors the pre-#418 legacy-derived
+// read behaviour for tests that don't assert on persisted profile state, while
+// integration tests below exercise the real implementation via useRealAdapter().
 vi.mock('../lib/capacityProfileResourceAdapter.js', async (importOriginal) => {
   const actual: Record<string, unknown> = await importOriginal()
   // Store reference so integration tests can exercise the real implementation
   testCtx.realBuildFn = actual.buildResourceCapacityProfileMap as (...args: unknown[]) => unknown
+
+  function camelEnum(value: unknown): string {
+    if (typeof value !== 'string') return 'fixed'
+    return value.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+  }
+
+  function basisForMode(mode: unknown): string {
+    if (mode === 'TIMELINE') return 'availabilityWindow'
+    if (mode === 'FULL_PROJECT') return 'wholeProjectAllocation'
+    if (mode === 'CAPACITY_PLAN') return 'capacityProfile'
+    return 'demandFollowing'
+  }
+
+  function synthProfile(input: Record<string, unknown>) {
+    const basis = basisForMode(input.allocationMode)
+    const source = basis === 'availabilityWindow' ? 'availabilityWindow' : basis === 'capacityProfile' ? 'squadPlanner' : 'fixed'
+    return {
+      id: `synth-${String(input.id)}`,
+      planningBasis: basis,
+      source,
+      defaultPercent: input.allocationPercent ?? input.allocationPct ?? 100,
+      startWeek: input.allocationStartWeek ?? input.startWeek ?? null,
+      endWeek: input.allocationEndWeek ?? input.endWeek ?? null,
+      segments: [],
+      resolutionSource: 'PROFILE',
+      legacyWriter: null,
+    }
+  }
+
+  function synthesizeCapacityMap(input: any) {
+    const roleProfiles = new Map<string, Record<string, unknown>>()
+    const namedResourceProfiles = new Map<string, Record<string, unknown>>()
+    const persisted = Array.isArray(input?.capacityProfiles) ? input.capacityProfiles : []
+    const persistedByRT = new Map<string, any>(
+      persisted
+        .filter((p: any) => p.ownerKind === 'ROLE' && p.resourceTypeId != null)
+        .map((p: any) => [p.resourceTypeId, p] as [string, any]),
+    )
+    const persistedByNR = new Map<string, any>(
+      persisted
+        .filter((p: any) => p.namedResourceId != null)
+        .map((p: any) => [p.namedResourceId, p] as [string, any]),
+    )
+
+    for (const rt of input?.resourceTypes ?? []) {
+      const nrs = rt.namedResources ?? []
+      for (const nr of nrs) {
+        const persistedProfile = persistedByNR.get(nr.id)
+        if (persistedProfile) {
+          namedResourceProfiles.set(nr.id, {
+            id: persistedProfile.id,
+            planningBasis: camelEnum(persistedProfile.planningBasis),
+            source: camelEnum(persistedProfile.source),
+            defaultPercent: persistedProfile.defaultPercent ?? null,
+            startWeek: persistedProfile.startWeek ?? null,
+            endWeek: persistedProfile.endWeek ?? null,
+            segments: (persistedProfile.segments ?? []).map((seg: any) => ({
+              startWeek: seg.startWeek,
+              endWeek: seg.endWeek,
+              capacityPercent: seg.capacityPercent,
+            })),
+            resolutionSource: 'PROFILE',
+            resourceIdentity: persistedProfile.ownerKind === 'PLANNED_RESOURCE' ? 'PLANNED_RESOURCE' : 'NAMED_PERSON',
+            legacyWriter: persistedProfile.legacy?.writer ?? null,
+          })
+        } else {
+          namedResourceProfiles.set(nr.id, { ...synthProfile(nr), resourceIdentity: 'NAMED_PERSON' })
+        }
+      }
+      const persistedRole = persistedByRT.get(rt.id)
+      if (persistedRole) {
+        roleProfiles.set(rt.id, {
+          id: persistedRole.id,
+          planningBasis: camelEnum(persistedRole.planningBasis),
+          source: camelEnum(persistedRole.source),
+          defaultPercent: persistedRole.defaultPercent ?? null,
+          startWeek: persistedRole.startWeek ?? null,
+          endWeek: persistedRole.endWeek ?? null,
+          segments: (persistedRole.segments ?? []).map((seg: any) => ({
+            startWeek: seg.startWeek,
+            endWeek: seg.endWeek,
+            capacityPercent: seg.capacityPercent,
+          })),
+          resolutionSource: 'PROFILE',
+          legacyWriter: persistedRole.legacy?.writer ?? null,
+        })
+      } else if (nrs.length === 0) {
+        roleProfiles.set(rt.id, synthProfile(rt))
+      }
+    }
+    return { roleProfiles, namedResourceProfiles }
+  }
+
   return {
     ...actual,
-    buildResourceCapacityProfileMap: vi.fn(() => ({ roleProfiles: new Map(), namedResourceProfiles: new Map() })),
+    buildResourceCapacityProfileMap: vi.fn(synthesizeCapacityMap),
   }
 })
 
@@ -28,7 +125,28 @@ const userId = 'user-1'
 const token = jwt.sign({ userId }, 'test-secret')
 const authHeader = `Bearer ${token}`
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  // The real resolveSchedulerCapacity queries Prisma directly. Feed it from
+  // the project fixture the route under test already mocked, so the resolver
+  // sees exactly the same resource types / profiles / plan as the route.
+  vi.mocked(prisma.resourceType.findMany).mockImplementation((async () => {
+    const results = vi.mocked(prisma.project.findFirst).mock.results
+    const last = results.length > 0 ? await results[results.length - 1].value : undefined
+    return ((last as { resourceTypes?: unknown } | undefined)?.resourceTypes ?? []) as never[]
+  }) as any)
+  vi.mocked(prisma.capacityProfile.findMany).mockImplementation((async () => {
+    const results = vi.mocked(prisma.project.findFirst).mock.results
+    const last = results.length > 0 ? await results[results.length - 1].value : undefined
+    return ((last as { capacityProfiles?: unknown } | undefined)?.capacityProfiles ?? []) as never[]
+  }) as any)
+  vi.mocked(prisma.capacityPlan.findFirst).mockImplementation((async () => {
+    const results = vi.mocked(prisma.project.findFirst).mock.results
+    const last = results.length > 0 ? await results[results.length - 1].value : undefined
+    const plans = (last as { capacityPlans?: unknown[] } | undefined)?.capacityPlans
+    return Array.isArray(plans) && plans.length > 0 ? (plans[0] as never) : null
+  }) as any)
+})
 
 describe('GET /api/projects/:projectId/resource-profile', () => {
   it('uses task.durationDays when provided', async () => {
@@ -187,6 +305,30 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
           ],
         },
       ],
+      // Profile-first: the plan's 0/1/0/1 windows are encoded as persisted
+      // capacity segments (issue #418) — no plan-fallback derivation.
+      capacityProfiles: [
+        {
+          id: 'cp-role-security', projectId: 'proj-1', ownerKind: 'ROLE',
+          resourceTypeId: 'rt-security', namedResourceId: null,
+          planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER',
+          defaultPercent: null, startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { id: 'seg-r1', capacityProfileId: 'cp-role-security', startWeek: 4, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+            { id: 'seg-r2', capacityProfileId: 'cp-role-security', startWeek: 12, endWeek: 15, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          ],
+        },
+        {
+          id: 'cp-nr-security', projectId: 'proj-1', ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null, namedResourceId: 'nr-security',
+          planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER',
+          defaultPercent: null, startWeek: null, endWeek: null, legacy: null,
+          segments: [
+            { id: 'seg-n1', capacityProfileId: 'cp-nr-security', startWeek: 4, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+            { id: 'seg-n2', capacityProfileId: 'cp-nr-security', startWeek: 12, endWeek: 15, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          ],
+        },
+      ],
     } as any)
 
     const res = await request(app)
@@ -198,7 +340,9 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     const securityRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-security')
     expect(securityRow).toBeTruthy()
     expect(securityRow.allocatedDays).toBe(40)
-    expect(securityRow.namedResources).toEqual([
+    // The profile-first row includes the persisted NR plus the synthetic
+    // role aggregate (roleSegments authority) — match the persisted NR by content.
+    expect(securityRow.namedResources).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: 'Principal Consultant - Security',
         allocationMode: 'CAPACITY_PLAN',
@@ -206,7 +350,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
         endWeek: 15,
         allocatedDays: 40,
       }),
-    ])
+    ]))
   })
 
   it('uses fractional CAPACITY_PLAN headcount for low-demand roles without inflating allocated days', async () => {
@@ -278,6 +422,16 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
           ],
         },
       ],
+      // ROLE profile carries the 25% plan capacity (profile-first, #418).
+      capacityProfiles: [{
+        id: 'cp-role-security', projectId: 'proj-1', ownerKind: 'ROLE',
+        resourceTypeId: 'rt-security', namedResourceId: null,
+        planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER',
+        defaultPercent: null, startWeek: null, endWeek: null, legacy: null,
+        segments: [
+          { id: 'seg-r1', capacityProfileId: 'cp-role-security', startWeek: 0, endWeek: 15, capacityPercent: 25, source: 'SQUAD_PLANNER' },
+        ],
+      }],
     } as any)
 
     const res = await request(app)
@@ -289,15 +443,10 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     const securityRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-security')
     expect(securityRow).toBeTruthy()
     expect(securityRow.allocatedDays).toBe(20)
-    expect(securityRow.namedResources).toEqual([
-      expect.objectContaining({
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: 25,
-        startWeek: 0,
-        endWeek: 15,
-        allocatedDays: 20,
-      }),
-    ])
+    expect(securityRow.allocationMode).toBe('CAPACITY_PLAN')
+    // No persisted named resources and no plan-fallback trajectories (issue
+    // #418): the role-level row carries the capacity; there are no NR rows.
+    expect(securityRow.namedResources).toEqual([])
   })
 
   it('includes derived actual assignment weeks for named resources', async () => {
@@ -500,8 +649,10 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(res.status).toBe(200)
 
     const dataRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-data')
+    // Explicit-only role (the NR's NAMED_PERSON profile is authoritative):
+    // the aggregate row presents as EFFORT per the profile-first model.
     expect(dataRow).toMatchObject({
-      allocationMode: 'TIMELINE',
+      allocationMode: 'EFFORT',
       allocatedDays: 61,
       derivedStartWeek: 0,
       derivedEndWeek: 12,
@@ -1944,7 +2095,7 @@ describe('capacity profile enrichment in resource profile', () => {
           startWeek: 0,
           endWeek: 8,
           segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
-          resolutionSource: 'LEGACY',
+          resolutionSource: 'PROFILE',
         }],
       ]),
       namedResourceProfiles: new Map([
@@ -1955,7 +2106,7 @@ describe('capacity profile enrichment in resource profile', () => {
           startWeek: 0,
           endWeek: 8,
           segments: [{ startWeek: 0, endWeek: 8, capacityPercent: 75 }],
-          resolutionSource: 'LEGACY',
+          resolutionSource: 'PROFILE',
         }],
       ]),
     })
@@ -2059,7 +2210,7 @@ describe('capacity profile enrichment in resource profile', () => {
     expect(nr.pricingModel).toBe('PRO_RATA')
   })
 
-  it('falls back gracefully when adapter returns empty map', async () => {
+  it('fails closed when no persisted profile exists for a named resource (issue #418)', async () => {
     const rtId = 'rt-no-cap'
     const nrId = 'nr-no-cap'
 
@@ -2084,25 +2235,14 @@ describe('capacity profile enrichment in resource profile', () => {
       storyTimelineEntries: [],
     } as never)
 
-    // Adapter already mocked to return empty map (from afterEach default)
+    // The adapter is mocked to return empty maps (afterEach default): the
+    // profile-first resolver fails closed instead of falling back to legacy.
     const res = await request(app)
       .get('/api/projects/proj-1/resource-profile')
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    const row = res.body.resourceRows.find((r: any) => r.resourceTypeId === rtId)
-    expect(row).toBeDefined()
-
-    // No duplicate resources
-    expect(row.namedResources).toHaveLength(1)
-    expect(row.namedResources[0].id).toBe(nrId)
-
-    // capacityProfile is absent when adapter returns empty map
-    expect(row.namedResources[0].capacityProfile).toBeUndefined()
-
-    // Legacy allocation fields are still present
-    expect(row.namedResources[0].allocationMode).toBe('EFFORT')
-    expect(row.namedResources[0].allocationPercent).toBe(100)
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
   it('capacity profile, assigned work, and billing basis remain separate', async () => {
@@ -2263,11 +2403,11 @@ describe('profile-first read adoption integration', () => {
       expect(row.capacityProfile.defaultPercent).toBe(70)
       expect(row.capacityProfile.resolutionSource).toBe('PROFILE')
 
-      // Commercial fields unchanged (computed from legacy RT fields)
-      // RT has TIMELINE/100% → allocatedDays = (8-0)*5*1*1.0 = 40
+      // Commercial fields follow the profile-first allocation mode:
+      // demandFollowing → EFFORT → allocatedDays = effortDays (160h / 8hpd)
       expect(row.effortDays).toBe(EXPECTED_EFFORT_DAYS)
-      expect(row.totalDays).toBe(40)
-      expect(row.estimatedCost).toBe(20000) // 40 * 500
+      expect(row.totalDays).toBe(EXPECTED_EFFORT_DAYS)
+      expect(row.estimatedCost).toBe(10000) // 20 * 500
     })
   })
 
@@ -2358,8 +2498,9 @@ describe('profile-first read adoption integration', () => {
       expect(nr.capacityProfile.source).toBe('manual')
       expect(nr.capacityProfile.resolutionSource).toBe('PROFILE')
 
-      // allocatedDays unchanged (computed from legacy EFFORT mode: 20 ÷ 1 NR)
-      expect(nr.allocatedDays).toBe(EXPECTED_EFFORT_DAYS)
+      // Profile-first: allocatedDays comes from the availability window
+      // (weeks 2-7 at 60%) — (7-2) × 5 × 0.6 = 15
+      expect(nr.allocatedDays).toBe(15)
     })
   })
 
@@ -2500,22 +2641,37 @@ describe('profile-first read adoption integration', () => {
         timelineEntries: [{ featureId: featId, startWeek: 0, durationWeeks: 4 }],
         storyTimelineEntries: [],
         capacityPlans: [],
-        capacityProfiles: [{
-          id: 'cp-planned-1',
-          projectId: 'proj-planned',
-          ownerKind: 'PLANNED_RESOURCE',
-          resourceTypeId: null,
-          namedResourceId: nrId,
-          planningBasis: 'CAPACITY_PROFILE',
-          source: 'SQUAD_PLANNER',
-          defaultPercent: null,
-          startWeek: null,
-          endWeek: null,
-          segments: [
-            { id: 'cs-planned-1', capacityProfileId: 'cp-planned-1', startWeek: 0, endWeek: 4, capacityPercent: 50, source: 'SQUAD_PLANNER' },
-            { id: 'cs-planned-2', capacityProfileId: 'cp-planned-1', startWeek: 4, endWeek: 8, capacityPercent: 100, source: 'SQUAD_PLANNER' },
-          ],
-        }],
+        capacityProfiles: [
+          {
+            id: 'cp-role-planned',
+            projectId: 'proj-planned',
+            ownerKind: 'ROLE',
+            resourceTypeId: rtId,
+            namedResourceId: null,
+            planningBasis: 'DEMAND_FOLLOWING',
+            source: 'FIXED',
+            defaultPercent: 100,
+            startWeek: null,
+            endWeek: null,
+            segments: [],
+          },
+          {
+            id: 'cp-planned-1',
+            projectId: 'proj-planned',
+            ownerKind: 'PLANNED_RESOURCE',
+            resourceTypeId: null,
+            namedResourceId: nrId,
+            planningBasis: 'CAPACITY_PROFILE',
+            source: 'SQUAD_PLANNER',
+            defaultPercent: null,
+            startWeek: null,
+            endWeek: null,
+            segments: [
+              { id: 'cs-planned-1', capacityProfileId: 'cp-planned-1', startWeek: 0, endWeek: 4, capacityPercent: 50, source: 'SQUAD_PLANNER' },
+              { id: 'cs-planned-2', capacityProfileId: 'cp-planned-1', startWeek: 4, endWeek: 8, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+            ],
+          },
+        ],
       } as never)
 
       useRealAdapter()
@@ -2527,10 +2683,13 @@ describe('profile-first read adoption integration', () => {
       expect(res.status).toBe(200)
       const row = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
       expect(row).toBeDefined()
-      expect(row.namedResources).toHaveLength(1)
+      // The persisted planned resource plus the synthetic role aggregate
+      expect(row.namedResources).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: nrId }),
+      ]))
 
-      const nr = row.namedResources[0]
-      expect(nr.id).toBe(nrId)
+      const nr = row.namedResources.find((n: { id: string }) => n.id === nrId)
+      expect(nr).toBeDefined()
       expect(nr.capacityProfile).toBeDefined()
       expect(nr.capacityProfile.planningBasis).toBe('capacityProfile')
       expect(nr.capacityProfile.source).toBe('squadPlanner')
@@ -2715,22 +2874,10 @@ describe('profile-first read adoption integration', () => {
         .get('/api/projects/proj-legacy/resource-profile')
         .set('Authorization', authHeader)
 
-      expect(res.status).toBe(200)
-
-      const row = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
-      expect(row).toBeDefined()
-      // RT with named resources now also gets a role-level legacy entry (independent enumeration)
-      expect(row.capacityProfile).toBeDefined()
-      expect(row.capacityProfile.resolutionSource).toBe('LEGACY')
-
-      // Display fields come from legacy RT fields
-      expect(row.allocationMode).toBe('TIMELINE')
-      expect(row.allocationPercent).toBe(100)
-
-      // Named resource gets LEGACY resolution
-      expect(row.namedResources).toHaveLength(1)
-      expect(row.namedResources[0].capacityProfile).toBeDefined()
-      expect(row.namedResources[0].capacityProfile.resolutionSource).toBe('LEGACY')
+      // Issue #418: no legacy fallback exists — missing persisted profiles
+      // fail closed with an actionable integrity error.
+      expect(res.status).toBe(409)
+      expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
     })
   })
 
@@ -2776,7 +2923,6 @@ describe('profile-first read adoption integration', () => {
         storyTimelineEntries: [],
         capacityPlans: [],
       }
-      const projectWithout = { ...(projectBase as unknown as Record<string, unknown>), capacityProfiles: [] }
       const projectWith = {
         ...(projectBase as unknown as Record<string, unknown>),
         capacityProfiles: [{
@@ -2794,19 +2940,8 @@ describe('profile-first read adoption integration', () => {
         }],
       }
 
-      // Request 1: WITHOUT profiles
-      vi.mocked(prisma.project.findFirst).mockResolvedValue(projectWithout as never)
-      useRealAdapter()
-
-      const res1 = await request(app)
-        .get('/api/projects/proj-com-1/resource-profile')
-        .set('Authorization', authHeader)
-      expect(res1.status).toBe(200)
-
-      // Clear mocks between requests
-      vi.clearAllMocks()
-
-      // Request 2: WITH profiles
+      // Issue #418: the no-profile request fails closed (no legacy fallback),
+      // so commercial invariance is verified against the profile-backed row.
       vi.mocked(prisma.project.findFirst).mockResolvedValue(projectWith as never)
       useRealAdapter()
 
@@ -2815,19 +2950,16 @@ describe('profile-first read adoption integration', () => {
         .set('Authorization', authHeader)
       expect(res2.status).toBe(200)
 
-      const row1 = res1.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
       const row2 = res2.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
-      expect(row1).toBeDefined()
       expect(row2).toBeDefined()
 
-      // Commercial fields identical with or without profiles
-      expect(row2.effortDays).toBe(row1.effortDays)
-      expect(row2.totalDays).toBe(row1.totalDays)
-      expect(row2.estimatedCost).toBe(row1.estimatedCost)
+      // Commercial fields are computed from effort: 160h / 8hpd = 20 days
+      expect(row2.effortDays).toBe(20)
+      expect(row2.totalDays).toBe(20)
+      expect(row2.estimatedCost).toBe(10000)
 
-      // Display fields changed by profile-first projection:
-      // Without profile → legacy TIMELINE; with profile → projected from demandFollowing
-      expect(row1.allocationMode).toBe('TIMELINE')   // legacy
+      // Display fields are projected from the persisted profile:
+      // demandFollowing → EFFORT
       expect(row2.capacityProfile.resolutionSource).toBe('PROFILE')
       expect(row2.allocationMode).toBe('EFFORT')     // projected
     })
@@ -2931,111 +3063,65 @@ describe('profile-first read adoption integration', () => {
       }
     }
 
-    /** Shared invariance pattern: request without profiles, clear, request with profiles, compare. */
-    async function assertCommercialInvariance(
-      baseProject: Record<string, unknown>,
-      withProfileProject: Record<string, unknown>,
-      rtId: string,
-      expectedEffortDays: number,
-      expectedTotalDays: number,
-      expectedCost: number,
-      nrAssertions?: (row: Record<string, unknown>) => void,
-    ): Promise<void> {
-      // Request 1: WITHOUT profiles
-      vi.mocked(prisma.project.findFirst).mockResolvedValue(baseProject as never)
-      useRealAdapter()
-
-      const res1 = await request(app)
-        .get(`/api/projects/${baseProject.id}/resource-profile`)
-        .set('Authorization', authHeader)
-      expect(res1.status).toBe(200)
-
-      // Request 2: WITH profiles — replace mock result without clearing (avoids isolation leaks)
-      vi.mocked(prisma.project.findFirst).mockResolvedValue(withProfileProject as never)
-      useRealAdapter()
-
-      const res2 = await request(app)
-        .get(`/api/projects/${withProfileProject.id}/resource-profile`)
-        .set('Authorization', authHeader)
-      expect(res2.status).toBe(200)
-
-      const row1 = res1.body.resourceRows.find((r: Record<string, unknown>) => r.resourceTypeId === rtId)
-      const row2 = res2.body.resourceRows.find((r: Record<string, unknown>) => r.resourceTypeId === rtId)
-      expect(row1).toBeDefined()
-      expect(row2).toBeDefined()
-
-      // Commercial fields identical with or without profiles
-      expect(row2.effortDays).toBe(expectedEffortDays)
-      expect(row2.totalDays).toBe(expectedTotalDays)
-      expect(row2.estimatedCost).toBe(expectedCost)
-
-      expect(row1.effortDays).toBe(row2.effortDays)
-      expect(row1.totalDays).toBe(row2.totalDays)
-      expect(row1.estimatedCost).toBe(row2.estimatedCost)
-
-      // Display fields show the profile projection
-      expect(row1.allocationMode).toBe('CAPACITY_PLAN') // legacy (no profiles)
-      expect(row2.capacityProfile.resolutionSource).toBe('PROFILE')
-
-      if (nrAssertions) {
-        expect(row2.namedResources).toBeDefined()
-        expect(row2.namedResources.length).toBeGreaterThanOrEqual(1)
-        nrAssertions(row2)
-      }
-    }
-
     // ─── Fixture 1: Constant 50% ──────────────────────────────────────────
     it('fixture 1: constant 50% capacity for 8 weeks', async () => {
       const rtId = 'rt-f1'
       const projectId = 'proj-f1'
 
-      const baseProject = buildTrajectoryProject({
+      // Profile-first (issue #418): the 50% plan capacity is persisted as a
+      // named-person CAPACITY_PROFILE with a single 50% segment.
+      const project = buildTrajectoryProject({
         projectId,
         rtId,
         rtName: 'F1 RT',
         capacityPlanPeriods: [{ startWeek: 0, endWeek: 8, headcount: 0.5 }],
         timelineStartWeek: 0,
         timelineDurationWeeks: WEEKS_8,
-        capacityProfiles: [],
-      })
-
-      const withProfileProject = buildTrajectoryProject({
-        projectId,
-        rtId,
-        rtName: 'F1 RT',
-        capacityPlanPeriods: [{ startWeek: 0, endWeek: 8, headcount: 0.5 }],
-        timelineStartWeek: 0,
-        timelineDurationWeeks: WEEKS_8,
+        namedResources: [{
+          id: 'nr-f1', name: 'F1 Person', startWeek: null, endWeek: null,
+          allocationPct: 50, allocationMode: 'CAPACITY_PLAN', allocationPercent: 50,
+          allocationStartWeek: null, allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+        }],
         capacityProfiles: [{
           id: 'cp-f1-1',
           projectId,
-          ownerKind: 'ROLE',
-          resourceTypeId: rtId,
-          namedResourceId: null,
-          planningBasis: 'DEMAND_FOLLOWING',
-          source: 'FIXED',
-          defaultPercent: 50,
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: 'nr-f1',
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER',
+          defaultPercent: null,
           startWeek: null,
           endWeek: null,
-          segments: [],
+          segments: [{ id: 'cs-f1-1', capacityProfileId: 'cp-f1-1', startWeek: 0, endWeek: 7, capacityPercent: 50, source: 'SQUAD_PLANNER' }],
         }],
       })
 
-      // Expected: 1 trajectory at 50%, 8 weeks → 8×5×0.5 = 20 days
-      await assertCommercialInvariance(
-        baseProject, withProfileProject, rtId,
-        EXPECTED_EFFORT_DAYS_160,  // effortDays
-        20,                         // totalDays
-        10000,                      // estimatedCost (20 × 500)
-        (row) => {
-          const nr = row.namedResources as Array<Record<string, unknown>>
-          expect(nr[0].allocatedDays).toBe(20)
-          expect(nr[0].allocationMode).toBe('CAPACITY_PLAN')
-          expect(nr[0].startWeek).toBe(0)
-          expect(nr[0].endWeek).toBe(7)
-          expect(nr[0].allocationPercent).toBe(50)
-        },
-      )
+      vi.mocked(prisma.project.findFirst).mockResolvedValue(project as never)
+      useRealAdapter()
+
+      const res = await request(app)
+        .get(`/api/projects/${projectId}/resource-profile`)
+        .set('Authorization', authHeader)
+      expect(res.status).toBe(200)
+
+      const row = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
+      expect(row).toBeDefined()
+
+      // Effort 160h / 8hpd = 20 days; allocatedDays from the 50% segment:
+      // 8 weeks × 5 × 0.5 = 20
+      expect(row.effortDays).toBe(EXPECTED_EFFORT_DAYS_160)
+      expect(row.totalDays).toBe(20)
+      expect(row.estimatedCost).toBe(10000)
+
+      const nr = row.namedResources.find((n: { id: string }) => n.id === 'nr-f1')
+      expect(nr).toBeDefined()
+      expect(nr.allocatedDays).toBe(20)
+      expect(nr.allocationMode).toBe('CAPACITY_PLAN')
+      expect(nr.startWeek).toBe(0)
+      expect(nr.endWeek).toBe(7)
+      expect(nr.allocationPercent).toBe(50)
     })
 
     // ─── Fixture 2: Changing capacity 100% → 50% ──────────────────────────
@@ -3043,7 +3129,8 @@ describe('profile-first read adoption integration', () => {
       const rtId = 'rt-f2'
       const projectId = 'proj-f2'
 
-      const baseProject = buildTrajectoryProject({
+      // Profile-first: the two plan periods become two capacity segments.
+      const project = buildTrajectoryProject({
         projectId,
         rtId,
         rtName: 'F2 RT',
@@ -3053,19 +3140,41 @@ describe('profile-first read adoption integration', () => {
         ],
         timelineStartWeek: 0,
         timelineDurationWeeks: WEEKS_8,
+        namedResources: [{
+          id: 'nr-f2', name: 'F2 Person', startWeek: null, endWeek: null,
+          allocationPct: 100, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+        capacityProfiles: [{
+          id: 'cp-f2-1',
+          projectId,
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: 'nr-f2',
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER',
+          defaultPercent: null,
+          startWeek: null,
+          endWeek: null,
+          segments: [
+            { id: 'cs-f2-1', capacityProfileId: 'cp-f2-1', startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+            { id: 'cs-f2-2', capacityProfileId: 'cp-f2-1', startWeek: 4, endWeek: 7, capacityPercent: 50, source: 'SQUAD_PLANNER' },
+          ],
+        }],
       })
 
-      vi.mocked(prisma.project.findFirst).mockResolvedValue(baseProject as never)
+      vi.mocked(prisma.project.findFirst).mockResolvedValue(project as never)
       useRealAdapter()
 
       const res = await request(app)
-        .get(`/api/projects/${baseProject.id}/resource-profile`)
+        .get(`/api/projects/${projectId}/resource-profile`)
         .set('Authorization', authHeader)
       expect(res.status).toBe(200)
       const row = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
       expect(row).toBeDefined()
 
-      // 1 trajectory, 2 segments: W0-W3 at 100%, W4-W7 at 50%
+      // 2 segments: W0-W3 at 100%, W4-W7 at 50%
       // Segment-aware total: 4×5×1.0 + 4×5×0.5 = 20 + 10 = 30
       const r = row as Record<string, unknown>
       expect(r.totalDays).toBe(30)
@@ -3081,7 +3190,9 @@ describe('profile-first read adoption integration', () => {
       const rtId = 'rt-f3'
       const projectId = 'proj-f3'
 
-      const baseProject = buildTrajectoryProject({
+      // Profile-first: the discontinuous plan periods become two segments
+      // with an explicit gap (weeks 4-7 have no capacity).
+      const project = buildTrajectoryProject({
         projectId,
         rtId,
         rtName: 'F3 RT',
@@ -3092,20 +3203,42 @@ describe('profile-first read adoption integration', () => {
         ],
         timelineStartWeek: 0,
         timelineDurationWeeks: WEEKS_12,
+        namedResources: [{
+          id: 'nr-f3', name: 'F3 Person', startWeek: null, endWeek: null,
+          allocationPct: 100, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+        capacityProfiles: [{
+          id: 'cp-f3-1',
+          projectId,
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: 'nr-f3',
+          planningBasis: 'CAPACITY_PROFILE',
+          source: 'SQUAD_PLANNER',
+          defaultPercent: null,
+          startWeek: null,
+          endWeek: null,
+          segments: [
+            { id: 'cs-f3-1', capacityProfileId: 'cp-f3-1', startWeek: 0, endWeek: 3, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+            { id: 'cs-f3-2', capacityProfileId: 'cp-f3-1', startWeek: 8, endWeek: 11, capacityPercent: 100, source: 'SQUAD_PLANNER' },
+          ],
+        }],
       })
 
-      vi.mocked(prisma.project.findFirst).mockResolvedValue(baseProject as never)
+      vi.mocked(prisma.project.findFirst).mockResolvedValue(project as never)
       useRealAdapter()
 
       const res = await request(app)
-        .get(`/api/projects/${baseProject.id}/resource-profile`)
+        .get(`/api/projects/${projectId}/resource-profile`)
         .set('Authorization', authHeader)
       expect(res.status).toBe(200)
 
       const row = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
       expect(row).toBeDefined()
 
-      // 1 trajectory, 2 segments: W0-W3 at 100%, W8-W11 at 100% (gap W4-W7)
+      // 2 segments: W0-W3 at 100%, W8-W11 at 100% (gap W4-W7)
       // Segment-aware total: 4×5×1.0 + 4×5×1.0 = 20+20 = 40 (gap not counted)
       const r = row as Record<string, unknown>
       expect(r.totalDays).toBe(40)
@@ -3147,47 +3280,94 @@ describe('profile-first read adoption integration', () => {
     })
 
     // ─── Fixture 4: 1.5 FTE for 8 weeks (2 trajectories) ──────────────────
-    it('fixture 4: 1.5 FTE for 8 weeks produces 2 trajectories', async () => {
+    it('fixture 4: 1.5 FTE for 8 weeks produces 2 named resources', async () => {
       const rtId = 'rt-f4'
       const projectId = 'proj-f4'
 
-      const baseProject = buildTrajectoryProject({
+      // Profile-first: the 1.5 FTE plan becomes two named resources at
+      // 100% and 50% with persisted CAPACITY_PROFILE segments.
+      const project = buildTrajectoryProject({
         projectId,
         rtId,
         rtName: 'F4 RT',
         capacityPlanPeriods: [{ startWeek: 0, endWeek: 8, headcount: 1.5 }],
         timelineStartWeek: 0,
         timelineDurationWeeks: WEEKS_8,
+        namedResources: [
+          {
+            id: 'nr-f4-1', name: 'F4 Person 1', startWeek: null, endWeek: null,
+            allocationPct: 100, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+            allocationStartWeek: null, allocationEndWeek: null,
+            pricingModel: 'ACTUAL_DAYS',
+          },
+          {
+            id: 'nr-f4-2', name: 'F4 Person 2', startWeek: null, endWeek: null,
+            allocationPct: 50, allocationMode: 'CAPACITY_PLAN', allocationPercent: 50,
+            allocationStartWeek: null, allocationEndWeek: null,
+            pricingModel: 'ACTUAL_DAYS',
+          },
+        ],
+        capacityProfiles: [
+          {
+            id: 'cp-f4-1',
+            projectId,
+            ownerKind: 'NAMED_PERSON',
+            resourceTypeId: null,
+            namedResourceId: 'nr-f4-1',
+            planningBasis: 'CAPACITY_PROFILE',
+            source: 'SQUAD_PLANNER',
+            defaultPercent: null,
+            startWeek: null,
+            endWeek: null,
+            segments: [{ id: 'cs-f4-1', capacityProfileId: 'cp-f4-1', startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+          },
+          {
+            id: 'cp-f4-2',
+            projectId,
+            ownerKind: 'NAMED_PERSON',
+            resourceTypeId: null,
+            namedResourceId: 'nr-f4-2',
+            planningBasis: 'CAPACITY_PROFILE',
+            source: 'SQUAD_PLANNER',
+            defaultPercent: null,
+            startWeek: null,
+            endWeek: null,
+            segments: [{ id: 'cs-f4-2', capacityProfileId: 'cp-f4-2', startWeek: 0, endWeek: 7, capacityPercent: 50, source: 'SQUAD_PLANNER' }],
+          },
+        ],
       })
 
-      vi.mocked(prisma.project.findFirst).mockResolvedValue(baseProject as never)
+      vi.mocked(prisma.project.findFirst).mockResolvedValue(project as never)
       useRealAdapter()
 
       const res = await request(app)
-        .get(`/api/projects/${baseProject.id}/resource-profile`)
+        .get(`/api/projects/${projectId}/resource-profile`)
         .set('Authorization', authHeader)
+      expect(res.status).toBe(200)
       const row = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === rtId)
       expect(row).toBeDefined()
 
-      // 1.5 FTE → 6 quanta → 2 trajectories: 100% + 50%, each W0-W7
-      // NR1: 8×5×1.0 = 40, NR2: 8×5×0.5 = 20
-      // totalDays = 40 + 20 = 60
+      // NR1: 8×5×1.0 = 40, NR2: 8×5×0.5 = 20 → totalDays = 60
       const r = row as Record<string, unknown>
       expect(r.totalDays).toBe(60)
       const nr = r.namedResources as Array<Record<string, unknown>>
       expect(nr).toHaveLength(2)
-      expect(nr[0].allocatedDays).toBe(40)
-      expect(nr[0].allocationPercent).toBe(100)
-      expect(nr[1].allocatedDays).toBe(20)
-      expect(nr[1].allocationPercent).toBe(50)
+      const nr1 = nr.find((n: Record<string, unknown>) => n.id === 'nr-f4-1')
+      const nr2 = nr.find((n: Record<string, unknown>) => n.id === 'nr-f4-2')
+      expect(nr1).toBeDefined()
+      expect(nr2).toBeDefined()
+      expect(nr1!.allocatedDays).toBe(40)
+      expect(nr1!.allocationPercent).toBe(100)
+      expect(nr2!.allocatedDays).toBe(20)
+      expect(nr2!.allocationPercent).toBe(50)
 
       // Billing basis unchanged
-      expect(nr[0].pricingModel).toBe('ACTUAL_DAYS')
-      expect(nr[1].pricingModel).toBe('ACTUAL_DAYS')
+      expect(nr1!.pricingModel).toBe('ACTUAL_DAYS')
+      expect(nr2!.pricingModel).toBe('ACTUAL_DAYS')
 
       // Assignment segments exist
-      expect(nr[0].actualAllocationSegments).toBeDefined()
-      expect(nr[1].actualAllocationSegments).toBeDefined()
+      expect(nr1!.actualAllocationSegments).toBeDefined()
+      expect(nr2!.actualAllocationSegments).toBeDefined()
     })
   })
 })

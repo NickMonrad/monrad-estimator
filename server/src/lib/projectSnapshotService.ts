@@ -13,10 +13,12 @@ import {
   isLegacyV1Snapshot,
   isSnapshotV2,
   isSnapshotV3,
+  isSnapshotV4,
   SnapshotSchemaError,
   type SnapshotData,
   type SnapshotV2,
   type SnapshotV3,
+  type SnapshotV4,
 } from './projectSnapshotTypes.js'
 import {
   validateSnapshotV3,
@@ -100,11 +102,18 @@ function parseWeeklyDemandCache(value: Prisma.JsonValue | null | undefined): Rec
 
 // ─── buildSnapshot (public) ───────────────────────────────────────────────────
 
-/** Build the full project snapshot (schemaVersion 3) with ordered capacity profiles. */
+/**
+ * Build the full project snapshot (schemaVersion 4) with ordered capacity
+ * profiles.
+ *
+ * v4 omits the candidate ResourceType/NamedResource legacy capacity columns:
+ * all capacity state is captured by capacityProfiles/capacitySegments
+ * (issue #418). v1/v2/v3 snapshots remain readable historical input.
+ */
 export async function buildSnapshot(
   projectId: string,
   db: SnapshotDbClient = prisma,
-): Promise<SnapshotV3> {
+): Promise<SnapshotV4> {
   const [
     epics,
     project,
@@ -128,17 +137,12 @@ export async function buildSnapshot(
       select: {
         id: true, name: true, category: true, count: true, hoursPerDay: true,
         dayRate: true, globalTypeId: true,
-        allocationMode: true, allocationPercent: true,
-        allocationStartWeek: true, allocationEndWeek: true,
       },
     }),
     db.namedResource.findMany({
       where: { resourceType: { projectId } },
       select: {
         id: true, resourceTypeId: true, name: true,
-        startWeek: true, endWeek: true, allocationPct: true,
-        allocationMode: true, allocationPercent: true,
-        allocationStartWeek: true, allocationEndWeek: true,
         pricingModel: true,
       },
     }),
@@ -212,8 +216,8 @@ export async function buildSnapshot(
       }
     : null
 
-  const snapshot: SnapshotV3 = {
-    schemaVersion: 3 as const,
+  const snapshot: SnapshotV4 = {
+    schemaVersion: 4 as const,
     epics,
     project: projectFields,
     resourceTypes,
@@ -237,14 +241,19 @@ export async function buildSnapshot(
 // ─── restoreSnapshotCommonState ───────────────────────────────────────────────
 
 /**
- * Restore the common snapshot state shared across v2 and v3 rollbacks.
+ * Restore the common snapshot state shared across v2/v3/v4 rollbacks.
  * Handles ResourceTypes, NamedResources, epics, project fields, timeline
  * entries, story timeline entries, dependencies, and overhead items.
+ *
+ * Capacity state is restored exclusively through capacity profiles:
+ * the candidate ResourceType/NamedResource legacy capacity columns are
+ * historical input (v2/v3) or absent (v4) and are never written during
+ * restoration (issue #418).
  */
 export async function restoreSnapshotCommonState(
   tx: SnapshotDbClient,
   projectId: string,
-  data: Omit<SnapshotV2, 'schemaVersion'>,
+  data: Omit<SnapshotV2, 'schemaVersion'> | Omit<SnapshotV4, 'schemaVersion'>,
 ): Promise<void> {
   // 1. Restore ResourceTypes FIRST so task FKs resolve correctly when recreating epics
   const rtNameMap = new Map<string, string>()
@@ -258,10 +267,6 @@ export async function restoreSnapshotCommonState(
         hoursPerDay: rt.hoursPerDay,
         dayRate: rt.dayRate,
         globalTypeId: rt.globalTypeId,
-        allocationMode: rt.allocationMode,
-        allocationPercent: rt.allocationPercent,
-        allocationStartWeek: rt.allocationStartWeek,
-        allocationEndWeek: rt.allocationEndWeek,
       },
       create: {
         id: rt.id,
@@ -271,10 +276,6 @@ export async function restoreSnapshotCommonState(
         hoursPerDay: rt.hoursPerDay,
         dayRate: rt.dayRate,
         globalTypeId: rt.globalTypeId,
-        allocationMode: rt.allocationMode,
-        allocationPercent: rt.allocationPercent,
-        allocationStartWeek: rt.allocationStartWeek,
-        allocationEndWeek: rt.allocationEndWeek,
         projectId,
       },
     })
@@ -303,26 +304,12 @@ export async function restoreSnapshotCommonState(
       update: {
         name: nr.name,
         resourceTypeId: nr.resourceTypeId,
-        startWeek: nr.startWeek,
-        endWeek: nr.endWeek,
-        allocationPct: nr.allocationPct,
-        allocationMode: nr.allocationMode,
-        allocationPercent: nr.allocationPercent,
-        allocationStartWeek: nr.allocationStartWeek,
-        allocationEndWeek: nr.allocationEndWeek,
         pricingModel: nr.pricingModel,
       },
       create: {
         id: nr.id,
         resourceTypeId: nr.resourceTypeId,
         name: nr.name,
-        startWeek: nr.startWeek,
-        endWeek: nr.endWeek,
-        allocationPct: nr.allocationPct,
-        allocationMode: nr.allocationMode,
-        allocationPercent: nr.allocationPercent,
-        allocationStartWeek: nr.allocationStartWeek,
-        allocationEndWeek: nr.allocationEndWeek,
         pricingModel: nr.pricingModel,
       },
     })
@@ -582,8 +569,8 @@ export async function rollbackProjectSnapshot({
     throw e
   }
 
-  // 3. V3: validation + pre-flight checks before any writes
-  if (isSnapshotV3(parsedData)) {
+  // 3. V3/V4: validation + pre-flight checks before any writes
+  if (isSnapshotV3(parsedData) || isSnapshotV4(parsedData)) {
     validateSnapshotV3(parsedData)
 
     // Cross-project owner ID collision check
@@ -705,6 +692,13 @@ export async function rollbackProjectSnapshot({
       await recreateV2CapacityProfiles(tx, projectId, parsedData)
     } else if (isSnapshotV3(parsedData)) {
       // --- V3: full-state restore + exact profile/segment and plan replacement ---
+      await restoreSnapshotCommonState(tx, projectId, parsedData)
+      await recreateV3CapacityProfiles(tx, projectId, parsedData)
+      await restoreSnapshotCapacityPlans(tx, projectId, parsedData.capacityPlans)
+    } else if (isSnapshotV4(parsedData)) {
+      // --- V4: full-state restore + exact profile/segment and plan replacement ---
+      // Capacity state is exclusively profile-based; the candidate legacy
+      // columns are absent from v4 payloads (issue #418).
       await restoreSnapshotCommonState(tx, projectId, parsedData)
       await recreateV3CapacityProfiles(tx, projectId, parsedData)
       await restoreSnapshotCapacityPlans(tx, projectId, parsedData.capacityPlans)

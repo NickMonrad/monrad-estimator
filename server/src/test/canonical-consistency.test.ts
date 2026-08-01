@@ -99,6 +99,58 @@ function resourceTypeWithNamedResources() {
   }]
 }
 
+
+/** Profiles for the two named resources (DEMAND_FOLLOWING scalars). */
+function capacityProfileFixture() {
+  return [
+    {
+      id: 'cp-role-dev',
+      projectId: 'proj-1',
+      resourceTypeId: 'rt-dev',
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      legacy: null,
+      createdAt: new Date(),
+      segments: [],
+    },
+    {
+      id: 'cp-alice',
+      projectId: 'proj-1',
+      resourceTypeId: null,
+      namedResourceId: 'nr-alice',
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      legacy: null,
+      createdAt: new Date(),
+      segments: [],
+    },
+    {
+      id: 'cp-bob',
+      projectId: 'proj-1',
+      resourceTypeId: null,
+      namedResourceId: 'nr-bob',
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      legacy: null,
+      createdAt: new Date(),
+      segments: [],
+    },
+  ]
+}
+
 /** A timeline-entry-shaped fixture with a feature task. */
 function timelineEntryFixture() {
   return [{
@@ -147,7 +199,7 @@ describe('canonical cross-surface consistency', () => {
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValueOnce(null as never)
     // resolveSchedulerCapacity also queries resourceType and capacityProfile
     vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
-    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce([] as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce(capacityProfileFixture() as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
 
     const res = await request(app)
@@ -216,9 +268,14 @@ describe('canonical cross-surface consistency', () => {
       timelineEntries: [{ featureId: 'feat-auth', startWeek: 0, durationWeeks: 4 }],
       storyTimelineEntries: [],
       capacityPlans: [],
+      capacityProfiles: capacityProfileFixture(),
     }
 
     vi.mocked(prisma.project.findFirst).mockResolvedValueOnce(projectFixture as never)
+    // resolveSchedulerCapacity queries (profile-first, issue #418)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce(capacityProfileFixture() as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValueOnce(null as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/resource-profile')
@@ -269,7 +326,7 @@ describe('canonical cross-surface consistency', () => {
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValueOnce(null as never)
     // resolveSchedulerCapacity also queries resourceType and capacityProfile
     vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
-    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce([] as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce(capacityProfileFixture() as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
 
     const timelineRes = await request(app)
@@ -315,8 +372,13 @@ describe('canonical cross-surface consistency', () => {
       timelineEntries: [{ featureId: 'feat-auth', startWeek: 0, durationWeeks: 4 }],
       storyTimelineEntries: [],
       capacityPlans: [],
+      capacityProfiles: capacityProfileFixture(),
     }
     vi.mocked(prisma.project.findFirst).mockResolvedValueOnce(profileFixture as never)
+    // resolveSchedulerCapacity queries (profile-first, issue #418)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce(capacityProfileFixture() as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValueOnce(null as never)
 
     const profileRes = await request(app)
       .get('/api/projects/proj-1/resource-profile')
@@ -344,22 +406,10 @@ describe('canonical cross-surface consistency', () => {
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
     vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValueOnce([] as never)
     vi.mocked(prisma.task.findMany).mockResolvedValueOnce([] as never)
-    vi.mocked(prisma.namedResource.findMany).mockResolvedValueOnce([
-      {
-        id: 'nr-alice',
-        name: 'Alice',
-        resourceTypeId: 'rt-dev',
-        startWeek: null,
-        endWeek: null,
-        allocationPct: 100,
-        allocationMode: 'EFFORT',
-        allocationPercent: 100,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        pricingModel: 'ACTUAL_DAYS',
-        resourceType: { id: 'rt-dev', name: 'Developer' },
-      },
-    ] as never)
+    // resolveSchedulerCapacity queries (profile-first, issue #418)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValueOnce(capacityProfileFixture() as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValueOnce(null as never)
 
     const res = await request(app)
       .get('/api/projects/proj-1/timeline/export/csv')
