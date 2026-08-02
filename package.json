@@ -32,6 +32,7 @@
     "capacity-profiles:audit:json": "npm run capacity-profiles:audit:json --workspace=server",
     "capacity-profiles:audit:repair": "npm run capacity-profiles:audit:repair --workspace=server",
     "capacity-profiles:readiness": "npm run capacity-profiles:readiness --workspace=server",
+    "capacity-profiles:remediate-readiness": "npm run capacity-profiles:remediate-readiness --workspace=server",
     "capacity-profiles:backfill": "npm run capacity-profiles:backfill --workspace=server",
     "capacity-profiles:reconcile": "npm run capacity-profiles:reconcile --workspace=server"
   },
