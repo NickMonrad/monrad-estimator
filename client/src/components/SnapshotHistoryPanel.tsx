@@ -2,7 +2,15 @@ import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 
-interface Snapshot { id: string; label: string | null; trigger: string; createdAt: string }
+interface Snapshot {
+  id: string
+  label: string | null
+  trigger: string
+  createdAt: string
+  /** Derived at read time from the stored content (issue #428). */
+  restoreStatus: 'restorable' | 'non-restorable'
+  restoreReason: string | null
+}
 interface Diff { added: string[]; removed: string[]; snapshotAt: string }
 
 interface SnapshotHistoryPanelProps {
@@ -78,12 +86,23 @@ export default function SnapshotHistoryPanel({ projectId }: SnapshotHistoryPanel
                       <button onClick={() => setDiffId(d => d === snap.id ? null : snap.id)} className="text-blue-500 hover:text-blue-700">
                         {diffId === snap.id ? 'Hide diff' : 'Diff'}
                       </button>
-                      <button
-                        onClick={() => { if (confirm('Roll back to this snapshot? Current state will be auto-saved first.')) rollback.mutate(snap.id) }}
-                        disabled={rollback.isPending}
-                        className="text-red-500 hover:text-red-700 disabled:opacity-50">
-                        Rollback
-                      </button>
+                      {snap.restoreStatus === 'non-restorable' ? (
+                        <div className="max-w-64">
+                          <span className="text-red-500 font-medium">Non-restorable</span>
+                          {snap.restoreReason && (
+                            <p className="text-gray-500 dark:text-gray-400 truncate" title={snap.restoreReason}>
+                              {snap.restoreReason}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { if (confirm('Roll back to this snapshot? Current state will be auto-saved first.')) rollback.mutate(snap.id) }}
+                          disabled={rollback.isPending}
+                          className="text-red-500 hover:text-red-700 disabled:opacity-50">
+                          Rollback
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

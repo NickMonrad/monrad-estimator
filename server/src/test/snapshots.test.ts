@@ -38,6 +38,7 @@ import {
   sortSnapshotSegments,
 } from '../lib/projectSnapshotValidation.js'
 import { buildSnapshot, rollbackProjectSnapshot, SnapshotNotFoundError, RollbackPreflightError } from '../lib/projectSnapshotService.js'
+import { QUARANTINE_CLASS_A_REASON, QUARANTINE_CLASS_B_REASON } from '../lib/snapshotRestorability.js'
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -1839,6 +1840,123 @@ describe('rollbackProjectSnapshot', () => {
       projectId: projId, snapshotId: 'snap-invalid-v3', userId,
     })).rejects.toThrow(SnapshotValidationError)
     // Validation before transaction — no destructive operations attempted
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #428 — derived quarantine: listing fields and pre-write rollback refusal
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('GET /api/projects/:projectId/snapshots — derived restorability fields', () => {
+  function windowlessV2(label: string) {
+    return {
+      schemaVersion: 2, epics: [], project: null,
+      resourceTypes: [{
+        id: 'rt-q', name: 'Quarantine Role', category: 'ENGINEERING', count: 1,
+        hoursPerDay: null, dayRate: null, globalTypeId: null,
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      }],
+      namedResources: [],
+      timelineEntries: [], storyTimelineEntries: [],
+      epicDependencies: [], featureDependencies: [], overheadItems: [],
+      label,
+    }
+  }
+
+  it('classifies stored content: quarantined and restorable rows with stable reasons', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
+    vi.mocked(prisma.backlogSnapshot.findMany).mockResolvedValue([
+      {
+        id: 'snap-q', projectId: projId, label: 'quarantined', trigger: 'manual',
+        createdAt: new Date('2026-01-01'), createdById: userId,
+        snapshot: windowlessV2('quarantined'),
+      },
+      {
+        id: 'snap-v1', projectId: projId, label: 'restorable', trigger: 'manual',
+        createdAt: new Date('2026-01-02'), createdById: userId,
+        snapshot: [{ id: 'e1', name: 'Epic', features: [] }],
+      },
+    ] as never)
+
+    const res = await request(app)
+      .get(`/api/projects/${projId}/snapshots`)
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveLength(2)
+    const quarantined = res.body.find((s: { id: string }) => s.id === 'snap-q')
+    const restorable = res.body.find((s: { id: string }) => s.id === 'snap-v1')
+    expect(quarantined.restoreStatus).toBe('non-restorable')
+    expect(quarantined.restoreReason).toBe(QUARANTINE_CLASS_A_REASON)
+    expect(restorable.restoreStatus).toBe('restorable')
+    expect(restorable.restoreReason).toBeNull()
+    // Existing list fields are preserved.
+    expect(quarantined.label).toBe('quarantined')
+    expect(quarantined.trigger).toBe('manual')
+  })
+})
+
+describe('POST rollback — quarantined snapshot refused before any write', () => {
+  it('returns 400 with the stable reason, no transaction, no pre_rollback row', async () => {
+    const windowlessV2 = {
+      schemaVersion: 2, epics: [], project: null,
+      resourceTypes: [{
+        id: 'rt-q', name: 'Quarantine Role', category: 'ENGINEERING', count: 1,
+        hoursPerDay: null, dayRate: null, globalTypeId: null,
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      }],
+      namedResources: [],
+      timelineEntries: [], storyTimelineEntries: [],
+      epicDependencies: [], featureDependencies: [], overheadItems: [],
+    }
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-q', projectId: projId, label: 'quarantined',
+      trigger: 'manual', snapshot: windowlessV2,
+      createdById: userId, createdAt: new Date(),
+    } as never)
+
+    const res = await request(app)
+      .post(`/api/projects/${projId}/snapshots/snap-q/rollback`)
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(QUARANTINE_CLASS_A_REASON)
+    // Refusal happens before the transaction: no project-state write, no
+    // pre_rollback snapshot creation.
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
+    expect(vi.mocked(prisma.backlogSnapshot.create)).not.toHaveBeenCalled()
+  })
+
+  it('rejects a Class B snapshot with its stable reason before any write', async () => {
+    const singleMinusOneV2 = {
+      schemaVersion: 2, epics: [], project: null,
+      resourceTypes: [{
+        id: 'rt-q', name: 'Quarantine Role', category: 'ENGINEERING', count: 1,
+        hoursPerDay: null, dayRate: null, globalTypeId: null,
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: -1, allocationEndWeek: 5,
+      }],
+      namedResources: [],
+      timelineEntries: [], storyTimelineEntries: [],
+      epicDependencies: [], featureDependencies: [], overheadItems: [],
+    }
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
+    vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
+      id: 'snap-q-b', projectId: projId, label: 'quarantined b',
+      trigger: 'manual', snapshot: singleMinusOneV2,
+      createdById: userId, createdAt: new Date(),
+    } as never)
+
+    const res = await request(app)
+      .post(`/api/projects/${projId}/snapshots/snap-q-b/rollback`)
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(QUARANTINE_CLASS_B_REASON)
     expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
   })
 })

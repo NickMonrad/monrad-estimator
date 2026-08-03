@@ -2723,7 +2723,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     expect(nrAfter.endWeek).toBe(nrBefore.endWeek)
   })
 
-  it('rejects untranslatable CAPACITY_PLAN (no captured window) before any change', async () => {
+  it('rejects quarantined CAPACITY_PLAN (no captured window) before any change', async () => {
     const projectId2 = await createProject()
     const rtId2 = await createResourceType(projectId2, 'rt-g-bad', 'Bad Plan', {
       allocationMode: 'CAPACITY_PLAN',
@@ -2771,6 +2771,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
         allocationEndWeek: null,
       })),
     } as unknown as SnapshotV2
+    const rawSnapshot = JSON.stringify(v2Data)
     const badSnap = (
       await prisma.backlogSnapshot.create({
         data: {
@@ -2785,11 +2786,90 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     const profileCountBefore = await prisma.capacityProfile.count({ where: { projectId: projectId2 } })
     const snapshotCountBefore = await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })
 
-    await expect(
-      rollbackProjectSnapshot({ projectId: projectId2, snapshotId: badSnap, userId, db: prisma }),
-    ).rejects.toThrow(SnapshotValidationError)
+    // Issue #428: this reviewed windowless CAPACITY_PLAN shape is derived
+    // quarantine — rollback is refused pre-write with the stable reason.
+    let caught: unknown
+    try {
+      await rollbackProjectSnapshot({ projectId: projectId2, snapshotId: badSnap, userId, db: prisma })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(SnapshotValidationError)
+    const message = caught instanceof Error ? caught.message : String(caught)
+    expect(message).toContain('quarantined')
+    expect(message).toContain('Class A')
 
-    // No state changed: profiles untouched, no pre_rollback snapshot.
+    // No state changed: profiles untouched, no pre_rollback snapshot, and the
+    // raw target snapshot remains byte-for-byte unchanged.
+    expect(await prisma.capacityProfile.count({ where: { projectId: projectId2 } })).toBe(profileCountBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })).toBe(snapshotCountBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2, trigger: 'pre_rollback' } })).toBe(0)
+    const stored = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: badSnap } })
+    expect(JSON.stringify(stored.snapshot)).toBe(rawSnapshot)
+  })
+
+  it('rejects quarantined CAPACITY_PLAN with a single -1 edge before any write', async () => {
+    const projectId2 = await createProject()
+    const rtId2 = await createResourceType(projectId2, 'rt-g-min1', 'Minus One Plan', {
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: -1,
+      allocationEndWeek: 5,
+    })
+    await createEpicBacklog(projectId2, rtId2, null)
+    await createProfile(
+      projectId2, 'prof-g-min1-role', 'ROLE', rtId2, null,
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
+      Prisma.DbNull,
+    )
+
+    const v4Data = await buildSnapshot(projectId2, prisma)
+    const v2Data = {
+      ...v4Data,
+      schemaVersion: 2,
+      resourceTypes: (v4Data.resourceTypes as Array<Record<string, unknown>>).map(rt => ({
+        ...rt,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100,
+        allocationStartWeek: -1,
+        allocationEndWeek: 5,
+      })),
+      namedResources: (v4Data.namedResources as Array<Record<string, unknown>>).map(nr => ({
+        ...nr,
+        startWeek: 1,
+        endWeek: 8,
+        allocationPct: 100,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      })),
+    } as unknown as SnapshotV2
+    const badSnap = (
+      await prisma.backlogSnapshot.create({
+        data: {
+          projectId: projectId2,
+          label: 'single -1 edge v2',
+          trigger: 'manual',
+          snapshot: v2Data as unknown as object,
+          createdById: userId,
+        },
+      })
+    ).id
+    const profileCountBefore = await prisma.capacityProfile.count({ where: { projectId: projectId2 } })
+    const snapshotCountBefore = await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })
+
+    let caught: unknown
+    try {
+      await rollbackProjectSnapshot({ projectId: projectId2, snapshotId: badSnap, userId, db: prisma })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(SnapshotValidationError)
+    const message = caught instanceof Error ? caught.message : String(caught)
+    expect(message).toContain('quarantined')
+    expect(message).toContain('Class B')
+
     expect(await prisma.capacityProfile.count({ where: { projectId: projectId2 } })).toBe(profileCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })).toBe(snapshotCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2, trigger: 'pre_rollback' } })).toBe(0)

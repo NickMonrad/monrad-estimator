@@ -11,7 +11,7 @@
  */
 
 import { Prisma } from '@prisma/client'
-import type { SnapshotV2, SnapshotV3, SnapshotV4 } from './projectSnapshotTypes.js'
+import type { SnapshotV2, SnapshotV3, SnapshotV4, SnapshotResourceType, SnapshotNamedResource } from './projectSnapshotTypes.js'
 import { snapshotJsonValueToPrisma } from './projectSnapshotTypes.js'
 import { validatePersistedCapacityProfiles } from './persistedCapacityProfileValidation.js'
 
@@ -239,6 +239,200 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0
 }
 
+export { isNonNegativeInteger }
+
+/** True when the mode is one of the known v2 allocation modes. */
+export function isKnownV2Mode(mode: string | null | undefined): boolean {
+  return mode != null && KNOWN_V2_MODES.has(mode)
+}
+
+/** True when a captured percent is absent or finite (the v2 translation rule). */
+export function v2PercentIsValid(value: number | null | undefined): boolean {
+  return value == null || Number.isFinite(value)
+}
+
+/**
+ * Effective allocation mode of a v2 NamedResource entry — the exact rule the
+ * authoritative translator and the restorability classifier share: an
+ * explicit NamedResource mode overrides the parent ResourceType mode; a
+ * missing/absent parent ResourceType resolves to null (the caller decides
+ * orphan-ness separately).
+ */
+export function v2EffectiveNamedMode(
+  nr: Pick<SnapshotNamedResource, 'allocationMode'>,
+  parentRt: Pick<SnapshotResourceType, 'allocationMode'> | undefined,
+): string | null {
+  return nr.allocationMode ?? parentRt?.allocationMode ?? null
+}
+
+/**
+ * Per-entry v2 ResourceType validation — the exact checks the authoritative
+ * translator applies to one resource type. Shared with the restorability
+ * classifier so translation rules exist in exactly one place.
+ */
+export function v2ResourceTypeEntryErrors(
+  rt: SnapshotResourceType,
+  prefix: string,
+): string[] {
+  const errors: string[] = []
+  if (rt.allocationMode != null && !KNOWN_V2_MODES.has(rt.allocationMode)) {
+    errors.push(`${prefix}: unknown allocationMode "${String(rt.allocationMode)}"`)
+    return errors
+  }
+  if (rt.allocationPercent != null && !Number.isFinite(rt.allocationPercent)) {
+    errors.push(`${prefix}: allocationPercent must be finite`)
+  }
+  const rtModeUsesWindows = rt.allocationMode === 'TIMELINE' || rt.allocationMode === 'CAPACITY_PLAN'
+  // Issue #421 never-active policy: a captured (-1, -1) pair or an inverted
+  // window (start > end) never contributed capacity; it translates to a
+  // zero-capacity profile with a null window instead of failing.
+  const rtNeverActive =
+    rtModeUsesWindows &&
+    isNeverActiveWindow(rt.allocationStartWeek, rt.allocationEndWeek)
+  if (!rtNeverActive) {
+    for (const [key, value] of [
+      ['allocationStartWeek', rt.allocationStartWeek],
+      ['allocationEndWeek', rt.allocationEndWeek],
+    ] as const) {
+      if (value != null && !isNonNegativeInteger(value)) {
+        errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
+      }
+    }
+    // Window aliases are only meaningful for the modes that used them;
+    // EFFORT/FULL_PROJECT stale aliases are discarded, never validated.
+    if (
+      rtModeUsesWindows &&
+      rt.allocationStartWeek != null &&
+      rt.allocationEndWeek != null &&
+      rt.allocationStartWeek > rt.allocationEndWeek
+    ) {
+      errors.push(`${prefix}: allocationStartWeek must not exceed allocationEndWeek`)
+    }
+  }
+  if (rt.allocationMode === 'CAPACITY_PLAN' && (rt.allocationStartWeek == null || rt.allocationEndWeek == null)) {
+    errors.push(
+      `${prefix}: CAPACITY_PLAN without a captured start/end window cannot be ` +
+      'translated without guessing capacity',
+    )
+  }
+  return errors
+}
+
+/**
+ * Per-entry v2 NamedResource validation — the exact checks the authoritative
+ * translator applies to one named resource (orphan rejection, effective-mode
+ * rules, alias validation). Shared with the restorability classifier.
+ */
+export function v2NamedResourceEntryErrors(
+  nr: SnapshotNamedResource,
+  parentRt: SnapshotResourceType | undefined,
+  prefix: string,
+): string[] {
+  const errors: string[] = []
+  // ── Orphan-owner rejection: every NamedResource must reference a
+  // ResourceType included in the same snapshot (issue #418 PR 1 review).
+  if (!nr.resourceTypeId) {
+    errors.push(
+      `${prefix}: named resource "${nr.id}" has no resourceTypeId and cannot be ` +
+      'translated into authoritative ownership',
+    )
+    return errors
+  }
+  if (!parentRt) {
+    errors.push(
+      `${prefix}: named resource "${nr.id}" references resource type "${nr.resourceTypeId}" ` +
+      'which is absent from this snapshot — orphan ownership cannot be translated',
+    )
+    return errors
+  }
+  const mode = v2EffectiveNamedMode(nr, parentRt)
+  if (mode != null && !KNOWN_V2_MODES.has(mode)) {
+    errors.push(`${prefix}: unknown allocationMode "${String(mode)}"`)
+    return errors
+  }
+  if (nr.allocationPercent != null && !Number.isFinite(nr.allocationPercent)) {
+    errors.push(`${prefix}: allocationPercent must be finite`)
+  }
+  if (nr.allocationPct != null && !Number.isFinite(nr.allocationPct)) {
+    errors.push(`${prefix}: allocationPct must be finite`)
+  }
+  const effectiveStart = nr.allocationStartWeek ?? nr.startWeek
+  const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek
+  const nrModeUsesWindows = mode === 'TIMELINE' || mode === 'CAPACITY_PLAN'
+  // Issue #421 never-active policy (same as the resource-type branch): a
+  // captured (-1, -1) pair or inverted window never contributed capacity;
+  // its window aliases are normalised instead of rejected.
+  const nrNeverActive =
+    nrModeUsesWindows && isNeverActiveWindow(effectiveStart, effectiveEnd)
+  if (!nrNeverActive) {
+    for (const [key, value] of [
+      ['allocationStartWeek', nr.allocationStartWeek],
+      ['allocationEndWeek', nr.allocationEndWeek],
+      ['startWeek', nr.startWeek],
+      ['endWeek', nr.endWeek],
+    ] as const) {
+      if (value != null && !isNonNegativeInteger(value)) {
+        errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
+      }
+    }
+    if (nrModeUsesWindows && effectiveStart != null && effectiveEnd != null && effectiveStart > effectiveEnd) {
+      errors.push(`${prefix}: allocation window start must not exceed end`)
+    }
+  }
+  if (mode === 'CAPACITY_PLAN' && (effectiveStart == null || effectiveEnd == null)) {
+    errors.push(
+      `${prefix}: CAPACITY_PLAN without a captured start/end window cannot be ` +
+      'translated without guessing capacity',
+    )
+  }
+  return errors
+}
+
+/**
+ * Map translated v2 profiles to the shared structural-validator input shape.
+ * Used by the authoritative translator and the restorability classifier so
+ * snapshot-level shape errors are computed identically.
+ */
+export function v2ProfilesToStructureInput(
+  profiles: TranslatedV2Profile[],
+): Parameters<typeof validatePersistedCapacityProfiles>[0] {
+  return profiles.map(p => ({
+    id: p.id,
+    projectId: p.projectId,
+    resourceTypeId: p.resourceTypeId,
+    namedResourceId: p.namedResourceId,
+    ownerKind: p.ownerKind,
+    planningBasis: p.planningBasis,
+    source: p.source,
+    defaultPercent: p.defaultPercent,
+    startWeek: p.startWeek,
+    endWeek: p.endWeek,
+    segments: [],
+  }))
+}
+
+/**
+ * Structural validation of a complete translated v2 profile set (duplicate
+ * owners, enum values, windows, segments, segmentless-CAPACITY_PROFILE rule)
+ * — the exact call the authoritative translator performs, shared with the
+ * restorability classifier so snapshot-level shape errors are attributed the
+ * same way.
+ */
+export function validateV2TranslatedProfiles(
+  profiles: TranslatedV2Profile[],
+  projectId: string,
+  snapshot: SnapshotV2,
+): string[] {
+  return validatePersistedCapacityProfiles(
+    v2ProfilesToStructureInput(profiles),
+    {
+      projectId,
+      resourceTypeIds: new Set(snapshot.resourceTypes.map(rt => rt.id)),
+      namedResourceIds: new Set(snapshot.namedResources.map(nr => nr.id)),
+    },
+  ).errors
+}
+
 /**
  * Issue #421 never-active window policy.
  *
@@ -348,9 +542,7 @@ export function translateV2SnapshotProfiles(
       errors.push(`${prefix}: unknown allocationMode "${String(rt.allocationMode)}"`)
       continue
     }
-    if (rt.allocationPercent != null && !Number.isFinite(rt.allocationPercent)) {
-      errors.push(`${prefix}: allocationPercent must be finite`)
-    }
+    errors.push(...v2ResourceTypeEntryErrors(rt, prefix))
     const rtModeUsesWindows = rt.allocationMode === 'TIMELINE' || rt.allocationMode === 'CAPACITY_PLAN'
     // Issue #421 never-active policy: a captured (-1, -1) pair or an inverted
     // window (start > end) never contributed capacity; it translates to a
@@ -358,32 +550,6 @@ export function translateV2SnapshotProfiles(
     const rtNeverActive =
       rtModeUsesWindows &&
       isNeverActiveWindow(rt.allocationStartWeek, rt.allocationEndWeek)
-    if (!rtNeverActive) {
-      for (const [key, value] of [
-        ['allocationStartWeek', rt.allocationStartWeek],
-        ['allocationEndWeek', rt.allocationEndWeek],
-      ] as const) {
-        if (value != null && !isNonNegativeInteger(value)) {
-          errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
-        }
-      }
-      // Window aliases are only meaningful for the modes that used them;
-      // EFFORT/FULL_PROJECT stale aliases are discarded, never validated.
-      if (
-        rtModeUsesWindows &&
-        rt.allocationStartWeek != null &&
-        rt.allocationEndWeek != null &&
-        rt.allocationStartWeek > rt.allocationEndWeek
-      ) {
-        errors.push(`${prefix}: allocationStartWeek must not exceed allocationEndWeek`)
-      }
-    }
-    if (rt.allocationMode === 'CAPACITY_PLAN' && (rt.allocationStartWeek == null || rt.allocationEndWeek == null)) {
-      errors.push(
-        `${prefix}: CAPACITY_PLAN without a captured start/end window cannot be ` +
-        'translated without guessing capacity',
-      )
-    }
     const { basis, source } = modeBasisSource(rt.allocationMode)
     // EFFORT / FULL_PROJECT never used window aliases — deterministic
     // translation discards them so the resulting DEMAND_FOLLOWING /
@@ -431,17 +597,12 @@ export function translateV2SnapshotProfiles(
       continue
     }
     const parentRt = rtById.get(nr.resourceTypeId)
-    const mode = nr.allocationMode ?? parentRt?.allocationMode ?? null
+    const mode = v2EffectiveNamedMode(nr, parentRt)
     if (mode != null && !KNOWN_V2_MODES.has(mode)) {
       errors.push(`${prefix}: unknown allocationMode "${String(mode)}"`)
       continue
     }
-    if (nr.allocationPercent != null && !Number.isFinite(nr.allocationPercent)) {
-      errors.push(`${prefix}: allocationPercent must be finite`)
-    }
-    if (nr.allocationPct != null && !Number.isFinite(nr.allocationPct)) {
-      errors.push(`${prefix}: allocationPct must be finite`)
-    }
+    errors.push(...v2NamedResourceEntryErrors(nr, parentRt, prefix))
     const effectiveStart = nr.allocationStartWeek ?? nr.startWeek
     const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek
     const nrModeUsesWindows = mode === 'TIMELINE' || mode === 'CAPACITY_PLAN'
@@ -450,27 +611,6 @@ export function translateV2SnapshotProfiles(
     // its window aliases are normalised instead of rejected.
     const nrNeverActive =
       nrModeUsesWindows && isNeverActiveWindow(effectiveStart, effectiveEnd)
-    if (!nrNeverActive) {
-      for (const [key, value] of [
-        ['allocationStartWeek', nr.allocationStartWeek],
-        ['allocationEndWeek', nr.allocationEndWeek],
-        ['startWeek', nr.startWeek],
-        ['endWeek', nr.endWeek],
-      ] as const) {
-        if (value != null && !isNonNegativeInteger(value)) {
-          errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
-        }
-      }
-      if (nrModeUsesWindows && effectiveStart != null && effectiveEnd != null && effectiveStart > effectiveEnd) {
-        errors.push(`${prefix}: allocation window start must not exceed end`)
-      }
-    }
-    if (mode === 'CAPACITY_PLAN' && (effectiveStart == null || effectiveEnd == null)) {
-      errors.push(
-        `${prefix}: CAPACITY_PLAN without a captured start/end window cannot be ` +
-        'translated without guessing capacity',
-      )
-    }
     const { basis, source } = modeBasisSource(mode)
     const effectivePercent = nr.allocationPercent ?? nr.allocationPct
     // EFFORT / FULL_PROJECT never used window aliases — discard them so the
@@ -504,27 +644,7 @@ export function translateV2SnapshotProfiles(
 
   // Structural validation of the complete translated set (duplicate owners,
   // enum values, windows, segments, segmentless-CAPACITY_PROFILE rule).
-  const shapeResult = validatePersistedCapacityProfiles(
-    profiles.map(p => ({
-      id: p.id,
-      projectId: p.projectId,
-      resourceTypeId: p.resourceTypeId,
-      namedResourceId: p.namedResourceId,
-      ownerKind: p.ownerKind,
-      planningBasis: p.planningBasis,
-      source: p.source,
-      defaultPercent: p.defaultPercent,
-      startWeek: p.startWeek,
-      endWeek: p.endWeek,
-      segments: [],
-    })),
-    {
-      projectId,
-      resourceTypeIds: new Set(snapshot.resourceTypes.map(rt => rt.id)),
-      namedResourceIds: new Set(snapshot.namedResources.map(nr => nr.id)),
-    },
-  )
-  errors.push(...shapeResult.errors)
+  errors.push(...validateV2TranslatedProfiles(profiles, projectId, snapshot))
 
   return { profiles, errors }
 }

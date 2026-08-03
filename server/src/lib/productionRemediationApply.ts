@@ -891,7 +891,7 @@ export async function applyRemediationPlan(
     const message = error instanceof Error ? error.message : String(error)
     errors.push(`post-apply verification error: ${message}`)
     postApply = {
-      planFindings: { deterministic: 0, decisionRequired: 0, unsupported: 0, alreadyValid: 0 },
+      planFindings: { deterministic: 0, decisionRequired: 0, unsupported: 0, alreadyValid: 0, quarantined: 0 },
       readinessPassed: false,
       readinessBlockers: [message],
     }
