@@ -134,12 +134,21 @@ allocation mode and effective window edges under the existing V2 rules:
 
 - ResourceType entries: mode = `allocationMode`; effective edges =
   `allocationStartWeek` / `allocationEndWeek`.
-- NamedResource entries: mode = the named resource's OWN `allocationMode`
-  (the legacy scheduler never inherited the parent role's mode); effective
-  edges = `allocationStartWeek` / `allocationEndWeek`, with the V2 alias
-  fallback (`startWeek` / `endWeek`) only where the V2 rules define it. Any
-  populated alternate alias must agree with the effective edge; a populated
-  alias that disagrees is a defect.
+- NamedResource entries: effective mode =
+  `namedResource.allocationMode ?? parentResourceType.allocationMode ?? null`
+  — the exact rule used by the authoritative V2 translator
+  (`translateV2SnapshotProfiles`, `server/src/lib/projectSnapshotCapacity.ts`).
+  An explicit NamedResource `allocationMode` overrides the parent mode; when
+  the NamedResource mode is null or absent, the parent ResourceType mode is
+  inherited; a missing `resourceTypeId` or an absent parent ResourceType is an
+  orphan ownership defect and can never quarantine. Effective edges =
+  `allocationStartWeek` / `allocationEndWeek`, with the V2 alias fallback
+  (`startWeek` / `endWeek`) where the V2 rules define it. Any populated
+  alternate alias must agree with the effective edge; a populated alias that
+  disagrees is a defect.
+
+The classifier and the translator must share this effective-mode semantic
+contract rather than implementing different mode rules.
 
 **Approved quarantine scope.** A historical entry may be quarantined only when
 all of the following hold:
@@ -177,10 +186,14 @@ The approved sentinel-edge shape is exact:
 
 ### Explicitly not quarantine
 
-- `(-1, -1)` — already handled deterministically as never-active
-  (zero capacity);
-- non-negative inverted windows (`start > end`) — already handled by the
-  reviewed never-active rule;
+These shapes are never quarantine. They resolve into two distinct outcomes:
+deterministic never-active shapes (restorable via the reviewed zero-capacity
+translation, no human decision) and blocking defects (all the rest).
+
+- `(-1, -1)` — deterministic never-active (zero capacity); restorable, not a
+  blocking defect;
+- non-negative inverted windows (`start > end`) — deterministic never-active;
+  restorable, not a blocking defect;
 - values below `-1` (e.g. `-2`);
 - fractional weeks;
 - one `-1` edge paired with null;
@@ -211,7 +224,7 @@ defects are never quarantined.
 
 | Class | Exact condition (raw content only) | Behaviour |
 |---|---|---|
-| **Restorable** | Parses; V1 (epic-only, no capacity state) → always; V3/V4 → `validateSnapshotV3` passes; V2 → `translateV2SnapshotProfiles` returns zero errors | Listed as restorable; rollback allowed (existing preflight still applies); readiness passes it |
+| **Restorable** | Parses; V1 (epic-only, no capacity state) → always; V3/V4 → `validateSnapshotV3` passes; V2 → `translateV2SnapshotProfiles` returns zero errors, including the deterministic never-active normalization of `(-1, -1)` pairs and non-negative inverted windows | Listed as restorable; rollback allowed (existing preflight still applies); readiness passes it |
 | **Quarantined / non-restorable** | Parses as V2; at least one entry matches Class A or Class B exactly; every other entry translates successfully or matches Class A/Class B; no defect-class error anywhere | Raw record preserved and protected from retention pruning; listed with a stable reason; rollback refused before any write; readiness treats as policy-accepted; remediation reports as quarantined with evidence |
 | **Malformed / unsupported** | Parse fails (`SnapshotSchemaError`, unknown `schemaVersion`) OR any entry has an error outside Class A/Class B — unknown `allocationMode`, orphan NamedResource, partial windows, alias conflicts, invalid values, structural failure, or a **mixture** of quarantine and other errors | Always blocks readiness; rollback refused; reported as a defect; never quarantined |
 | **Recoverable but currently failing validation** | Parses but fails V3/V4 validation or V2 translation for reasons a reviewed remediation could address (defect class above, resolved later with review or external evidence) | Always blocks readiness until a reviewed remediation resolves it; never silently excluded |
@@ -272,41 +285,78 @@ The smallest required surface:
   remediation reports enumerate every quarantined snapshot and entry with its
   reason and evidence hash (Sections 5.4, 5.5).
 
-Acceptance criteria for the future implementation (observable):
+Acceptance criteria for the future implementation (observable), grouped by
+the three possible outcomes:
+
+**A. Quarantined / non-restorable**
 
 1. A fixture V2 snapshot containing only entries matching Class A (both
-   window edges null, no conflicting aliases) lists as `non-restorable` with
-   the stable reason.
+   effective window edges absent/null, no conflicting aliases, no other
+   defect) lists as `non-restorable` with the stable reason.
 2. A fixture V2 snapshot containing only entries matching Class B (exactly
    one effective edge `-1`, the other a non-negative integer, no alias
-   conflicts) lists as `non-restorable` with the stable reason.
+   conflicts, no other defect) lists as `non-restorable` with the stable
+   reason.
 3. A rollback attempt against either fixture returns 400 with that reason,
    performs zero writes and creates no `pre_rollback` row.
-4. A V2 snapshot with captured windows, and all V3/V4 snapshots, remain fully
-   restorable.
-5. Every boundary case below classifies as a **blocking defect**, never as
-   quarantine:
+4. The snapshot-level fail-closed requirements of Section 3 hold: at least
+   one approved entry, every other entry translating successfully or
+   matching an approved shape, and no defect-class error anywhere.
+
+**B. Deterministic / restorable (not quarantined, not blocking)**
+
+5. A `(-1, -1)` effective window pair and a non-negative inverted effective
+   window (`start > end`) are translated to the reviewed zero-capacity
+   representation (never-active policy): they do **not** quarantine, do not
+   block readiness, remain restorable through the existing deterministic
+   translation, and require no human decision.
+
+**C. Blocking defects (not quarantined)**
+
+6. Each case below classifies as a **blocking defect**, never as quarantine:
    - one-null/one-valid effective window;
-   - `(-1, -1)` (deterministic never-active — restorable path, not
-     quarantine);
-   - non-negative inverted windows (deterministic never-active);
-   - a value below `-1` (e.g. `-2`);
-   - a fractional week;
    - one `-1` edge paired with null;
    - one missing edge paired with a populated non-null edge;
+   - a value below `-1` (e.g. `-2`);
+   - a fractional or non-integer week;
    - conflicting `allocationStartWeek`/`startWeek` or
      `allocationEndWeek`/`endWeek` aliases;
-   - an invalid stale alias (populated negative/fractional/invalid value);
-   - effective mode other than `CAPACITY_PLAN` (e.g. `TIMELINE`);
+   - an invalid populated alias (negative, fractional or otherwise invalid
+     value);
+   - an effective mode other than `CAPACITY_PLAN` where the entry otherwise
+     appears to match a quarantine shape (e.g. `TIMELINE`);
    - a mixture of quarantine-shape and other errors in one snapshot;
    - an unknown `allocationMode`;
-   - an orphan NamedResource;
-   - an unparseable payload or unknown `schemaVersion`.
-6. Creating a new V4 snapshot while quarantined historical snapshots exist
-   does not delete the quarantined rows, and ordinary restorable-snapshot
-   retention (newest 20) continues to work (Section 7).
-7. A snapshot whose classification cannot be completed is never silently
-   deleted by retention handling (Section 7).
+   - an orphan NamedResource (missing/unknown `resourceTypeId` or absent
+     parent ResourceType);
+   - an unparseable payload or unknown `schemaVersion`;
+   - structural-validation failures.
+
+**NamedResource mode-inheritance acceptance cases** (same three-outcome
+contract, effective mode =
+`namedResource.allocationMode ?? parentResourceType.allocationMode ?? null`):
+
+7. NamedResource mode null + parent `CAPACITY_PLAN` + Class A or Class B:
+   effective mode is `CAPACITY_PLAN`; the entry quarantines when all
+   remaining predicates pass.
+8. NamedResource explicit `CAPACITY_PLAN` + non-`CAPACITY_PLAN` parent:
+   explicit mode wins; the entry may quarantine when Class A/B and all
+   remaining predicates pass.
+9. NamedResource explicit `TIMELINE` + parent `CAPACITY_PLAN`: explicit mode
+   wins; the entry does not quarantine as `CAPACITY_PLAN`.
+10. NamedResource mode null + parent `EFFORT`, `FULL_PROJECT`, `TIMELINE` or
+    null: the inherited effective mode is not `CAPACITY_PLAN`; the entry
+    does not quarantine under this policy.
+11. Missing/unknown `resourceTypeId` or absent parent ResourceType: blocking
+    orphan defect; never quarantine.
+
+**Retention acceptance cases**
+
+12. Creating a new V4 snapshot while quarantined historical snapshots exist
+    does not delete the quarantined rows, and ordinary restorable-snapshot
+    retention (newest 20) continues to work (Section 7).
+13. A snapshot whose classification cannot be completed is never silently
+    deleted by retention handling (Section 7).
 
 ## 5. Readiness and remediation
 
@@ -488,7 +538,10 @@ Confirmed against current code — no new work required:
    `server/src/lib/snapshotRestorability.ts`) built on `parseSnapshotData` +
    `translateV2SnapshotProfiles` + `validateSnapshotV3`, with the approved
    raw-value predicates (Classes A and B, Section 3) as the reviewed policy
-   constant. Translation error strings are diagnostics only.
+   constant and the shared effective-mode rule
+   (`namedResource.allocationMode ?? parentResourceType.allocationMode ??
+   null`) taken from the translator. Translation error strings are
+   diagnostics only.
 2. Wire the classifier into:
    - `server/src/routes/snapshots.ts` — list `restoreStatus`/`restoreReason`;
      rollback pre-transaction refusal with the stable 400 reason;
@@ -504,11 +557,15 @@ Confirmed against current code — no new work required:
      disabled rollback control, reason surfaced on attempt.
 3. Tests:
    - classifier unit tests covering **every positive and negative boundary
-     case** in Section 3 (both-null window, one-null/one-valid, exactly one
-     `-1` plus non-negative integer, `(-1, -1)`, `-2`, fractional week,
-     conflicting NamedResource aliases, invalid unused alias, mixed
-     quarantine and defect errors, unknown mode, orphan NamedResource, and
-     the snapshot-level at-least-one/mixed rules);
+     case** in Sections 3–4 across the three outcomes:
+     quarantine (Class A, Class B, snapshot-level at-least-one/mixed rules),
+     deterministic/restorable (`(-1, -1)`, non-negative inverted windows),
+     and blocking defects (one-null/one-valid, one `-1` paired with null,
+     values below `-1`, fractional weeks, conflicting aliases, invalid
+     populated aliases, non-`CAPACITY_PLAN` effective mode, unknown mode,
+     orphan NamedResource), plus the NamedResource mode-inheritance cases
+     (null mode + parent `CAPACITY_PLAN`; explicit override; inherited
+     non-`CAPACITY_PLAN` parent; missing/absent parent);
    - `snapshots.test.ts` list shape;
    - `snapshotRollback.integration.test.ts` (refusal before any write, no
      `pre_rollback` row);
