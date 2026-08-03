@@ -154,3 +154,17 @@ For each readiness run, the production machine records:
 - **PR 1 performs no production migration.** All database and migration
   testing in PR 1 uses disposable PostgreSQL databases on the development
   machine.
+
+## Pre-PR-2 remediation (Issue #421)
+
+The first production readiness run failed with deterministic and ambiguous
+blockers (missing profiles, malformed persisted profiles, untranslatable
+historical v2 snapshots). The reviewed remediation command
+(`npm run capacity-profiles:remediate-readiness`, explicit dry-run/apply
+modes) is specified in
+[`docs/domain/capacity-profile-readiness-remediation.md`](capacity-profile-readiness-remediation.md),
+including the deterministic transformation matrix, the historical v2 snapshot
+policy (never-active `-1`/inverted-window normalisation shared by readiness
+and rollback), the decision manifest contract, the ownership-invariant
+migration sequencing, and the exact #404 production handoff. PR 2 remains
+blocked until #404 executes that procedure and records both gates.
