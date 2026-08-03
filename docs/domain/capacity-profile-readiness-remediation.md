@@ -218,6 +218,14 @@ are written (negative fallback aliases cleared), all unrelated snapshot
 content and metadata are preserved, and the complete resulting snapshot is
 re-validated through the shared translation before writing. Reruns are no-ops.
 
+The unrecoverable subset of this class (windowless `CAPACITY_PLAN` and single
+`-1` edges for which no reviewed evidence exists) is defined as derived
+quarantine under Issue #426 — see
+[`unrecoverable-historical-capacity-snapshots.md`](unrecoverable-historical-capacity-snapshots.md).
+The `snapshot-window-interpretation` decision flow does not apply to
+quarantined entries: they carry no plan decision ID, and re-entry requires a
+separately reviewed, evidence-bound repair defined in that design.
+
 Malformed snapshots are never deleted to pass readiness — they are reported as
 unsupported and block apply.
 
