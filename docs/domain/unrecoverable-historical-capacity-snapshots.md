@@ -186,27 +186,42 @@ The approved sentinel-edge shape is exact:
 
 ### Explicitly not quarantine
 
-These shapes are never quarantine. They resolve into two distinct outcomes:
+These shapes are never quarantine. They resolve into three outcomes:
 deterministic never-active shapes (restorable via the reviewed zero-capacity
-translation, no human decision) and blocking defects (all the rest).
+translation, no human decision), valid non-`CAPACITY_PLAN` entries (restorable
+through the existing translation, no human decision), and blocking defects
+(all the rest).
 
 - `(-1, -1)` — deterministic never-active (zero capacity); restorable, not a
   blocking defect;
 - non-negative inverted windows (`start > end`) — deterministic never-active;
   restorable, not a blocking defect;
-- values below `-1` (e.g. `-2`);
-- fractional weeks;
-- one `-1` edge paired with null;
-- one missing edge paired with a populated non-null edge (unless separately
-  proven);
+- valid `TIMELINE` entries — `null`/`null` effective windows are unbounded
+  capacity, and valid non-negative captured windows translate directly;
+  restorable, not blocking;
+- valid `EFFORT`, `FULL_PROJECT` and null-mode entries — follow the existing
+  translation rules (stale window aliases that are null or valid are
+  deliberately discarded); restorable, not blocking;
+- values below `-1` (e.g. `-2`) in any populated window field;
+- fractional weeks in any populated window field;
+- one `-1` edge paired with null (effective `CAPACITY_PLAN`);
+- one missing edge paired with a populated non-null edge (effective
+  `CAPACITY_PLAN`, unless separately proven);
+- a single negative edge such as `-1` in a window-using non-`CAPACITY_PLAN`
+  mode (e.g. `TIMELINE`) paired with a non-negative value or null — an
+  actual translation defect, blocking;
 - conflicting `allocationStartWeek`/`startWeek` or
   `allocationEndWeek`/`endWeek` aliases;
 - invalid stale aliases (any populated alias holding a negative, fractional
   or otherwise invalid value);
-- `TIMELINE` or any effective mode other than `CAPACITY_PLAN`;
-- mixed quarantine and defect errors;
+- mixed quarantine-shape and independent defect errors;
 - unknown modes, orphan owners, malformed payloads or structural validation
   failures.
+
+An effective mode other than `CAPACITY_PLAN` is **outside quarantine**: the
+entry is restorable when the existing translation succeeds and blocking only
+when an independent translation, ownership, parsing or structural defect
+exists. A mode differing from `CAPACITY_PLAN` is never itself an error.
 
 ### Snapshot-level verdict
 
@@ -224,7 +239,7 @@ defects are never quarantined.
 
 | Class | Exact condition (raw content only) | Behaviour |
 |---|---|---|
-| **Restorable** | Parses; V1 (epic-only, no capacity state) → always; V3/V4 → `validateSnapshotV3` passes; V2 → `translateV2SnapshotProfiles` returns zero errors, including the deterministic never-active normalization of `(-1, -1)` pairs and non-negative inverted windows | Listed as restorable; rollback allowed (existing preflight still applies); readiness passes it |
+| **Restorable** | Parses; V1 (epic-only, no capacity state) → always; V3/V4 → `validateSnapshotV3` passes; V2 → `translateV2SnapshotProfiles` returns zero errors, including deterministic never-active normalization (`(-1, -1)` pairs, non-negative inverted windows) and valid non-`CAPACITY_PLAN` translations (`TIMELINE` unbounded or captured windows; `EFFORT`/`FULL_PROJECT`/null mode with windows discarded) | Listed as restorable; rollback allowed (existing preflight still applies); readiness passes it |
 | **Quarantined / non-restorable** | Parses as V2; at least one entry matches Class A or Class B exactly; every other entry translates successfully or matches Class A/Class B; no defect-class error anywhere | Raw record preserved and protected from retention pruning; listed with a stable reason; rollback refused before any write; readiness treats as policy-accepted; remediation reports as quarantined with evidence |
 | **Malformed / unsupported** | Parse fails (`SnapshotSchemaError`, unknown `schemaVersion`) OR any entry has an error outside Class A/Class B — unknown `allocationMode`, orphan NamedResource, partial windows, alias conflicts, invalid values, structural failure, or a **mixture** of quarantine and other errors | Always blocks readiness; rollback refused; reported as a defect; never quarantined |
 | **Recoverable but currently failing validation** | Parses but fails V3/V4 validation or V2 translation for reasons a reviewed remediation could address (defect class above, resolved later with review or external evidence) | Always blocks readiness until a reviewed remediation resolves it; never silently excluded |
@@ -241,7 +256,11 @@ defects are never quarantined.
    the #421 never-active policy already translates them deterministically to
    zero-capacity profiles (`isNeverActiveWindow`,
    `server/src/lib/projectSnapshotCapacity.ts`).
-5. The classifier is a pure function of stored content: idempotent,
+5. An effective mode other than `CAPACITY_PLAN` is **outside quarantine**:
+   it is restorable when the existing translation succeeds and blocking only
+   when an independent translation, ownership, parsing or structural defect
+   exists. A mode differing from `CAPACITY_PLAN` is never itself an error.
+6. The classifier is a pure function of stored content: idempotent,
    deterministic, re-derivable on every run. No persisted marker, no state.
 
 **Coverage statement.** The predicates cover exactly the reviewed production
@@ -310,22 +329,41 @@ the three possible outcomes:
    representation (never-active policy): they do **not** quarantine, do not
    block readiness, remain restorable through the existing deterministic
    translation, and require no human decision.
+6. Valid non-`CAPACITY_PLAN` entries remain restorable through the existing
+   translation and are **not** blocking — never merely because the effective
+   mode differs from `CAPACITY_PLAN`:
+   - `TIMELINE` with `null`/`null` effective windows — valid unbounded
+     capacity;
+   - `TIMELINE` with valid non-negative captured windows — translated
+     directly;
+   - `EFFORT`, `FULL_PROJECT` and null modes — follow the existing
+     translation rules (stale window aliases that are null or valid are
+     deliberately discarded);
+   - explicit NamedResource mode override producing a valid translation
+     (e.g. explicit `TIMELINE` with a `CAPACITY_PLAN` parent).
 
 **C. Blocking defects (not quarantined)**
 
-6. Each case below classifies as a **blocking defect**, never as quarantine:
-   - one-null/one-valid effective window;
-   - one `-1` edge paired with null;
-   - one missing edge paired with a populated non-null edge;
-   - a value below `-1` (e.g. `-2`);
-   - a fractional or non-integer week;
+7. An effective mode other than `CAPACITY_PLAN` is outside quarantine: it is
+   restorable when the existing translation succeeds and blocking only when
+   an independent translation, ownership, parsing or structural defect
+   exists. Each case below classifies as a **blocking defect**, never as
+   quarantine:
+   - one-null/one-valid effective window (effective `CAPACITY_PLAN`);
+   - one `-1` edge paired with null (effective `CAPACITY_PLAN`);
+   - one missing edge paired with a populated non-null edge (effective
+     `CAPACITY_PLAN`);
+   - a single negative edge such as `-1` in a window-using
+     non-`CAPACITY_PLAN` mode (e.g. `TIMELINE`) paired with a non-negative
+     value or null;
+   - a value below `-1` (e.g. `-2`) in any populated window field;
+   - a fractional or non-integer week in any populated window field;
    - conflicting `allocationStartWeek`/`startWeek` or
-     `allocationEndWeek`/`endWeek` aliases;
+     `allocationEndWeek`/`endWeek` aliases that cannot be reconciled under
+     the existing V2 rules;
    - an invalid populated alias (negative, fractional or otherwise invalid
      value);
-   - an effective mode other than `CAPACITY_PLAN` where the entry otherwise
-     appears to match a quarantine shape (e.g. `TIMELINE`);
-   - a mixture of quarantine-shape and other errors in one snapshot;
+   - a mixture of quarantine-shape and independent defect in one snapshot;
    - an unknown `allocationMode`;
    - an orphan NamedResource (missing/unknown `resourceTypeId` or absent
      parent ResourceType);
@@ -336,26 +374,30 @@ the three possible outcomes:
 contract, effective mode =
 `namedResource.allocationMode ?? parentResourceType.allocationMode ?? null`):
 
-7. NamedResource mode null + parent `CAPACITY_PLAN` + Class A or Class B:
+8. NamedResource mode null + parent `CAPACITY_PLAN` + Class A or Class B:
    effective mode is `CAPACITY_PLAN`; the entry quarantines when all
    remaining predicates pass.
-8. NamedResource explicit `CAPACITY_PLAN` + non-`CAPACITY_PLAN` parent:
+9. NamedResource explicit `CAPACITY_PLAN` + non-`CAPACITY_PLAN` parent:
    explicit mode wins; the entry may quarantine when Class A/B and all
    remaining predicates pass.
-9. NamedResource explicit `TIMELINE` + parent `CAPACITY_PLAN`: explicit mode
-   wins; the entry does not quarantine as `CAPACITY_PLAN`.
-10. NamedResource mode null + parent `EFFORT`, `FULL_PROJECT`, `TIMELINE` or
-    null: the inherited effective mode is not `CAPACITY_PLAN`; the entry
-    does not quarantine under this policy.
-11. Missing/unknown `resourceTypeId` or absent parent ResourceType: blocking
+10. NamedResource explicit `TIMELINE` + parent `CAPACITY_PLAN`: explicit mode
+    wins; the entry does not quarantine as `CAPACITY_PLAN` and remains
+    restorable when the translation succeeds.
+11. NamedResource mode null + parent `TIMELINE` with `null`/`null` windows:
+    inherited effective mode is `TIMELINE`; restorable unbounded, not
+    quarantined.
+12. NamedResource mode null + parent `EFFORT`, `FULL_PROJECT` or null: the
+    inherited effective mode is not `CAPACITY_PLAN`; the entry follows the
+    existing translation and does not quarantine under this policy.
+13. Missing/unknown `resourceTypeId` or absent parent ResourceType: blocking
     orphan defect; never quarantine.
 
 **Retention acceptance cases**
 
-12. Creating a new V4 snapshot while quarantined historical snapshots exist
+14. Creating a new V4 snapshot while quarantined historical snapshots exist
     does not delete the quarantined rows, and ordinary restorable-snapshot
     retention (newest 20) continues to work (Section 7).
-13. A snapshot whose classification cannot be completed is never silently
+15. A snapshot whose classification cannot be completed is never silently
     deleted by retention handling (Section 7).
 
 ## 5. Readiness and remediation
@@ -385,7 +427,7 @@ two approved raw-value shapes (Classes A and B). V1 handling, V3/V4
 structural validation, the live-state completeness/shape section, the
 ownership audit and the shared translation helper are untouched. Any failure
 outside the approved shapes — for any snapshot, any version — still fails
-readiness.
+readiness; valid non-`CAPACITY_PLAN` translations are not failures.
 
 ### 5.3 Readiness continues to fail for the 130 live decisions
 
@@ -559,11 +601,13 @@ Confirmed against current code — no new work required:
    - classifier unit tests covering **every positive and negative boundary
      case** in Sections 3–4 across the three outcomes:
      quarantine (Class A, Class B, snapshot-level at-least-one/mixed rules),
-     deterministic/restorable (`(-1, -1)`, non-negative inverted windows),
-     and blocking defects (one-null/one-valid, one `-1` paired with null,
-     values below `-1`, fractional weeks, conflicting aliases, invalid
-     populated aliases, non-`CAPACITY_PLAN` effective mode, unknown mode,
-     orphan NamedResource), plus the NamedResource mode-inheritance cases
+     deterministic/restorable (`(-1, -1)`, non-negative inverted windows,
+     valid non-`CAPACITY_PLAN` entries: `TIMELINE` null/null and captured
+     windows, `EFFORT`/`FULL_PROJECT`/null mode with discarded windows), and
+     blocking defects (one-null/one-valid, one `-1` paired with null,
+     `TIMELINE` single negative edge, values below `-1`, fractional weeks,
+     conflicting aliases, invalid populated aliases, unknown mode, orphan
+     NamedResource), plus the NamedResource mode-inheritance cases
      (null mode + parent `CAPACITY_PLAN`; explicit override; inherited
      non-`CAPACITY_PLAN` parent; missing/absent parent);
    - `snapshots.test.ts` list shape;
