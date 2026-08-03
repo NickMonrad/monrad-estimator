@@ -19,6 +19,7 @@ try {
       'test:runtime-cutover-integration',
       'test:transfer-integration',
       'test:legacy-alias-removal-integration',
+      'test:remediation-integration',
     ]) {
       if (guard.triggered) break
       await runCommand('npm', ['run', script, '--workspace=server'], { cwd: root, env: environment, signal: guard.abortSignal })

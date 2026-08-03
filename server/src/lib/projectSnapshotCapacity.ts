@@ -240,6 +240,50 @@ function isNonNegativeInteger(value: unknown): value is number {
 }
 
 /**
+ * Issue #421 never-active window policy.
+ *
+ * A captured window is "never active" when no non-negative week can ever
+ * match it under the legacy scheduler gate (`week >= start && week <= end`):
+ *
+ *  - both edges are the `-1` sentinel that the legacy Squad Planner apply
+ *    path wrote for named resources without an assigned slot window
+ *    (`routes/squadPlan.ts`, pre-#359: `slotWindows[idx] ?? { startWeek: -1,
+ *    endWeek: -1, allocationPercent: 100 }`); or
+ *  - the window is inverted (`start > end`), which the legacy scheduler
+ *    tolerated without clamping — no week satisfies the gate, so the entry
+ *    contributed zero capacity.
+ *
+ * Evidence: `server/src/test/scheduler.test.ts` ("slot never active →
+ * endWeek=-1 → does not contribute capacity") and the pre-cutover
+ * `scheduler.getWeeklyCapacity` window gate (`start = nr.startWeek ?? 0`,
+ * `end = nr.endWeek ?? Infinity`, match only when `week >= start &&
+ * week <= end`). `null`/`Infinity` meant unbounded; `-1` never meant
+ * "unset" or "unbounded" — it meant "never active".
+ *
+ * The translated state is a zero-capacity profile (defaultPercent 0, null
+ * window): the exact historical effective capacity, never a guess. A single
+ * `-1` edge (or any other negative value) has no established meaning and is
+ * NOT normalised here — callers treat it as requiring an explicit decision.
+ */
+export function isNeverActiveWindow(
+  start: number | null | undefined,
+  end: number | null | undefined,
+): boolean {
+  if (start === -1 && end === -1) return true
+  // Inverted window with non-negative edges: the legacy scheduler tolerated it
+  // without clamping and no week can ever match the gate.
+  return (
+    start != null &&
+    end != null &&
+    Number.isFinite(start) &&
+    Number.isFinite(end) &&
+    start >= 0 &&
+    end >= 0 &&
+    start > end
+  )
+}
+
+/**
  * Deterministic translation of a historical v2 snapshot into authoritative
  * CapacityProfile rows, using ONLY the values captured in the v2 payload
  * (never the active CapacityPlan, never sync/reconciliation tooling).
@@ -258,6 +302,12 @@ function isNonNegativeInteger(value: unknown): value is number {
  *                              CAPACITY_PLAN without a captured start/end
  *                              window cannot be translated without guessing
  *                              and is rejected).
+ *   - never-active windows    → (-1, -1) pairs (the legacy Squad Planner
+ *                              "no slot window" sentinel) and inverted windows
+ *                              (start > end, tolerated unclamped by the legacy
+ *                              scheduler) translate to a zero-capacity
+ *                              AVAILABILITY_WINDOW profile with a null window
+ *                              (issue #421 policy, `isNeverActiveWindow`).
  *
  * Every NamedResource must reference a ResourceType included in the same
  * snapshot (orphan rows are rejected with a clear error before any write).
@@ -302,23 +352,31 @@ export function translateV2SnapshotProfiles(
       errors.push(`${prefix}: allocationPercent must be finite`)
     }
     const rtModeUsesWindows = rt.allocationMode === 'TIMELINE' || rt.allocationMode === 'CAPACITY_PLAN'
-    for (const [key, value] of [
-      ['allocationStartWeek', rt.allocationStartWeek],
-      ['allocationEndWeek', rt.allocationEndWeek],
-    ] as const) {
-      if (value != null && !isNonNegativeInteger(value)) {
-        errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
-      }
-    }
-    // Window aliases are only meaningful for the modes that used them;
-    // EFFORT/FULL_PROJECT stale aliases are discarded, never validated.
-    if (
+    // Issue #421 never-active policy: a captured (-1, -1) pair or an inverted
+    // window (start > end) never contributed capacity; it translates to a
+    // zero-capacity profile with a null window instead of failing.
+    const rtNeverActive =
       rtModeUsesWindows &&
-      rt.allocationStartWeek != null &&
-      rt.allocationEndWeek != null &&
-      rt.allocationStartWeek > rt.allocationEndWeek
-    ) {
-      errors.push(`${prefix}: allocationStartWeek must not exceed allocationEndWeek`)
+      isNeverActiveWindow(rt.allocationStartWeek, rt.allocationEndWeek)
+    if (!rtNeverActive) {
+      for (const [key, value] of [
+        ['allocationStartWeek', rt.allocationStartWeek],
+        ['allocationEndWeek', rt.allocationEndWeek],
+      ] as const) {
+        if (value != null && !isNonNegativeInteger(value)) {
+          errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
+        }
+      }
+      // Window aliases are only meaningful for the modes that used them;
+      // EFFORT/FULL_PROJECT stale aliases are discarded, never validated.
+      if (
+        rtModeUsesWindows &&
+        rt.allocationStartWeek != null &&
+        rt.allocationEndWeek != null &&
+        rt.allocationStartWeek > rt.allocationEndWeek
+      ) {
+        errors.push(`${prefix}: allocationStartWeek must not exceed allocationEndWeek`)
+      }
     }
     if (rt.allocationMode === 'CAPACITY_PLAN' && (rt.allocationStartWeek == null || rt.allocationEndWeek == null)) {
       errors.push(
@@ -331,8 +389,8 @@ export function translateV2SnapshotProfiles(
     // translation discards them so the resulting DEMAND_FOLLOWING /
     // WHOLE_PROJECT_ALLOCATION profile is structurally valid.
     const modeDiscardsWindows = rt.allocationMode === 'EFFORT' || rt.allocationMode === 'FULL_PROJECT' || rt.allocationMode == null
-    const roleStartWeek = modeDiscardsWindows ? null : rt.allocationStartWeek
-    const roleEndWeek = modeDiscardsWindows ? null : rt.allocationEndWeek
+    const roleStartWeek = modeDiscardsWindows || rtNeverActive ? null : rt.allocationStartWeek
+    const roleEndWeek = modeDiscardsWindows || rtNeverActive ? null : rt.allocationEndWeek
     profiles.push({
       id: `snapshot-v2-role-${rt.id}`,
       projectId,
@@ -341,7 +399,7 @@ export function translateV2SnapshotProfiles(
       ownerKind: 'ROLE',
       planningBasis: basis,
       source,
-      defaultPercent: rt.allocationPercent,
+      defaultPercent: rtNeverActive ? 0 : rt.allocationPercent,
       startWeek: roleStartWeek,
       endWeek: roleEndWeek,
       legacy: {
@@ -384,21 +442,28 @@ export function translateV2SnapshotProfiles(
     if (nr.allocationPct != null && !Number.isFinite(nr.allocationPct)) {
       errors.push(`${prefix}: allocationPct must be finite`)
     }
-    for (const [key, value] of [
-      ['allocationStartWeek', nr.allocationStartWeek],
-      ['allocationEndWeek', nr.allocationEndWeek],
-      ['startWeek', nr.startWeek],
-      ['endWeek', nr.endWeek],
-    ] as const) {
-      if (value != null && !isNonNegativeInteger(value)) {
-        errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
-      }
-    }
     const effectiveStart = nr.allocationStartWeek ?? nr.startWeek
     const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek
     const nrModeUsesWindows = mode === 'TIMELINE' || mode === 'CAPACITY_PLAN'
-    if (nrModeUsesWindows && effectiveStart != null && effectiveEnd != null && effectiveStart > effectiveEnd) {
-      errors.push(`${prefix}: allocation window start must not exceed end`)
+    // Issue #421 never-active policy (same as the resource-type branch): a
+    // captured (-1, -1) pair or inverted window never contributed capacity;
+    // its window aliases are normalised instead of rejected.
+    const nrNeverActive =
+      nrModeUsesWindows && isNeverActiveWindow(effectiveStart, effectiveEnd)
+    if (!nrNeverActive) {
+      for (const [key, value] of [
+        ['allocationStartWeek', nr.allocationStartWeek],
+        ['allocationEndWeek', nr.allocationEndWeek],
+        ['startWeek', nr.startWeek],
+        ['endWeek', nr.endWeek],
+      ] as const) {
+        if (value != null && !isNonNegativeInteger(value)) {
+          errors.push(`${prefix}: ${key} must be a non-negative integer or null`)
+        }
+      }
+      if (nrModeUsesWindows && effectiveStart != null && effectiveEnd != null && effectiveStart > effectiveEnd) {
+        errors.push(`${prefix}: allocation window start must not exceed end`)
+      }
     }
     if (mode === 'CAPACITY_PLAN' && (effectiveStart == null || effectiveEnd == null)) {
       errors.push(
@@ -412,8 +477,8 @@ export function translateV2SnapshotProfiles(
     // resulting DEMAND_FOLLOWING / WHOLE_PROJECT_ALLOCATION profile is
     // structurally valid.
     const modeDiscardsWindows = mode === 'EFFORT' || mode === 'FULL_PROJECT' || mode == null
-    const namedStartWeek = modeDiscardsWindows ? null : effectiveStart
-    const namedEndWeek = modeDiscardsWindows ? null : effectiveEnd
+    const namedStartWeek = modeDiscardsWindows || nrNeverActive ? null : effectiveStart
+    const namedEndWeek = modeDiscardsWindows || nrNeverActive ? null : effectiveEnd
     profiles.push({
       id: `snapshot-v2-named-${nr.id}`,
       projectId,
@@ -422,7 +487,7 @@ export function translateV2SnapshotProfiles(
       ownerKind: 'NAMED_PERSON',
       planningBasis: basis,
       source,
-      defaultPercent: effectivePercent,
+      defaultPercent: nrNeverActive ? 0 : effectivePercent,
       startWeek: namedStartWeek,
       endWeek: namedEndWeek,
       legacy: {
