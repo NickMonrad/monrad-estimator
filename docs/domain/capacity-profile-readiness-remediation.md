@@ -33,7 +33,12 @@ npm run capacity-profiles:remediate-readiness -- --apply --plan reviewed-plan.js
 npm run capacity-profiles:remediate-readiness -- --apply --plan reviewed-plan.json --manifest approved-decisions.json
 ```
 
-Equivalent standalone invocation from `server/`:
+The root wrapper forwards every argument after `--` exactly once and in order
+to the server workspace command; the root form is the normal production
+interface.
+
+Equivalent direct invocation from `server/` (same command, not the normal
+production interface):
 
 ```bash
 npx tsx src/scripts/remediateProductionReadiness.ts [--dry-run] [--json <path>] [--manifest <path>]
