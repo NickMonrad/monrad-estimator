@@ -568,7 +568,7 @@ describeIf('readiness — blockers fail closed', () => {
     expect(formatReadinessReport(report)).toContain('READINESS PASSED')
   })
 
-  it('v2 CAPACITY_PLAN without a captured window is untranslatable and fails', async () => {
+  it('v2 CAPACITY_PLAN without a captured window is derived-quarantined and passes readiness', async () => {
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'No Window Plan Role')
     await createNamedPersonWithProfile(projectId, rtId, 'No Window Plan Person')
@@ -580,9 +580,71 @@ describeIf('readiness — blockers fail closed', () => {
     } as unknown as (typeof badV2.resourceTypes)[0]
     await createBacklogSnapshot(projectId, badV2)
     const report = await runProductionMigrationReadiness(prisma)
+    // Issue #428: the reviewed windowless CAPACITY_PLAN shape is
+    // policy-accepted derived quarantine — reported explicitly, never blocking.
+    expect(report.passed).toBe(true)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('quarantined (policy-accepted, non-restorable)')
+    expect(text).toContain('Class A')
+  })
+
+  it('v2 CAPACITY_PLAN with a single -1 edge is derived-quarantined and passes readiness', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Single Minus One Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Single Minus One Person')
+    const v2 = v2CapacityPlanSnapshotFixture(projectId)
+    v2.resourceTypes[0] = {
+      ...v2.resourceTypes[0],
+      allocationStartWeek: -1,
+      allocationEndWeek: 5,
+    } as unknown as (typeof v2.resourceTypes)[0]
+    await createBacklogSnapshot(projectId, v2)
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(true)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('quarantined (policy-accepted, non-restorable)')
+    expect(text).toContain('Class B')
+  })
+
+  it('quarantine plus a real snapshot defect still fails readiness', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Mixed Snapshot Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Mixed Snapshot Person')
+    const quarantined = v2CapacityPlanSnapshotFixture(projectId)
+    quarantined.resourceTypes[0] = {
+      ...quarantined.resourceTypes[0],
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    } as unknown as (typeof quarantined.resourceTypes)[0]
+    await createBacklogSnapshot(projectId, quarantined)
+    const defective = v2SnapshotFixture(projectId)
+    defective.resourceTypes[0].allocationMode = 'WARP_DRIVE'
+    await createBacklogSnapshot(projectId, defective)
+    const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('CAPACITY_PLAN without a captured start/end window')
+    expect(text).toContain('unknown allocationMode')
+    // The quarantine is still reported explicitly — never silently hidden.
+    expect(text).toContain('quarantined (policy-accepted, non-restorable)')
+  })
+
+  it('quarantine plus unresolved live-state decisions still fails readiness', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Live Decision Role')
+    const quarantined = v2CapacityPlanSnapshotFixture(projectId)
+    quarantined.resourceTypes[0] = {
+      ...quarantined.resourceTypes[0],
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    } as unknown as (typeof quarantined.resourceTypes)[0]
+    await createBacklogSnapshot(projectId, quarantined)
+    // A named resource without a persisted profile is a live-state blocker
+    // (the 130 live decisions are this class of blocker — out of scope).
+    await prisma.namedResource.create({ data: { name: 'Unprofiled Person', resourceTypeId: rtId } })
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('lacks persisted profile')
   })
 
   it('v2 EFFORT and FULL_PROJECT rows with stale window aliases are translatable', async () => {
