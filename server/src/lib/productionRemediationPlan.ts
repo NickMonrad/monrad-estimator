@@ -35,7 +35,7 @@ import {
   type CapacityProfileDTO,
 } from './capacityProfileMapping.js'
 import { buildRoleProfileData } from './squadPlannerProfileWriter.js'
-import { isNeverActiveWindow } from './projectSnapshotCapacity.js'
+import { isNeverActiveWindow, v2EffectiveNamedMode } from './projectSnapshotCapacity.js'
 import {
   classifySnapshotRestorability,
   classifyV2QuarantineShape,
@@ -1251,13 +1251,19 @@ export function buildRemediationPlan(
     if (!isSnapshotV2(parsed)) continue
 
     const v2 = parsed as SnapshotV2
-    const rtById = new Map(v2.resourceTypes.map(rt => [rt.id, true]))
+    const rtById = new Map(v2.resourceTypes.map(rt => [rt.id, rt]))
 
     // Issue #428: only a snapshot whose verdict is derived quarantine (every
     // entry translates or matches an approved Class A/B shape, no independent
     // defect anywhere) may carry quarantined findings. Mixed
     // quarantine-and-defect snapshots keep the existing per-entry
     // classifications (defects are never quarantined).
+    // An individual entry receives a quarantined finding only when its
+    // EFFECTIVE allocation mode is exactly CAPACITY_PLAN and its window fields
+    // match an approved Class A/B shape — a valid non-CAPACITY_PLAN entry
+    // (TIMELINE, EFFORT, FULL_PROJECT, null mode, explicit NamedResource
+    // override) whose raw window shape resembles Class A is never labelled
+    // quarantined.
     const restorability = classifySnapshotRestorability(snapshot.snapshot, snapshot.projectId)
     const quarantinedSnapshot = restorability.kind === 'quarantined'
     const quarantineMessage = (entryClass: V2QuarantineClass): string =>
@@ -1271,7 +1277,7 @@ export function buildRemediationPlan(
         allocationStartWeek: rt.allocationStartWeek ?? null,
         allocationEndWeek: rt.allocationEndWeek ?? null,
       }
-      if (quarantinedSnapshot) {
+      if (quarantinedSnapshot && rt.allocationMode === 'CAPACITY_PLAN') {
         const entryClass = classifyV2QuarantineShape({
           primaryStart: entryPayload.allocationStartWeek,
           aliasStart: null,
@@ -1358,25 +1364,28 @@ export function buildRemediationPlan(
         endWeek: nr.endWeek ?? null,
       }
       if (quarantinedSnapshot) {
-        const entryClass = classifyV2QuarantineShape({
-          primaryStart: entryPayload.allocationStartWeek,
-          aliasStart: entryPayload.startWeek,
-          primaryEnd: entryPayload.allocationEndWeek,
-          aliasEnd: entryPayload.endWeek,
-        })
-        if (entryClass != null) {
-          addFinding({
-            category: 'snapshot-entry',
-            projectId: snapshot.projectId,
-            ownerId: nr.id,
-            ownerName: nr.name,
-            profileId: null,
-            snapshotId: snapshot.id,
-            entryId: nr.id,
-            classification: 'quarantined',
-            message: quarantineMessage(entryClass),
-          }, buildSnapshotEntryEvidence(snapshot.id, 'namedResource', nr.id, entryPayload))
-          continue
+        const mode = v2EffectiveNamedMode(nr, rtById.get(nr.resourceTypeId ?? ''))
+        if (mode === 'CAPACITY_PLAN') {
+          const entryClass = classifyV2QuarantineShape({
+            primaryStart: entryPayload.allocationStartWeek,
+            aliasStart: entryPayload.startWeek,
+            primaryEnd: entryPayload.allocationEndWeek,
+            aliasEnd: entryPayload.endWeek,
+          })
+          if (entryClass != null) {
+            addFinding({
+              category: 'snapshot-entry',
+              projectId: snapshot.projectId,
+              ownerId: nr.id,
+              ownerName: nr.name,
+              profileId: null,
+              snapshotId: snapshot.id,
+              entryId: nr.id,
+              classification: 'quarantined',
+              message: quarantineMessage(entryClass),
+            }, buildSnapshotEntryEvidence(snapshot.id, 'namedResource', nr.id, entryPayload))
+            continue
+          }
         }
       }
       const classified = classifySnapshotEntry(entryPayload)

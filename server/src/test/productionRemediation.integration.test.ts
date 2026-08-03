@@ -965,7 +965,10 @@ describeIf('remediation historical v2 snapshot policy', () => {
     const outcome = await applyRemediationPlan(prisma, { plan })
     expect(outcome.exitCode).toBe(0)
     expect(outcome.applied).toBe(0)
-    expect(outcome.postApply?.readinessPassed).toBe(true)
+    // Zero-operation plans skip the post-apply verification block by design.
+    expect(outcome.postApply).toBeNull()
+    // Readiness (with the quarantined snapshot present) still passes.
+    expect((await runProductionMigrationReadiness(prisma)).passed).toBe(true)
 
     // Raw record unchanged — including the windowless entry and the sentinel.
     const row = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snapshotId } })

@@ -1927,7 +1927,7 @@ test.describe('Snapshot History — derived quarantine display', () => {
     await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
 
     // The row renders the derived status and the stable reason.
-    await expect(page.getByText('Non-restorable')).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText('Non-restorable', { exact: true })).toBeVisible({ timeout: 8_000 })
     await expect(page.getByText(/original capacity window is not recoverable/)).toBeVisible()
     // The rollback control is not rendered for a non-restorable row.
     await expect(page.getByRole('button', { name: /^rollback$/i })).toHaveCount(0)

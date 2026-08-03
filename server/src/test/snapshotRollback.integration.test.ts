@@ -2771,7 +2771,6 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
         allocationEndWeek: null,
       })),
     } as unknown as SnapshotV2
-    const rawSnapshot = JSON.stringify(v2Data)
     const badSnap = (
       await prisma.backlogSnapshot.create({
         data: {
@@ -2783,6 +2782,10 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
         },
       })
     ).id
+    // Persisted value as PostgreSQL actually stored it (jsonb may normalise
+    // object-key ordering, so the in-memory object is not a valid string
+    // comparison baseline). This is the byte-preservation baseline.
+    const persistedBefore = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: badSnap } })
     const profileCountBefore = await prisma.capacityProfile.count({ where: { projectId: projectId2 } })
     const snapshotCountBefore = await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })
 
@@ -2800,12 +2803,19 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     expect(message).toContain('Class A')
 
     // No state changed: profiles untouched, no pre_rollback snapshot, and the
-    // raw target snapshot remains byte-for-byte unchanged.
+    // persisted target row is unchanged — compared against the value read
+    // from PostgreSQL before the attempt (deep structural equality, immune to
+    // jsonb key-ordering normalisation).
     expect(await prisma.capacityProfile.count({ where: { projectId: projectId2 } })).toBe(profileCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })).toBe(snapshotCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2, trigger: 'pre_rollback' } })).toBe(0)
-    const stored = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: badSnap } })
-    expect(JSON.stringify(stored.snapshot)).toBe(rawSnapshot)
+    const persistedAfter = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: badSnap } })
+    expect(persistedAfter.id).toBe(persistedBefore.id)
+    expect(persistedAfter.projectId).toBe(persistedBefore.projectId)
+    expect(persistedAfter.label).toBe(persistedBefore.label)
+    expect(persistedAfter.trigger).toBe(persistedBefore.trigger)
+    expect(persistedAfter.createdById).toBe(persistedBefore.createdById)
+    expect(persistedAfter.snapshot).toEqual(persistedBefore.snapshot)
   })
 
   it('rejects quarantined CAPACITY_PLAN with a single -1 edge before any write', async () => {
