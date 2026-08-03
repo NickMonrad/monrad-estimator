@@ -1172,6 +1172,223 @@ describeIf('remediation owner-kind decisions', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════════════
+// 5d. Shared-parent ROLE coordination (review round 3)
+// ════════════════════════════════════════════════════════════════════════════
+
+describeIf('remediation shared-parent ROLE coordination', () => {
+  function plannedResourceResolution(): { shape: 'owner-kind-decision'; ownerKind: 'PLANNED_RESOURCE'; capacity: { shape: 'scalar-profile'; planningBasis: 'DEMAND_FOLLOWING'; defaultPercent: number } } {
+    return {
+      shape: 'owner-kind-decision' as const,
+      ownerKind: 'PLANNED_RESOURCE' as const,
+      capacity: { shape: 'scalar-profile' as const, planningBasis: 'DEMAND_FOLLOWING' as const, defaultPercent: 100 },
+    }
+  }
+
+  it('two PLANNED_RESOURCE children of one parent emit one parent ROLE op and apply exactly once', async () => {
+    const projectId = await createProject()
+    const parentRt = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const nrA = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const nrB = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const { plan } = await runDryRun()
+    const decA = plan.decisions.find(d => d.ownerId === nrA)!
+    const decB = plan.decisions.find(d => d.ownerId === nrB)!
+    expect(decA.roleState).toBe('derived')
+    expect(decB.roleState).toBe('derived')
+    const manifest = await buildManifest(plan, [
+      { decisionId: decA.id, resolution: plannedResourceResolution() },
+      { decisionId: decB.id, resolution: plannedResourceResolution() },
+    ])
+    const merged = resolvePlanWithManifest(plan, manifest)
+    expect(merged.errors).toEqual([])
+    const parentOps = merged.plan.operations.filter(op => op.ownerId === parentRt && op.kind === 'create-role-profile')
+    expect(parentOps).toHaveLength(1)
+    expect(merged.plan.operations.filter(op => op.ownerId === nrA || op.ownerId === nrB)).toHaveLength(2)
+
+    const outcome = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(outcome.exitCode).toBe(0)
+    const childProfiles = await prisma.capacityProfile.findMany({
+      where: { namedResourceId: { in: [nrA, nrB] } },
+    })
+    expect(childProfiles).toHaveLength(2)
+    expect(childProfiles.every(p => p.ownerKind === 'PLANNED_RESOURCE')).toBe(true)
+    const roleProfiles = await prisma.capacityProfile.findMany({
+      where: { resourceTypeId: parentRt, ownerKind: 'ROLE' },
+    })
+    expect(roleProfiles).toHaveLength(1)
+
+    const audit = await runOwnershipAudit(prisma)
+    expect(audit.isClean).toBe(true)
+    const readiness = await runProductionMigrationReadiness(prisma)
+    expect(readiness.passed).toBe(true)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
+    expect(resolved.meta.legacyCount).toBe(0)
+
+    // Exact rerun is a no-op.
+    const rerun = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(rerun.exitCode).toBe(0)
+    expect(rerun.applied).toBe(0)
+    expect(rerun.skipped).toBe(3)
+  })
+
+  it('mixed PLANNED_RESOURCE and NAMED_PERSON children persist exact kinds with one parent ROLE profile', async () => {
+    const projectId = await createProject()
+    const parentRt = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const plannedNr = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const namedNr = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const { plan } = await runDryRun()
+    const manifest = await buildManifest(plan, [
+      {
+        decisionId: plan.decisions.find(d => d.ownerId === plannedNr)!.id,
+        resolution: plannedResourceResolution(),
+      },
+      {
+        decisionId: plan.decisions.find(d => d.ownerId === namedNr)!.id,
+        resolution: {
+          shape: 'owner-kind-decision' as const,
+          ownerKind: 'NAMED_PERSON' as const,
+          capacity: { shape: 'availability-window' as const, defaultPercent: 100, startWeek: 0, endWeek: 10 },
+        },
+      },
+    ])
+    const merged = resolvePlanWithManifest(plan, manifest)
+    expect(merged.errors).toEqual([])
+    const parentOps = merged.plan.operations.filter(op => op.ownerId === parentRt && op.kind === 'create-role-profile')
+    expect(parentOps).toHaveLength(1)
+
+    const outcome = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(outcome.exitCode).toBe(0)
+    const plannedProfile = await prisma.capacityProfile.findFirstOrThrow({ where: { namedResourceId: plannedNr } })
+    const namedProfile = await prisma.capacityProfile.findFirstOrThrow({ where: { namedResourceId: namedNr } })
+    expect(plannedProfile.ownerKind).toBe('PLANNED_RESOURCE')
+    expect(namedProfile.ownerKind).toBe('NAMED_PERSON')
+    const roleCount = await prisma.capacityProfile.count({ where: { resourceTypeId: parentRt, ownerKind: 'ROLE' } })
+    expect(roleCount).toBe(1)
+    const readiness = await runProductionMigrationReadiness(prisma)
+    expect(readiness.passed).toBe(true)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
+    expect(resolved.meta.legacyCount).toBe(0)
+  })
+
+  it('retains a valid existing parent ROLE profile unchanged (no replacement, no duplicate op)', async () => {
+    const projectId = await createProject()
+    const parentRt = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const existingProfileId = await createProfile(projectId, {
+      resourceTypeId: parentRt,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+      legacy: { allocationMode: 'EFFORT', allocationPercent: 100 },
+    })
+    const nr = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const { plan } = await runDryRun()
+    const decision = plan.decisions.find(d => d.ownerId === nr)!
+    expect(decision.roleState).toBe('existing')
+    const manifest = await buildManifest(plan, [
+      { decisionId: decision.id, resolution: plannedResourceResolution() },
+    ])
+    const merged = resolvePlanWithManifest(plan, manifest)
+    expect(merged.errors).toEqual([])
+    expect(merged.plan.operations.filter(op => op.ownerId === parentRt && op.kind === 'create-role-profile')).toHaveLength(0)
+
+    const outcome = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(outcome.exitCode).toBe(0)
+    const existing = await prisma.capacityProfile.findUniqueOrThrow({ where: { id: existingProfileId } })
+    expect(existing.planningBasis).toBe('DEMAND_FOLLOWING')
+    expect(existing.defaultPercent).toBe(100)
+    expect((existing.legacy as Record<string, unknown>).allocationMode).toBe('EFFORT')
+    const roleCount = await prisma.capacityProfile.count({ where: { resourceTypeId: parentRt, ownerKind: 'ROLE' } })
+    expect(roleCount).toBe(1)
+    const readiness = await runProductionMigrationReadiness(prisma)
+    expect(readiness.passed).toBe(true)
+  })
+
+  it('reuses a compatible baseline parent ROLE operation for a planner-owned parent', async () => {
+    const projectId = await createProject()
+    const plannerRt = await createRole(projectId, { allocationMode: 'CAPACITY_PLAN', count: 1 })
+    await createActivePlan(projectId, [
+      { periodIndex: 0, startWeek: 0, endWeek: 8, entries: [{ resourceTypeId: plannerRt, headcount: 1 }] },
+    ])
+    const plannedNr = await createNamedPerson(projectId, plannerRt, { allocationMode: 'CAPACITY_PLAN', startWeek: 0, endWeek: 7 })
+    await createProfile(projectId, {
+      namedResourceId: plannedNr,
+      ownerKind: 'PLANNED_RESOURCE',
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+      defaultPercent: 100,
+      segments: [{ startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+    })
+    const ambiguousNr = await createNamedPerson(projectId, plannerRt, { allocationMode: 'CAPACITY_PLAN' })
+    const { plan } = await runDryRun()
+    const baselineRoleOps = plan.operations.filter(op => op.ownerId === plannerRt && op.kind === 'create-role-profile')
+    expect(baselineRoleOps).toHaveLength(1)
+    const decision = plan.decisions.find(d => d.ownerId === ambiguousNr)!
+    const manifest = await buildManifest(plan, [
+      { decisionId: decision.id, resolution: plannedResourceResolution() },
+    ])
+    const merged = resolvePlanWithManifest(plan, manifest)
+    expect(merged.errors).toEqual([])
+    expect(merged.plan.operations.filter(op => op.ownerId === plannerRt && op.kind === 'create-role-profile')).toHaveLength(1)
+
+    const outcome = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(outcome.exitCode).toBe(0)
+    const roleCount = await prisma.capacityProfile.count({ where: { resourceTypeId: plannerRt, ownerKind: 'ROLE' } })
+    expect(roleCount).toBe(1)
+    const readiness = await runProductionMigrationReadiness(prisma)
+    expect(readiness.passed).toBe(true)
+  })
+
+  it('rejects conflicting parent ROLE evidence before writes, identifying parent and decisions', async () => {
+    const projectId = await createProject()
+    const parentRt = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const nrA = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const nrB = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const { plan } = await runDryRun()
+    const mutated = JSON.parse(JSON.stringify(plan)) as unknown as Record<string, unknown>
+    const mutatedDecisions = mutated.decisions as Array<Record<string, unknown>>
+    const mutatedB = mutatedDecisions.find(d => d.ownerId === nrB)!
+    mutatedB.roleProposed = {
+      ...(mutatedB.roleProposed as Record<string, unknown>),
+      defaultPercent: 123,
+    }
+    const manifest = await buildManifest(plan, [
+      { decisionId: (mutatedDecisions.find(d => d.ownerId === nrA)!.id as string), resolution: plannedResourceResolution() },
+      { decisionId: (mutatedB.id as string), resolution: plannedResourceResolution() },
+    ])
+    const profilesBefore = await prisma.capacityProfile.count()
+    const outcome = await applyRemediationPlan(prisma, { plan: mutated as never, manifest })
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.errors.join(' ')).toContain('conflicting parent ROLE proposals')
+    expect(outcome.errors.join(' ')).toContain(parentRt)
+    expect(await prisma.capacityProfile.count()).toBe(profilesBefore)
+  })
+
+  it('keeps coordinated operations and fingerprint stable under reversed manifest order', async () => {
+    const projectId = await createProject()
+    const parentRt = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const nrA = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const nrB = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    const { plan } = await runDryRun()
+    const decA = plan.decisions.find(d => d.ownerId === nrA)!
+    const decB = plan.decisions.find(d => d.ownerId === nrB)!
+    const forward = await buildManifest(plan, [
+      { decisionId: decA.id, resolution: plannedResourceResolution() },
+      { decisionId: decB.id, resolution: plannedResourceResolution() },
+    ])
+    const reversed = await buildManifest(plan, [
+      { decisionId: decB.id, resolution: plannedResourceResolution() },
+      { decisionId: decA.id, resolution: plannedResourceResolution() },
+    ])
+    const forwardMerged = resolvePlanWithManifest(plan, forward)
+    const reversedMerged = resolvePlanWithManifest(plan, reversed)
+    expect(forwardMerged.errors).toEqual([])
+    expect(reversedMerged.errors).toEqual([])
+    expect(forwardMerged.plan.operations.map(op => op.id)).toEqual(reversedMerged.plan.operations.map(op => op.id))
+    expect(forwardMerged.plan.fingerprint).toBe(reversedMerged.plan.fingerprint)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
 // 5c. Full-scope drift refusal before writes (review round 2)
 // ════════════════════════════════════════════════════════════════════════════
 

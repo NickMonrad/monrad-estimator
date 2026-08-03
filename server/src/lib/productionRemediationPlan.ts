@@ -230,13 +230,17 @@ export interface PlanDecisionEntry {
   allowedResolutions: string[]
   message: string
   /**
-   * Owner-kind-required NamedResource decisions only: when the parent
-   * ResourceType's ROLE profile can be derived deterministically, this
-   * carries the derived profile so an explicit PLANNED_RESOURCE selection can
-   * also create the planner-owned ROLE profile (readiness completeness
-   * requires it). Null/absent when the ROLE cannot be proven — the
-   * PLANNED_RESOURCE selection is then rejected rather than guessed.
+   * Owner-kind-required NamedResource decisions only. Parent ROLE state for a
+   * PLANNED_RESOURCE selection:
+   *   - 'existing': exactly one structurally valid ROLE profile exists — it
+   *     is retained; no parent operation is emitted;
+   *   - 'derived': no valid ROLE profile exists and the deterministic
+   *     derivation was captured (roleOwnerId/roleProposed/roleEvidenceHash);
+   *     the merge coordinates at most one creation per parent ResourceType;
+   *   - 'unproven': no valid ROLE profile and no deterministic derivation —
+   *     PLANNED_RESOURCE is rejected rather than guessed.
    */
+  roleState?: 'existing' | 'derived' | 'unproven'
   roleOwnerId?: string | null
   roleProposed?: ProposedProfile | null
   roleEvidenceHash?: string | null
@@ -1042,15 +1046,34 @@ export function buildRemediationPlan(
             proposed: derived.proposed,
           })
         } else if (derived.classification === 'decisionRequired') {
-          // The parent role's ROLE profile may be required if the reviewed
-          // decision selects PLANNED_RESOURCE (planner-owned completeness).
-          const roleDerivation = deriveRoleProfileFromLegacy(rt, stateProjectsActivePlan(state, project.id))
-          const roleProposed = roleDerivation.classification === 'deterministic'
-            ? roleDerivation.proposed ?? null
-            : null
-          const roleEvidenceHash = roleProposed
-            ? evidenceHash(buildRtEvidence(rt, stateProjectsActivePlan(state, project.id)))
-            : null
+          // Parent ROLE state for a PLANNED_RESOURCE selection (issue #421
+          // review round 3): exactly one structurally valid ROLE profile is
+          // retained as-is; otherwise a deterministic derivation is captured
+          // for coordination; anything else stays fail-closed ('unproven').
+          const parentRoleProfiles = (profilesByOwner.get(`rt::${rt.id}`) ?? [])
+            .filter(p => p.ownerKind === 'ROLE')
+          const validParentRole = parentRoleProfiles.length === 1 &&
+            validateProfileStructure(parentRoleProfiles[0]!, context).length === 0
+          let roleState: 'existing' | 'derived' | 'unproven'
+          let roleProposed: ProposedProfile | null = null
+          let roleEvidenceHash: string | null = null
+          if (validParentRole) {
+            roleState = 'existing'
+          } else if (parentRoleProfiles.length > 0) {
+            // A parent ROLE profile exists but is not a valid single owner
+            // state — never replace or duplicate it without a separate
+            // explicit reviewed decision.
+            roleState = 'unproven'
+          } else {
+            const roleDerivation = deriveRoleProfileFromLegacy(rt, stateProjectsActivePlan(state, project.id))
+            if (roleDerivation.classification === 'deterministic' && roleDerivation.proposed) {
+              roleState = 'derived'
+              roleProposed = roleDerivation.proposed
+              roleEvidenceHash = evidenceHash(buildRtEvidence(rt, stateProjectsActivePlan(state, project.id)))
+            } else {
+              roleState = 'unproven'
+            }
+          }
           addDecision(finding, {
             projectId: project.id,
             ownerId: nr.id,
@@ -1067,7 +1090,8 @@ export function buildRemediationPlan(
             // NAMED_PERSON.
             allowedResolutions: ['owner-kind-decision'],
             message: `${derived.message} — owner kind and capacity require explicit review`,
-            roleOwnerId: roleProposed ? rt.id : null,
+            roleState,
+            roleOwnerId: roleState === 'derived' ? rt.id : null,
             roleProposed,
             roleEvidenceHash,
           })
@@ -1679,6 +1703,32 @@ export function resolvePlanWithManifest(
     if (finding.decisionId) findingByDecisionId.set(finding.decisionId, finding)
   }
 
+  // ── Parent ROLE coordination (issue #421 review round 3) ─────────────────
+  // Baseline ROLE-profile operations (create or update) indexed by parent
+  // ResourceType id, so PLANNED_RESOURCE decisions can reuse a compatible
+  // existing operation instead of emitting a duplicate.
+  const baselineRoleOpsByParent = new Map<string, RemediationOperation[]>()
+  for (const op of plan.operations) {
+    const proposed = op.proposed as ProposedProfile
+    const isRoleOp = op.kind === 'create-role-profile' ||
+      (op.kind === 'update-profile' && proposed?.ownerKind === 'ROLE')
+    if (isRoleOp) {
+      const list = baselineRoleOpsByParent.get(op.ownerId) ?? []
+      list.push(op)
+      baselineRoleOpsByParent.set(op.ownerId, list)
+    }
+  }
+  // Parent ROLE requirements introduced by resolved PLANNED_RESOURCE
+  // decisions, grouped deterministically by parent ResourceType id. Multiple
+  // child decisions for the same parent collapse into one requirement;
+  // incompatible proposals are rejected instead of silently selecting one.
+  const roleRequirements = new Map<string, {
+    projectId: string
+    roleProposed: ProposedProfile
+    roleEvidenceHash: string
+    decisionIds: string[]
+  }>()
+
   for (const entry of plan.decisions) {
     const manifestDecision = resolvedByDecisionId.get(entry.id)
     if (!manifestDecision) {
@@ -1746,14 +1796,42 @@ export function resolvePlanWithManifest(
       }
       // A PLANNED_RESOURCE selection makes the parent role planner-owned,
       // which requires exactly one ROLE profile (readiness completeness).
-      // The ROLE profile must come from the reviewed deterministic
-      // derivation captured at dry-run — never invented here.
-      if (resolution.ownerKind === 'PLANNED_RESOURCE' && !(entry.roleProposed && entry.roleEvidenceHash && entry.roleOwnerId)) {
-        errors.push(
-          `manifest decision ${entry.id}: PLANNED_RESOURCE requires a deterministically derivable parent ROLE profile, ` +
-          'which is not available for this owner — choose NAMED_PERSON or resolve the parent role separately',
-        )
-        continue
+      // The ROLE profile comes from the reviewed deterministic derivation
+      // captured at dry-run — never invented here. A valid existing ROLE
+      // profile is retained as-is (roleState 'existing'); a derived
+      // proposal is coordinated once per parent (roleState 'derived');
+      // anything else stays fail-closed (roleState 'unproven').
+      if (resolution.ownerKind === 'PLANNED_RESOURCE') {
+        if (entry.roleState === 'existing') {
+          // Valid parent ROLE profile already exists — retained, no parent op.
+        } else if (entry.roleState === 'derived' && entry.roleOwnerId && entry.roleProposed && entry.roleEvidenceHash) {
+          const requirement = roleRequirements.get(entry.roleOwnerId)
+          if (requirement) {
+            if (
+              requirement.roleEvidenceHash !== entry.roleEvidenceHash ||
+              canonicalJson(requirement.roleProposed) !== canonicalJson(entry.roleProposed)
+            ) {
+              errors.push(
+                `manifest decisions ${requirement.decisionIds.join(', ')} and ${entry.id} imply conflicting parent ROLE proposals for ResourceType ${entry.roleOwnerId}`,
+              )
+              continue
+            }
+            requirement.decisionIds.push(entry.id)
+          } else {
+            roleRequirements.set(entry.roleOwnerId, {
+              projectId: entry.projectId,
+              roleProposed: entry.roleProposed,
+              roleEvidenceHash: entry.roleEvidenceHash,
+              decisionIds: [entry.id],
+            })
+          }
+        } else {
+          errors.push(
+            `manifest decision ${entry.id}: PLANNED_RESOURCE requires a valid existing or deterministically derivable parent ROLE profile, ` +
+            'which is not available for this owner — choose NAMED_PERSON or resolve the parent role separately',
+          )
+          continue
+        }
       }
       ownerKind = resolution.ownerKind
       capacity = resolution.capacity
@@ -1785,23 +1863,37 @@ export function resolvePlanWithManifest(
       decisionId: entry.id,
       proposed,
     })
+  }
 
-    // PLANNED_RESOURCE selection: also create the planner-owned ROLE profile
-    // for the parent ResourceType (exact deterministic derivation captured at
-    // dry-run; readiness completeness requires it).
-    if (resolution.shape === 'owner-kind-decision' && ownerKind === 'PLANNED_RESOURCE' && entry.roleOwnerId && entry.roleProposed && entry.roleEvidenceHash) {
-      operations.push({
-        id: `op-${String(operations.length + 1).padStart(4, '0')}`,
-        kind: 'create-role-profile',
-        classification: 'decisionResolved',
-        projectId: entry.projectId,
-        ownerId: entry.roleOwnerId,
-        ownerName: '',
-        evidenceHash: entry.roleEvidenceHash,
-        decisionId: entry.id,
-        proposed: entry.roleProposed,
-      })
+  // ── Emit coordinated parent ROLE operations (at most one per parent) ─────
+  // Deterministic order: requirements sorted by parent ResourceType id. A
+  // compatible baseline ROLE operation for the parent is reused; otherwise
+  // exactly one create operation is emitted for all PLANNED_RESOURCE child
+  // decisions sharing the parent.
+  for (const [parentId, requirement] of [...roleRequirements.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const baselineOps = baselineRoleOpsByParent.get(parentId) ?? []
+    if (baselineOps.length > 0) {
+      const compatible = baselineOps.some(op => canonicalJson(op.proposed) === canonicalJson(requirement.roleProposed))
+      if (!compatible) {
+        errors.push(
+          `parent ROLE requirement for ResourceType ${parentId} (decisions ${requirement.decisionIds.join(', ')}) conflicts with ` +
+          `baseline operation(s) ${baselineOps.map(op => op.id).join(', ')} — resolve the parent role with a separate reviewed decision`,
+        )
+      }
+      // Compatible baseline operations are reused; no duplicate is emitted.
+      continue
     }
+    operations.push({
+      id: `op-${String(operations.length + 1).padStart(4, '0')}`,
+      kind: 'create-role-profile',
+      classification: 'decisionResolved',
+      projectId: requirement.projectId,
+      ownerId: parentId,
+      ownerName: '',
+      evidenceHash: requirement.roleEvidenceHash,
+      decisionId: requirement.decisionIds[0]!,
+      proposed: requirement.roleProposed,
+    })
   }
 
   const merged: RemediationPlan = {

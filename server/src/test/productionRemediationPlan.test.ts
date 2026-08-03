@@ -33,7 +33,10 @@ import {
   sha256Hex,
   type RemediationDatabaseState,
   type RemediationManifest,
+  type ManifestDecision,
+  type ProposedProfile,
   type RemediationNamedResource,
+  type RemediationPlan,
   type RemediationProject,
   type RemediationResourceType,
 } from '../lib/productionRemediationPlan.js'
@@ -969,7 +972,7 @@ describe('owner-kind decisions for ambiguous NamedResources', () => {
       }],
     }
     const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
-    expect(resolved.errors.join(' ')).toContain('PLANNED_RESOURCE requires a deterministically derivable parent ROLE profile')
+    expect(resolved.errors.join(' ')).toContain('PLANNED_RESOURCE requires a valid existing or deterministically derivable parent ROLE profile')
   })
 
   it('emits the deterministic parent ROLE op when PLANNED_RESOURCE is selected', () => {
@@ -1008,6 +1011,309 @@ describe('owner-kind decisions for ambiguous NamedResources', () => {
       decisionId: decision.id,
     })
     expect(resolved.plan.operations[1]!.proposed).toMatchObject({ ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING' })
+  })
+
+  // ── Shared-parent coordination (issue #421 review round 3) ───────────────
+
+  function sharedParentPlan(): {
+    plan: RemediationPlan
+    nrA: string
+    nrB: string
+    parentId: string
+  } {
+    const nrA = 'nr-shared-a'
+    const nrB = 'nr-shared-b'
+    const parentId = 'rt-shared'
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [
+        makeRt({
+          id: parentId,
+          allocationMode: 'EFFORT',
+          namedResources: [
+            makeNr({ id: nrA, allocationMode: 'CAPACITY_PLAN' }),
+            makeNr({ id: nrB, allocationMode: 'CAPACITY_PLAN' }),
+          ],
+        }),
+      ],
+    })), 'commit-1')
+    return { plan, nrA, nrB, parentId }
+  }
+
+  function plannedResourceResolution(ownerId: string, decisionId: string): ManifestDecision {
+    return {
+      decisionId,
+      projectId: 'proj-1',
+      ownerId,
+      snapshotId: null,
+      resolution: {
+        shape: 'owner-kind-decision',
+        ownerKind: 'PLANNED_RESOURCE',
+        capacity: { shape: 'scalar-profile', planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 100 },
+      },
+    }
+  }
+
+  it('emits at most one parent ROLE op for two PLANNED_RESOURCE children of one parent', () => {
+    const { plan, nrA, nrB, parentId } = sharedParentPlan()
+    const decA = plan.decisions.find(d => d.ownerId === nrA)!
+    const decB = plan.decisions.find(d => d.ownerId === nrB)!
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [
+        plannedResourceResolution(nrA, decA.id),
+        plannedResourceResolution(nrB, decB.id),
+      ],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors).toEqual([])
+    const childOps = resolved.plan.operations.filter(op => op.ownerId === nrA || op.ownerId === nrB)
+    const parentOps = resolved.plan.operations.filter(op => op.ownerId === parentId && op.kind === 'create-role-profile')
+    expect(childOps).toHaveLength(2)
+    expect(parentOps).toHaveLength(1)
+    expect(resolved.plan.operations).toHaveLength(3)
+  })
+
+  it('produces identical coordinated operations and fingerprint regardless of manifest decision order', () => {
+    const { plan, nrA, nrB } = sharedParentPlan()
+    const decA = plan.decisions.find(d => d.ownerId === nrA)!
+    const decB = plan.decisions.find(d => d.ownerId === nrB)!
+    const forward = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [
+        plannedResourceResolution(nrA, decA.id),
+        plannedResourceResolution(nrB, decB.id),
+      ],
+    }
+    const reversed = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [
+        plannedResourceResolution(nrB, decB.id),
+        plannedResourceResolution(nrA, decA.id),
+      ],
+    }
+    const forwardResolved = resolvePlanWithManifest(plan, forward as RemediationManifest)
+    const reversedResolved = resolvePlanWithManifest(plan, reversed as RemediationManifest)
+    expect(forwardResolved.errors).toEqual([])
+    expect(reversedResolved.errors).toEqual([])
+    expect(forwardResolved.plan.operations.map(op => op.id)).toEqual(reversedResolved.plan.operations.map(op => op.id))
+    expect(forwardResolved.plan.fingerprint).toBe(reversedResolved.plan.fingerprint)
+  })
+
+  it('coordinates one parent ROLE op for mixed PLANNED_RESOURCE / NAMED_PERSON children', () => {
+    const { plan, nrA, nrB, parentId } = sharedParentPlan()
+    const decA = plan.decisions.find(d => d.ownerId === nrA)!
+    const decB = plan.decisions.find(d => d.ownerId === nrB)!
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [
+        plannedResourceResolution(nrA, decA.id),
+        {
+          decisionId: decB.id,
+          projectId: 'proj-1',
+          ownerId: nrB,
+          snapshotId: null,
+          resolution: {
+            shape: 'owner-kind-decision' as const,
+            ownerKind: 'NAMED_PERSON' as const,
+            capacity: { shape: 'availability-window' as const, defaultPercent: 100, startWeek: 0, endWeek: 10 },
+          },
+        },
+      ],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors).toEqual([])
+    const parentOps = resolved.plan.operations.filter(op => op.ownerId === parentId && op.kind === 'create-role-profile')
+    expect(parentOps).toHaveLength(1)
+    const childA = resolved.plan.operations.find(op => op.ownerId === nrA)!
+    const childB = resolved.plan.operations.find(op => op.ownerId === nrB)!
+    expect(childA.proposed).toMatchObject({ ownerKind: 'PLANNED_RESOURCE' })
+    expect(childB.proposed).toMatchObject({ ownerKind: 'NAMED_PERSON' })
+  })
+
+  it('retains a valid existing parent ROLE profile (roleState existing) and emits no parent op', () => {
+    const nr = makeNr({ id: 'nr-exist', allocationMode: 'CAPACITY_PLAN' })
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [
+        makeRt({
+          id: 'rt-exist',
+          allocationMode: 'EFFORT',
+          namedResources: [nr],
+        }),
+      ],
+      capacityProfiles: [{
+        id: 'prof-exist-role',
+        projectId: 'proj-1',
+        resourceTypeId: 'rt-exist',
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        legacy: null,
+        segments: [],
+      }],
+    })), 'commit-1')
+    const decision = plan.decisions.find(d => d.ownerId === 'nr-exist')!
+    expect(decision.roleState).toBe('existing')
+    expect(decision.roleProposed).toBeNull()
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [plannedResourceResolution('nr-exist', decision.id)],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors).toEqual([])
+    expect(resolved.plan.operations).toHaveLength(1) // child only
+    expect(resolved.plan.operations[0]!.ownerId).toBe('nr-exist')
+  })
+
+  it('reuses a compatible baseline parent ROLE operation (planner-owned parent)', () => {
+    // Planner-owned parent: baseline ROLE op derived from plan entries +
+    // one ambiguous NR decision; PLANNED_RESOURCE must reuse the baseline op.
+    const nr = makeNr({ id: 'nr-base', allocationMode: 'CAPACITY_PLAN' })
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [
+        makeRt({
+          id: 'rt-base',
+          allocationMode: 'CAPACITY_PLAN',
+          count: 1,
+          namedResources: [
+            makeNr({ id: 'nr-planned', allocationMode: 'CAPACITY_PLAN' }),
+            nr,
+          ],
+        }),
+      ],
+      activePlanPeriods: [{
+        periodIndex: 0,
+        startWeek: 0,
+        endWeek: 8,
+        entries: [{ resourceTypeId: 'rt-base', headcount: 1 }],
+      }],
+      capacityProfiles: [{
+        id: 'prof-nr-planned',
+        projectId: 'proj-1',
+        resourceTypeId: null,
+        namedResourceId: 'nr-planned',
+        ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: null,
+        startWeek: 0,
+        endWeek: 7,
+        legacy: null,
+        segments: [{ id: 'seg-planned', startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+      }],
+    })), 'commit-1')
+    const baselineRoleOps = plan.operations.filter(op => op.ownerId === 'rt-base' && op.kind === 'create-role-profile')
+    expect(baselineRoleOps).toHaveLength(1)
+    const decision = plan.decisions.find(d => d.ownerId === 'nr-base')!
+    expect(decision.roleState).toBe('derived')
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [plannedResourceResolution('nr-base', decision.id)],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors).toEqual([])
+    const parentRoleOps = resolved.plan.operations.filter(op => op.ownerId === 'rt-base' && op.kind === 'create-role-profile')
+    expect(parentRoleOps).toHaveLength(1) // baseline reused, no duplicate
+    expect(resolved.plan.operations).toHaveLength(2) // baseline role op + child
+  })
+
+  it('rejects conflicting parent ROLE requirements and identifies the parent and decisions', () => {
+    const { plan, nrA, nrB } = sharedParentPlan()
+    const decA = plan.decisions.find(d => d.ownerId === nrA)!
+    const decB = plan.decisions.find(d => d.ownerId === nrB)!
+    // Mutate one child's captured role proposal so the two decisions imply
+    // different parent ROLE profiles.
+    const mutatedPlan = JSON.parse(JSON.stringify(plan)) as RemediationPlan
+    const mutatedB = mutatedPlan.decisions.find(d => d.ownerId === nrB)!
+    mutatedB.roleProposed = {
+      ...JSON.parse(JSON.stringify(mutatedB.roleProposed)),
+      defaultPercent: 123,
+    } as unknown as ProposedProfile
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [
+        plannedResourceResolution(nrA, decA.id),
+        plannedResourceResolution(nrB, decB.id),
+      ],
+    }
+    const resolved = resolvePlanWithManifest(mutatedPlan, manifest as RemediationManifest)
+    expect(resolved.errors.join(' ')).toContain('conflicting parent ROLE proposals')
+    expect(resolved.errors.join(' ')).toContain('rt-shared')
+    expect(resolved.errors.join(' ')).toContain(decA.id)
+    expect(resolved.errors.join(' ')).toContain(decB.id)
+  })
+
+  it('rejects a parent ROLE requirement conflicting with a baseline operation', () => {
+    const nr = makeNr({ id: 'nr-conflict', allocationMode: 'CAPACITY_PLAN' })
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [
+        makeRt({
+          id: 'rt-conflict',
+          allocationMode: 'CAPACITY_PLAN',
+          count: 1,
+          namedResources: [
+            makeNr({ id: 'nr-planned2', allocationMode: 'CAPACITY_PLAN' }),
+            nr,
+          ],
+        }),
+      ],
+      activePlanPeriods: [{
+        periodIndex: 0,
+        startWeek: 0,
+        endWeek: 8,
+        entries: [{ resourceTypeId: 'rt-conflict', headcount: 1 }],
+      }],
+      capacityProfiles: [{
+        id: 'prof-nr-planned2',
+        projectId: 'proj-1',
+        resourceTypeId: null,
+        namedResourceId: 'nr-planned2',
+        ownerKind: 'PLANNED_RESOURCE',
+        planningBasis: 'CAPACITY_PROFILE',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: null,
+        startWeek: 0,
+        endWeek: 7,
+        legacy: null,
+        segments: [{ id: 'seg-planned2', startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+      }],
+    })), 'commit-1')
+    const baselineRoleOps = plan.operations.filter(op => op.ownerId === 'rt-conflict' && op.kind === 'create-role-profile')
+    expect(baselineRoleOps).toHaveLength(1)
+    const decision = plan.decisions.find(d => d.ownerId === 'nr-conflict')!
+    const mutatedPlan = JSON.parse(JSON.stringify(plan)) as RemediationPlan
+    const mutatedDecision = mutatedPlan.decisions.find(d => d.ownerId === 'nr-conflict')!
+    mutatedDecision.roleProposed = {
+      ...JSON.parse(JSON.stringify(mutatedDecision.roleProposed)),
+      defaultPercent: 321,
+    } as unknown as ProposedProfile
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [plannedResourceResolution('nr-conflict', decision.id)],
+    }
+    const resolved = resolvePlanWithManifest(mutatedPlan, manifest as RemediationManifest)
+    expect(resolved.errors.join(' ')).toContain('conflicts with baseline operation')
+    expect(resolved.errors.join(' ')).toContain('rt-conflict')
+    expect(resolved.errors.join(' ')).toContain(baselineRoleOps[0]!.id)
   })
 
   it('keeps deterministic NamedResource mappings unchanged (no owner-kind decision)', () => {

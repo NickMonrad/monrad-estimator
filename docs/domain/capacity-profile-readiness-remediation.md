@@ -145,6 +145,27 @@ named person or a planner-created resource. Such decisions are emitted with
   completeness requires exactly one ROLE profile for planner-owned roles);
   when the parent ROLE profile cannot be derived deterministically, the
   `PLANNED_RESOURCE` selection is rejected rather than guessed;
+
+### Shared-parent ROLE coordination
+
+Parent ROLE ownership is coordinated **once per ResourceType** across the
+complete resolved plan:
+
+- a valid existing parent ROLE profile (exactly one, structurally valid) is
+  **retained as-is** — no create/update operation is emitted and no
+  replacement happens when a child becomes `PLANNED_RESOURCE`;
+- a compatible baseline ROLE operation for the parent (same reviewed
+  proposed owner, profile ID and shape) is **reused** — no duplicate is
+  emitted;
+- multiple `PLANNED_RESOURCE` children under the same parent collapse into
+  **one** deterministic parent ROLE operation (grouped by parent ResourceType
+  id); output is independent of manifest decision ordering;
+- conflicting parent ROLE proposals (incompatible requirements or a
+  requirement incompatible with a baseline operation) **reject the resolved
+  plan before any write**, reporting the parent ResourceType and the
+  conflicting decision/operation IDs;
+- when no valid ROLE profile exists and no deterministic proposal can be
+  proven, `PLANNED_RESOURCE` stays fail-closed;
 - the selected owner kind and nested capacity are validated through the
   authoritative structural and ownership rules before any write;
 - deterministic NamedResource mappings (where existing evidence proves a
