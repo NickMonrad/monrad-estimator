@@ -703,6 +703,49 @@ this design review pure; do not expand this PR into implementation.
   re-entry is deferred to a separately reviewed, evidence-bound repair under
   its own issue (Section 5.6) and is not part of the first implementation.
 
+## 11. Implementation record (Issue #428)
+
+Implemented on merged main (`fe80eb7c`, PR #427) by the `#428` PR. This
+section records only the implemented component/function names and actual API
+fields; it does not restate or broaden the policy.
+
+- **Classifier** — `classifySnapshotRestorability(raw, projectId)` in
+  `server/src/lib/snapshotRestorability.ts`, returning a discriminated
+  verdict `{ kind: 'restorable' }` | `{ kind: 'quarantined', … }` |
+  `{ kind: 'defect', … }` with `restoreStatus: 'restorable' |
+  'non-restorable'` and `restoreReason: string | null`. The raw-value shape
+  predicate is `classifyV2QuarantineShape(fields)`; stable reasons are
+  `QUARANTINE_CLASS_A_REASON` and `QUARANTINE_CLASS_B_REASON`.
+- **Shared translator helpers** — `v2ResourceTypeEntryErrors`,
+  `v2NamedResourceEntryErrors`, `v2EffectiveNamedMode`, `isKnownV2Mode`,
+  `v2PercentIsValid`, `v2ProfilesToStructureInput` and
+  `validateV2TranslatedProfiles` in `server/src/lib/projectSnapshotCapacity.ts`;
+  the authoritative translator and the classifier run the same entry-level
+  rules (never-active policy, alias fallback, orphan rejection, percentage
+  and window-value checks).
+- **Listing API** — `GET /api/projects/:projectId/snapshots` returns the
+  existing fields plus `restoreStatus` and `restoreReason` per row, derived
+  from the stored content at read time.
+- **Rollback** — `rollbackProjectSnapshot` refuses any non-restorable
+  snapshot (quarantined or defective) with a 400 `{ error: <reason> }`
+  before any write, including the `pre_rollback` auto-snapshot.
+- **Retention** — `pruneSnapshots` (newest-20 cap) deletes only snapshots
+  positively classified restorable; quarantined and unclassifiable records
+  are preserved and never rewritten.
+- **Readiness** — the snapshot section classifies via the shared classifier;
+  quarantined snapshots are reported as
+  `quarantined (policy-accepted, non-restorable)` in a new `notes` list and
+  never block; every defect class still blocks.
+- **Remediation** — the planner classifies approved Class A/B entries as
+  `quarantined` findings with the stable reason and evidence hash, no plan
+  decision ID and no apply operation; `plan.summary.quarantined` counts them
+  separately. `classifyPlanExit` is unchanged (quarantine-only is eligible
+  for exit 0; decisions → 2; unsupported → 1). The manifest resolver cannot
+  address quarantined entries.
+- **Client** — `SnapshotHistoryPanel` renders `Non-restorable` with the
+  reason for non-restorable rows and does not render the Rollback control;
+  Diff/inspection remains available.
+
 ## Appendix — Sources reviewed
 
 Repository code (worktree at `e99b20e…`, branch

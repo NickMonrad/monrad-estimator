@@ -20,6 +20,7 @@ import {
   SnapshotValidationError,
 } from '../lib/projectSnapshotValidation.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
+import { classifySnapshotRestorability } from '../lib/snapshotRestorability.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -44,9 +45,23 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const snapshots = await prisma.backlogSnapshot.findMany({
     where: { projectId },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, label: true, trigger: true, createdAt: true, createdById: true },
+    select: { id: true, label: true, trigger: true, createdAt: true, createdById: true, snapshot: true },
   })
-  res.json(snapshots)
+  // Issue #428: restorability is derived from the stored content at read time
+  // (never persisted) so the list can surface quarantined/defective snapshots
+  // without rewriting or annotating the raw record.
+  res.json(snapshots.map(snap => {
+    const restorability = classifySnapshotRestorability(snap.snapshot, projectId)
+    return {
+      id: snap.id,
+      label: snap.label,
+      trigger: snap.trigger,
+      createdAt: snap.createdAt,
+      createdById: snap.createdById,
+      restoreStatus: restorability.restoreStatus,
+      restoreReason: restorability.restoreReason,
+    }
+  }))
 }))
 
 // POST /api/projects/:projectId/snapshots — manual snapshot

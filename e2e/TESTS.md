@@ -108,7 +108,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (16 tests)
+### `timeline.spec.ts` — Timeline (17 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -171,6 +171,12 @@ API-level tests using the `request` fixture. No browser UI involved.
 | Test | Description |
 |------|-------------|
 | generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_apply` trigger snapshot visibility and rollback button click |
+
+#### `Snapshot History — derived quarantine display` describe block (1 test — issue #428)
+
+| Test | Description |
+|------|-------------|
+| quarantined historical snapshot shows non-restorable status and reason; rollback is refused server-side | Creates a project via the UI, inserts a windowless `CAPACITY_PLAN` v2 snapshot row directly (the reviewed Class A shape the UI never produces), opens the Snapshot History panel on Timeline, asserts the row renders "Non-restorable" with the stable reason, that no Rollback control is rendered, and that Diff/inspection still works. Verifies the listing API exposes `restoreStatus: non-restorable` with the Class A reason and that a direct rollback POST is refused with 400 and the stable reason (server remains the enforcement boundary) |
 
 ---
 

@@ -18,10 +18,12 @@
  *     its named resources are explicit NAMED_PERSON profiles; profile and
  *     segment shapes follow the authoritative validation rules (reuses
  *     validatePersistedCapacityProfiles + checkPersistedCompleteness).
- *  3. Historical snapshot translatability — every stored BacklogSnapshot and
- *     TemplateSnapshot parses as v1/v2/v3/v4; v2 legacy capacity values are
- *     structurally translatable to profiles; v3/v4 payloads validate against
- *     the authoritative snapshot rules.
+ *  3. Historical snapshot restorability — every stored BacklogSnapshot and
+ *     TemplateSnapshot is classified by the shared restorability classifier
+ *     (issue #428): v2 legacy capacity values must be structurally
+ *     translatable or match an approved derived-quarantine shape (Class A/B,
+ *     policy-accepted and never blocking); v3/v4 payloads validate against
+ *     the authoritative snapshot rules; every other failure class blocks.
  *
  * Exit contract: the CLI exits 0 only when every section passes. Any blocker
  * yields a non-zero exit with an actionable human-readable report.
@@ -35,14 +37,7 @@ import {
   validatePersistedCapacityProfiles,
   checkPersistedCompleteness,
 } from './persistedCapacityProfileValidation.js'
-import { translateV2SnapshotProfiles } from './projectSnapshotCapacity.js'
-import {
-  parseSnapshotData,
-  isLegacyV1Snapshot,
-  isSnapshotV2,
-  type SnapshotV2,
-} from './projectSnapshotTypes.js'
-import { validateSnapshotV3 } from './projectSnapshotValidation.js'
+import { classifySnapshotRestorability } from './snapshotRestorability.js'
 
 // ─── Report types ────────────────────────────────────────────────────────────
 
@@ -50,6 +45,8 @@ export interface ReadinessSection {
   name: string
   passed: boolean
   blockers: string[]
+  /** Policy-accepted derived-quarantined records (never blockers). */
+  notes?: string[]
 }
 
 export interface ReadinessReport {
@@ -62,20 +59,6 @@ export class ReadinessError extends Error {
     super(message)
     this.name = 'ReadinessError'
   }
-}
-
-// ─── Historical v2 snapshot translation validation (read-only) ───────────────
-
-/**
- * Validate that a historical v2 snapshot's legacy capacity values are
- * structurally translatable to authoritative profiles. This delegates to the
- * exact shared translation helper used by rollback
- * (`translateV2SnapshotProfiles`), so readiness and rollback always agree on
- * whether a v2 payload is translatable (issue #418 PR 1 review). Read-only:
- * nothing is written.
- */
-export function validateV2SnapshotTranslation(v2: SnapshotV2, projectId: string): string[] {
-  return translateV2SnapshotProfiles(v2, projectId).errors
 }
 
 // ─── Section checks ──────────────────────────────────────────────────────────
@@ -156,55 +139,31 @@ async function checkSnapshots(prisma: PrismaClient): Promise<ReadinessSection> {
   // state, not project snapshots) and are deliberately NOT inspected — a
   // normal template snapshot must never block the migration readiness check.
   const backlogSnapshots = await prisma.backlogSnapshot.findMany({
-    select: { id: true, projectId: true },
+    select: { id: true, projectId: true, snapshot: true },
   })
 
   const blockers: string[] = []
+  const notes: string[] = []
   for (const snapshot of backlogSnapshots) {
-    const raw = await prisma.backlogSnapshot.findUnique({
-      where: { id: snapshot.id },
-      select: { snapshot: true },
-    })
-    if (!raw) {
-      blockers.push(`backlog snapshot ${snapshot.id}: row vanished during check`)
-      continue
+    const label = `backlog snapshot ${snapshot.id} (project ${snapshot.projectId})`
+    // Issue #428: the shared classifier derives the verdict from the stored
+    // content — approved historical quarantine is policy-accepted and never
+    // blocks; every defect class (malformed, unsupported, any other
+    // validation failure) stays a blocker.
+    const restorability = classifySnapshotRestorability(snapshot.snapshot, snapshot.projectId)
+    if (restorability.kind === 'quarantined') {
+      notes.push(`${label}: quarantined (policy-accepted, non-restorable) — ${restorability.restoreReason}`)
+    } else if (restorability.kind === 'defect') {
+      blockers.push(`${label}: ${restorability.restoreReason}`)
     }
-    blockers.push(...validateStoredSnapshot(
-      raw.snapshot,
-      `backlog snapshot ${snapshot.id} (project ${snapshot.projectId})`,
-      snapshot.projectId,
-    ))
   }
 
   return {
     name: 'historical snapshot parseability and translatability',
     passed: blockers.length === 0,
     blockers,
+    notes,
   }
-}
-
-function validateStoredSnapshot(raw: unknown, label: string, projectId: string): string[] {
-  let parsed: unknown
-  try {
-    parsed = parseSnapshotData(raw)
-  } catch (error) {
-    return [
-      `${label}: unsupported or malformed snapshot data — ${error instanceof Error ? error.message : String(error)}`,
-    ]
-  }
-
-  if (isLegacyV1Snapshot(parsed)) return []
-  if (isSnapshotV2(parsed)) {
-    return validateV2SnapshotTranslation(parsed, projectId).map(error => `${label}: ${error}`)
-  }
-  try {
-    validateSnapshotV3(parsed as Parameters<typeof validateSnapshotV3>[0])
-  } catch (error) {
-    return [
-      `${label}: invalid payload — ${error instanceof Error ? error.message : String(error)}`,
-    ]
-  }
-  return []
 }
 
 // ─── Main check ──────────────────────────────────────────────────────────────
@@ -240,6 +199,9 @@ export function formatReadinessReport(report: ReadinessReport): string {
     lines.push(section.passed ? `✅ ${section.name}: PASS` : `❌ ${section.name}: FAIL`)
     for (const blocker of section.blockers) {
       lines.push(`   - ${blocker}`)
+    }
+    for (const note of section.notes ?? []) {
+      lines.push(`   · ${note}`)
     }
     lines.push('')
   }

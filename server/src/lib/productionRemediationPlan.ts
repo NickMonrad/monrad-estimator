@@ -35,7 +35,14 @@ import {
   type CapacityProfileDTO,
 } from './capacityProfileMapping.js'
 import { buildRoleProfileData } from './squadPlannerProfileWriter.js'
-import { isNeverActiveWindow } from './projectSnapshotCapacity.js'
+import { isNeverActiveWindow, v2EffectiveNamedMode } from './projectSnapshotCapacity.js'
+import {
+  classifySnapshotRestorability,
+  classifyV2QuarantineShape,
+  QUARANTINE_CLASS_A_REASON,
+  QUARANTINE_CLASS_B_REASON,
+  type V2QuarantineClass,
+} from './snapshotRestorability.js'
 import {
   validateProfileStructure,
   type ProfileStructureInput,
@@ -67,6 +74,7 @@ export type FindingClassification =
   | 'decisionRequired'
   | 'unsupported'
   | 'alreadyValid'
+  | 'quarantined'
 
 export type OperationKind =
   | 'create-role-profile'
@@ -250,6 +258,8 @@ export interface RemediationPlanSummary {
   findings: Record<FindingClassification, number>
   operations: number
   decisionsRequired: number
+  /** Derived-quarantined historical snapshot entries (issue #428). */
+  quarantined: number
 }
 
 export interface RemediationPlan {
@@ -915,6 +925,7 @@ const EMPTY_CLASS_COUNTS = (): Record<FindingClassification, number> => ({
   decisionRequired: 0,
   unsupported: 0,
   alreadyValid: 0,
+  quarantined: 0,
 })
 
 function projectContext(project: RemediationProject): {
@@ -1240,22 +1251,56 @@ export function buildRemediationPlan(
     if (!isSnapshotV2(parsed)) continue
 
     const v2 = parsed as SnapshotV2
-    const rtById = new Map(v2.resourceTypes.map(rt => [rt.id, true]))
+    const rtById = new Map(v2.resourceTypes.map(rt => [rt.id, rt]))
+
+    // Issue #428: only a snapshot whose verdict is derived quarantine (every
+    // entry translates or matches an approved Class A/B shape, no independent
+    // defect anywhere) may carry quarantined findings. Mixed
+    // quarantine-and-defect snapshots keep the existing per-entry
+    // classifications (defects are never quarantined).
+    // An individual entry receives a quarantined finding only when its
+    // EFFECTIVE allocation mode is exactly CAPACITY_PLAN and its window fields
+    // match an approved Class A/B shape — a valid non-CAPACITY_PLAN entry
+    // (TIMELINE, EFFORT, FULL_PROJECT, null mode, explicit NamedResource
+    // override) whose raw window shape resembles Class A is never labelled
+    // quarantined.
+    const restorability = classifySnapshotRestorability(snapshot.snapshot, snapshot.projectId)
+    const quarantinedSnapshot = restorability.kind === 'quarantined'
+    const quarantineMessage = (entryClass: V2QuarantineClass): string =>
+      entryClass === 'A' ? QUARANTINE_CLASS_A_REASON : QUARANTINE_CLASS_B_REASON
 
     for (let i = 0; i < v2.resourceTypes.length; i++) {
       const rt = v2.resourceTypes[i]
-      const classified = classifySnapshotEntry({
+      const entryPayload = {
         allocationMode: rt.allocationMode ?? null,
         allocationPercent: rt.allocationPercent ?? null,
         allocationStartWeek: rt.allocationStartWeek ?? null,
         allocationEndWeek: rt.allocationEndWeek ?? null,
-      })
-      const evidence = buildSnapshotEntryEvidence(snapshot.id, 'resourceType', rt.id, {
-        allocationMode: rt.allocationMode ?? null,
-        allocationPercent: rt.allocationPercent ?? null,
-        allocationStartWeek: rt.allocationStartWeek ?? null,
-        allocationEndWeek: rt.allocationEndWeek ?? null,
-      })
+      }
+      if (quarantinedSnapshot && rt.allocationMode === 'CAPACITY_PLAN') {
+        const entryClass = classifyV2QuarantineShape({
+          primaryStart: entryPayload.allocationStartWeek,
+          aliasStart: null,
+          primaryEnd: entryPayload.allocationEndWeek,
+          aliasEnd: null,
+        })
+        if (entryClass != null) {
+          addFinding({
+            category: 'snapshot-entry',
+            projectId: snapshot.projectId,
+            ownerId: rt.id,
+            ownerName: rt.name,
+            profileId: null,
+            snapshotId: snapshot.id,
+            entryId: rt.id,
+            classification: 'quarantined',
+            message: quarantineMessage(entryClass),
+          }, buildSnapshotEntryEvidence(snapshot.id, 'resourceType', rt.id, entryPayload))
+          continue
+        }
+      }
+      const classified = classifySnapshotEntry(entryPayload)
+      const evidence = buildSnapshotEntryEvidence(snapshot.id, 'resourceType', rt.id, entryPayload)
       const finding = addFinding({
         category: 'snapshot-entry',
         projectId: snapshot.projectId,
@@ -1309,7 +1354,7 @@ export function buildRemediationPlan(
         }))
         continue
       }
-      const classified = classifySnapshotEntry({
+      const entryPayload = {
         allocationMode: nr.allocationMode ?? null,
         allocationPercent: nr.allocationPercent ?? null,
         allocationPct: nr.allocationPct ?? null,
@@ -1317,16 +1362,34 @@ export function buildRemediationPlan(
         allocationEndWeek: nr.allocationEndWeek ?? null,
         startWeek: nr.startWeek ?? null,
         endWeek: nr.endWeek ?? null,
-      })
-      const evidence = buildSnapshotEntryEvidence(snapshot.id, 'namedResource', nr.id, {
-        allocationMode: nr.allocationMode ?? null,
-        allocationPercent: nr.allocationPercent ?? null,
-        allocationPct: nr.allocationPct ?? null,
-        allocationStartWeek: nr.allocationStartWeek ?? null,
-        allocationEndWeek: nr.allocationEndWeek ?? null,
-        startWeek: nr.startWeek ?? null,
-        endWeek: nr.endWeek ?? null,
-      })
+      }
+      if (quarantinedSnapshot) {
+        const mode = v2EffectiveNamedMode(nr, rtById.get(nr.resourceTypeId ?? ''))
+        if (mode === 'CAPACITY_PLAN') {
+          const entryClass = classifyV2QuarantineShape({
+            primaryStart: entryPayload.allocationStartWeek,
+            aliasStart: entryPayload.startWeek,
+            primaryEnd: entryPayload.allocationEndWeek,
+            aliasEnd: entryPayload.endWeek,
+          })
+          if (entryClass != null) {
+            addFinding({
+              category: 'snapshot-entry',
+              projectId: snapshot.projectId,
+              ownerId: nr.id,
+              ownerName: nr.name,
+              profileId: null,
+              snapshotId: snapshot.id,
+              entryId: nr.id,
+              classification: 'quarantined',
+              message: quarantineMessage(entryClass),
+            }, buildSnapshotEntryEvidence(snapshot.id, 'namedResource', nr.id, entryPayload))
+            continue
+          }
+        }
+      }
+      const classified = classifySnapshotEntry(entryPayload)
+      const evidence = buildSnapshotEntryEvidence(snapshot.id, 'namedResource', nr.id, entryPayload)
       const finding = addFinding({
         category: 'snapshot-entry',
         projectId: snapshot.projectId,
@@ -1358,6 +1421,7 @@ export function buildRemediationPlan(
     findings: classCounts,
     operations: operations.length,
     decisionsRequired: decisions.length,
+    quarantined: classCounts.quarantined,
   }
   const plan: RemediationPlan = {
     formatVersion: REMEDIATION_PLAN_FORMAT_VERSION,
@@ -1907,9 +1971,11 @@ export function resolvePlanWithManifest(
         decisionRequired: findings.filter(f => f.classification === 'decisionRequired').length,
         unsupported: findings.filter(f => f.classification === 'unsupported').length,
         alreadyValid: findings.filter(f => f.classification === 'alreadyValid').length,
+        quarantined: findings.filter(f => f.classification === 'quarantined').length,
       },
       operations: operations.length,
       decisionsRequired: decisions.length,
+      quarantined: findings.filter(f => f.classification === 'quarantined').length,
     },
     fingerprint: computePlanFingerprint({
       formatVersion: plan.formatVersion,
@@ -1919,9 +1985,11 @@ export function resolvePlanWithManifest(
           decisionRequired: findings.filter(f => f.classification === 'decisionRequired').length,
           unsupported: findings.filter(f => f.classification === 'unsupported').length,
           alreadyValid: findings.filter(f => f.classification === 'alreadyValid').length,
+          quarantined: findings.filter(f => f.classification === 'quarantined').length,
         },
         operations: operations.length,
         decisionsRequired: decisions.length,
+        quarantined: findings.filter(f => f.classification === 'quarantined').length,
       },
       findings,
       operations,
@@ -2021,9 +2089,17 @@ export function formatRemediationPlanReport(plan: RemediationPlan): string {
   lines.push(`  explicit decisions needed: ${plan.summary.findings.decisionRequired}`)
   lines.push(`  unsupported / invalid:     ${plan.summary.findings.unsupported}`)
   lines.push(`  already valid / no action: ${plan.summary.findings.alreadyValid}`)
+  lines.push(`  quarantined (historical):  ${plan.summary.quarantined}`)
   lines.push(`  operations (writes):       ${plan.summary.operations}`)
   lines.push(`  unresolved decisions:      ${plan.summary.decisionsRequired}`)
   lines.push('')
+  if (plan.summary.quarantined > 0) {
+    lines.push('Quarantined (policy-accepted, non-restorable):')
+    for (const finding of plan.findings.filter(f => f.classification === 'quarantined')) {
+      lines.push(`   - ${finding.id}: ${finding.message} (${finding.projectId} / snapshot ${finding.snapshotId} / ${finding.entryId})`)
+    }
+    lines.push('')
+  }
   if (plan.summary.findings.unsupported > 0) {
     lines.push('❌ Unsupported or structurally invalid findings present:')
     for (const finding of plan.findings.filter(f => f.classification === 'unsupported')) {

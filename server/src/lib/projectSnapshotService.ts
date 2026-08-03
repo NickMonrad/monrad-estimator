@@ -29,10 +29,10 @@ import {
   recreateV3CapacityProfiles,
   loadRetainedRoleProfiles,
   validateRetainedRoleProfiles,
-  translateV2SnapshotProfiles,
   type RetainedRoleProfile,
 } from './projectSnapshotCapacity.js'
 import { pruneSnapshots } from './snapshotUtils.js'
+import { classifySnapshotRestorability } from './snapshotRestorability.js'
 import {
   loadExactCapacityProfiles,
   type SnapshotDbClient,
@@ -602,18 +602,21 @@ export async function rollbackProjectSnapshot({
     throw e
   }
 
-  // 3. Validation + pre-flight checks before any writes. V2 payloads are
-  // translated with the same shared helper the readiness command uses, so
-  // rollback and readiness always agree on translatability (issue #418 PR 1
-  // review); untranslatable v2 capacity fails before any destructive write.
-  if (isSnapshotV2(parsedData)) {
-    const { errors: translationErrors } = translateV2SnapshotProfiles(parsedData, projectId)
-    if (translationErrors.length > 0) {
-      throw new SnapshotValidationError(
-        `V2 snapshot capacity translation failed: ${translationErrors.join('; ')}`,
-      )
-    }
+  // 2.5 Issue #428: a non-restorable snapshot — derived-quarantined OR
+  // defective — must never enter the rollback transaction. Refuse before any
+  // write, including the pre_rollback auto-snapshot, with the stable reason
+  // from the shared classifier. The version-specific checks below remain for
+  // their preflight behaviour (cross-project ID collisions, retained-owner
+  // validation).
+  const restorability = classifySnapshotRestorability(snap.snapshot, projectId)
+  if (restorability.restoreStatus === 'non-restorable') {
+    throw new SnapshotValidationError(restorability.restoreReason)
   }
+
+  // 3. Validation + pre-flight checks before any writes. The classifier
+  // above already translated V2 payloads and validated V3/V4 payloads; the
+  // remaining checks below are the cross-project owner-ID collision preflight
+  // (V3/V4 only).
   if (isSnapshotV3(parsedData) || isSnapshotV4(parsedData)) {
     validateSnapshotV3(parsedData)
 

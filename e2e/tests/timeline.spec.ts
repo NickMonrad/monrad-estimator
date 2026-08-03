@@ -1865,3 +1865,106 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     expect(segmentsRestored).toBe(true)
   })
 })
+
+// ════════════════════════════════════════════════════════════════════════════
+// Snapshot History — derived quarantine (issue #428)
+// ════════════════════════════════════════════════════════════════════════════
+
+test.describe('Snapshot History — derived quarantine display', () => {
+  test('quarantined historical snapshot shows non-restorable status and reason; rollback is refused server-side', async ({ page }) => {
+    test.setTimeout(90_000)
+    const projectName = `E2E Quarantine ${Date.now()}`
+
+    await login(page)
+    await createProject(page, projectName)
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
+    if (!projectId) throw new Error('Could not determine project ID')
+
+    // Insert a windowless CAPACITY_PLAN v2 snapshot row directly — the
+    // reviewed Class A shape the UI would never produce (v4 snapshots are
+    // always restorable).
+    const db = new Client({ connectionString: DATABASE_URL })
+    await db.connect()
+    const userRes = await db.query(`SELECT id FROM "User" WHERE email = $1`, [process.env.TEST_EMAIL ?? 'test@example.com'])
+    expect(userRes.rows).toHaveLength(1)
+    const v2Payload = {
+      schemaVersion: 2,
+      epics: [],
+      project: null,
+      resourceTypes: [{
+        id: 'rt-q-e2e',
+        name: 'Quarantine Role',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: null,
+        dayRate: null,
+        globalTypeId: null,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      }],
+      namedResources: [],
+      timelineEntries: [],
+      storyTimelineEntries: [],
+      epicDependencies: [],
+      featureDependencies: [],
+      overheadItems: [],
+    }
+    await db.query(
+      `INSERT INTO "BacklogSnapshot" ("id", "projectId", "label", "trigger", "snapshot", "createdAt", "createdById") ` +
+      `VALUES ($1, $2, $3, 'manual', $4::jsonb, NOW(), $5)`,
+      [`snap-q-${Date.now()}`, projectId, 'quarantined historical', JSON.stringify(v2Payload), userRes.rows[0].id],
+    )
+    await db.end()
+
+    // Open the History panel on Timeline.
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 8_000 })
+    await page.getByRole('button', { name: /history/i }).click()
+    await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
+
+    // The row renders the derived status and the stable reason.
+    await expect(page.getByText('Non-restorable', { exact: true })).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText(/original capacity window is not recoverable/)).toBeVisible()
+    // The rollback control is not rendered for a non-restorable row.
+    await expect(page.getByRole('button', { name: /^rollback$/i })).toHaveCount(0)
+    // Diff/inspection remains available.
+    await page.getByRole('button', { name: /^diff$/i }).click()
+    await expect(page.getByText(/comparing snapshot/i)).toBeVisible()
+
+    // The listing API exposes the derived fields.
+    const listing = await page.evaluate(async ({ id }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      }
+      const res = await fetch(`/api/projects/${id}/snapshots`, { headers })
+      return { status: res.status, body: await res.json() }
+    }, { id: projectId })
+    expect(listing.status).toBe(200)
+    const quarantinedRow = (listing.body as Array<{ label: string | null; restoreStatus: string; restoreReason: string | null }>)
+      .find(s => s.label === 'quarantined historical')
+    expect(quarantinedRow?.restoreStatus).toBe('non-restorable')
+    expect(quarantinedRow?.restoreReason).toContain('Class A')
+
+    // A rollback attempt is refused by the server (400, stable reason) — the
+    // API remains the enforcement boundary even if the client is bypassed.
+    const rollbackAttempt = await page.evaluate(async ({ id, label }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      }
+      const list = await (await fetch(`/api/projects/${id}/snapshots`, { headers })).json() as Array<{ id: string; label: string | null }>
+      const target = list.find(s => s.label === label)!
+      const res = await fetch(`/api/projects/${id}/snapshots/${target.id}/rollback`, { method: 'POST', headers })
+      return { status: res.status, body: await res.json() }
+    }, { id: projectId, label: 'quarantined historical' })
+    expect(rollbackAttempt.status).toBe(400)
+    expect((rollbackAttempt.body as { error: string }).error).toContain('quarantined')
+  })
+})

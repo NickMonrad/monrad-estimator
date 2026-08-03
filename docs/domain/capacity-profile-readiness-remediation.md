@@ -233,8 +233,13 @@ unsupported and block apply.
 
 The dry-run emits a versioned JSON plan (`formatVersion: 1`) containing every
 finding (classified `deterministic` / `decisionRequired` / `unsupported` /
-`alreadyValid`), concrete operations, unresolved decision entries with their
-allowed resolution shapes, and the current-state evidence hash per entry.
+`alreadyValid` / `quarantined`), concrete operations, unresolved decision
+entries with their allowed resolution shapes, and the current-state evidence
+hash per entry. `quarantined` findings (issue #428) carry the stable class
+reason (Class A / Class B) and their evidence hash, receive **no plan decision
+ID** and generate **no apply operation**; `plan.summary.quarantined` counts
+them separately from `decisionsRequired`. The manifest resolver cannot address
+quarantined entries (they are absent from `plan.decisions`).
 
 Fingerprint contract:
 
