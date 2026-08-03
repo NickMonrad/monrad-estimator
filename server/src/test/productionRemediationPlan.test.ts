@@ -784,3 +784,276 @@ describe('buildRemediationPlan (integration of matrix)', () => {
     expect(proposed).toMatchObject({ planningBasis: 'CAPACITY_PROFILE', source: 'SQUAD_PLANNER' })
   })
 })
+
+// ─── Owner-kind decisions (issue #421 review round 2) ───────────────────────
+
+describe('owner-kind decisions for ambiguous NamedResources', () => {
+  function ambiguousNrProject(): { project: RemediationProject; nr: RemediationNamedResource } {
+    const nr = makeNr({ id: 'nr-amb', allocationMode: 'CAPACITY_PLAN' })
+    return {
+      nr,
+      project: makeProject({
+        resourceTypes: [
+          makeRt({ id: 'rt-parent', allocationMode: 'EFFORT', namedResources: [nr] }),
+        ],
+      }),
+    }
+  }
+
+  it('emits an owner-kind-required decision for a missing ambiguous NamedResource', () => {
+    const { project } = ambiguousNrProject()
+    const plan = buildRemediationPlan(makeState(project), 'commit-1')
+    const decision = plan.decisions.find(d => d.ownerId === 'nr-amb')
+    expect(decision).toBeDefined()
+    expect(decision!.allowedResolutions).toEqual(['owner-kind-decision'])
+    expect(decision!.message).toContain('owner kind and capacity require explicit review')
+  })
+
+  it('emits an owner-kind-required decision for a single -1 missing NamedResource', () => {
+    const nr = makeNr({ id: 'nr-neg', allocationMode: 'CAPACITY_PLAN', startWeek: 0, endWeek: -1 })
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [makeRt({ id: 'rt-parent', allocationMode: 'EFFORT', namedResources: [nr] })],
+    })), 'commit-1')
+    const decision = plan.decisions.find(d => d.ownerId === 'nr-neg')
+    expect(decision!.allowedResolutions).toEqual(['owner-kind-decision'])
+  })
+
+  it('rejects a direct capacity-only resolution while owner kind is unresolved', () => {
+    const { project } = ambiguousNrProject()
+    const plan = buildRemediationPlan(makeState(project), 'commit-1')
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [{
+        decisionId: plan.decisions[0]!.id,
+        projectId: 'proj-1',
+        ownerId: 'nr-amb',
+        snapshotId: null,
+        resolution: { shape: 'availability-window' as const, defaultPercent: 100, startWeek: 0, endWeek: 10 },
+      }],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors.join(' ')).toContain('not allowed for this entry')
+  })
+
+  it('creates the exact NAMED_PERSON profile from an explicit owner-kind decision', () => {
+    const { project } = ambiguousNrProject()
+    const plan = buildRemediationPlan(makeState(project), 'commit-1')
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [{
+        decisionId: plan.decisions[0]!.id,
+        projectId: 'proj-1',
+        ownerId: 'nr-amb',
+        snapshotId: null,
+        resolution: {
+          shape: 'owner-kind-decision' as const,
+          ownerKind: 'NAMED_PERSON' as const,
+          capacity: { shape: 'availability-window' as const, defaultPercent: 100, startWeek: 0, endWeek: 10 },
+        },
+      }],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors).toEqual([])
+    expect(resolved.plan.operations).toHaveLength(1)
+    expect(resolved.plan.operations[0]!).toMatchObject({
+      kind: 'create-named-profile',
+      classification: 'decisionResolved',
+    })
+    expect(resolved.plan.operations[0]!.proposed).toMatchObject({
+      profileId: remediationProfileId('namedPerson', 'nr-amb'),
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 10,
+    })
+  })
+
+  it('creates the exact PLANNED_RESOURCE profile from an explicit owner-kind decision', () => {
+    const { project } = ambiguousNrProject()
+    const plan = buildRemediationPlan(makeState(project), 'commit-1')
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [{
+        decisionId: plan.decisions[0]!.id,
+        projectId: 'proj-1',
+        ownerId: 'nr-amb',
+        snapshotId: null,
+        resolution: {
+          shape: 'owner-kind-decision' as const,
+          ownerKind: 'PLANNED_RESOURCE' as const,
+          capacity: {
+            shape: 'segmented-capacity-profile' as const,
+            defaultPercent: 50,
+            segments: [
+              { startWeek: 5, endWeek: 10, capacityPercent: 25 },
+              { startWeek: 0, endWeek: 4, capacityPercent: 50 },
+            ],
+          },
+        },
+      }],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors).toEqual([])
+    const proposed = resolved.plan.operations[0]!.proposed
+    expect(proposed).toMatchObject({
+      ownerKind: 'PLANNED_RESOURCE',
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'LEGACY',
+      defaultPercent: 50,
+    })
+    // Segments are ordered like the persisted read-back (startWeek, id).
+    expect(proposed).toMatchObject({
+      segments: [
+        { startWeek: 0, endWeek: 4, capacityPercent: 50 },
+        { startWeek: 5, endWeek: 10, capacityPercent: 25 },
+      ],
+    })
+  })
+
+  it('rejects an unknown nested capacity shape before writes', () => {
+    const { project } = ambiguousNrProject()
+    const plan = buildRemediationPlan(makeState(project), 'commit-1')
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [{
+        decisionId: plan.decisions[0]!.id,
+        projectId: 'proj-1',
+        ownerId: 'nr-amb',
+        snapshotId: null,
+        resolution: {
+          shape: 'owner-kind-decision' as const,
+          ownerKind: 'NAMED_PERSON' as const,
+          capacity: { shape: 'mystery-shape' } as never,
+        },
+      }],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors.join(' ')).toContain('unknown nested capacity shape')
+  })
+
+  it('rejects PLANNED_RESOURCE when the parent ROLE profile cannot be derived deterministically', () => {
+    // Parent role is CAPACITY_PLAN without plan evidence → its ROLE profile
+    // cannot be proven, so PLANNED_RESOURCE must not be selectable.
+    const nr = makeNr({ id: 'nr-amb2', allocationMode: 'CAPACITY_PLAN' })
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [
+        makeRt({ id: 'rt-parent2', allocationMode: 'CAPACITY_PLAN', namedResources: [nr] }),
+      ],
+    })), 'commit-1')
+    const decision = plan.decisions.find(d => d.ownerId === 'nr-amb2')!
+    expect(decision.roleProposed).toBeNull()
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [{
+        decisionId: decision.id,
+        projectId: 'proj-1',
+        ownerId: 'nr-amb2',
+        snapshotId: null,
+        resolution: {
+          shape: 'owner-kind-decision' as const,
+          ownerKind: 'PLANNED_RESOURCE' as const,
+          capacity: { shape: 'scalar-profile' as const, planningBasis: 'DEMAND_FOLLOWING' as const, defaultPercent: 100 },
+        },
+      }],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors.join(' ')).toContain('PLANNED_RESOURCE requires a deterministically derivable parent ROLE profile')
+  })
+
+  it('emits the deterministic parent ROLE op when PLANNED_RESOURCE is selected', () => {
+    const nr = makeNr({ id: 'nr-amb3', allocationMode: 'CAPACITY_PLAN' })
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [
+        makeRt({ id: 'rt-parent3', allocationMode: 'EFFORT', namedResources: [nr] }),
+      ],
+    })), 'commit-1')
+    const decision = plan.decisions.find(d => d.ownerId === 'nr-amb3')!
+    expect(decision.roleProposed).not.toBeNull()
+    expect(decision.roleOwnerId).toBe('rt-parent3')
+    const manifest = {
+      formatVersion: 1 as const,
+      applicationCommit: 'commit-1',
+      planFingerprint: plan.fingerprint,
+      decisions: [{
+        decisionId: decision.id,
+        projectId: 'proj-1',
+        ownerId: 'nr-amb3',
+        snapshotId: null,
+        resolution: {
+          shape: 'owner-kind-decision' as const,
+          ownerKind: 'PLANNED_RESOURCE' as const,
+          capacity: { shape: 'scalar-profile' as const, planningBasis: 'DEMAND_FOLLOWING' as const, defaultPercent: 100 },
+        },
+      }],
+    }
+    const resolved = resolvePlanWithManifest(plan, manifest as RemediationManifest)
+    expect(resolved.errors).toEqual([])
+    expect(resolved.plan.operations).toHaveLength(2)
+    expect(resolved.plan.operations[0]).toMatchObject({ kind: 'create-named-profile', ownerId: 'nr-amb3' })
+    expect(resolved.plan.operations[1]).toMatchObject({
+      kind: 'create-role-profile',
+      ownerId: 'rt-parent3',
+      decisionId: decision.id,
+    })
+    expect(resolved.plan.operations[1]!.proposed).toMatchObject({ ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING' })
+  })
+
+  it('keeps deterministic NamedResource mappings unchanged (no owner-kind decision)', () => {
+    const nr = makeNr({ id: 'nr-det', allocationMode: 'TIMELINE', startWeek: 0, endWeek: 8 })
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [makeRt({ id: 'rt-parent', allocationMode: 'EFFORT', namedResources: [nr] })],
+    })), 'commit-1')
+    expect(plan.decisions).toHaveLength(0)
+    expect(plan.operations).toHaveLength(1)
+    expect(plan.operations[0]!.proposed).toMatchObject({ ownerKind: 'NAMED_PERSON' })
+  })
+})
+
+// ─── Baseline state hash (issue #421 review round 2) ────────────────────────
+
+describe('baselineStateHash', () => {
+  it('is present, stable for identical state and changes with state', () => {
+    const state = makeState(makeProject({
+      resourceTypes: [makeRt({ allocationMode: 'TIMELINE' })],
+    }))
+    const plan1 = buildRemediationPlan(state, 'commit-1')
+    const plan2 = buildRemediationPlan(state, 'commit-2')
+    expect(plan1.baselineStateHash).toBe(plan2.baselineStateHash)
+    const changed = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [makeRt({ allocationMode: 'TIMELINE', allocationPercent: 50 })],
+    })), 'commit-1')
+    expect(changed.baselineStateHash).not.toBe(plan1.baselineStateHash)
+  })
+
+  it('is covered by the plan fingerprint (tamper detection)', () => {
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [makeRt({ allocationMode: 'TIMELINE' })],
+    })), 'commit-1')
+    const json = JSON.parse(JSON.stringify(plan)) as Record<string, unknown>
+    json.baselineStateHash = 'deadbeef'
+    const parsed = parsePlanJson(JSON.stringify(json))
+    expect(parsed.plan).toBeNull()
+    expect(parsed.errors.join(' ')).toContain('fingerprint mismatch')
+  })
+
+  it('round-trips through the plan file contract', () => {
+    const plan = buildRemediationPlan(makeState(makeProject({
+      resourceTypes: [makeRt({ allocationMode: 'TIMELINE' })],
+    })), 'commit-1')
+    const parsed = parsePlanJson(JSON.stringify(plan))
+    expect(parsed.errors).toEqual([])
+    expect(parsed.plan!.baselineStateHash).toBe(plan.baselineStateHash)
+  })
+})

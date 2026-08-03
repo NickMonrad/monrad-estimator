@@ -34,6 +34,7 @@ import {
   classifyPlanExit,
   resolvePlanWithManifest,
   parsePlanJson,
+  computeStateHash,
   buildRtEvidence,
   buildNrEvidence,
   buildProfileEvidence,
@@ -689,6 +690,51 @@ export async function applyRemediationPlan(
 
   try {
     await prisma.$transaction(async tx => {
+      // ── Full-scope drift check: the COMPLETE remediation state must match
+      // the reviewed dry-run baseline before any write (issue #421 review
+      // round 2). The state hash covers projects, resource types, named
+      // resources, profiles, segments, active plan periods/entries and all
+      // backlog snapshots — anything outside the per-operation evidence.
+      const currentState = await loadRemediationState(tx)
+      const currentStateHash = computeStateHash(currentState)
+      const baselineIntact = currentStateHash === plan.baselineStateHash
+
+      if (!baselineIntact) {
+        // ── Exact-rerun acceptance ───────────────────────────────────────
+        // A rerun after a fully successful application must be a no-op: every
+        // reviewed operation already matches its exact proposed state, and
+        // the complete current planner contains no remaining operations,
+        // unresolved decisions or unsupported findings. Any mixed, partially
+        // applied or otherwise different state is refused BEFORE the first
+        // write.
+        const rerunVerdicts: VerificationResult[] = []
+        let rerunRefusals = 0
+        let rerunWrites = 0
+        for (const op of plan.operations) {
+          const current = await loadCurrentState(tx, op)
+          const verdict = verifyOperation(op, current)
+          rerunVerdicts.push(verdict)
+          if (verdict.verdict === 'write') rerunWrites++
+          if (verdict.verdict === 'refuse') rerunRefusals++
+        }
+        const rerunPlan = buildRemediationPlan(currentState, plan.applicationCommit)
+        const fullyRemediated =
+          rerunPlan.summary.operations === 0 &&
+          rerunPlan.summary.decisionsRequired === 0 &&
+          rerunPlan.summary.findings.unsupported === 0
+        if (rerunWrites === 0 && rerunRefusals === 0 && fullyRemediated) {
+          // Exact rerun: every operation already in proposed state; nothing
+          // to write. The post-commit readiness check still runs as defence
+          // in depth.
+          skipped = plan.operations.length
+          return
+        }
+        throw new RemediationDriftError(
+          'complete remediation state changed since dry-run — the reviewed baseline no longer matches. ' +
+          'No write was performed. Regenerate the plan with a fresh dry-run and re-review before applying.',
+        )
+      }
+
       // ── Pre-flight: re-read every affected row and verify evidence ──────
       const verdicts: VerificationResult[] = []
       for (const op of plan.operations) {

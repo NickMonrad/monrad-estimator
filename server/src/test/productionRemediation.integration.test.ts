@@ -1016,6 +1016,423 @@ describeIf('remediation historical v2 snapshot policy', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════════════
+// 5b. Owner-kind decisions for ambiguous NamedResources (review round 2)
+// ════════════════════════════════════════════════════════════════════════════
+
+describeIf('remediation owner-kind decisions', () => {
+  async function seedAmbiguousNr(): Promise<{ projectId: string; parentRt: string; nrId: string }> {
+    const projectId = await createProject()
+    const parentRt = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const nrId = await createNamedPerson(projectId, parentRt, { allocationMode: 'CAPACITY_PLAN' })
+    return { projectId, parentRt, nrId }
+  }
+
+  it('emits an owner-kind-required decision and rejects a direct capacity-only resolution', async () => {
+    const { projectId, nrId } = await seedAmbiguousNr()
+    const { plan } = await runDryRun()
+    const decision = plan.decisions.find(d => d.ownerId === nrId)!
+    expect(decision.allowedResolutions).toEqual(['owner-kind-decision'])
+
+    const directManifest = await buildManifest(plan, [{
+      decisionId: decision.id,
+      resolution: { shape: 'availability-window', defaultPercent: 100, startWeek: 0, endWeek: 10 },
+    }])
+    const profilesBefore = await prisma.capacityProfile.count()
+    const outcome = await applyRemediationPlan(prisma, { plan, manifest: directManifest })
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.errors.join(' ')).toContain('not allowed for this entry')
+    expect(await prisma.capacityProfile.count()).toBe(profilesBefore)
+    void projectId
+  })
+
+  it('creates the exact reviewed NAMED_PERSON profile from an explicit owner-kind decision', async () => {
+    const { projectId, nrId } = await seedAmbiguousNr()
+    const { plan } = await runDryRun()
+    const manifest = await buildManifest(plan, [{
+      decisionId: plan.decisions.find(d => d.ownerId === nrId)!.id,
+      resolution: {
+        shape: 'owner-kind-decision',
+        ownerKind: 'NAMED_PERSON',
+        capacity: { shape: 'availability-window', defaultPercent: 100, startWeek: 0, endWeek: 10 },
+      },
+    }])
+    const outcome = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(outcome.exitCode).toBe(0)
+    const profile = await prisma.capacityProfile.findFirstOrThrow({ where: { namedResourceId: nrId } })
+    expect(profile).toMatchObject({
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 10,
+    })
+    // The profile passes structural validation, ownership audit, readiness
+    // and the runtime resolver.
+    const audit = await runOwnershipAudit(prisma)
+    expect(audit.isClean).toBe(true)
+    const readiness = await runProductionMigrationReadiness(prisma)
+    expect(readiness.passed).toBe(true)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
+    expect(resolved.meta.legacyCount).toBe(0)
+    expect(resolved.meta.profileBackedCount).toBe(1)
+  })
+
+  it('creates the exact reviewed PLANNED_RESOURCE profile from an explicit owner-kind decision', async () => {
+    const { projectId, nrId } = await seedAmbiguousNr()
+    const { plan } = await runDryRun()
+    const manifest = await buildManifest(plan, [{
+      decisionId: plan.decisions.find(d => d.ownerId === nrId)!.id,
+      resolution: {
+        shape: 'owner-kind-decision',
+        ownerKind: 'PLANNED_RESOURCE',
+        capacity: {
+          shape: 'segmented-capacity-profile',
+          defaultPercent: 50,
+          segments: [
+            { startWeek: 5, endWeek: 10, capacityPercent: 25 },
+            { startWeek: 0, endWeek: 4, capacityPercent: 50 },
+          ],
+        },
+      },
+    }])
+    const outcome = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(outcome.exitCode).toBe(0)
+    const profile = await prisma.capacityProfile.findFirstOrThrow({ where: { namedResourceId: nrId } })
+    expect(profile).toMatchObject({
+      ownerKind: 'PLANNED_RESOURCE',
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'LEGACY',
+      defaultPercent: 50,
+    })
+    const segments = await prisma.capacitySegment.findMany({
+      where: { capacityProfileId: profile.id },
+      orderBy: { startWeek: 'asc' },
+    })
+    expect(segments).toEqual([
+      expect.objectContaining({ startWeek: 0, endWeek: 4, capacityPercent: 50 }),
+      expect.objectContaining({ startWeek: 5, endWeek: 10, capacityPercent: 25 }),
+    ])
+    const audit = await runOwnershipAudit(prisma)
+    expect(audit.isClean).toBe(true)
+    const readiness = await runProductionMigrationReadiness(prisma)
+    expect(readiness.passed).toBe(true)
+    const resolved = await resolveSchedulerCapacity(prisma, projectId)
+    expect(resolved.meta.legacyCount).toBe(0)
+    expect(resolved.meta.profileBackedCount).toBe(1)
+  })
+
+  it('rejects an unknown or structurally invalid nested capacity resolution before writes', async () => {
+    const { nrId } = await seedAmbiguousNr()
+    const { plan } = await runDryRun()
+
+    // Unknown nested shape.
+    const unknownManifest = await buildManifest(plan, [{
+      decisionId: plan.decisions.find(d => d.ownerId === nrId)!.id,
+      resolution: {
+        shape: 'owner-kind-decision',
+        ownerKind: 'NAMED_PERSON',
+        capacity: { shape: 'mystery-shape' } as never,
+      },
+    }])
+    const profilesBefore = await prisma.capacityProfile.count()
+    const unknownOutcome = await applyRemediationPlan(prisma, { plan, manifest: unknownManifest })
+    expect(unknownOutcome.exitCode).toBe(1)
+    expect(unknownOutcome.errors.join(' ')).toContain('unknown nested capacity shape')
+    expect(await prisma.capacityProfile.count()).toBe(profilesBefore)
+
+    // Structurally invalid nested window (inverted) is refused before writes.
+    const invalidManifest = await buildManifest(plan, [{
+      decisionId: plan.decisions.find(d => d.ownerId === nrId)!.id,
+      resolution: {
+        shape: 'owner-kind-decision',
+        ownerKind: 'NAMED_PERSON',
+        capacity: { shape: 'availability-window', defaultPercent: 100, startWeek: 9, endWeek: 3 },
+      },
+    }])
+    const invalidOutcome = await applyRemediationPlan(prisma, { plan, manifest: invalidManifest })
+    expect(invalidOutcome.exitCode).toBe(1)
+    expect(invalidOutcome.errors.join(' ')).toContain('structurally invalid')
+    expect(await prisma.capacityProfile.count()).toBe(profilesBefore)
+  })
+
+  it('keeps deterministic NamedResource mappings unchanged', async () => {
+    const projectId = await createProject()
+    const parentRt = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const detNr = await createNamedPerson(projectId, parentRt, { allocationMode: 'TIMELINE', startWeek: 0, endWeek: 8 })
+    const { plan } = await runDryRun()
+    expect(plan.decisions).toHaveLength(0)
+    expect(plan.operations).toHaveLength(1)
+    expect(plan.operations[0]!.proposed).toMatchObject({ ownerKind: 'NAMED_PERSON' })
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(0)
+    const profile = await prisma.capacityProfile.findFirstOrThrow({ where: { namedResourceId: detNr } })
+    expect(profile.ownerKind).toBe('NAMED_PERSON')
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// 5c. Full-scope drift refusal before writes (review round 2)
+// ════════════════════════════════════════════════════════════════════════════
+
+describeIf('remediation full-scope drift', () => {
+  async function assertZeroWrites(baseline: { profiles: number; segments: number; snapshots: number }): Promise<void> {
+    expect(await prisma.capacityProfile.count()).toBe(baseline.profiles)
+    expect(await prisma.capacitySegment.count()).toBe(baseline.segments)
+    expect(await prisma.backlogSnapshot.count()).toBe(baseline.snapshots)
+  }
+
+  async function snapshotCounts(): Promise<{ profiles: number; segments: number; snapshots: number }> {
+    return {
+      profiles: await prisma.capacityProfile.count(),
+      segments: await prisma.capacitySegment.count(),
+      snapshots: await prisma.backlogSnapshot.count(),
+    }
+  }
+
+  it('refuses before writes when a new unprofiled ResourceType is added after dry-run', async () => {
+    const projectId = await createProject()
+    await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const { plan } = await runDryRun()
+    expect(plan.operations).toHaveLength(1)
+
+    await createRole(projectId, { allocationMode: 'EFFORT' })
+    const baseline = await snapshotCounts()
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.errors.join(' ')).toContain('complete remediation state changed since dry-run')
+    await assertZeroWrites(baseline)
+  })
+
+  it('refuses before writes when a new unprofiled NamedResource is added after dry-run', async () => {
+    const projectId = await createProject()
+    const rtId = await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const { plan } = await runDryRun()
+    expect(plan.operations).toHaveLength(1)
+
+    await createNamedPerson(projectId, rtId, { allocationMode: 'EFFORT' })
+    const baseline = await snapshotCounts()
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(1)
+    await assertZeroWrites(baseline)
+  })
+
+  it('refuses before writes when a previously valid profile becomes malformed', async () => {
+    const projectId = await createProject()
+    const validRt = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const validProfileId = await createProfile(projectId, {
+      resourceTypeId: validRt,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'FIXED',
+      defaultPercent: 100,
+    })
+    const unprofiledRt = await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const { plan } = await runDryRun()
+    expect(plan.operations).toHaveLength(1) // only the unprofiled RT
+
+    // The previously valid profile becomes structurally invalid.
+    await prisma.capacityProfile.update({
+      where: { id: validProfileId },
+      data: { startWeek: 5, endWeek: 10 },
+    })
+    const baseline = await snapshotCounts()
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.errors.join(' ')).toContain('complete remediation state changed since dry-run')
+    await assertZeroWrites(baseline)
+    void unprofiledRt
+  })
+
+  it('refuses before writes when a new untranslatable BacklogSnapshot is inserted', async () => {
+    const projectId = await createProject()
+    await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const { plan } = await runDryRun()
+    expect(plan.operations).toHaveLength(1)
+
+    await createBacklogSnapshot(projectId, v2Snapshot({
+      resourceTypes: [v2Role({ id: 'rt-drift-snap', allocationMode: 'EFFORT' })],
+      namedResources: [
+        v2Person({ id: 'nr-drift', resourceTypeId: 'rt-drift-snap', allocationMode: 'CAPACITY_PLAN' }),
+      ],
+    }))
+    const baseline = await snapshotCounts()
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(1)
+    await assertZeroWrites(baseline)
+  })
+
+  it('refuses before writes when an existing unplanned snapshot entry changes', async () => {
+    const projectId = await createProject()
+    await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const snapshotId = await createBacklogSnapshot(projectId, v2Snapshot({
+      resourceTypes: [v2Role({ id: 'rt-snap-e', allocationMode: 'EFFORT' })],
+      namedResources: [
+        v2Person({ id: 'nr-snap-e', resourceTypeId: 'rt-snap-e', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 }),
+      ],
+    }))
+    const { plan } = await runDryRun()
+    expect(plan.operations).toHaveLength(1)
+
+    // Change the already-valid unplanned entry (stays translatable).
+    const row = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snapshotId } })
+    const snap = structuredClone(row.snapshot) as Record<string, unknown>
+    const nrs = snap.namedResources as Array<Record<string, unknown>>
+    nrs.find(e => e.id === 'nr-snap-e')!.allocationPercent = 90
+    await prisma.backlogSnapshot.update({ where: { id: snapshotId }, data: { snapshot: snap as never } })
+
+    const baseline = await snapshotCounts()
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.errors.join(' ')).toContain('complete remediation state changed since dry-run')
+    await assertZeroWrites(baseline)
+  })
+
+  it('refuses before writes when an active CapacityPlan changes outside operation evidence', async () => {
+    const projectId = await createProject()
+    // A planner-owned RT with a valid ROLE profile (no operation for it).
+    const plannerRt = await createRole(projectId, { allocationMode: 'CAPACITY_PLAN', count: 1 })
+    await createActivePlan(projectId, [
+      { periodIndex: 0, startWeek: 0, endWeek: 8, entries: [{ resourceTypeId: plannerRt, headcount: 1 }] },
+    ])
+    const plannerProfileId = await createProfile(projectId, {
+      resourceTypeId: plannerRt,
+      ownerKind: 'ROLE',
+      planningBasis: 'CAPACITY_PROFILE',
+      source: 'SQUAD_PLANNER',
+      defaultPercent: 100,
+      segments: [{ id: 'seg-planner', startWeek: 0, endWeek: 7, capacityPercent: 100, source: 'SQUAD_PLANNER' }],
+    })
+    // An unprofiled RT produces the operation.
+    await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const { plan } = await runDryRun()
+    expect(plan.operations).toHaveLength(1)
+
+    // Change the plan entry for the ALREADY VALID planner RT (outside the
+    // operation's local evidence).
+    await prisma.capacityPlanEntry.updateMany({
+      where: { resourceTypeId: plannerRt },
+      data: { headcount: 2 },
+    })
+    const baseline = await snapshotCounts()
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.errors.join(' ')).toContain('complete remediation state changed since dry-run')
+    await assertZeroWrites(baseline)
+    void plannerProfileId
+  })
+
+  it('refuses before writes when a cross-project ownership defect appears', async () => {
+    const projectId = await createProject()
+    await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const { plan } = await runDryRun()
+    expect(plan.operations).toHaveLength(1)
+
+    // A profile in this project referencing a ResourceType owned by another
+    // project (cross-project ownership — the partial unique indexes still
+    // allow the FK, so this row is insertable).
+    const otherProjectId = await createProject('Other Project')
+    const otherRt = await createRole(otherProjectId, { allocationMode: 'EFFORT' })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: otherRt,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+      },
+    })
+    const baseline = await snapshotCounts()
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(1)
+    await assertZeroWrites(baseline)
+  })
+
+  it('refuses before writes on mixed partial state (one op manually applied)', async () => {
+    const projectId = await createProject()
+    const rtA = await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const rtB = await createRole(projectId, { allocationMode: 'EFFORT' })
+    const { plan } = await runDryRun()
+    expect(plan.operations).toHaveLength(2)
+
+    // Manually apply exactly one of the two proposed profiles.
+    const opA = plan.operations.find(op => op.ownerId === rtA)!
+    const proposed = opA.proposed as { profileId: string; planningBasis: string; source: string; defaultPercent: number | null; startWeek: number | null; endWeek: number | null; legacy?: unknown }
+    await prisma.capacityProfile.create({
+      data: {
+        id: proposed.profileId,
+        projectId,
+        resourceTypeId: rtA,
+        ownerKind: 'ROLE',
+        planningBasis: proposed.planningBasis as $Enums.CapacityProfilePlanningBasis,
+        source: proposed.source as $Enums.CapacityProfileSource,
+        defaultPercent: proposed.defaultPercent,
+        startWeek: proposed.startWeek,
+        endWeek: proposed.endWeek,
+        legacy: proposed.legacy as never,
+      },
+    })
+
+    const baseline = await snapshotCounts()
+    const outcome = await applyRemediationPlan(prisma, { plan })
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.errors.join(' ')).toContain('complete remediation state changed since dry-run')
+    await assertZeroWrites(baseline)
+    void rtB
+  })
+
+  it('exact post-apply rerun is a no-op for both invocation forms', async () => {
+    const projectId = await createProject()
+    await createRole(projectId, { allocationMode: 'TIMELINE' })
+    await createRole(projectId, { allocationMode: 'CAPACITY_PLAN' })
+    const { plan } = await runDryRun()
+    const manifest = await buildManifest(plan, [{
+      decisionId: plan.decisions.find(d => d.ownerKind === 'role')!.id,
+      resolution: { shape: 'scalar-profile', planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 100 },
+    }])
+
+    // Resolved-plan form (as saved by dry-run with a manifest).
+    const resolved = resolvePlanWithManifest(plan, manifest)
+    expect(resolved.errors).toEqual([])
+    const first = await applyRemediationPlan(prisma, { plan: resolved.plan })
+    expect(first.exitCode).toBe(0)
+    expect(first.applied).toBe(2)
+    const rerun = await applyRemediationPlan(prisma, { plan: resolved.plan })
+    expect(rerun.exitCode).toBe(0)
+    expect(rerun.applied).toBe(0)
+    expect(rerun.skipped).toBe(2)
+
+    // Baseline-plan-plus-manifest form: first apply and rerun both work.
+    const secondFirst = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(secondFirst.exitCode).toBe(0)
+    expect(secondFirst.skipped).toBe(2)
+    const secondRerun = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(secondRerun.exitCode).toBe(0)
+    expect(secondRerun.applied).toBe(0)
+    expect(secondRerun.skipped).toBe(2)
+    expect(await prisma.capacityProfile.count()).toBe(2)
+  })
+
+  it('baseline-plan-plus-manifest and resolved-plan forms enforce the same full-scope drift contract', async () => {
+    const projectId = await createProject()
+    await createRole(projectId, { allocationMode: 'TIMELINE' })
+    const { plan } = await runDryRun()
+    const manifest = await buildManifest(plan, [])
+    const resolved = resolvePlanWithManifest(plan, manifest)
+    expect(resolved.errors).toEqual([])
+
+    await createRole(projectId, { allocationMode: 'EFFORT' })
+    const baseline = await snapshotCounts()
+    const baseOutcome = await applyRemediationPlan(prisma, { plan, manifest })
+    expect(baseOutcome.exitCode).toBe(1)
+    const resolvedOutcome = await applyRemediationPlan(prisma, { plan: resolved.plan })
+    expect(resolvedOutcome.exitCode).toBe(1)
+    await assertZeroWrites(baseline)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
 // 6. End-to-end readiness on a database with every production blocker class
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1103,7 +1520,11 @@ describeIf('remediation end-to-end', () => {
       },
       {
         decisionId: plan.decisions.find(d => d.ownerId === capNr)!.id,
-        resolution: { shape: 'availability-window' as const, defaultPercent: 100, startWeek: 0, endWeek: 12 },
+        resolution: {
+          shape: 'owner-kind-decision' as const,
+          ownerKind: 'NAMED_PERSON' as const,
+          capacity: { shape: 'availability-window' as const, defaultPercent: 100, startWeek: 0, endWeek: 12 },
+        },
       },
       {
         decisionId: plan.decisions.find(d => d.profileId !== null && d.ownerId === effortRt)!.id,

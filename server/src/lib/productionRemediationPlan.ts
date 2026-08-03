@@ -25,7 +25,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { PrismaClient } from '@prisma/client'
+import type { Prisma, PrismaClient } from '@prisma/client'
 
 import {
   mapResourceTypeToCapacityProfile,
@@ -229,6 +229,17 @@ export interface PlanDecisionEntry {
   evidenceHash: string
   allowedResolutions: string[]
   message: string
+  /**
+   * Owner-kind-required NamedResource decisions only: when the parent
+   * ResourceType's ROLE profile can be derived deterministically, this
+   * carries the derived profile so an explicit PLANNED_RESOURCE selection can
+   * also create the planner-owned ROLE profile (readiness completeness
+   * requires it). Null/absent when the ROLE cannot be proven — the
+   * PLANNED_RESOURCE selection is then rejected rather than guessed.
+   */
+  roleOwnerId?: string | null
+  roleProposed?: ProposedProfile | null
+  roleEvidenceHash?: string | null
 }
 
 export interface RemediationPlanSummary {
@@ -242,6 +253,14 @@ export interface RemediationPlan {
   generatedAt: string
   /** Informational: the git commit the plan was generated on (never enforced). */
   applicationCommit: string
+  /**
+   * SHA-256 over the canonical complete remediation state (projects,
+   * resource types, named resources, profiles, segments, active plan periods
+   * and backlog snapshots) the plan was generated from. Apply re-loads the
+   * same scope inside the transaction and refuses before any write when the
+   * current state does not match this hash (issue #421 review round 2).
+   */
+  baselineStateHash: string
   /** SHA-256 over the canonical actionable content (stable across reruns). */
   fingerprint: string
   summary: RemediationPlanSummary
@@ -336,6 +355,7 @@ export function computePlanFingerprint(plan: {
   findings: RemediationFinding[]
   operations: RemediationOperation[]
   decisions: PlanDecisionEntry[]
+  baselineStateHash: string
 }): string {
   return sha256Hex(canonicalJson({
     formatVersion: plan.formatVersion,
@@ -343,7 +363,17 @@ export function computePlanFingerprint(plan: {
     findings: plan.findings,
     operations: plan.operations,
     decisions: plan.decisions,
+    baselineStateHash: plan.baselineStateHash,
   }))
+}
+
+/**
+ * SHA-256 over the canonical complete remediation state — the exact scope
+ * the dry-run planner inspects. Apply recomputes this from a fresh load
+ * inside the transaction and refuses before the first write on any mismatch.
+ */
+export function computeStateHash(state: RemediationDatabaseState): string {
+  return sha256Hex(canonicalJson(state))
 }
 
 // ─── Small domain helpers ───────────────────────────────────────────────────
@@ -1012,6 +1042,15 @@ export function buildRemediationPlan(
             proposed: derived.proposed,
           })
         } else if (derived.classification === 'decisionRequired') {
+          // The parent role's ROLE profile may be required if the reviewed
+          // decision selects PLANNED_RESOURCE (planner-owned completeness).
+          const roleDerivation = deriveRoleProfileFromLegacy(rt, stateProjectsActivePlan(state, project.id))
+          const roleProposed = roleDerivation.classification === 'deterministic'
+            ? roleDerivation.proposed ?? null
+            : null
+          const roleEvidenceHash = roleProposed
+            ? evidenceHash(buildRtEvidence(rt, stateProjectsActivePlan(state, project.id)))
+            : null
           addDecision(finding, {
             projectId: project.id,
             ownerId: nr.id,
@@ -1020,8 +1059,17 @@ export function buildRemediationPlan(
             snapshotId: null,
             entryId: null,
             legacyBase: mapperLegacyForNamedResource(nr),
-            allowedResolutions: ['scalar-profile', 'availability-window', 'segmented-capacity-profile'],
-            message: derived.message,
+            // The owner kind of a missing NamedResource with unproven
+            // capacity is itself unproven (issue #421: never guess owner kind
+            // or planner intent). Only an explicit owner-kind decision with a
+            // nested capacity resolution is accepted; a direct capacity
+            // resolution must never silently default the owner to
+            // NAMED_PERSON.
+            allowedResolutions: ['owner-kind-decision'],
+            message: `${derived.message} — owner kind and capacity require explicit review`,
+            roleOwnerId: roleProposed ? rt.id : null,
+            roleProposed,
+            roleEvidenceHash,
           })
         }
       }
@@ -1291,6 +1339,7 @@ export function buildRemediationPlan(
     formatVersion: REMEDIATION_PLAN_FORMAT_VERSION,
     generatedAt: new Date().toISOString(),
     applicationCommit,
+    baselineStateHash: computeStateHash(state),
     fingerprint: '',
     summary,
     findings,
@@ -1399,8 +1448,10 @@ function mapperLegacyForNamedResource(nr: RemediationNamedResource): Record<stri
 /**
  * Load the exact current profile/snapshot state the planner inspects. This is
  * the only Prisma-touching part of the planner; everything above is pure.
+ * Accepts a transaction client so the apply can perform its full-scope drift
+ * check inside the same transaction as the writes.
  */
-export async function loadRemediationState(prisma: PrismaClient): Promise<RemediationDatabaseState> {
+export async function loadRemediationState(prisma: PrismaClient | Prisma.TransactionClient): Promise<RemediationDatabaseState> {
   const projects = await prisma.project.findMany({
     select: { id: true, name: true },
     orderBy: { id: 'asc' },
@@ -1577,13 +1628,17 @@ function capacityResolutionToProposed(
         startWeek: null,
         endWeek: null,
         legacy: base.legacy,
-        segments: resolution.segments.map((segment, index) => ({
-          id: remediationSegmentId(base.profileId, index),
-          startWeek: segment.startWeek,
-          endWeek: segment.endWeek,
-          capacityPercent: segment.capacityPercent,
-          source: 'LEGACY',
-        })),
+        // Persisted segments are ordered by (startWeek, id); proposed segments
+        // must use the same ordering so read-back verification is exact.
+        segments: resolution.segments
+          .map((segment, index) => ({
+            id: remediationSegmentId(base.profileId, index),
+            startWeek: segment.startWeek,
+            endWeek: segment.endWeek,
+            capacityPercent: segment.capacityPercent,
+            source: 'LEGACY',
+          }))
+          .sort((a, b) => a.startWeek - b.startWeek || a.id.localeCompare(b.id)),
       }
   }
 }
@@ -1678,6 +1733,28 @@ export function resolvePlanWithManifest(
     let ownerKind: 'ROLE' | 'NAMED_PERSON' | 'PLANNED_RESOURCE'
     let capacity: ManifestCapacityResolution
     if (resolution.shape === 'owner-kind-decision') {
+      // Defensive runtime validation of hand-edited manifests: the nested
+      // capacity shape must be one of the three supported shapes.
+      const nestedShape = resolution.capacity?.shape
+      if (
+        nestedShape !== 'scalar-profile' &&
+        nestedShape !== 'availability-window' &&
+        nestedShape !== 'segmented-capacity-profile'
+      ) {
+        errors.push(`manifest decision ${entry.id}: unknown nested capacity shape ${JSON.stringify(nestedShape)}`)
+        continue
+      }
+      // A PLANNED_RESOURCE selection makes the parent role planner-owned,
+      // which requires exactly one ROLE profile (readiness completeness).
+      // The ROLE profile must come from the reviewed deterministic
+      // derivation captured at dry-run — never invented here.
+      if (resolution.ownerKind === 'PLANNED_RESOURCE' && !(entry.roleProposed && entry.roleEvidenceHash && entry.roleOwnerId)) {
+        errors.push(
+          `manifest decision ${entry.id}: PLANNED_RESOURCE requires a deterministically derivable parent ROLE profile, ` +
+          'which is not available for this owner — choose NAMED_PERSON or resolve the parent role separately',
+        )
+        continue
+      }
       ownerKind = resolution.ownerKind
       capacity = resolution.capacity
     } else {
@@ -1708,6 +1785,23 @@ export function resolvePlanWithManifest(
       decisionId: entry.id,
       proposed,
     })
+
+    // PLANNED_RESOURCE selection: also create the planner-owned ROLE profile
+    // for the parent ResourceType (exact deterministic derivation captured at
+    // dry-run; readiness completeness requires it).
+    if (resolution.shape === 'owner-kind-decision' && ownerKind === 'PLANNED_RESOURCE' && entry.roleOwnerId && entry.roleProposed && entry.roleEvidenceHash) {
+      operations.push({
+        id: `op-${String(operations.length + 1).padStart(4, '0')}`,
+        kind: 'create-role-profile',
+        classification: 'decisionResolved',
+        projectId: entry.projectId,
+        ownerId: entry.roleOwnerId,
+        ownerName: '',
+        evidenceHash: entry.roleEvidenceHash,
+        decisionId: entry.id,
+        proposed: entry.roleProposed,
+      })
+    }
   }
 
   const merged: RemediationPlan = {
@@ -1740,6 +1834,7 @@ export function resolvePlanWithManifest(
       findings,
       operations,
       decisions,
+      baselineStateHash: plan.baselineStateHash,
     }),
   }
   return { plan: merged, errors }
@@ -1773,6 +1868,9 @@ export function parsePlanJson(raw: string): ParsePlanResult {
   if (!Array.isArray(obj.findings) || !Array.isArray(obj.operations) || !Array.isArray(obj.decisions)) {
     return { plan: null, errors: ['plan must contain findings, operations and decisions arrays'] }
   }
+  if (typeof obj.baselineStateHash !== 'string') {
+    return { plan: null, errors: ['plan must contain baselineStateHash'] }
+  }
   const candidate = obj as unknown as RemediationPlan
   const recomputed = computePlanFingerprint({
     formatVersion: candidate.formatVersion,
@@ -1780,6 +1878,7 @@ export function parsePlanJson(raw: string): ParsePlanResult {
     findings: candidate.findings,
     operations: candidate.operations,
     decisions: candidate.decisions,
+    baselineStateHash: candidate.baselineStateHash,
   })
   if (recomputed !== candidate.fingerprint) {
     return { plan: null, errors: ['plan fingerprint mismatch — plan content was altered after review'] }
@@ -1822,6 +1921,7 @@ export function formatRemediationPlanReport(plan: RemediationPlan): string {
   lines.push('')
   lines.push(`Application commit (informational): ${plan.applicationCommit}`)
   lines.push(`Plan fingerprint: ${plan.fingerprint}`)
+  lines.push(`Baseline state hash: ${plan.baselineStateHash}`)
   lines.push(`Format version: ${plan.formatVersion}`)
   lines.push('')
   lines.push('Summary:')

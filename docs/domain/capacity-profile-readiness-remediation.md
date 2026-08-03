@@ -128,6 +128,28 @@ Unless a reviewed manifest decision resolves them:
 - any owner whose kind, source, percentage, window, segments or provenance
   cannot be determined exactly.
 
+### Owner-kind decisions for ambiguous NamedResources
+
+A missing NamedResource whose capacity cannot be proven (windowless
+`CAPACITY_PLAN`, single `-1`) has an **unproven owner kind** — it may be a
+named person or a planner-created resource. Such decisions are emitted with
+`allowedResolutions: ["owner-kind-decision"]` only:
+
+- a **direct** scalar / window / segmented capacity resolution is rejected
+  (it would silently default the owner to `NAMED_PERSON`);
+- an explicit `owner-kind-decision` selects `NAMED_PERSON` **or**
+  `PLANNED_RESOURCE`, followed by one of the nested capacity shapes
+  (`scalar-profile`, `availability-window`, `segmented-capacity-profile`);
+- selecting `PLANNED_RESOURCE` also creates the parent role's ROLE profile
+  from the reviewed deterministic derivation captured at dry-run (readiness
+  completeness requires exactly one ROLE profile for planner-owned roles);
+  when the parent ROLE profile cannot be derived deterministically, the
+  `PLANNED_RESOURCE` selection is rejected rather than guessed;
+- the selected owner kind and nested capacity are validated through the
+  authoritative structural and ownership rules before any write;
+- deterministic NamedResource mappings (where existing evidence proves a
+  named person) are unchanged and never require an owner-kind decision.
+
 ## Historical v2 snapshot policy
 
 Readiness and rollback share the same translation helper
@@ -183,9 +205,14 @@ allowed resolution shapes, and the current-state evidence hash per entry.
 Fingerprint contract:
 
 - `plan.fingerprint` = SHA-256 over the canonical JSON (sorted keys) of the
-  plan's actionable content (summary, findings, operations, decisions).
-  `generatedAt` is excluded so repeated dry-runs on unchanged state produce
-  identical fingerprints.
+  plan's actionable content (summary, findings, operations, decisions)
+  **plus `baselineStateHash`**. `generatedAt` is excluded so repeated
+  dry-runs on unchanged state produce identical fingerprints.
+- `plan.baselineStateHash` = SHA-256 over the canonical **complete
+  remediation state** the dry-run inspected: all projects, ResourceTypes,
+  NamedResources, CapacityProfiles, CapacitySegments, active CapacityPlan
+  periods/entries and all BacklogSnapshots. It is covered by the reviewed
+  fingerprint, so tampering with it invalidates the plan.
 - `manifest.planFingerprint` must equal the referenced plan's fingerprint;
   any alteration of reviewed plan content invalidates the fingerprint and
   apply refuses.
@@ -194,6 +221,33 @@ Fingerprint contract:
   and refuses execution when the hash differs or the proposed state is not
   already persisted.
 
+### Full-scope drift refusal (before any write)
+
+Inside the same transaction and before the first write, apply re-loads the
+complete remediation state with the same loader the dry-run uses, recomputes
+`baselineStateHash`, and compares it with the reviewed plan. Any unplanned
+change — a new unprofiled ResourceType or NamedResource, a previously valid
+profile becoming malformed, a duplicate or cross-project ownership defect, a
+new or changed BacklogSnapshot, an active CapacityPlan change, or any other
+state difference — refuses execution with exit `1` and **zero writes**,
+regardless of whether the existing operations' local evidence still matches.
+The per-operation evidence checks remain as a second layer.
+
+### Idempotent rerun contract
+
+An apply whose complete state no longer equals the reviewed baseline is
+accepted as a no-op **only** when BOTH hold:
+
+1. every reviewed operation already matches its exact proposed state; and
+2. the planner rebuilt from the current state contains no remaining
+   operations, unresolved decisions or unsupported findings.
+
+The apply then returns success with all operations skipped (the permanent
+readiness check still re-runs after the empty transaction as defence in
+depth). Any mixed, partially applied or otherwise different state refuses
+before writes. The contract is identical for the baseline-plan-plus-manifest
+and resolved-plan invocation forms.
+
 Manifest (`formatVersion: 1`): per-decision entries referencing plan decision
 ids with an explicit reviewed resolution. Supported resolution shapes (only
 those required by #421):
@@ -201,7 +255,11 @@ those required by #421):
 - `scalar-profile` (`DEMAND_FOLLOWING` / `WHOLE_PROJECT_ALLOCATION` + percent);
 - `availability-window` (percent + window);
 - `segmented-capacity-profile` (percent + explicit segments);
-- `owner-kind-decision` (`NAMED_PERSON` / `PLANNED_RESOURCE` + capacity shape);
+- `owner-kind-decision` (`NAMED_PERSON` / `PLANNED_RESOURCE` + nested
+  capacity shape) — required for ambiguous missing NamedResources, whose
+  owner kind is unproven; selecting `PLANNED_RESOURCE` additionally creates
+  the parent role's deterministically derived ROLE profile (or is rejected
+  when the parent ROLE cannot be proven);
 - `snapshot-window-interpretation` (window for windowless / single-`-1`
   snapshot entries).
 
@@ -216,13 +274,17 @@ data size (a few thousand rows):
 
 1. plan + manifest validation (fingerprint, formats, resolution shapes);
 2. refusal when any decision is unresolved or any unsupported finding exists;
-3. inside the transaction: re-read every affected owner/profile/snapshot,
-   verify evidence hashes (or that the proposed state is already persisted →
-   no-op), validate every proposed profile against the authoritative
-   structural rules, write, then re-verify every write;
-4. any failure rolls back everything — no partially repaired project is ever
+3. inside the transaction, before any write: reload the complete remediation
+   state and compare its canonical hash with the reviewed `baselineStateHash`
+   — any difference refuses with zero writes (full-scope drift); an exact
+   post-apply rerun (all operations already in proposed state, planner clean)
+   returns success with everything skipped;
+4. re-read every affected owner/profile/snapshot and verify the operation's
+   evidence hash (second layer), validate every proposed profile against the
+   authoritative structural rules, write, then re-verify every write;
+5. any failure rolls back everything — no partially repaired project is ever
    reported as successful;
-5. after commit: re-run the planner and the permanent readiness gate; exit `1`
+6. after commit: re-run the planner and the permanent readiness gate; exit `1`
    with a full report if any non-policy blocker remains.
 
 No distributed or resumable migration infrastructure is introduced. The
@@ -324,14 +386,22 @@ remaining ambiguous owner. **PR 2 remains blocked** until the gates pass.
 - `server/src/test/productionRemediationPlan.test.ts` — pure planner unit
   tests (classification matrix, never-active policy, overlap decomposition,
   fingerprint stability/tamper detection, manifest merge/refusals, exit
-  classification).
+  classification, owner-kind decision contract incl. PLANNED_RESOURCE parent
+  role derivation, baselineStateHash stability/tamper coverage).
 - `server/src/test/productionRemediation.integration.test.ts` — Linux
   PostgreSQL suite covering dry-run (zero writes, stable fingerprints,
   credentials absent, production-scale counts), deterministic apply (all
   matrix rows, capacity/identity preservation, candidate columns frozen,
   runtime resolver profile-first), manifest decisions (unresolved/malformed/
-  fingerprint/drift refusals, exact resolution, rerun no-op), transaction
-  safety (mid-transaction rollback, no partial success), historical snapshots
+  fingerprint refusals, exact NAMED_PERSON and PLANNED_RESOURCE owner-kind
+  resolutions passing structural/ownership/readiness/resolver checks,
+  unknown nested shapes rejected before writes, rerun no-op), full-scope
+  drift (new unprofiled RT/NR, malformed profile, new untranslatable
+  snapshot, changed unplanned snapshot entry, active-plan change outside
+  operation evidence, cross-project ownership, mixed partial state — all
+  refuse with zero writes; exact rerun no-op and identical drift contract for
+  both invocation forms), transaction safety (mid-transaction rollback, no
+  partial success), historical snapshots
   (all policy cases, minimal rewrites, readiness/rollback agreement, malformed
   refusal) and the end-to-end blocker-class database (readiness fails →
   dry-run → approved apply → audit + readiness pass → runtime loads →
