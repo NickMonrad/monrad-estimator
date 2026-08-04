@@ -36,8 +36,8 @@ than the approved predicate boundary. **574 is the current classifier's
 quarantine count — the correct expected result for the merged implementation
 at `ffed1fa`** — and it is not yet final as a policy boundary: Section 3.5
 assesses whether the legacy scheduler proves a deterministic unbounded
-outcome for current NamedResource Class A entries, which would narrow the
-quarantine class.
+interval-and-percentage outcome for current NamedResource Class A entries,
+which would narrow the quarantine class.
 
 ## 2. Repository and Git-history evidence
 
@@ -161,15 +161,33 @@ const end = nr.endWeek ?? Infinity     // null = project end
 if (week >= start && week <= end) { /* allocationPercent of hpd*5 */ }
 ```
 
-For effective `CAPACITY_PLAN` the allocation gate is the alias pair
-`startWeek`/`endWeek` only (`effectiveAllocationPct` returns the percent
-unconditionally for `CAPACITY_PLAN`); `allocationStartWeek`/`allocationEndWeek`
-were not consulted by the legacy scheduler for this mode. The test
+The legacy scheduler examined **only the NamedResource's own `allocationMode`**
+(`effectiveAllocationPct`), never the parent ResourceType mode — so the V2
+"effective mode" (`namedResource.allocationMode ??
+parentResourceType.allocationMode ?? null`, current `v2EffectiveNamedMode`) is
+a translator interpretation that must not be read back into the historical
+percentage contract:
+
+- `nr.allocationMode === 'CAPACITY_PLAN'` (explicit) → the captured
+  `nr.allocationPercent`, used directly in the capacity arithmetic — a null
+  percent contributes zero (`null / 100` × hours), there is no fallback to
+  `100`;
+- `nr.allocationMode === null` (inherited category) or any other mode → the
+  default EFFORT branch → `100`.
+
+The explicit `CAPACITY_PLAN` percentage branch was introduced in `74b98d3`
+(2026-05-05); at the snapshot-era start (`f783b26`, 2026-05-01) explicit
+`CAPACITY_PLAN` also fell to the default `100`. The outer gate below is
+unchanged across the whole era.
+
+The outer capacity gate (`getWeeklyCapacity`) is the alias pair
+`startWeek`/`endWeek` only: `allocationStartWeek`/`allocationEndWeek` were not
+consulted by the legacy scheduler for this mode. The test
 `scheduler.test.ts` ("slot never active → endWeek=-1 → does not contribute
-capacity") codifies the gate. Weekly capacity is therefore provable per
+capacity") codifies the gate. The active interval is therefore provable per
 orientation:
 
-| Raw shape (all other fields null) | Legacy gate | Provable weekly capacity |
+| Raw shape (all other fields null) | Legacy gate | Provable active interval |
 |---|---|---|
 | `startWeek = -1`, `endWeek = null` | `week >= -1` always true, `end = ∞` | **unbounded** — identical to `null`/`null` |
 | `startWeek = null`, `endWeek = -1` | `start = 0`, `week <= -1` never true | **zero** — identical to `(-1, -1)` |
@@ -180,35 +198,39 @@ orientation:
 "unbounded" as an intentional single edge — the single-`-1` value is stray,
 and the scheduler result came from the null fallback and the other edge.
 
-**Conclusion: the class does not have one deterministic meaning without the
-field orientation.** Three of the four possible orientations are provably
-**unbounded** (the scheduler gate defaulted to `0..∞` and the `-1` value was
-stray); the fourth (`startWeek = null`, `endWeek = -1`) is provably **zero**
-(never-active, identical to `(-1, -1)`). In every orientation the historical
-weekly capacity is fully determined by the proven scheduler contract — no
-orientation requires inventing a window. The sanitized evidence does not
-currently distinguish the orientations, so the per-entry outcome is not yet
+**Conclusion: the active interval does not have one deterministic meaning
+without the field orientation.** Three of the four possible orientations are
+provably **unbounded** (the scheduler gate defaulted to `0..∞` and the `-1`
+value was stray); the fourth (`startWeek = null`, `endWeek = -1`) is provably
+**zero** (never-active, identical to `(-1, -1)`). No orientation requires
+inventing a window. The exact weekly capacity, however, is interval ×
+percentage: the percentage is determined by the explicit-versus-inherited
+mode category (Section 3.4), so **orientation alone does not prove complete
+weekly capacity**. The sanitized evidence does not currently distinguish the
+orientations (or the mode category), so the per-entry outcome is not yet
 assignable.
 
 ### 3.4 Per the required conclusion options
 
 All seven entries remain **decision-required** until sanitized evidence
-identifies their exact raw-field orientation and alias state (Section 5.1
-item 1). Once the orientation is established, each exact shape is evaluated
-as a **deterministic translation candidate** — never as a quarantine
-candidate, because the historical capacity outcome is provable and therefore
-reproducible without guessing.
+identifies their exact raw-field orientation, alias state, raw
+`allocationMode`, parent `allocationMode` (explicit-versus-inherited
+category) and percentage fields (Section 5.1 item 1). Once those are
+established, each exact shape is evaluated as a **deterministic translation
+candidate** — never as a quarantine candidate, because the historical
+capacity outcome is provable and therefore reproducible without guessing.
 
 **Proven zero-capacity orientation.** For the exact raw shape
 `startWeek = null` and `endWeek = -1` (all other window fields null, effective
 `CAPACITY_PLAN`), the historical outer scheduler gate never admitted an
 active week (`start = 0`, `end = -1`), so the entry contributed zero capacity
-— identical to the proven never-active `(-1, -1)` semantics. This is a
-deterministic zero-capacity candidate, subject to:
+**regardless of percentage** — identical to the proven never-active
+`(-1, -1)` semantics. This is a deterministic zero-capacity candidate,
+subject to:
 
 - exact alias constraints (every other captured window field null);
 - effective allocation mode exactly `CAPACITY_PLAN`;
-- valid percentage and ownership;
+- valid ownership;
 - no independent defect;
 - focused future implementation tests.
 
@@ -217,10 +239,20 @@ It is **not** a quarantine candidate.
 **Proven unbounded orientations.** For the exact raw shapes
 `startWeek = -1` + `endWeek = null`, or only `allocationStartWeek = -1`, or
 only `allocationEndWeek = -1` (with the scheduler-consumed `startWeek` /
-`endWeek` aliases null), Git history and the scheduler contract prove
-unbounded historical capacity: the gate defaulted to `0..∞` and
-`effectiveAllocationPct` returned the captured percentage unconditionally for
-`CAPACITY_PLAN`. These are deterministic unbounded-capacity candidates.
+`endWeek` aliases null), the outer gate provably defaulted to `0..∞`, so the
+active interval is unbounded. The deterministic weekly capacity must combine
+that interval with the **historically used percentage**, which splits by
+mode category:
+
+- **explicit** `namedResource.allocationMode = CAPACITY_PLAN` → unbounded
+  interval at `nr.allocationPercent` (from `74b98d3` 2026-05-05; a null
+  percent contributes zero; before `74b98d3` the default `100` applied);
+- **inherited** effective `CAPACITY_PLAN`
+  (`namedResource.allocationMode = null`, parent `CAPACITY_PLAN`) →
+  unbounded interval at the scheduler's null-mode default of **100%** — the
+  captured `allocationPercent` was not used for this category.
+
+The two categories must not be combined into one deterministic mapping.
 
 They are **not**:
 
@@ -228,14 +260,17 @@ They are **not**:
 - "unrecoverable";
 - non-restorable merely because a conventional window pair is absent.
 
-The historical capacity semantics are deterministic; the smallest future
-design task is selecting the **existing valid profile representation** that
-reproduces those semantics. A structurally valid null-window
+The historical capacity semantics (interval × percentage) are deterministic;
+the smallest future design task is selecting the **existing valid profile
+representation** that reproduces both the active interval and the
+historically used percentage — explicit and inherited modes may require
+different target profiles or profile values. A structurally valid null-window
 `AVAILABILITY_WINDOW` representation already exists and is used for
 windowless `TIMELINE` entries; whether it (or another existing
 representation) is the correct target for `CAPACITY_PLAN`/`LEGACY` entries
 is an unresolved design question (Section 3.5). Inventing a finite window is
-neither required nor allowed.
+neither required nor allowed. A deterministic interval without the correct
+percentage is not a complete translation.
 
 Do **not** infer the meaning from `(-1, -1)`: that pair is the planner's
 intentional never-active sentinel; the single-`-1`+null shape has a different
@@ -249,27 +284,60 @@ The current approved policy quarantines every windowless effective
 start and end window. For historical NamedResource entries, however, the
 legacy scheduler used `startWeek ?? 0` / `endWeek ?? Infinity` as the outer
 capacity gate (stable across the whole snapshot window: `f783b26`
-2026-05-01 → `b194e6c` 2026-07-14) and `effectiveAllocationPct` returned the
-captured percentage for `CAPACITY_PLAN` **without applying an inner
-allocation-window gate**. A NamedResource entry with all four window fields
-null therefore provably produced unbounded historical capacity
-(`allocationPercent` for every week ≥ 0).
+2026-05-01 → `b194e6c` 2026-07-14) and applied **no inner allocation-window
+gate** for `CAPACITY_PLAN`. A NamedResource entry with all four window fields
+null therefore provably produced an **unbounded active interval**. The
+percentage is category-dependent and the assessment must separate the two
+categories:
+
+- **explicit** `namedResource.allocationMode = CAPACITY_PLAN`: the scheduler
+  used the captured `allocationPercent` (from `74b98d3` 2026-05-05 onward; a
+  null percent contributed zero; before `74b98d3` the default `100`
+  applied);
+- **inherited** effective `CAPACITY_PLAN`
+  (`namedResource.allocationMode = null`, parent `CAPACITY_PLAN`): the
+  scheduler examined the NamedResource's own null mode and fell to the
+  default EFFORT branch — **100%**, not the captured `allocationPercent`.
+
+For each category the assessment must ask:
+
+- which percentage the historical scheduler used (explicit: the captured
+  `allocationPercent`; inherited: the `100` default);
+- which raw percentage fields were present in the snapshot payload
+  (`allocationPercent` vs `allocationPct`);
+- whether the scheduler behaviour was stable across the applicable writer
+  era (the explicit-mode percentage branch appeared on 2026-05-05 in
+  `74b98d3`; before that every mode fell to the `100` default);
+- whether a current valid authoritative profile representation can reproduce
+  both interval and percentage;
+- whether effective-mode inheritance occurred at snapshot time (the payload
+  captured the raw NamedResource `allocationMode` and the raw parent mode
+  verbatim) or is only a current translator interpretation
+  (`v2EffectiveNamedMode`).
+
+It is **not** claimed that all windowless effective-`CAPACITY_PLAN`
+NamedResources historically used `allocationPercent`.
 
 The three questions are separated deliberately:
 
-1. **Is the historical scheduler outcome provable?** Yes for NamedResource
-   entries under the legacy scheduler contract cited above, across the
-   writer/scheduler era covering the production snapshot window. This is a
-   proven scheduler outcome, not an inference about intent.
+1. **Is the historical scheduler outcome provable?** The active interval is
+   provable for NamedResource entries under the legacy scheduler contract
+   cited above. The percentage is provable per category: explicit
+   `CAPACITY_PLAN` used `allocationPercent` from `74b98d3` (2026-05-05)
+   onward (the first four days of the snapshot window used the default `100`
+   for every non-FULL_PROJECT/TIMELINE mode); inherited/null mode used `100`
+   throughout. This is a proven scheduler outcome, not an inference about
+   intent.
 2. **Is the correct authoritative profile representation already proven?**
    No. The #421 deterministic matrix and the approved #426 policy treat
    windowless `CAPACITY_PLAN` as untranslatable-without-guessing and the
    merged classifier quarantines it; no reviewed mapping reproduces a proven
-   unbounded historical outcome as an authoritative profile for
-   `CAPACITY_PLAN`/`LEGACY` entries. A structurally valid null-window
-   `AVAILABILITY_WINDOW` profile exists (used for windowless `TIMELINE`), but
-   whether that (or another existing representation) is the correct target is
-   an unresolved design question that belongs in a focused future amendment.
+   unbounded historical outcome (interval **and** percentage) as an
+   authoritative profile for `CAPACITY_PLAN`/`LEGACY` entries. A structurally
+   valid null-window `AVAILABILITY_WINDOW` profile exists (used for
+   windowless `TIMELINE`), but whether that (or another existing
+   representation) is the correct target is an unresolved design question
+   that belongs in a focused future amendment.
 3. **Does the existing Class A quarantine policy therefore remain valid,
    require narrowing, or require a focused design amendment?** Under
    assessment. The merged policy is not silently invalidated: it remains in
@@ -285,21 +353,24 @@ The three questions are separated deliberately:
      ResourceType's own allocation fields were not the capacity source in
      that function, so no unbounded conclusion transfers to RT entries from
      this gate;
+   - explicit vs inherited NamedResource `CAPACITY_PLAN` (the scheduler read
+     only the NamedResource's own `allocationMode`);
    - every applicable writer era (legacy planner column writes, client
      PUT/PATCH, clone propagation, and the post-#359 profile-first era in
      which the legacy columns became a compatibility projection);
-   - percentage semantics (`allocationPercent` vs `allocationPct`,
-     `effectiveAllocationPct` behaviour per mode);
+   - percentage semantics (`allocationPercent` vs `allocationPct`, the
+     scheduler's per-mode percentage branches);
    - primary and fallback aliases (which pair the scheduler consumed);
-   - effective-mode inheritance (`v2EffectiveNamedMode`);
+   - effective-mode inheritance (`v2EffectiveNamedMode`) — whether it
+     reflects snapshot-time state or translator interpretation;
    - all structurally valid neighbouring shapes (a translated profile set
      must validate as a complete set).
 
    The sanitized evidence cannot currently split the 574 Class A entries into
-   ResourceType vs NamedResource counts, nor by writer era (Section 5.1 item
-   4). Until that split exists, **the investigation does not claim that 574
-   is the final authoritative policy boundary**; it is the current
-   implementation outcome.
+   ResourceType vs NamedResource counts, nor by explicit/inherited category,
+   nor by writer era (Section 5.1 item 4). Until that split exists, **the
+   investigation does not claim that 574 is the final authoritative policy
+   boundary**; it is the current implementation outcome.
 
 ## 4. Mixed-defect snapshot analysis (11 snapshots, 359 windowless entries)
 
@@ -360,31 +431,41 @@ The following are **not** established by any sanitized evidence on GitHub and
 cannot be derived from repository history:
 
 1. For the 7 single-`-1`+null entries: which of the four captured window
-   fields holds `-1`, and whether the other three are null (decisive for
-   assigning deterministic-zero vs deterministic-unbounded semantics).
+   fields holds `-1`; whether the other three are null, populated or
+   conflicting; the raw NamedResource `allocationMode`; the parent
+   ResourceType `allocationMode` (explicit-versus-inherited category); and
+   the sanitized percentage fields (decisive for assigning
+   deterministic-zero vs deterministic-unbounded interval semantics and the
+   historically used percentage).
 2. For the 11 defect-classified snapshots: the distinct independent-defect
    reasons with counts (decisive for the outcome of the 359 entries).
 3. Whether the 359 include partial-window entries (one-null/one-valid) or are
    purely both-null — the plan message cannot distinguish them.
 4. For the current Class A assessment (Section 3.5): the ResourceType vs
    NamedResource split of the 574 quarantined entries and 49 quarantined
-   snapshots, with writer-era grouping where derivable from existing snapshot
-   metadata (no payloads) — required before 574 can be called final.
+   snapshots, further split by explicit vs inherited NamedResource
+   `CAPACITY_PLAN` and raw null/other mode categories, with writer-era
+   grouping where derivable from existing snapshot metadata (no payloads) —
+   required before 574 can be called final.
 
 ### 5.1 Smallest safe read-only evidence request (for the #404 production agent)
 
 All items are read-only aggregates of the **existing** plan and readiness
 outputs already on the production machine (`plan-1.json`/`plan-2.json` at
-`ffed1fa`, readiness log `a1b4237b…`), supporting the deterministic-semantics
-analysis (Sections 3.4–3.5) and the mixed-defect assessment (Section 4). No
-new database access, no payload copy, no identifiers required.
+`ffed1fa`, readiness log `a1b4237b…`), supporting the deterministic
+interval-and-percentage analysis (Sections 3.4–3.5) and the mixed-defect
+assessment (Section 4). No new database access, no payload copy, no
+identifiers required.
 
 1. For the 7 decisions with message "single -1/negative window edge without
    established meaning": a shape-category table — per entry, which of
    `allocationStartWeek` / `allocationEndWeek` / `startWeek` / `endWeek`
-   equals `-1` and whether the other three captured fields are null
-   (categories only: e.g. `startWeek=-1, others null`), plus entry kind and
-   effective mode (all expected `namedResource`, `CAPACITY_PLAN`).
+   equals `-1`; whether the other captured window fields are null, populated
+   or conflicting; the raw NamedResource `allocationMode` and the parent
+   ResourceType `allocationMode` (explicit vs inherited category); the
+   sanitized percentage category (`allocationPercent` absent/null, finite
+   value with an aggregate bucket, or exact value only if non-sensitive;
+   `allocationPct` absent/null or finite); and entry kind.
 2. For the 18 defect-classified snapshots: counts of snapshot-entry findings
    by message (sanitized to reason categories), per snapshot — specifically
    the distinct non-"without captured window" messages (percent-range,
@@ -393,10 +474,13 @@ new database access, no payload copy, no identifiers required.
 3. Per-snapshot classification counts for the 11 mixed snapshots:
    `decisionRequired` by message (windowless vs partial vs single-negative),
    `alreadyValid`, `unsupported`, `quarantined` (expected 0/0/0/0).
-4. For the current Class A assessment: ResourceType vs NamedResource split of
-   the 574 quarantined entries and 49 quarantined snapshots (the plan already
-   carries `ownerKind` per snapshot-entry finding), with writer-era grouping
-   where derivable from existing snapshot metadata.
+4. For the current Class A assessment: aggregate counts of the 574
+   quarantined entries and 49 quarantined snapshots split by ResourceType vs
+   NamedResource; explicit NamedResource `CAPACITY_PLAN`; inherited
+   NamedResource `CAPACITY_PLAN`; NamedResource raw null/other mode
+   categories; percentage-field presence category; and writer-era grouping
+   where derivable from existing snapshot metadata (the plan already carries
+   `ownerKind` per snapshot-entry finding).
 
 Nothing in the request asks for complete plan JSON, snapshot payloads,
 customer/project names, decision IDs, credentials or database copies.
@@ -405,9 +489,9 @@ customer/project names, decision IDs, credentials or database copies.
 
 | Class | Observed count | Proven historical semantics | Recommended outcome | Evidence |
 | ----- | -------------: | --------------------------- | ------------------- | -------- |
-| Class A windowless entries in fully-clean snapshots | 574 entries / 49 snapshots | no captured window; for NamedResource entries the legacy scheduler gate proves unbounded historical capacity (§3.5); RT semantics are not established by that gate | **Quarantine (current implementation outcome — unchanged); NamedResource subset under assessment (§3.5)** | #404 `5172781179`; classifier at `ffed1fa`; scheduler gate `f783b26`→`b194e6c` |
+| Class A windowless entries in fully-clean snapshots | 574 entries / 49 snapshots | no captured window; for NamedResource entries the legacy scheduler gate proves an unbounded active interval, with percentage per explicit/inherited mode (§3.5); RT semantics are not established by that gate | **Quarantine (current implementation outcome — unchanged); NamedResource subset under assessment (§3.5)** | #404 `5172781179`; classifier at `ffed1fa`; scheduler gate `f783b26`→`b194e6c` (percentage branch `74b98d3`) |
 | Windowless `CAPACITY_PLAN` entries inside 11 mixed-defect snapshots | 359 entries / 11 snapshots | same raw shape as Class A; snapshot carries ≥1 unidentified independent defect | **Decision-required (unchanged)** until defect classes are identified (Section 5.1 item 2) | #404 `5172781179`; fail-closed snapshot rule |
-| `-1` + null (effective `CAPACITY_PLAN`) | 7 entries / 7 snapshots | orientation-dependent provable: `startWeek=null, endWeek=-1` → zero (≡ never-active); all other orientations → unbounded | **Decision-required (unchanged)** until orientation evidence (Section 5.1 item 1); then deterministic zero or deterministic unbounded candidate — never quarantine | scheduler gate (`d179cbe`), planner writer trace (§3.2–3.3) |
+| `-1` + null (effective `CAPACITY_PLAN`) | 7 entries / 7 snapshots | orientation-dependent provable: `startWeek=null, endWeek=-1` → zero interval (≡ never-active); all other orientations → unbounded interval at the category-specific percentage (explicit `allocationPercent` or inherited `100` default) | **Decision-required (unchanged)** until orientation, alias and mode-source evidence exists (Section 5.1 item 1); zero orientation is deterministic zero; unbounded orientation is deterministic only when the historically used percentage is also established; explicit and inherited modes may require different deterministic target profiles — never quarantine | scheduler gate (`f783b26`→`b194e6c`; percentage branch `74b98d3`), planner writer trace (§3.2–3.3) |
 | `(-1,-1)` / non-negative inverted never-active | 205 normalized, not findings | zero capacity | Deterministic (unchanged) | #421 policy; `scheduler.test.ts` |
 | Single `-1` + non-negative other edge (Class B) | 0 | — | n/a (no production match) | #404 `5172781179` |
 | Valid non-`CAPACITY_PLAN` entries | not findings | restorable per existing translation | Restorable (unchanged) | classifier tests |
@@ -417,18 +501,23 @@ customer/project names, decision IDs, credentials or database copies.
 ## 7. Recommended policy
 
 **Path A — no runtime or policy change yet; obtain the minimal sanitized
-evidence and complete the deterministic-semantics assessment.**
+evidence and complete the deterministic interval-and-percentage assessment.**
 
 - The current implementation follows the currently approved policy (Section
   2.3); no classifier correction is justified (**Path C not applicable**).
 - The old expectation that all 940 would immediately quarantine was
   incorrect; 574/366 is the observed outcome of the current classifier.
-- The seven `-1`+null entries remain blocked until their orientation is
-  known; each proven orientation then belongs to deterministic translation
-  analysis (zero or unbounded), not quarantine. No Class A extension for
-  `-1`+null is proposed and no new quarantine class is created by this PR.
+- The seven `-1`+null entries remain blocked until their orientation, alias
+  state and mode-source category are known; each proven orientation then
+  belongs to deterministic translation analysis (zero or unbounded), not
+  quarantine. No Class A extension for `-1`+null is proposed and no new
+  quarantine class is created by this PR.
 - Proven zero and proven unbounded historical outcomes are deterministic
   states — potentially restorable — not unrecoverable quarantine candidates.
+- A complete deterministic translation must reproduce both the active
+  interval and the historically used percentage; explicit and inherited
+  NamedResource `CAPACITY_PLAN` used different historical percentages and
+  may require different target profiles or profile values (Section 3.4).
 - The effect on current NamedResource Class A entries (Section 3.5) must be
   resolved before 574 is called the final policy count.
 - Mixed-defect snapshots remain fail-closed (Section 4.3).
@@ -446,21 +535,32 @@ evidence and complete the deterministic-semantics assessment.**
 
 If Section 5.1 item 1 returns `startWeek=null, endWeek=-1` (all other window
 fields null) for some entries: those entries are deterministic zero-capacity
-candidates (never-active-equivalent). A future focused amendment would define
-the exact raw predicate, alias constraints and effective-mode rules and add
-focused implementation tests; the entries then leave the decision set without
-a human decision. They are not quarantine candidates.
+candidates (never-active-equivalent) — the active interval is zero
+regardless of percentage. A future focused amendment would define the exact
+raw predicate, alias constraints, effective-mode rules and category checks
+and add focused implementation tests; the entries then leave the decision
+set without a human decision. They are not quarantine candidates.
 
 If item 1 returns any other orientation (`startWeek=-1` + `endWeek=null`, or
-a single `-1` in the primary pair with null aliases): the entry is a
-deterministic unbounded-capacity candidate. A future focused amendment would
-select the **existing valid profile representation** that reproduces the
-proven unbounded semantics (a null-window `AVAILABILITY_WINDOW`
-representation already exists and is used for windowless `TIMELINE`);
-inventing a finite window is neither required nor allowed. The
-profile-representation choice is the smallest open design task — the
-historical capacity semantics themselves are already deterministic. These
-entries are not quarantine candidates.
+a single `-1` in the primary pair with null aliases): the entry has a
+deterministic unbounded active interval. The deterministic mapping must also
+reproduce the historically used percentage, which splits by mode category:
+
+- explicit `namedResource.allocationMode = CAPACITY_PLAN` → the captured
+  `allocationPercent` (from `74b98d3` 2026-05-05; a null percent contributes
+  zero; before `74b98d3` the default `100` applied);
+- inherited effective `CAPACITY_PLAN` (null own mode, parent `CAPACITY_PLAN`)
+  → the scheduler's `100%` null-mode default.
+
+A future focused amendment would select the **existing valid profile
+representation** that reproduces both the interval and the category-specific
+percentage (a null-window `AVAILABILITY_WINDOW` representation already exists
+and is used for windowless `TIMELINE`); explicit and inherited modes may
+require different target profiles or profile values. Inventing a finite
+window is neither required nor allowed. The profile-representation choice is
+the smallest open design task — the historical capacity semantics (interval
+and percentage) are already deterministic per category. These entries are
+not quarantine candidates.
 
 If Section 5.1 item 2 identifies partial-window entries (one-null/one-valid):
 the same orientation analysis applies — `(start=null, end=N)` in the alias
@@ -498,33 +598,36 @@ not a quarantine outcome. `940 = 574 quarantined + 366 remaining` under the
 approved fail-closed snapshot-level rule. These figures are the **current
 policy/classifier boundary**: they are the correct expected result for the
 currently merged classifier, and they remain subject to the Section 3.5
-assessment before any later focused policy amendment is considered.
+interval-and-percentage assessment before any later focused policy amendment
+is considered.
 
 ## 9. Implementation boundary
 
 None authorized by this issue. If the evidence returned by Section 5.1
-establishes a deterministic zero or deterministic unbounded candidate (or the
-Section 3.5 assessment narrows Class A), that is a **separate focused design
-amendment** (an updated `#426` policy section) followed by a separate
-implementation issue mirroring the #426 → #428 flow — not part of this
-investigation. No quarantine extension is proposed. #404 and #418 PR 2
-remain blocked.
+establishes a deterministic zero or deterministic unbounded
+interval-and-percentage candidate (or the Section 3.5 assessment narrows
+Class A), that is a **separate focused design amendment** (an updated `#426`
+policy section) followed by a separate implementation issue mirroring the
+#426 → #428 flow — not part of this investigation. No quarantine extension
+is proposed. #404 and #418 PR 2 remain blocked.
 
 ## 10. Simplicity Check
 
 - **What is the minimum correct next step?** Post the Section 5.1 evidence
   request to #404, record the observed 574/366 boundary as the current
-  implementation outcome, complete the Section 3.5 deterministic-semantics
-  assessment, and change no code. No runtime change is authorized or
-  required.
+  implementation outcome, complete the Section 3.5
+  interval-and-percentage assessment, and change no code. No runtime change
+  is authorized or required.
 - **Is a code change actually required?** No. The implementation matches the
   approved design; the deviation is an expectation-count error, not a code
   defect.
 - **Which exact new abstraction or predicate, if any, is essential?** None
   now. At most two future deterministic translation candidates
-  (`(null, -1)` zero-capacity; unbounded orientations) — each only if
-  orientation evidence proves the corresponding historical semantics; both
-  require a focused design amendment, and neither is a quarantine class.
+  (`(null, -1)` zero-capacity; unbounded orientations at the
+  category-specific historical percentage) — each only if orientation and
+  mode-source evidence proves the corresponding historical interval and
+  percentage; both require a focused design amendment, and neither is a
+  quarantine class.
 - **Can the issue be resolved by correcting expected counts instead?** Only
   partially. The observed counts are the correct expected result for the
   current implementation (the 940 expectation was wrong), but Issue #430 is
