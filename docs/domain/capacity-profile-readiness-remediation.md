@@ -355,6 +355,134 @@ PR 2 migration during the Phase 4 `prisma migrate deploy` — acceptable but
 couples the steps; the separate step is preferred. This PR does not modify,
 apply or fold in that migration.
 
+## Sanitized snapshot evidence command (Issue #432)
+
+A standalone, explicitly invoked, **read-only** command that extracts the
+sanitized aggregate historical snapshot evidence required by the Issue #430
+design investigation. It is evidence tooling only: it changes no
+classifier, readiness, rollback, retention or remediation behaviour, creates
+no manifest, selects no decisions and authorizes nothing. It never runs
+during application startup or HTTP requests.
+
+### Exact root command
+
+```bash
+npm run capacity-profiles:snapshot-evidence -- \
+  --json <output.json> \
+  --markdown <output.md> \
+  --expected <expected.json>
+```
+
+Equivalent standalone invocation from `server/`:
+
+```bash
+npx tsx src/scripts/generateSnapshotEvidence.ts \
+  --json <output.json> --markdown <output.md> --expected <expected.json>
+```
+
+All three arguments are required. Root arguments are forwarded exactly once
+and in order (regression-tested, same seam as the #424 forwarding fix).
+There is deliberately **no `--dry-run` option**: the command is inherently
+read-only.
+
+### Expected-file schema (reviewed production-run input)
+
+The reviewed expectations are supplied explicitly per run; they are never
+hard-coded as application constants. Shape:
+
+```json
+{
+  "fingerprint": "<64-hex remediation-plan fingerprint>",
+  "baselineStateHash": "<64-hex baseline-state hash>",
+  "quarantinedEntries": 574,
+  "quarantinedSnapshots": 49,
+  "defectSnapshots": 18,
+  "windowlessDecisions": 359,
+  "singleMinusOneDecisions": 7,
+  "snapshotDecisions": 366,
+  "liveDecisions": 130,
+  "unsupported": 0,
+  "rewriteOperations": 0,
+  "topology11WindowlessDecisions": 226,
+  "topology7WindowlessDecisions": 133,
+  "topology7SingleMinusOneDecisions": 7
+}
+```
+
+Current reviewed production values (Issue #404 comment `5172781179`):
+fingerprint `eccf77edde816d59d2625b7988175f41dfa14f2ca792483bfcb2c271ba2130dc`,
+baseline-state hash
+`09b504b5e27ee8362f7d983c2d00cda68711ed7e71c2f7737d90668ad50a02df`.
+
+### Exit contract
+
+- `0` — all gates passed (fingerprint, baseline, reviewed counts,
+  reconciliation) and both output files were written.
+- `1` — any refusal: bad arguments, malformed/unsafe expected values,
+  existing output file (never silently overwritten), snapshot parse failure,
+  unsupported schema version, fingerprint/baseline/count mismatch,
+  reconciliation failure, or output-write failure.
+
+No evidence is emitted until every gate passes.
+
+### Output schema and redaction guarantees
+
+Versioned JSON (`formatVersion: 1`) with `runMetadata`, `expectedBoundary`,
+`observedBoundary`, `integrityResult`, `topology`, `singleNegativeEntries`
+(S1… labels), `defectSnapshots` (M1… labels), `classAAggregates`,
+`unavailableEvidence`, `reconciliation` and `policyDecision:
+"not-assessed"`. Markdown is rendered from the same evidence object, so JSON
+and Markdown cannot diverge. Output ordering is deterministic apart from the
+explicit run timestamp.
+
+The command prevents output of project/snapshot/owner/finding/decision IDs,
+names, complete payloads, credentials and database details by construction
+(aggregates only, content-derived labels) and automated redaction tests scan
+serialized output for seeded sensitive fixture values and fail if any
+appear. Runtime errors are converted to controlled reason codes and concise
+safe messages.
+
+### Corrected 18-snapshot topology (evidence basis)
+
+The 359 windowless decisions span **all 18** defect-classified snapshots
+(Issue #404 comment `5174355909`): 226 windowless decisions in the
+11-snapshot windowless-only subgroup (21 each × 10, 16 × 1) and 133
+windowless + 7 single-`-1` decisions in the 7-snapshot subgroup (19
+windowless + 1 single-`-1` per snapshot, 140 total). The earlier topology
+attributing all 359 to the 11-snapshot subgroup is superseded.
+
+### Zero-write and read-only guarantee
+
+The command uses ordinary read queries through `loadRemediationState` and a
+separate read-only `createdAt` metadata query, then aggregates in pure code.
+It never invokes remediation apply, manifest resolution, migrations, schema
+mutation, snapshot rewrite/deletion or retention pruning. Focused
+integration tests capture canonical database state before and after a run
+and assert exact equality.
+
+### #404 run procedure (Issue #432 handoff)
+
+1. Install the reviewed merge commit without running migrations; confirm a
+   clean checkout at the exact expected commit and a healthy service.
+2. Create or retain the required #404 backup according to the documented
+   backup command — this evidence command is not migration authorization.
+3. Run the command once, writing outputs **outside the repository** (e.g.
+   `~/.monrad-estimator/ops/…/snapshot-evidence.json` and `.md`) with
+   restrictive permissions (directory 700, files 600).
+4. Verify fingerprint, baseline and reviewed counts against the handoff
+   values above (or the values recorded in the reviewed PR description).
+5. Post only the sanitized Markdown summary and the output file hashes to
+   Issue #404; never post or copy complete snapshot payloads or the useful
+   database.
+6. Return the evidence to Issue #430 for design review.
+7. Stop on any drift, mismatch, redaction failure or reconciliation failure.
+
+### Stop conditions and scope confirmation
+
+The command output is evidence only. It does **not** authorize remediation
+apply, migration deployment, manifest creation or decision selection.
+#404 and #418 remain blocked until the evidence is reviewed under #430.
+
 ## #404 Production handoff procedure
 
 The production machine must execute exactly these steps; stop on any failure
