@@ -49,7 +49,9 @@ import {
   computePlanFingerprint,
   computeStateHash,
   sha256Hex,
+  type PlanDecisionEntry,
   type RemediationDatabaseState,
+  type RemediationPlan,
 } from './productionRemediationPlan.js'
 
 // ─── Version and schema ─────────────────────────────────────────────────────
@@ -139,6 +141,29 @@ export interface SnapshotEvidenceExpected {
 
 // ─── Report schema (versioned, evidence-only) ───────────────────────────────
 
+/** One sanitized S record (single-negative decision evidence). Key is a
+ * content-derived internal label input; never emitted. */
+export interface SingleNegativeEvidenceEntry {
+  key: string
+  entryKind: OwnerKindCategory
+  minusOneField: MinusOneField
+  /** Sanitized state of every raw window field (never numeric values). */
+  windowFields: Record<MinusOneField, WindowFieldState>
+  /** Per-edge conflicting-populated-alias evidence (shared predicate). */
+  aliasConflicts: { startEdge: boolean; endEdge: boolean }
+  alternateAliasState: AlternateAliasState
+  /** Sanitized mode values only (fixed evidence vocabulary). */
+  rawMode: SanitizedMode
+  parentMode: SanitizedMode
+  effectiveMode: SanitizedMode
+  modeSource: NamedModeSourceCategory
+  allocationPercentCategory: PercentCategory
+  allocationPctCategory: PercentCategory
+  entryErrorCategories: EntryErrorCategory[]
+  structuralErrorCategories: StructuralErrorCategory[]
+  independentDefect: IndependentDefectCategory
+}
+
 export interface SnapshotEvidenceReport {
   formatVersion: typeof SNAPSHOT_EVIDENCE_FORMAT_VERSION
   runMetadata: {
@@ -186,26 +211,7 @@ export interface SnapshotEvidenceReport {
     }
     quarantinedFindingsWithDecisionOrOperationIds: number
   }
-  singleNegativeEntries: Array<{
-    label: string
-    entryKind: OwnerKindCategory
-    minusOneField: MinusOneField
-    /** Sanitized state of every raw window field (never numeric values). */
-    windowFields: Record<MinusOneField, WindowFieldState>
-    /** Per-edge conflicting-populated-alias evidence (shared predicate). */
-    aliasConflicts: { startEdge: boolean; endEdge: boolean }
-    alternateAliasState: AlternateAliasState
-    /** Sanitized mode values only (fixed evidence vocabulary). */
-    rawMode: SanitizedMode
-    parentMode: SanitizedMode
-    effectiveMode: SanitizedMode
-    modeSource: NamedModeSourceCategory
-    allocationPercentCategory: PercentCategory
-    allocationPctCategory: PercentCategory
-    entryErrorCategories: EntryErrorCategory[]
-    structuralErrorCategories: StructuralErrorCategory[]
-    independentDefect: IndependentDefectCategory
-  }>
+  singleNegativeEntries: Array<Omit<SingleNegativeEvidenceEntry, 'key'> & { label: string }>
   defectSnapshots: Array<{
     label: string
     subgroup: DefectSubgroup
@@ -258,7 +264,7 @@ export interface SnapshotEvidenceReport {
 
 // ─── Controlled error ───────────────────────────────────────────────────────
 
-export type EvidenceErrorCode = 'unsupported-snapshot' | 'snapshot-parse-failure'
+export type EvidenceErrorCode = 'unsupported-snapshot' | 'snapshot-parse-failure' | 'decision-correlation-failure'
 
 export class SnapshotEvidenceError extends Error {
   readonly code: EvidenceErrorCode
@@ -483,12 +489,7 @@ function namedResourceEntryEvidence(
   if (v2NamedResourceAliasConflict(nr, effectiveMode) && !categories.includes('alias-conflict')) {
     categories.push('alias-conflict')
   }
-  const modeSource: NamedModeSourceCategory =
-    rawMode === 'CAPACITY_PLAN' ? 'explicit'
-      : rawMode != null ? 'other'
-        : parentMode === 'CAPACITY_PLAN' ? 'inherited'
-          : parentMode == null ? 'unavailable'
-            : 'other'
+  const modeSource: NamedModeSourceCategory = namedModeSourceCategory(rawMode, parentMode)
   const minusOneFields: MinusOneField[] = []
   if (nr.allocationStartWeek === -1) minusOneFields.push('allocationStartWeek')
   if (nr.allocationEndWeek === -1) minusOneFields.push('allocationEndWeek')
@@ -608,6 +609,228 @@ function planEntryPayload(rt: SnapshotResourceType | SnapshotNamedResource, kind
   }
 }
 
+// ─── S-record correlation (plan decisions are the selection authority) ─────
+
+/** One plan single-negative snapshot decision correlated to its raw entry. */
+interface CorrelatedSingleNegativeDecision {
+  decision: PlanDecisionEntry
+  snapshotIndex: number
+  kind: 'resourceType' | 'namedResource'
+  rawEntry: SnapshotResourceType | SnapshotNamedResource
+  parentRt: SnapshotResourceType | undefined
+  minusOneField: MinusOneField
+}
+
+function edgeOfMinusOneField(field: MinusOneField): 'start' | 'end' {
+  return field === 'allocationStartWeek' || field === 'startWeek' ? 'start' : 'end'
+}
+
+/** Deterministic exact-field pick for a plan single-negative decision: the
+ * primary of the negative effective edge when it holds `-1`, otherwise its
+ * fallback. Historical payloads may hold `-1` on more than one raw field of
+ * the same edge; every such field is still reported as `minus-one` in
+ * `windowFields`, while `minusOneField` names the plan-relevant exact field. */
+function deterministicMinusOneField(
+  raw: SnapshotResourceType | SnapshotNamedResource,
+  kind: 'resourceType' | 'namedResource',
+): MinusOneField {
+  if (kind === 'resourceType') {
+    const rt = raw as SnapshotResourceType
+    if (rt.allocationStartWeek != null && rt.allocationStartWeek < 0) return 'allocationStartWeek'
+    if (rt.allocationEndWeek != null && rt.allocationEndWeek < 0) return 'allocationEndWeek'
+  } else {
+    const nr = raw as SnapshotNamedResource
+    const effectiveStart = nr.allocationStartWeek ?? nr.startWeek ?? null
+    const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek ?? null
+    if (effectiveStart != null && effectiveStart < 0) {
+      return nr.allocationStartWeek === -1 ? 'allocationStartWeek' : 'startWeek'
+    }
+    if (effectiveEnd != null && effectiveEnd < 0) {
+      return nr.allocationEndWeek === -1 ? 'allocationEndWeek' : 'endWeek'
+    }
+  }
+  throw new SnapshotEvidenceError(
+    'decision-correlation-failure',
+    'cannot determine the negative window edge of a correlated single-negative decision',
+  )
+}
+
+/**
+ * Correlate every plan single-negative snapshot decision to exactly one raw
+ * v2 entry, using the identifiers the plan decision already carries
+ * (snapshotId, entryId, owner kind). The plan is the selection authority:
+ * no raw entry is discovered or reclassified independently. Any missing,
+ * ambiguous or inconsistent correlation fails closed with a fixed safe
+ * message (positions and counts only — never identifiers or payloads).
+ */
+export function correlateSingleNegativeDecisions(
+  plan: RemediationPlan,
+  state: RemediationDatabaseState,
+  classified: readonly ClassifiedSnapshot[],
+): CorrelatedSingleNegativeDecision[] {
+  const selected = plan.decisions.filter(
+    decision => decision.snapshotId != null && snapshotDecisionCategory(decision.message) === 'single-negative',
+  )
+  const correlations: CorrelatedSingleNegativeDecision[] = []
+  const correlatedKeys = new Set<string>()
+  selected.forEach((decision, index) => {
+    const position = index + 1
+    const total = selected.length
+    const fail = (reason: string): never => {
+      throw new SnapshotEvidenceError(
+        'decision-correlation-failure',
+        `cannot correlate snapshot decision ${position} of ${total}: ${reason}`,
+      )
+    }
+    const snapshotIndex = state.snapshots.findIndex(snapshot => snapshot.id === decision.snapshotId)
+    if (snapshotIndex < 0) fail('no stored snapshot matches')
+    const item = classified[snapshotIndex]!
+    if (!item.v2 || item.parsedV2 == null) fail('the stored snapshot is not a supported v2 payload')
+    if (decision.entryId == null) fail('the decision carries no entry identifier')
+    const kind: 'resourceType' | 'namedResource' = decision.ownerKind === 'role' ? 'resourceType' : 'namedResource'
+    const parsed: SnapshotV2 = item.parsedV2 ?? fail('the stored snapshot is not a supported v2 payload')
+    const matches = kind === 'resourceType'
+      ? parsed.resourceTypes.filter(rt => rt.id === decision.entryId)
+      : parsed.namedResources.filter(nr => nr.id === decision.entryId)
+    if (matches.length !== 1) fail(`matched ${matches.length} raw entries`)
+    const rawEntry = matches[0]!
+    // The matched raw entry must re-derive the same decision through the
+    // shared classifier (correlation validator — never an independent
+    // selection or policy path).
+    const finding = classifySnapshotEntry(planEntryPayload(rawEntry, kind))
+    if (finding.classification !== 'decisionRequired' || !finding.message.includes(SINGLE_NEGATIVE_DECISION_MESSAGE)) {
+      fail('the raw entry does not re-derive the single-negative decision')
+    }
+    const key = `${decision.snapshotId}\u0000${kind}\u0000${decision.entryId}`
+    if (correlatedKeys.has(key)) fail('two selected decisions resolve to the same raw entry')
+    correlatedKeys.add(key)
+    const parentRt = kind === 'namedResource'
+      ? parsed.resourceTypes.find(rt => rt.id === (rawEntry as SnapshotNamedResource).resourceTypeId)
+      : undefined
+    correlations.push({
+      decision,
+      snapshotIndex,
+      kind,
+      rawEntry,
+      parentRt,
+      minusOneField: deterministicMinusOneField(rawEntry, kind),
+    })
+  })
+  return correlations
+}
+
+/**
+ * Populate one sanitized S record from a correlated raw entry. Pure evidence
+ * derivation through shared classifier/effective-mode helpers; never emits
+ * identifiers, exact percentages or populated window numbers. Exported so the
+ * inherited-effective-mode evidence capability is directly testable.
+ */
+export function buildSingleNegativeEvidenceEntry(
+  rawEntry: SnapshotResourceType | SnapshotNamedResource,
+  kind: 'resourceType' | 'namedResource',
+  parentRt: SnapshotResourceType | undefined,
+  structuralErrorCategories: readonly StructuralErrorCategory[],
+  minusOneField: MinusOneField,
+): SingleNegativeEvidenceEntry {
+  let rawMode: SanitizedMode
+  let parentMode: SanitizedMode
+  let effectiveMode: SanitizedMode
+  let modeSource: NamedModeSourceCategory
+  let percent: number | null | undefined
+  let pct: number | null | undefined
+  let windowFields: Record<MinusOneField, WindowFieldState>
+  let aliasConflicts: { startEdge: boolean; endEdge: boolean }
+  let sanitizedForKey: Record<string, unknown>
+  if (kind === 'resourceType') {
+    const rt = rawEntry as SnapshotResourceType
+    rawMode = sanitizeMode(rt.allocationMode)
+    parentMode = null
+    effectiveMode = rawMode
+    modeSource = 'unavailable'
+    percent = rt.allocationPercent
+    // ResourceType entries carry no alternate aliases: every fallback field
+    // is reported absent, and no edge can conflict.
+    windowFields = {
+      allocationStartWeek: windowFieldStateFor(rt.allocationStartWeek),
+      allocationEndWeek: windowFieldStateFor(rt.allocationEndWeek),
+      startWeek: 'absent-null',
+      endWeek: 'absent-null',
+    }
+    aliasConflicts = { startEdge: false, endEdge: false }
+    sanitizedForKey = {
+      kind,
+      mode: rawMode,
+      percent: rt.allocationPercent ?? null,
+      asw: rt.allocationStartWeek ?? null,
+      aew: rt.allocationEndWeek ?? null,
+    }
+  } else {
+    const nr = rawEntry as SnapshotNamedResource
+    const effectiveRawMode = v2EffectiveNamedMode(nr, parentRt)
+    rawMode = sanitizeMode(nr.allocationMode)
+    parentMode = sanitizeMode(parentRt?.allocationMode)
+    effectiveMode = sanitizeMode(effectiveRawMode)
+    modeSource = namedModeSourceCategory(nr.allocationMode ?? null, parentRt?.allocationMode ?? null)
+    percent = nr.allocationPercent
+    pct = nr.allocationPct
+    windowFields = {
+      allocationStartWeek: windowFieldStateFor(nr.allocationStartWeek),
+      allocationEndWeek: windowFieldStateFor(nr.allocationEndWeek),
+      startWeek: windowFieldStateFor(nr.startWeek),
+      endWeek: windowFieldStateFor(nr.endWeek),
+    }
+    // Shared per-edge alias semantics (same definition the classifier uses);
+    // window-using modes only.
+    aliasConflicts = {
+      startEdge: v2NamedResourceEdgeAliasConflict(nr, effectiveRawMode, 'start'),
+      endEdge: v2NamedResourceEdgeAliasConflict(nr, effectiveRawMode, 'end'),
+    }
+    sanitizedForKey = {
+      kind,
+      mode: rawMode,
+      percent: nr.allocationPercent ?? null,
+      pct: nr.allocationPct ?? null,
+      asw: nr.allocationStartWeek ?? null,
+      aew: nr.allocationEndWeek ?? null,
+      sw: nr.startWeek ?? null,
+      ew: nr.endWeek ?? null,
+    }
+  }
+  const entryErrorCategories: EntryErrorCategory[] = []
+  const errorMessages = kind === 'resourceType'
+    ? v2ResourceTypeEntryErrors(rawEntry as SnapshotResourceType, 'v2 snapshot resourceTypes[?]')
+    : v2NamedResourceEntryErrors(rawEntry as SnapshotNamedResource, parentRt, 'v2 snapshot namedResources[?]')
+  for (const message of errorMessages) {
+    const category = entryErrorCategory(message, rawEntry)
+    if (!entryErrorCategories.includes(category)) entryErrorCategories.push(category)
+  }
+  if (kind === 'namedResource') {
+    const nr = rawEntry as SnapshotNamedResource
+    const effectiveRawMode = v2EffectiveNamedMode(nr, parentRt)
+    if (v2NamedResourceAliasConflict(nr, effectiveRawMode) && !entryErrorCategories.includes('alias-conflict')) {
+      entryErrorCategories.push('alias-conflict')
+    }
+  }
+  const conflict = aliasConflicts.startEdge || aliasConflicts.endEdge
+  return {
+    key: contentKey(sanitizedForKey),
+    entryKind: kind,
+    minusOneField,
+    windowFields,
+    aliasConflicts,
+    alternateAliasState: conflict ? 'conflicting' : aliasStateFrom(windowFields),
+    rawMode,
+    parentMode,
+    effectiveMode,
+    modeSource,
+    allocationPercentCategory: percentCategory(percent),
+    allocationPctCategory: percentCategory(pct),
+    entryErrorCategories,
+    structuralErrorCategories: [...structuralErrorCategories],
+    independentDefect: structuralErrorCategories.length > 0 ? 'both' : 'entry-level',
+  }
+}
+
 export interface SnapshotEvidenceInputs {
   state: RemediationDatabaseState
   /** snapshot id → ISO created-at timestamp (separate read-only query;
@@ -626,7 +849,7 @@ interface ClassifiedSnapshot {
   parsedV2: SnapshotV2 | null
 }
 
-function classifyAllSnapshots(state: RemediationDatabaseState): ClassifiedSnapshot[] {
+export function classifyAllSnapshots(state: RemediationDatabaseState): ClassifiedSnapshot[] {
   return state.snapshots.map(snapshot => {
     const evidence = classifySnapshotEvidence(snapshot.snapshot, snapshot.projectId)
     let parsed: SnapshotData | null = null
@@ -699,155 +922,28 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     findingCountsBySnapshot.set(finding.snapshotId, entry)
   }
 
-  // ── S entries: raw `-1` edge decisions — the exact entries the plan
-  // classifies as "single -1/negative window edge" (shared predicate via
-  // classifySnapshotEntry; the observed production shape is a single `-1`
-  // raw field; the other-edge state is reported as raw evidence, not
-  // assumed). Evidence, not policy.
-  interface SingleNegativeRecord {
-    key: string
-    entryKind: OwnerKindCategory
-    minusOneField: MinusOneField
-    windowFields: Record<MinusOneField, WindowFieldState>
-    aliasConflicts: { startEdge: boolean; endEdge: boolean }
-    alternateAliasState: AlternateAliasState
-    rawMode: SanitizedMode
-    parentMode: SanitizedMode
-    effectiveMode: SanitizedMode
-    modeSource: NamedModeSourceCategory
-    allocationPercentCategory: PercentCategory
-    allocationPctCategory: PercentCategory
-    entryErrorCategories: EntryErrorCategory[]
-    structuralErrorCategories: StructuralErrorCategory[]
-    independentDefect: IndependentDefectCategory
-  }
-  const singleNegativeRecords: SingleNegativeRecord[] = []
-
-  for (let snapshotIndex = 0; snapshotIndex < state.snapshots.length; snapshotIndex++) {
-    const item = classified[snapshotIndex]!
-    if (!item.v2 || !item.parsedV2) continue
-    const parsed = item.parsedV2
-    const rtById = new Map(parsed.resourceTypes.map(rt => [rt.id, rt]))
-    const evidence = item.evidence
-    // Entry evidence is in payload order: RTs then NRs.
-    for (let i = 0; i < evidence.entries.length; i++) {
-      const entry = evidence.entries[i]!
-      if (entry.minusOneFields.length !== 1) continue
-      let raw: SnapshotResourceType | SnapshotNamedResource
-      let kind: 'resourceType' | 'namedResource'
-      if (entry.kind === 'resourceType') {
-        raw = parsed.resourceTypes[i]!
-        kind = 'resourceType'
-      } else {
-        raw = parsed.namedResources[i - parsed.resourceTypes.length]!
-        kind = 'namedResource'
-      }
-      // Shared plan-level predicate: the entry must be exactly the
-      // "single -1/negative window edge" decision class. The plan quarantines
-      // CAPACITY_PLAN entries inside quarantined snapshots that match a
-      // shared quarantine shape BEFORE any decision classification; mirror
-      // that precedence so the S record set equals the plan's decision set.
-      if (item.evidence.restorability.kind === 'quarantined' && entry.effectiveMode === 'CAPACITY_PLAN') {
-        const shape = kind === 'resourceType'
-          ? {
-              primaryStart: (raw as SnapshotResourceType).allocationStartWeek ?? null,
-              aliasStart: null,
-              primaryEnd: (raw as SnapshotResourceType).allocationEndWeek ?? null,
-              aliasEnd: null,
-            }
-          : {
-              primaryStart: (raw as SnapshotNamedResource).allocationStartWeek ?? null,
-              aliasStart: (raw as SnapshotNamedResource).startWeek ?? null,
-              primaryEnd: (raw as SnapshotNamedResource).allocationEndWeek ?? null,
-              aliasEnd: (raw as SnapshotNamedResource).endWeek ?? null,
-            }
-        if (classifyV2QuarantineShape(shape) != null) continue
-      }
-      const finding = classifySnapshotEntry(planEntryPayload(raw, kind))
-      if (finding.classification !== 'decisionRequired') continue
-      if (!finding.message.includes(SINGLE_NEGATIVE_DECISION_MESSAGE)) continue
-
-      let rawMode: SanitizedMode
-      let parentMode: SanitizedMode
-      let percent: number | null | undefined
-      let pct: number | null | undefined
-      let windowFields: Record<MinusOneField, WindowFieldState>
-      let aliasConflicts: { startEdge: boolean; endEdge: boolean }
-      let aliasState: AlternateAliasState
-      let sanitizedForKey: Record<string, unknown>
-      if (kind === 'resourceType') {
-        const rt = raw as SnapshotResourceType
-        rawMode = sanitizeMode(rt.allocationMode)
-        parentMode = null
-        percent = rt.allocationPercent
-        // ResourceType entries carry no alternate aliases: every fallback
-        // field is reported absent, and no edge can conflict.
-        windowFields = {
-          allocationStartWeek: windowFieldState(rt.allocationStartWeek),
-          allocationEndWeek: windowFieldState(rt.allocationEndWeek),
-          startWeek: 'absent-null',
-          endWeek: 'absent-null',
-        }
-        aliasConflicts = { startEdge: false, endEdge: false }
-        aliasState = aliasStateFrom(windowFields)
-        sanitizedForKey = {
-          kind: entry.kind,
-          mode: rawMode,
-          percent: rt.allocationPercent ?? null,
-          asw: rt.allocationStartWeek ?? null,
-          aew: rt.allocationEndWeek ?? null,
-        }
-      } else {
-        const nr = raw as SnapshotNamedResource
-        rawMode = sanitizeMode(nr.allocationMode)
-        parentMode = sanitizeMode(rtById.get(nr.resourceTypeId ?? '')?.allocationMode)
-        percent = nr.allocationPercent
-        pct = nr.allocationPct
-        windowFields = {
-          allocationStartWeek: windowFieldState(nr.allocationStartWeek),
-          allocationEndWeek: windowFieldState(nr.allocationEndWeek),
-          startWeek: windowFieldState(nr.startWeek),
-          endWeek: windowFieldState(nr.endWeek),
-        }
-        // Shared per-edge alias semantics (same definition the classifier
-        // uses); window-using modes only.
-        aliasConflicts = {
-          startEdge: v2NamedResourceEdgeAliasConflict(nr, entry.effectiveMode, 'start'),
-          endEdge: v2NamedResourceEdgeAliasConflict(nr, entry.effectiveMode, 'end'),
-        }
-        aliasState = aliasConflicts.startEdge || aliasConflicts.endEdge
-          ? 'conflicting'
-          : aliasStateFrom(windowFields)
-        sanitizedForKey = {
-          kind: entry.kind,
-          mode: rawMode,
-          percent: nr.allocationPercent ?? null,
-          pct: nr.allocationPct ?? null,
-          asw: nr.allocationStartWeek ?? null,
-          aew: nr.allocationEndWeek ?? null,
-          sw: nr.startWeek ?? null,
-          ew: nr.endWeek ?? null,
-        }
-      }
-
-      singleNegativeRecords.push({
-        key: contentKey(sanitizedForKey),
-        entryKind: entry.kind,
-        minusOneField: entry.minusOneFields[0],
-        windowFields,
-        aliasConflicts,
-        alternateAliasState: aliasState,
-        rawMode,
-        parentMode,
-        effectiveMode: sanitizeMode(entry.effectiveMode),
-        modeSource: entry.modeSource,
-        allocationPercentCategory: percentCategory(percent),
-        allocationPctCategory: percentCategory(pct),
-        entryErrorCategories: entry.entryErrorCategories,
-        structuralErrorCategories: evidence.structuralErrorCategories,
-        independentDefect: evidence.structuralErrorCategories.length > 0 ? 'both' : 'entry-level',
-      })
-    }
+  // ── S records: correlated one-to-one with the plan's single-negative
+  // snapshot decisions. The remediation plan is the selection authority
+  // (shared snapshotDecisionCategory); raw payload entries are correlated
+  // internally by snapshotId + entryId + owner kind and are used ONLY to
+  // populate the sanitized evidence. Any missing, ambiguous or inconsistent
+  // correlation fails closed before any evidence is emitted. Raw entry
+  // scanning is never an independent policy or selection path.
+  const correlations = correlateSingleNegativeDecisions(plan, state, classified)
+  const singleNegativeRecords: SingleNegativeEvidenceEntry[] = correlations.map(correlation => {
+    const item = classified[correlation.snapshotIndex]!
+    return buildSingleNegativeEvidenceEntry(
+      correlation.rawEntry,
+      correlation.kind,
+      correlation.parentRt,
+      item.evidence.structuralErrorCategories,
+      correlation.minusOneField,
+    )
+  })
+  const singleNegativeBySnapshot = new Map<string, number>()
+  for (const correlation of correlations) {
+    const snapshotId = correlation.decision.snapshotId!
+    singleNegativeBySnapshot.set(snapshotId, (singleNegativeBySnapshot.get(snapshotId) ?? 0) + 1)
   }
 
   // ── M records: the defect-classified snapshots ───────────────────────────
@@ -1000,12 +1096,25 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
   const windowFieldReconciliationViolations = singleNegativeRecords.filter(record => {
     const fields = Object.keys(record.windowFields) as MinusOneField[]
     const minusOneFields = fields.filter(field => record.windowFields[field] === 'minus-one')
-    if (minusOneFields.length !== 1) return true
-    if (minusOneFields[0] !== record.minusOneField) return true
+    // At least one raw field must hold -1, minusOneField must be among them,
+    // every minus-one field must lie on the same effective edge (historical
+    // payloads may hold -1 on both aliases of one edge), and every other
+    // field must be absent-null or populated.
+    if (minusOneFields.length === 0) return true
+    if (!minusOneFields.includes(record.minusOneField)) return true
+    const edge = edgeOfMinusOneField(record.minusOneField)
+    if (minusOneFields.some(field => edgeOfMinusOneField(field) !== edge)) return true
     return fields.some(
-      field => field !== minusOneFields[0] && record.windowFields[field] !== 'absent-null' && record.windowFields[field] !== 'populated',
+      field => !minusOneFields.includes(field) && record.windowFields[field] !== 'absent-null' && record.windowFields[field] !== 'populated',
     )
   })
+
+  // Per-snapshot consistency: every seven-subgroup M record's single-negative
+  // decision count must equal the number of S records correlated to that
+  // snapshot (both derive from the same plan decisions; asserted explicitly).
+  const sRecordSubgroupViolations = defectSnapshotRecords.filter(record =>
+    record.singleMinusOneDecisionCount !== (singleNegativeBySnapshot.get(record.snapshotId) ?? 0),
+  ).length
 
   const checks: boolean[] = [
     check('quarantined entries', plan.summary.quarantined, expected.quarantinedEntries),
@@ -1028,8 +1137,11 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     check('topology 7 total = windowless + single', sevenWindowless + sevenSingle, expected.topology7WindowlessDecisions + expected.topology7SingleMinusOneDecisions),
     check('snapshot decisions = windowless + single', snapshotDecisions, windowlessDecisions + singleMinusOneDecisions),
     check('quarantined findings carry no decision/op ids', quarantinedFindingsWithIds, 0),
+    check('plan single-negative snapshot decisions', correlations.length, expected.singleMinusOneDecisions),
+    check('correlated single-negative decisions match records', correlations.length, singleNegativeRecords.length),
     check('single-negative records', singleNegativeRecords.length, expected.singleMinusOneDecisions),
     check('S records window-field reconciliation', windowFieldReconciliationViolations.length, 0),
+    check('S records reconcile to per-snapshot subgroup counts', sRecordSubgroupViolations, 0),
     check('class A entries reconcile', classATotalEntries, expected.quarantinedEntries),
     check('class A snapshots reconcile', classATotalSnapshots, expected.quarantinedSnapshots),
   ]
@@ -1123,7 +1235,20 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
 
 // ─── Small raw-field evidence helpers (no ids, no names) ────────────────────
 
-function windowFieldState(value: number | null | undefined): WindowFieldState {
+/** Fixed evidence mode-source category for a NamedResource entry: the raw
+ * mode wins when present; a CAPACITY_PLAN parent provides inherited
+ * provenance; otherwise the source is unavailable (or other for a
+ * non-CAPACITY_PLAN parent). Single definition shared by the entry evidence
+ * and the correlated S records. */
+function namedModeSourceCategory(rawMode: string | null, parentMode: string | null): NamedModeSourceCategory {
+  if (rawMode === 'CAPACITY_PLAN') return 'explicit'
+  if (rawMode != null) return 'other'
+  if (parentMode === 'CAPACITY_PLAN') return 'inherited'
+  if (parentMode == null) return 'unavailable'
+  return 'other'
+}
+
+function windowFieldStateFor(value: number | null | undefined): WindowFieldState {
   if (value === -1) return 'minus-one'
   if (value == null) return 'absent-null'
   return 'populated'

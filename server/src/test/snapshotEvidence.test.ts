@@ -18,7 +18,10 @@ import path from 'node:path'
 import { main } from '../scripts/generateSnapshotEvidence.js'
 import {
   buildSnapshotEvidenceReport,
+  buildSingleNegativeEvidenceEntry,
+  classifyAllSnapshots,
   classifySnapshotEvidence,
+  correlateSingleNegativeDecisions,
   isExpectedBoundaryShape,
   percentCategory,
   renderSnapshotEvidenceMarkdown,
@@ -32,6 +35,7 @@ import {
   buildRemediationPlan,
   computePlanFingerprint,
   computeStateHash,
+  type PlanDecisionEntry,
   type RemediationDatabaseState,
 } from '../lib/productionRemediationPlan.js'
 
@@ -664,9 +668,9 @@ describe('all four raw -1 orientations', () => {
         [makeRt({ id: 'rt-o', allocationMode: 'TIMELINE', allocationStartWeek: 0, allocationEndWeek: 5 })],
         [
           // Start edge: primary -1 vs populated fallback 7 → start conflict.
-          makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: 7, allocationEndWeek: 5, endWeek: null }),
+          makeNr({ id: 'nr-start-conflict', resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: 7, allocationEndWeek: 5, endWeek: null }),
           // End edge: populated primary 5 vs fallback 9 → end conflict.
-          makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: null, allocationEndWeek: 5, endWeek: 9 }),
+          makeNr({ id: 'nr-end-conflict', resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: null, allocationEndWeek: 5, endWeek: 9 }),
         ],
       ),
     }])
@@ -1236,5 +1240,321 @@ describe('structural defect classification', () => {  it('classifies a duplicate
     const m = report.defectSnapshots[0]!
     expect(m.independentDefect).toBe('structural')
     expect(m.structuralErrorCategories['duplicate-owner']).toBe(1)
+  })
+})
+
+describe('plan-decision-anchored S-record correlation', () => {
+  function fakeDecision(overrides: Partial<PlanDecisionEntry>): PlanDecisionEntry {
+    return {
+      id: 'decision-id',
+      projectId: PROJECT_ID,
+      ownerId: 'owner',
+      ownerKind: 'namedPerson',
+      profileId: null,
+      snapshotId: 'snap-correlate',
+      entryId: 'nr-1',
+      legacyBase: null,
+      evidenceHash: 'hash',
+      allowedResolutions: ['snapshot-window-interpretation'],
+      message: 'single -1/negative window edge without established meaning — explicit window interpretation required',
+      ...overrides,
+    }
+  }
+
+  function correlateFixtureState(): RemediationDatabaseState {
+    return makeState([{
+      id: 'snap-correlate',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-w', allocationMode: 'CAPACITY_PLAN' })],
+        [makeNr({ id: 'nr-1', resourceTypeId: 'rt-w', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: -1, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }])
+  }
+
+  it('reproduces the production failure shape: dual-alias -1 is a plan decision that now emits one S record', () => {
+    // Production regression: a raw payload holding -1 on both aliases of the
+    // start edge (allocationStartWeek AND startWeek) is a plan single-negative
+    // decision; the pre-fix independent raw-entry scan dropped it via the
+    // one-minus-one prefilter and reported observed 0 against expected 7.
+    const state = correlateFixtureState()
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+      windowlessDecisions: 1, singleMinusOneDecisions: 1, snapshotDecisions: 2,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 1,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 1,
+      topology7SingleMinusOneDecisions: 1,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(1)
+    const s = report.singleNegativeEntries[0]!
+    expect(s.entryKind).toBe('namedResource')
+    // The plan-relevant exact field is the primary of the negative edge; the
+    // fallback alias is still reported truthfully as minus-one.
+    expect(s.minusOneField).toBe('allocationStartWeek')
+    expect(s.windowFields).toEqual({
+      allocationStartWeek: 'minus-one',
+      allocationEndWeek: 'populated',
+      startWeek: 'minus-one',
+      endWeek: 'absent-null',
+    })
+    expect(s.aliasConflicts).toEqual({ startEdge: false, endEdge: false })
+    expect(s.modeSource).toBe('explicit')
+    // JSON and Markdown parity for the sanitized field states.
+    const json = JSON.stringify(report)
+    const markdown = renderSnapshotEvidenceMarkdown(report)
+    expect(json).toContain('"allocationStartWeek":"minus-one","allocationEndWeek":"populated","startWeek":"minus-one","endWeek":"absent-null"')
+    expect(markdown).toContain('allocationStartWeek:minus-one')
+    expect(markdown).toContain('startWeek:minus-one')
+  })
+
+  it('populates inherited effective-mode evidence (raw null / parent CAPACITY_PLAN / effective CAPACITY_PLAN / inherited)', () => {
+    // The S schema must be capable of showing inherited provenance. This is
+    // the pure population path; a real plan decision for such an entry cannot
+    // exist because the plan classifies NamedResources by their own raw mode
+    // (traced contract), so the capability is proven directly.
+    const entry = buildSingleNegativeEvidenceEntry(
+      makeNr({ id: 'nr-inherited', resourceTypeId: 'rt-parent', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: null }) as unknown as Parameters<typeof buildSingleNegativeEvidenceEntry>[0],
+      'namedResource',
+      makeRt({ id: 'rt-parent', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 }) as unknown as Parameters<typeof buildSingleNegativeEvidenceEntry>[2],
+      [],
+      'startWeek',
+    )
+    expect(entry.rawMode).toBe(null)
+    expect(entry.parentMode).toBe('CAPACITY_PLAN')
+    expect(entry.effectiveMode).toBe('CAPACITY_PLAN')
+    expect(entry.modeSource).toBe('inherited')
+    expect(entry.windowFields).toEqual({
+      allocationStartWeek: 'absent-null',
+      allocationEndWeek: 'populated',
+      startWeek: 'minus-one',
+      endWeek: 'absent-null',
+    })
+  })
+
+  it('keeps inherited-mode single-negative entries out of the S set (plan classifies by raw mode)', () => {
+    // Plan-faithful boundary: the plan derives decisions from the raw own
+    // mode, so an inherited CAPACITY_PLAN NamedResource (own mode null) is
+    // never a single-negative decision or S record. The entry instead matches
+    // the shared Class B quarantine shape, so the run also refuses on the
+    // reviewed Class A invariant (fail closed) exactly as on production.
+    const state = makeState([{
+      id: 'snap-inherited',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-parent', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-inherited', resourceTypeId: 'rt-parent', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 1, quarantinedSnapshots: 1, defectSnapshots: 0,
+      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 0,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
+    }
+    const report = buildReport(state, counts)
+    expect(report.singleNegativeEntries).toHaveLength(0)
+    expect(report.integrityResult.reconciliationPassed).toBe(false)
+    const mismatches = report.reconciliation.details.filter(detail => detail.includes('MISMATCH'))
+    expect(mismatches.map(m => m.split(':')[0])).toEqual(['class A entries reconcile', 'class A snapshots reconcile'])
+  })
+
+  it('emits exactly seven S records for seven synthetic defect snapshots', () => {
+    const snapshots = Array.from({ length: 7 }, (_, i) => ({
+      id: `snap-${i}`,
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: `rt-w-${i}`, allocationMode: 'CAPACITY_PLAN' })],
+        [makeNr({ id: `nr-m-${i}`, resourceTypeId: `rt-w-${i}`, allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: -1, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }))
+    const state = makeState(snapshots)
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 7,
+      windowlessDecisions: 7, singleMinusOneDecisions: 7, snapshotDecisions: 14,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 7,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 7,
+      topology7SingleMinusOneDecisions: 7,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(7)
+    // Every seven-subgroup M record reports exactly one correlated S record.
+    for (const m of report.defectSnapshots) {
+      expect(m.singleMinusOneDecisionCount).toBe(1)
+    }
+    const seven = report.topology.sevenSnapshotSubgroup
+    expect(seven.snapshots).toBe(7)
+    expect(seven.singleMinusOneDecisions).toBe(7)
+  })
+
+  it('reconciles the reviewed 18-snapshot topology shape (226 + 133/7 decisions)', () => {
+    // Production-shaped topology: 10 eleven-subgroup snapshots with 21
+    // windowless decisions, 1 with 16, and 7 seven-subgroup snapshots with 19
+    // windowless + 1 single-negative decision each. 359 windowless + 7
+    // single-negative = 366 snapshot decisions across 18 defect snapshots.
+    const conflictNr = (rtId: string, i: number) => makeNr({
+      id: `nr-c-${i}`,
+      resourceTypeId: rtId,
+      allocationMode: null,
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: 5,
+      allocationEndWeek: 10,
+      startWeek: 5,
+      endWeek: 9,
+    })
+    const snapshots = []
+    for (let i = 0; i < 10; i++) {
+      const rtId = `rt-e-${i}-0`
+      snapshots.push({
+        id: `snap-eleven-${i}`,
+        projectId: PROJECT_ID,
+        payload: makeV2Snapshot(
+          Array.from({ length: 21 }, (_, j) => makeRt({ id: `rt-e-${i}-${j}`, allocationMode: 'CAPACITY_PLAN' })),
+          [conflictNr(rtId, i)],
+        ),
+      })
+    }
+    snapshots.push({
+      id: 'snap-eleven-16',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        Array.from({ length: 16 }, (_, j) => makeRt({ id: `rt-e16-${j}`, allocationMode: 'CAPACITY_PLAN' })),
+        [conflictNr('rt-e16-0', 99)],
+      ),
+    })
+    for (let i = 0; i < 7; i++) {
+      const rtId = `rt-s-${i}-0`
+      snapshots.push({
+        id: `snap-seven-${i}`,
+        projectId: PROJECT_ID,
+        payload: makeV2Snapshot(
+          Array.from({ length: 19 }, (_, j) => makeRt({ id: `rt-s-${i}-${j}`, allocationMode: 'CAPACITY_PLAN' })),
+          [makeNr({ id: `nr-s-${i}`, resourceTypeId: rtId, allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: -1, allocationEndWeek: 5, endWeek: null })],
+        ),
+      })
+    }
+    const state = makeState(snapshots)
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 18,
+      windowlessDecisions: 359, singleMinusOneDecisions: 7, snapshotDecisions: 366,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 11, topology7Snapshots: 7,
+      topology11WindowlessDecisions: 226, topology7WindowlessDecisions: 133,
+      topology7SingleMinusOneDecisions: 7,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(7)
+    expect(report.topology.elevenSnapshotSubgroup.snapshots).toBe(11)
+    expect(report.topology.elevenSnapshotSubgroup.windowlessDecisions).toBe(226)
+    expect(report.topology.sevenSnapshotSubgroup.windowlessDecisions).toBe(133)
+    expect(report.topology.sevenSnapshotSubgroup.singleMinusOneDecisions).toBe(7)
+    expect(report.topology.snapshotDecisions).toBe(366)
+  })
+
+  it('fails closed on a missing stored snapshot', () => {
+    const state = correlateFixtureState()
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    const decisions = [fakeDecision({ snapshotId: 'ghost-snapshot' })]
+    const fakePlan = { ...plan, decisions }
+    expect(() => correlateSingleNegativeDecisions(fakePlan, state, classified))
+      .toThrowError(SnapshotEvidenceError)
+  })
+
+  it('fails closed on a missing entry identifier and on a missing raw entry', () => {
+    const state = correlateFixtureState()
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    expect(() => correlateSingleNegativeDecisions({ ...plan, decisions: [fakeDecision({ entryId: null })] }, state, classified))
+      .toThrowError(/carries no entry identifier/)
+    expect(() => correlateSingleNegativeDecisions({ ...plan, decisions: [fakeDecision({ entryId: 'nr-ghost' })] }, state, classified))
+      .toThrowError(/matched 0 raw entries/)
+  })
+
+  it('fails closed on duplicate raw entry IDs and on entry-kind mismatch', () => {
+    const state = makeState([{
+      id: 'snap-dupe',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [
+          makeRt({ id: 'rt-dupe', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+          makeRt({ id: 'rt-dupe', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+        ],
+        [],
+      ),
+    }])
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    expect(() => correlateSingleNegativeDecisions(
+      { ...plan, decisions: [fakeDecision({ snapshotId: 'snap-dupe', ownerKind: 'role', entryId: 'rt-dupe' })] },
+      state,
+      classified,
+    )).toThrowError(/matched 2 raw entries/)
+    // Kind mismatch: a namedPerson decision for a ResourceType id matches no
+    // NamedResource.
+    expect(() => correlateSingleNegativeDecisions(
+      { ...plan, decisions: [fakeDecision({ snapshotId: 'snap-dupe', ownerKind: 'namedPerson', entryId: 'rt-dupe' })] },
+      state,
+      classified,
+    )).toThrowError(/matched 0 raw entries/)
+  })
+
+  it('fails closed when two selected decisions resolve to the same raw entry', () => {
+    const state = correlateFixtureState()
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    const decision = fakeDecision({})
+    expect(() => correlateSingleNegativeDecisions(
+      { ...plan, decisions: [decision, decision] },
+      state,
+      classified,
+    )).toThrowError(/two selected decisions resolve to the same raw entry/)
+  })
+
+  it('fails closed when the matched raw entry does not re-derive the single-negative decision', () => {
+    const state = makeState([{
+      id: 'snap-windowless',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-w', allocationMode: 'CAPACITY_PLAN' })],
+        [],
+      ),
+    }])
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    expect(() => correlateSingleNegativeDecisions(
+      { ...plan, decisions: [fakeDecision({ snapshotId: 'snap-windowless', ownerKind: 'role', entryId: 'rt-w' })] },
+      state,
+      classified,
+    )).toThrowError(/does not re-derive the single-negative decision/)
+  })
+
+  it('correlation errors carry only fixed safe reasons and counts (no ids or payloads)', () => {
+    const state = correlateFixtureState()
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    try {
+      correlateSingleNegativeDecisions(
+        { ...plan, decisions: [fakeDecision({ snapshotId: 'ghost-snapshot', entryId: 'nr-1' })] },
+        state,
+        classified,
+      )
+      throw new Error('expected refusal')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      expect(message).toContain('cannot correlate snapshot decision 1 of 1')
+      expect(message).not.toContain('ghost-snapshot')
+      expect(message).not.toContain('nr-1')
+      expect(message).not.toContain(PROJECT_ID)
+      expect(message).not.toContain('Secret')
+    }
   })
 })

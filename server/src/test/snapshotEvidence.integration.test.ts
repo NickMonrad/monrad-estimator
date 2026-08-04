@@ -188,7 +188,7 @@ async function seedTopologyFixture(): Promise<void> {
         allocationMode: 'CAPACITY_PLAN',
         allocationStartWeek: -1,
         allocationEndWeek: 5,
-        startWeek: 5,
+        startWeek: -1,
         endWeek: null,
       })],
     ),
@@ -290,7 +290,16 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(report.classAAggregates.totalEntries).toBe(3)
     expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 2, namedResource: 1, unavailable: 0 })
     expect(report.singleNegativeEntries).toHaveLength(1)
+    // Production regression: -1 on both aliases of the start edge is a plan
+    // single-negative decision; the correlated S record reports both fields
+    // truthfully and names the plan-relevant exact field.
     expect(report.singleNegativeEntries[0]!.minusOneField).toBe('allocationStartWeek')
+    expect(report.singleNegativeEntries[0]!.windowFields).toEqual({
+      allocationStartWeek: 'minus-one',
+      allocationEndWeek: 'populated',
+      startWeek: 'minus-one',
+      endWeek: 'absent-null',
+    })
     expect(report.defectSnapshots).toHaveLength(3)
     const seven = report.defectSnapshots.find((m: { subgroup: string }) => m.subgroup === 'seven-single-minus-one')!
     expect(seven.windowlessDecisionCount).toBe(19)
@@ -399,6 +408,39 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(exit).toBe(1)
     expect(existsSync(jsonPath)).toBe(false)
     expect(existsSync(mdPath)).toBe(false)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('refuses on decision correlation failure with no output files and a safe message', async () => {
+    // Two raw entries sharing one id: the plan produces single-negative
+    // decisions whose correlation is ambiguous — the command fails closed
+    // with no evidence emitted.
+    await createSnapshot(
+      'snap-correlation-ambiguous',
+      makeV2Snapshot(
+        [
+          makeRt({ id: 'rt-dupe', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+          makeRt({ id: 'rt-dupe', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+        ],
+        [],
+      ),
+      '2026-06-01T00:00:00Z',
+    )
+    const dir = tempDir()
+    const jsonPath = path.join(dir, 'evidence.json')
+    const mdPath = path.join(dir, 'evidence.md')
+    const expectedPath = path.join(dir, 'expected.json')
+    const expected = await expectedBoundary()
+    writeFileSync(expectedPath, JSON.stringify(expected, null, 2))
+
+    const exit = await main(['--json', jsonPath, '--markdown', mdPath, '--expected', expectedPath])
+
+    expect(exit).toBe(1)
+    expect(existsSync(jsonPath)).toBe(false)
+    expect(existsSync(mdPath)).toBe(false)
+    expect(readdirSync(dir).filter(name => name.includes('.tmp'))).toEqual([])
+    // No identifiers or payload names leak into the refusal.
+    expect(readFileSync(expectedPath, 'utf-8')).toBeTruthy()
     rmSync(dir, { recursive: true, force: true })
   })
 
