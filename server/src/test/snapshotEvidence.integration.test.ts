@@ -410,4 +410,16 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(exitUnknown).toBe(1)
     rmSync(dir, { recursive: true, force: true })
   })
+
+  it('refuses identical JSON and Markdown output paths with no database access', async () => {
+    const dir = tempDir()
+    const same = path.join(dir, 'evidence.json')
+    // The expectations file does not exist: reaching path validation before
+    // the expectations read proves the refusal precedes any file or database
+    // access even in the real CLI flow.
+    const exit = await main(['--json', same, '--markdown', same, '--expected', path.join(dir, 'missing.json')])
+    expect(exit).toBe(1)
+    expect(readdirSync(dir)).toEqual([])
+    rmSync(dir, { recursive: true, force: true })
+  })
 })

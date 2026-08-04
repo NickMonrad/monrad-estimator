@@ -38,6 +38,7 @@ import {
   classifySnapshotRestorability,
   classifyV2QuarantineShape,
   v2NamedResourceAliasConflict,
+  v2NamedResourceEdgeAliasConflict,
   type SnapshotRestorability,
 } from './snapshotRestorability.js'
 import {
@@ -67,6 +68,8 @@ export type PercentCategory =
   | 'invalid-non-finite'
 export type AlternateAliasState = 'all-absent-null' | 'populated' | 'conflicting'
 export type MinusOneField = 'allocationStartWeek' | 'allocationEndWeek' | 'startWeek' | 'endWeek'
+/** Fixed sanitized state vocabulary for one raw window field (no numbers). */
+export type WindowFieldState = 'minus-one' | 'absent-null' | 'populated'
 export type IndependentDefectCategory = 'entry-level' | 'structural' | 'both' | 'unavailable'
 export type DefectSubgroup = 'eleven-windowless-only' | 'seven-single-minus-one'
 export type SnapshotEraCategory =
@@ -187,6 +190,10 @@ export interface SnapshotEvidenceReport {
     label: string
     entryKind: OwnerKindCategory
     minusOneField: MinusOneField
+    /** Sanitized state of every raw window field (never numeric values). */
+    windowFields: Record<MinusOneField, WindowFieldState>
+    /** Per-edge conflicting-populated-alias evidence (shared predicate). */
+    aliasConflicts: { startEdge: boolean; endEdge: boolean }
     alternateAliasState: AlternateAliasState
     /** Sanitized mode values only (fixed evidence vocabulary). */
     rawMode: SanitizedMode
@@ -229,6 +236,10 @@ export interface SnapshotEvidenceReport {
       unavailable: number
     }
     snapshotsByOwnerKindMix: { resourceTypeOnly: number; namedResourceOnly: number; mixed: number }
+    /** Affected snapshots per owner-kind category (deduplicated per snapshot). */
+    affectedSnapshotsByOwnerKind: Record<OwnerKindCategory, number>
+    /** Affected snapshots per NamedResource mode-source category (deduplicated per snapshot). */
+    affectedSnapshotsByNamedModeSource: Record<NamedModeSourceCategory, number>
     entriesByEra: Record<SnapshotEraCategory, number>
     snapshotsByEra: Record<SnapshotEraCategory, number>
   }
@@ -697,6 +708,8 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     key: string
     entryKind: OwnerKindCategory
     minusOneField: MinusOneField
+    windowFields: Record<MinusOneField, WindowFieldState>
+    aliasConflicts: { startEdge: boolean; endEdge: boolean }
     alternateAliasState: AlternateAliasState
     rawMode: SanitizedMode
     parentMode: SanitizedMode
@@ -730,7 +743,26 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
         kind = 'namedResource'
       }
       // Shared plan-level predicate: the entry must be exactly the
-      // "single -1/negative window edge" decision class.
+      // "single -1/negative window edge" decision class. The plan quarantines
+      // CAPACITY_PLAN entries inside quarantined snapshots that match a
+      // shared quarantine shape BEFORE any decision classification; mirror
+      // that precedence so the S record set equals the plan's decision set.
+      if (item.evidence.restorability.kind === 'quarantined' && entry.effectiveMode === 'CAPACITY_PLAN') {
+        const shape = kind === 'resourceType'
+          ? {
+              primaryStart: (raw as SnapshotResourceType).allocationStartWeek ?? null,
+              aliasStart: null,
+              primaryEnd: (raw as SnapshotResourceType).allocationEndWeek ?? null,
+              aliasEnd: null,
+            }
+          : {
+              primaryStart: (raw as SnapshotNamedResource).allocationStartWeek ?? null,
+              aliasStart: (raw as SnapshotNamedResource).startWeek ?? null,
+              primaryEnd: (raw as SnapshotNamedResource).allocationEndWeek ?? null,
+              aliasEnd: (raw as SnapshotNamedResource).endWeek ?? null,
+            }
+        if (classifyV2QuarantineShape(shape) != null) continue
+      }
       const finding = classifySnapshotEntry(planEntryPayload(raw, kind))
       if (finding.classification !== 'decisionRequired') continue
       if (!finding.message.includes(SINGLE_NEGATIVE_DECISION_MESSAGE)) continue
@@ -739,6 +771,8 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
       let parentMode: SanitizedMode
       let percent: number | null | undefined
       let pct: number | null | undefined
+      let windowFields: Record<MinusOneField, WindowFieldState>
+      let aliasConflicts: { startEdge: boolean; endEdge: boolean }
       let aliasState: AlternateAliasState
       let sanitizedForKey: Record<string, unknown>
       if (kind === 'resourceType') {
@@ -746,7 +780,16 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
         rawMode = sanitizeMode(rt.allocationMode)
         parentMode = null
         percent = rt.allocationPercent
-        aliasState = aliasStateFor(rt.allocationStartWeek, rt.allocationEndWeek, null, null, entry.minusOneFields[0])
+        // ResourceType entries carry no alternate aliases: every fallback
+        // field is reported absent, and no edge can conflict.
+        windowFields = {
+          allocationStartWeek: windowFieldState(rt.allocationStartWeek),
+          allocationEndWeek: windowFieldState(rt.allocationEndWeek),
+          startWeek: 'absent-null',
+          endWeek: 'absent-null',
+        }
+        aliasConflicts = { startEdge: false, endEdge: false }
+        aliasState = aliasStateFrom(windowFields)
         sanitizedForKey = {
           kind: entry.kind,
           mode: rawMode,
@@ -760,10 +803,21 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
         parentMode = sanitizeMode(rtById.get(nr.resourceTypeId ?? '')?.allocationMode)
         percent = nr.allocationPercent
         pct = nr.allocationPct
-        aliasState = aliasStateFor(
-          nr.allocationStartWeek, nr.allocationEndWeek, nr.startWeek, nr.endWeek,
-          entry.minusOneFields[0],
-        )
+        windowFields = {
+          allocationStartWeek: windowFieldState(nr.allocationStartWeek),
+          allocationEndWeek: windowFieldState(nr.allocationEndWeek),
+          startWeek: windowFieldState(nr.startWeek),
+          endWeek: windowFieldState(nr.endWeek),
+        }
+        // Shared per-edge alias semantics (same definition the classifier
+        // uses); window-using modes only.
+        aliasConflicts = {
+          startEdge: v2NamedResourceEdgeAliasConflict(nr, entry.effectiveMode, 'start'),
+          endEdge: v2NamedResourceEdgeAliasConflict(nr, entry.effectiveMode, 'end'),
+        }
+        aliasState = aliasConflicts.startEdge || aliasConflicts.endEdge
+          ? 'conflicting'
+          : aliasStateFrom(windowFields)
         sanitizedForKey = {
           kind: entry.kind,
           mode: rawMode,
@@ -780,6 +834,8 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
         key: contentKey(sanitizedForKey),
         entryKind: entry.kind,
         minusOneField: entry.minusOneFields[0],
+        windowFields,
+        aliasConflicts,
         alternateAliasState: aliasState,
         rawMode,
         parentMode,
@@ -869,6 +925,10 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
   }
   const aliasShapes = { primaryAbsentNull: 0, fallbackAbsentNull: 0, populatedAgreeing: 0, conflicting: 0, unavailable: 0 }
   const snapshotsByOwnerKindMix = { resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 0 }
+  // Affected-snapshot aggregates: a snapshot counts at most once per
+  // category; mixed snapshots may appear in more than one category.
+  const affectedSnapshotsByOwnerKind: Record<OwnerKindCategory, number> = { resourceType: 0, namedResource: 0, unavailable: 0 }
+  const affectedSnapshotsByNamedModeSource: Record<NamedModeSourceCategory, number> = { explicit: 0, inherited: 0, other: 0, unavailable: 0 }
   const entriesByEra = emptyCounts([ERA_BEFORE, ERA_MID, ERA_AFTER, ERA_UNAVAILABLE])
   const snapshotsByEra = emptyCounts([ERA_BEFORE, ERA_MID, ERA_AFTER, ERA_UNAVAILABLE])
   let classATotalEntries = 0
@@ -882,6 +942,8 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     snapshotsByEra[era]++
     let rtCount = 0
     let nrCount = 0
+    const ownerKindsInSnapshot = new Set<OwnerKindCategory>()
+    const modeSourcesInSnapshot = new Set<NamedModeSourceCategory>()
     for (const entry of item.evidence.entries) {
       if (entry.quarantineClass !== 'A') continue
       classATotalEntries++
@@ -889,12 +951,18 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
       if (entry.kind === 'resourceType') {
         byOwnerKind.resourceType++
         rtCount++
+        ownerKindsInSnapshot.add('resourceType')
+        // ResourceType entries carry no mode-source concept; their snapshots
+        // surface under the unavailable mode-source category.
+        modeSourcesInSnapshot.add('unavailable')
         percentageByCategory.resourceType.allocationPercent[entry.allocationPercentCategory]++
         aliasShapes.primaryAbsentNull++
       } else {
         byOwnerKind.namedResource++
         byNamedModeSource[entry.modeSource]++
         nrCount++
+        ownerKindsInSnapshot.add('namedResource')
+        modeSourcesInSnapshot.add(entry.modeSource)
         percentageByCategory[entry.modeSource].allocationPercent[entry.allocationPercentCategory]++
         percentageByCategory[entry.modeSource].allocationPct[entry.allocationPctCategory]++
         // Every Class A entry has all four window fields absent by the shared
@@ -906,6 +974,8 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     if (rtCount > 0 && nrCount > 0) snapshotsByOwnerKindMix.mixed++
     else if (nrCount > 0) snapshotsByOwnerKindMix.namedResourceOnly++
     else if (rtCount > 0) snapshotsByOwnerKindMix.resourceTypeOnly++
+    for (const ownerKind of ownerKindsInSnapshot) affectedSnapshotsByOwnerKind[ownerKind]++
+    for (const modeSource of modeSourcesInSnapshot) affectedSnapshotsByNamedModeSource[modeSource]++
     if (rtCount + nrCount > 0) classATotalSnapshots++
   }
 
@@ -926,6 +996,16 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
   const elevenWindowless = elevenRecords.reduce((sum, record) => sum + record.windowlessDecisionCount, 0)
   const sevenWindowless = sevenRecords.reduce((sum, record) => sum + record.windowlessDecisionCount, 0)
   const sevenSingle = sevenRecords.reduce((sum, record) => sum + record.singleMinusOneDecisionCount, 0)
+
+  const windowFieldReconciliationViolations = singleNegativeRecords.filter(record => {
+    const fields = Object.keys(record.windowFields) as MinusOneField[]
+    const minusOneFields = fields.filter(field => record.windowFields[field] === 'minus-one')
+    if (minusOneFields.length !== 1) return true
+    if (minusOneFields[0] !== record.minusOneField) return true
+    return fields.some(
+      field => field !== minusOneFields[0] && record.windowFields[field] !== 'absent-null' && record.windowFields[field] !== 'populated',
+    )
+  })
 
   const checks: boolean[] = [
     check('quarantined entries', plan.summary.quarantined, expected.quarantinedEntries),
@@ -949,6 +1029,7 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     check('snapshot decisions = windowless + single', snapshotDecisions, windowlessDecisions + singleMinusOneDecisions),
     check('quarantined findings carry no decision/op ids', quarantinedFindingsWithIds, 0),
     check('single-negative records', singleNegativeRecords.length, expected.singleMinusOneDecisions),
+    check('S records window-field reconciliation', windowFieldReconciliationViolations.length, 0),
     check('class A entries reconcile', classATotalEntries, expected.quarantinedEntries),
     check('class A snapshots reconcile', classATotalSnapshots, expected.quarantinedSnapshots),
   ]
@@ -1024,6 +1105,8 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
       percentageByCategory,
       aliasShapes,
       snapshotsByOwnerKindMix,
+      affectedSnapshotsByOwnerKind,
+      affectedSnapshotsByNamedModeSource,
       entriesByEra,
       snapshotsByEra,
     },
@@ -1040,22 +1123,25 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
 
 // ─── Small raw-field evidence helpers (no ids, no names) ────────────────────
 
-function aliasStateFor(
-  primaryStart: number | null,
-  primaryEnd: number | null,
-  fallbackStart: number | null | undefined,
-  fallbackEnd: number | null | undefined,
-  _minusOneField: MinusOneField,
-): AlternateAliasState {
-  const pairs: Array<[number | null | undefined, number | null | undefined]> = [
-    [primaryStart, fallbackStart],
-    [primaryEnd, fallbackEnd],
-  ]
-  for (const [primary, fallback] of pairs) {
-    if (primary != null && fallback != null && primary !== fallback) return 'conflicting'
-  }
-  const populated = [primaryStart, primaryEnd, fallbackStart, fallbackEnd].some(value => value != null)
-  return populated ? 'populated' : 'all-absent-null'
+function windowFieldState(value: number | null | undefined): WindowFieldState {
+  if (value === -1) return 'minus-one'
+  if (value == null) return 'absent-null'
+  return 'populated'
+}
+
+/** Aggregate alias state from the per-field states (conflict handled
+ * separately by the per-edge predicate). The minus-one field itself is never
+ * reported as populated: only genuinely populated other fields count. */
+function aliasStateFrom(windowFields: Record<MinusOneField, WindowFieldState>): AlternateAliasState {
+  const states = Object.values(windowFields)
+  if (states.some(state => state === 'populated')) return 'populated'
+  return 'all-absent-null'
+}
+
+function summarizeWindowFields(windowFields: Record<MinusOneField, WindowFieldState>): string {
+  return (Object.keys(windowFields) as MinusOneField[])
+    .map(field => `${field}:${windowFields[field]}`)
+    .join(' ')
 }
 
 function hasNonWindowlessEntryErrors(entryErrors: Record<EntryErrorCategory, number>): boolean {
@@ -1120,13 +1206,23 @@ export function renderSnapshotEvidenceMarkdown(report: SnapshotEvidenceReport): 
   lines.push(`- quarantined findings with decision/op ids: ${report.topology.quarantinedFindingsWithDecisionOrOperationIds}`)
   lines.push('')
   if (report.singleNegativeEntries.length > 0) {
-    lines.push('## Single -1 + null entries')
+    // S records are selected from the plan's single-negative decision class
+    // (shared classifySnapshotEntry predicate). A clean `-1` + null shape may
+    // instead be classified through the windowless branch, so the heading
+    // names the decision class, not an assumed raw shape.
+    lines.push('## Single-negative decision entries')
     lines.push('')
-    lines.push('| Label | Kind | -1 field | Alternate aliases | Raw mode | Parent mode | Effective mode | Mode source | allocationPercent | allocationPct | Entry errors | Structural errors | Independent defect |')
-    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|')
+    lines.push('Each row reports the sanitized state of every raw window field (allocationStartWeek/allocationEndWeek/startWeek/endWeek) and per-edge conflicting-populated-alias evidence (shared predicate; window-using modes only).')
+    lines.push('')
+    lines.push('| Label | Kind | -1 field | Window fields (allocationStartWeek, allocationEndWeek, startWeek, endWeek) | Start edge conflict | End edge conflict | Alternate aliases | Raw mode | Parent mode | Effective mode | Mode source | allocationPercent | allocationPct | Entry errors | Structural errors | Independent defect |')
+    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|')
     for (const entry of report.singleNegativeEntries) {
       lines.push([
-        entry.label, entry.entryKind, entry.minusOneField, entry.alternateAliasState,
+        entry.label, entry.entryKind, entry.minusOneField,
+        summarizeWindowFields(entry.windowFields),
+        entry.aliasConflicts.startEdge ? 'yes' : 'no',
+        entry.aliasConflicts.endEdge ? 'yes' : 'no',
+        entry.alternateAliasState,
         entry.rawMode ?? 'null', entry.parentMode ?? 'null', entry.effectiveMode ?? 'null', entry.modeSource,
         entry.allocationPercentCategory, entry.allocationPctCategory,
         entry.entryErrorCategories.join(','), entry.structuralErrorCategories.join(','),
@@ -1159,6 +1255,8 @@ export function renderSnapshotEvidenceMarkdown(report: SnapshotEvidenceReport): 
   lines.push(`- byNamedModeSource: ${JSON.stringify(report.classAAggregates.byNamedModeSource)}`)
   lines.push(`- aliasShapes: ${JSON.stringify(report.classAAggregates.aliasShapes)}`)
   lines.push(`- snapshotsByOwnerKindMix: ${JSON.stringify(report.classAAggregates.snapshotsByOwnerKindMix)}`)
+  lines.push(`- affectedSnapshotsByOwnerKind: ${JSON.stringify(report.classAAggregates.affectedSnapshotsByOwnerKind)} (a snapshot counts at most once per category; mixed snapshots may appear in both)`)
+  lines.push(`- affectedSnapshotsByNamedModeSource: ${JSON.stringify(report.classAAggregates.affectedSnapshotsByNamedModeSource)} (a snapshot containing explicit and inherited entries counts in both)`)
   lines.push(`- entriesByEra: ${JSON.stringify(report.classAAggregates.entriesByEra)} (timestamp is not proof of the exact historical writer)`)
   lines.push(`- snapshotsByEra: ${JSON.stringify(report.classAAggregates.snapshotsByEra)}`)
   lines.push('')

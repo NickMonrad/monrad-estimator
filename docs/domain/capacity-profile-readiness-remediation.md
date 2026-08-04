@@ -385,6 +385,12 @@ and in order (regression-tested, same seam as the #424 forwarding fix).
 There is deliberately **no `--dry-run` option**: the command is inherently
 read-only.
 
+The JSON and Markdown output paths must resolve to **distinct** files: the
+command resolves and normalizes both paths and refuses (exit `1`) before
+reading the expectations file, inspecting the database or creating any
+temporary or final output when they are equal (including equivalent
+spellings such as `out.json` and `./out.json`).
+
 ### Expected-file schema (reviewed production-run input)
 
 The reviewed expectations are supplied explicitly per run; they are never
@@ -447,11 +453,38 @@ evidence split by owner kind / mode source (`resourceType`, `explicit`,
 every bucket). Output ordering is deterministic apart from the explicit run
 timestamp.
 
+Class A aggregates also include **affected-snapshot counts** in addition to
+entry counts: `affectedSnapshotsByOwnerKind` (`resourceType` /
+`namedResource` / `unavailable`) and `affectedSnapshotsByNamedModeSource`
+(`explicit` / `inherited` / `other` / `unavailable`). A snapshot counts at
+most once per category; a mixed ResourceType/NamedResource snapshot may
+count in both owner-kind categories and a snapshot containing explicit and
+inherited NamedResource entries in both mode-source categories — the
+categories are not forced mutually exclusive. `snapshotsByOwnerKindMix`
+retains the mutually exclusive overall mix and the total Class A snapshot
+reconciliation stays at 49.
+
 Unknown or malformed historical mode strings are never copied into evidence
 output: the command normalizes every outward-facing mode value to the fixed
 vocabulary (`TIMELINE`, `CAPACITY_PLAN`, `EFFORT`, `FULL_PROJECT`, `null`,
 `other`), and unknown strings render only as `other`. This applies to JSON,
 Markdown and the content-derived labels.
+
+Each S record reports the sanitized state of **all four raw window fields**
+(`allocationStartWeek`, `allocationEndWeek`, `startWeek`, `endWeek`) with
+exactly one value from the fixed vocabulary `minus-one` / `absent-null` /
+`populated` — populated numeric values are never emitted. `minusOneField`
+is reconciled one-to-one with the single `minus-one` field. Alias-conflict
+evidence is reported **per logical edge** (`aliasConflicts.startEdge` /
+`aliasConflicts.endEdge`) using the shared classifier alias semantics
+(window-using modes only), so a conflict on the start edge is distinguished
+from a conflict on the end edge. The aggregate `alternateAliasState` is
+derived from the same per-field states.
+
+S records are selected from the plan's single-negative decision class; the
+Markdown section is titled **"Single-negative decision entries"** (a clean
+`-1` + null shape may instead be classified through the windowless or Class
+B quarantine branch and is never implied by the heading).
 
 The command prevents output of project/snapshot/owner/finding/decision IDs,
 names, complete payloads, credentials and database details by construction
@@ -460,16 +493,25 @@ serialized output for seeded sensitive fixture values and fail if any
 appear. Runtime errors are converted to controlled reason codes and concise
 safe messages.
 
-### Output publication (all-or-nothing)
+### Output publication (all-or-nothing, no-clobber)
 
 Both output files are published as a set: both complete strings are staged
 into exclusive temporary files (mode `0600`) in the corresponding output
 directories, and only after both are written and closed are the final paths
-published with same-directory renames. Any staging or publication failure
-removes every temporary file and any final file published by that run
-(leaving pre-existing files untouched), emits a controlled error and exits
-`1`. On success both finals exist with mode `0600` and no temporary files
-remain. Existing final files are never silently overwritten.
+published. The final publication step itself refuses an existing
+destination: each final path is created as a hard link to the staged file
+(`link` fails with `EEXIST` when the destination exists), never a
+check-then-rename sequence — so a destination created by another process
+between the preflight and the final step can never be overwritten.
+
+Ownership is tracked explicitly: on any staging or publication failure the
+command removes every temporary file created by the run and only final
+files the run itself created (verified by inode); destinations that existed
+before or appeared independently are preserved. The command returns exit
+`1` with a controlled message. On success both finals exist as distinct
+files with mode `0600` (POSIX), contain the intended complete content, and
+no temporary files remain. Existing final files are never silently
+overwritten.
 
 ### Corrected 18-snapshot topology (evidence basis)
 

@@ -10,11 +10,12 @@
  * errors, and expectation/mismatch handling.
  */
 
-import { describe, it, expect } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { describe, it, expect, vi } from 'vitest'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { main } from '../scripts/generateSnapshotEvidence.js'
 import {
   buildSnapshotEvidenceReport,
   classifySnapshotEvidence,
@@ -26,7 +27,7 @@ import {
   SnapshotEvidenceError,
   type SnapshotEvidenceExpected,
 } from '../lib/snapshotEvidence.js'
-import { publishEvidenceOutputs } from '../scripts/generateSnapshotEvidence.js'
+import { publishEvidenceOutputs } from '../lib/evidenceOutputPublication.js'
 import {
   buildRemediationPlan,
   computePlanFingerprint,
@@ -456,11 +457,22 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
     // Topology snapshot and decision counts for both subgroups.
     expect(markdown).toContain('11-snapshot subgroup: 1 snapshots, 20 windowless decisions')
     expect(markdown).toContain('7-snapshot subgroup: 1 snapshots, 19 windowless + 1 single-(-1) = 20 total decisions')
-    // S records: entry errors AND structural errors, modes, percentages, defect class.
+    // S records: entry errors AND structural errors, modes, percentages, defect class,
+    // sanitized window-field states and per-edge conflict evidence.
     const sRow = markdown.split('\n').find(line => line.startsWith('S1 |'))!
     expect(sRow).toContain('negative-one-window-value')
     expect(sRow).toContain('profile-window')
     expect(sRow).toContain('CAPACITY_PLAN')
+    expect(sRow).toContain('allocationStartWeek:minus-one')
+    expect(sRow).toContain('allocationEndWeek:populated')
+    expect(sRow).toContain('startWeek:populated')
+    expect(sRow).toContain('endWeek:absent-null')
+    expect(sRow).toContain('| yes | no |')
+    expect(markdown).toContain('## Single-negative decision entries')
+    expect(markdown).not.toContain('Single -1 + null')
+    // Class A affected-snapshot aggregates render in Markdown.
+    expect(markdown).toContain('affectedSnapshotsByOwnerKind:')
+    expect(markdown).toContain('affectedSnapshotsByNamedModeSource:')
     expect(sRow).toContain('hundred')
     expect(sRow).toContain('both')
     // M records: other decision reasons column plus entry/structural categories.
@@ -480,6 +492,10 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
     // JSON carries the same categories (parity over the same evidence object).
     const json = JSON.stringify(report)
     expect(json).toContain('profile-window')
+    expect(json).toContain('"windowFields"')
+    expect(json).toContain('"aliasConflicts"')
+    expect(json).toContain('"affectedSnapshotsByOwnerKind"')
+    expect(json).toContain('"affectedSnapshotsByNamedModeSource"')
     expect(json).toContain('alias-conflict')
     expect(json).toContain('percentageByCategory')
   })
@@ -527,35 +543,55 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
 })
 
 describe('all four raw -1 orientations', () => {
-  const orientationCases: Array<{ name: string; nr: ReturnType<typeof makeNr>; field: string; aliasState: string }> = [
+  const orientationCases: Array<{
+    name: string
+    nr: ReturnType<typeof makeNr>
+    field: string
+    aliasState: string
+    startEdge: boolean
+    endEdge: boolean
+    windowFields: Record<string, string>
+  }> = [
     {
       name: 'startWeek',
       nr: makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, startWeek: -1, allocationEndWeek: 4, endWeek: 5 }),
       field: 'startWeek',
       aliasState: 'conflicting',
+      startEdge: false,
+      endEdge: true,
+      windowFields: { allocationStartWeek: 'absent-null', allocationEndWeek: 'populated', startWeek: 'minus-one', endWeek: 'populated' },
     },
     {
       name: 'endWeek',
       nr: makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 4, startWeek: 5, allocationEndWeek: null, endWeek: -1 }),
       field: 'endWeek',
       aliasState: 'conflicting',
+      startEdge: true,
+      endEdge: false,
+      windowFields: { allocationStartWeek: 'populated', allocationEndWeek: 'absent-null', startWeek: 'populated', endWeek: 'minus-one' },
     },
     {
       name: 'allocationStartWeek',
       nr: makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: 5, allocationEndWeek: 5, endWeek: null }),
       field: 'allocationStartWeek',
       aliasState: 'conflicting',
+      startEdge: true,
+      endEdge: false,
+      windowFields: { allocationStartWeek: 'minus-one', allocationEndWeek: 'populated', startWeek: 'populated', endWeek: 'absent-null' },
     },
     {
       name: 'allocationEndWeek',
       nr: makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 5, startWeek: null, allocationEndWeek: -1, endWeek: 5 }),
       field: 'allocationEndWeek',
       aliasState: 'conflicting',
+      startEdge: false,
+      endEdge: true,
+      windowFields: { allocationStartWeek: 'populated', allocationEndWeek: 'minus-one', startWeek: 'absent-null', endWeek: 'populated' },
     },
   ]
 
-  for (const { name, nr, field, aliasState } of orientationCases) {
-    it(`reports the -1 field for orientation ${name}`, () => {
+  for (const { name, nr, field, aliasState, startEdge, endEdge, windowFields } of orientationCases) {
+    it(`reports the -1 field, all four field states and per-edge conflicts for orientation ${name}`, () => {
       const state = makeState([{
         id: `snap-${name}`,
         projectId: PROJECT_ID,
@@ -578,10 +614,78 @@ describe('all four raw -1 orientations', () => {
       expect(report.singleNegativeEntries).toHaveLength(1)
       const s = report.singleNegativeEntries[0]!
       expect(s.minusOneField).toBe(field)
+      expect(s.windowFields).toEqual(windowFields)
+      expect(s.aliasConflicts).toEqual({ startEdge, endEdge })
       expect(s.alternateAliasState).toBe(aliasState)
       expect(s.modeSource).toBe('explicit')
+      // The sanitized field-state object never carries raw numeric values.
+      expect(JSON.stringify(s.windowFields)).not.toMatch(/\d/)
+      expect(JSON.stringify(s.windowFields)).not.toContain('-1')
     })
   }
+
+  it('reports a clean single -1 shape as Class B quarantine, not an S record (no conflicts to report)', () => {
+    // Classifier boundary: a single -1 with no populated alias on the -1 edge
+    // and agreeing/absent aliases on the other edge matches the shared Class B
+    // quarantine predicate, so the plan makes no single-negative decision and
+    // the evidence command reports no S record and no alias conflicts.
+    const state = makeState([{
+      id: 'snap-class-b',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-o', allocationMode: 'TIMELINE', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: null, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 1, quarantinedSnapshots: 1, defectSnapshots: 0,
+      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 0,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
+    }
+    const report = buildReport(state, counts)
+    // No single-negative decision exists for a clean Class B shape: the
+    // evidence command reports no S record. The quarantined Class B entry is
+    // outside the reviewed Class A invariant, so the run refuses (fail
+    // closed) exactly as the production command would.
+    expect(report.singleNegativeEntries).toHaveLength(0)
+    expect(report.integrityResult.reconciliationPassed).toBe(false)
+    const mismatches = report.reconciliation.details.filter(detail => detail.includes('MISMATCH'))
+    expect(mismatches.map(m => m.split(':')[0])).toEqual(['class A entries reconcile', 'class A snapshots reconcile'])
+  })
+
+  it('distinguishes a start-edge conflict from an end-edge conflict', () => {
+    const state = makeState([{
+      id: 'snap-edge-conflicts',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-o', allocationMode: 'TIMELINE', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [
+          // Start edge: primary -1 vs populated fallback 7 → start conflict.
+          makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: 7, allocationEndWeek: 5, endWeek: null }),
+          // End edge: populated primary 5 vs fallback 9 → end conflict.
+          makeNr({ resourceTypeId: 'rt-o', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: null, allocationEndWeek: 5, endWeek: 9 }),
+        ],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+      windowlessDecisions: 0, singleMinusOneDecisions: 2, snapshotDecisions: 2,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 1,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 2,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(2)
+    const startConflict = report.singleNegativeEntries.find(s => s.windowFields.startWeek === 'populated')!
+    const endConflict = report.singleNegativeEntries.find(s => s.windowFields.endWeek === 'populated')!
+    expect(startConflict.aliasConflicts).toEqual({ startEdge: true, endEdge: false })
+    expect(endConflict.aliasConflicts).toEqual({ startEdge: false, endEdge: true })
+  })
 
   it('a clean -1+null shape is a windowless decision, not a single-negative decision', () => {
     // Empirical contract: the plan-level classifier checks the null edge
@@ -709,6 +813,133 @@ describe('subgroup snapshot-count gating', () => {
   })
 })
 
+describe('Class A affected-snapshot aggregates', () => {
+  /** One Class A RT entry per snapshot with the given windows. */
+  function rtOnlySnapshot(id: string, windowStart: number | null = null): StateSnapshot {
+    return {
+      id,
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: `rt-${id}`, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: windowStart, allocationEndWeek: null })],
+        [],
+      ),
+    }
+  }
+
+  /** One Class A NR entry (explicit CAPACITY_PLAN) with the given windows. */
+  function nrOnlySnapshot(id: string): StateSnapshot {
+    return {
+      id,
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        // Restorable windowed parent (not itself Class A).
+        [makeRt({ id: `rt-${id}`, allocationMode: 'TIMELINE', allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: `nr-${id}`, resourceTypeId: `rt-${id}`, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
+      ),
+    }
+  }
+
+  function countsFor(quarantinedEntries: number, quarantinedSnapshots: number): Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> {
+    return {
+      quarantinedEntries, quarantinedSnapshots, defectSnapshots: 0,
+      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 0,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
+    }
+  }
+
+  it('counts a ResourceType-only Class A snapshot under resourceType and unavailable mode source', () => {
+    const state = makeState([rtOnlySnapshot('rt-a')])
+    const report = buildReport(state, countsFor(1, 1))
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 1, namedResource: 0, unavailable: 0 })
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 1 })
+    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 1, namedResourceOnly: 0, mixed: 0 })
+  })
+
+  it('counts a NamedResource-only Class A snapshot under namedResource and explicit mode source', () => {
+    const state = makeState([nrOnlySnapshot('nr-a')])
+    const report = buildReport(state, countsFor(1, 1))
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 0, namedResource: 1, unavailable: 0 })
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 0, other: 0, unavailable: 0 })
+    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 1, mixed: 0 })
+  })
+
+  it('counts a mixed ResourceType/NamedResource snapshot once in both owner-kind categories', () => {
+    const state = makeState([{
+      id: 'snap-mixed',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-mix', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null })],
+        [makeNr({ id: 'nr-mix', resourceTypeId: 'rt-mix', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
+      ),
+    }])
+    const report = buildReport(state, countsFor(2, 1))
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 1, namedResource: 1, unavailable: 0 })
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 0, other: 0, unavailable: 1 })
+    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 1 })
+  })
+
+  it('counts a snapshot containing explicit and inherited NamedResource Class A entries once in both mode-source categories', () => {
+    const state = makeState([{
+      id: 'snap-both-modes',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        // CAPACITY_PLAN parent with absent windows: itself Class A (its
+        // unavailable mode-source category) and the source of the inherited
+        // mode for the raw-mode-null NamedResource.
+        [makeRt({ id: 'rt-both', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null })],
+        [
+          makeNr({ id: 'nr-explicit', resourceTypeId: 'rt-both', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null }),
+          makeNr({ id: 'nr-inherited', resourceTypeId: 'rt-both', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null }),
+        ],
+      ),
+    }])
+    const report = buildReport(state, countsFor(3, 1))
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    // byNamedModeSource counts NamedResource entries only (the ResourceType
+    // entry's unavailable mode source surfaces in the snapshot aggregate).
+    expect(report.classAAggregates.byNamedModeSource).toEqual({ explicit: 1, inherited: 1, other: 0, unavailable: 0 })
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 1, other: 0, unavailable: 1 })
+  })
+
+  it('counts repeated Class A entries in one category as a single affected snapshot', () => {
+    const state = makeState([{
+      id: 'snap-repeated',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [
+          makeRt({ id: 'rt-rep-1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null }),
+          makeRt({ id: 'rt-rep-2', allocationMode: 'CAPACITY_PLAN', allocationPercent: 80, allocationStartWeek: null, allocationEndWeek: null }),
+        ],
+        [],
+      ),
+    }])
+    const report = buildReport(state, countsFor(2, 1))
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.classAAggregates.totalEntries).toBe(2)
+    expect(report.classAAggregates.affectedSnapshotsByOwnerKind.resourceType).toBe(1)
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource.unavailable).toBe(1)
+  })
+
+  it('renders both aggregates in JSON and Markdown in parity', () => {
+    const state = makeState([
+      rtOnlySnapshot('rt-parity'),
+      nrOnlySnapshot('nr-parity'),
+    ])
+    const report = buildReport(state, countsFor(2, 2))
+    const json = JSON.stringify(report)
+    const markdown = renderSnapshotEvidenceMarkdown(report)
+    expect(json).toContain('"affectedSnapshotsByOwnerKind":{"resourceType":1,"namedResource":1,"unavailable":0}')
+    expect(markdown).toContain('affectedSnapshotsByOwnerKind: {"resourceType":1,"namedResource":1,"unavailable":0}')
+    expect(markdown).toContain('affectedSnapshotsByNamedModeSource: {"explicit":1,"inherited":0,"other":0,"unavailable":1}')
+  })
+})
+
 describe('mode redaction', () => {
   it('never emits arbitrary historical mode strings in JSON or Markdown', () => {
     const BOGUS_NR = 'TOTALLY-BOGUS-MODE-SECRET-1'
@@ -824,6 +1055,132 @@ describe('publishEvidenceOutputs', () => {
         failOn: phase => { if (phase === 'publish-markdown') throw new Error('injected second publish failure') },
       })).toThrow('injected second publish failure')
       expect(readdirSync(dir)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('never overwrites a destination created after preflight (first destination race)', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-pub-'))
+    try {
+      const json = path.join(dir, 'out.json')
+      const md = path.join(dir, 'out.md')
+      // Simulate another process creating the JSON destination between the
+      // CLI preflight and the final publication step.
+      writeFileSync(json, 'independently created')
+      expect(() => publishEvidenceOutputs(json, md, 'json', 'md')).toThrow(/EEXIST/)
+      // The independently created destination is preserved untouched.
+      expect(readFileSync(json, 'utf8')).toBe('independently created')
+      expect(readdirSync(dir).sort()).toEqual(['out.json'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a second-destination no-clobber refusal removes the first final created by this run and preserves the independent file', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-pub-'))
+    try {
+      const json = path.join(dir, 'out.json')
+      const md = path.join(dir, 'out.md')
+      writeFileSync(md, 'independent markdown')
+      expect(() => publishEvidenceOutputs(json, md, 'json', 'md')).toThrow(/EEXIST/)
+      // First final (json) published by this run was removed; the
+      // independently created markdown survives with its original content;
+      // no temporaries remain.
+      expect(readFileSync(md, 'utf8')).toBe('independent markdown')
+      expect(readdirSync(dir).sort()).toEqual(['out.md'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('successful publication still produces two distinct 0600 files with no temporaries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-pub-'))
+    try {
+      const json = path.join(dir, 'out.json')
+      const md = path.join(dir, 'out.md')
+      publishEvidenceOutputs(json, md, '{"a":1}', '# markdown')
+      expect(readFileSync(json, 'utf8')).toBe('{"a":1}')
+      expect(readFileSync(md, 'utf8')).toBe('# markdown')
+      if (process.platform !== 'win32') {
+        expect(statSync(json).mode & 0o777).toBe(0o600)
+        expect(statSync(md).mode & 0o777).toBe(0o600)
+      }
+      expect(readdirSync(dir).sort()).toEqual(['out.json', 'out.md'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('CLI output-path safety (before database access)', () => {
+  async function runMain(args: string[]): Promise<{ code: number; stderr: string }> {
+    const errors: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation(message => errors.push(String(message)))
+    try {
+      const code = await main(args)
+      return { code, stderr: errors.join('\n') }
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  it('refuses identical JSON and Markdown output paths before reading the expected file or the database', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-cli-'))
+    try {
+      const same = path.join(dir, 'out.json')
+      // The expected file does not exist: a same-path refusal that still
+      // reaches the expectations read would surface the expectations error;
+      // the observed refusal proves path validation precedes any file or
+      // database access.
+      const { code, stderr } = await runMain(['--json', same, '--markdown', same, '--expected', path.join(dir, 'missing-expected.json')])
+      expect(code).toBe(1)
+      expect(stderr).toContain('resolve to the same file')
+      expect(stderr).not.toContain('expectations file')
+      expect(readdirSync(dir).sort()).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses normalized-equivalent JSON and Markdown output paths', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-cli-'))
+    try {
+      const direct = path.join(dir, 'out.json')
+      const dotted = path.join(dir, '.', 'out.json')
+      const { code, stderr } = await runMain(['--json', direct, '--markdown', dotted, '--expected', path.join(dir, 'missing-expected.json')])
+      expect(code).toBe(1)
+      expect(stderr).toContain('resolve to the same file')
+      expect(readdirSync(dir).sort()).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the existing refusal when a final output path already exists', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-cli-'))
+    try {
+      const json = path.join(dir, 'out.json')
+      writeFileSync(json, 'pre-existing')
+      const md = path.join(dir, 'out.md')
+      // Schema-valid expectations file so the run reaches the output
+      // existence preflight (path validation happens even earlier).
+      const expectedPath = path.join(dir, 'expected.json')
+      writeFileSync(expectedPath, JSON.stringify({
+        fingerprint: 'a'.repeat(64),
+        baselineStateHash: 'b'.repeat(64),
+        quarantinedEntries: 574, quarantinedSnapshots: 49, defectSnapshots: 18,
+        windowlessDecisions: 359, singleMinusOneDecisions: 7, snapshotDecisions: 366,
+        liveDecisions: 130, unsupported: 0, rewriteOperations: 0,
+        topology11Snapshots: 11, topology7Snapshots: 7,
+        topology11WindowlessDecisions: 226, topology7WindowlessDecisions: 133,
+        topology7SingleMinusOneDecisions: 7,
+      }))
+      const { code, stderr } = await runMain(['--json', json, '--markdown', md, '--expected', expectedPath])
+      expect(code).toBe(1)
+      expect(stderr).toContain('already exists')
+      expect(readFileSync(json, 'utf8')).toBe('pre-existing')
+      expect(readdirSync(dir).sort()).toEqual(['expected.json', 'out.json'])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

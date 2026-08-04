@@ -37,8 +37,9 @@
  * Exit contract:
  *   0 — evidence produced, all gates passed (fingerprint, baseline, counts,
  *       reconciliation) and both output files written;
- *   1 — any refusal: bad arguments, missing/unsafe expected values, existing
- *       output files (never silently overwritten), snapshot parse failure,
+ *   1 — any refusal: bad arguments, missing/unsafe expected values, JSON and
+ *       Markdown output paths resolving to the same file, existing output
+ *       files (never silently overwritten), snapshot parse failure,
  *       unsupported schema version, fingerprint/baseline/count mismatch,
  *       reconciliation failure, or output-write failure.
  *
@@ -48,8 +49,7 @@
  */
 
 import { execSync } from 'node:child_process'
-import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PrismaPg } from '@prisma/adapter-pg'
@@ -64,6 +64,7 @@ import {
   type SnapshotEvidenceExpected,
   type SnapshotEvidenceReport,
 } from '../lib/snapshotEvidence.js'
+import { publishEvidenceOutputs } from '../lib/evidenceOutputPublication.js'
 import { loadRemediationState } from '../lib/productionRemediationPlan.js'
 
 // ─── CLI argument parsing ──────────────────────────────────────────────────
@@ -128,87 +129,6 @@ function controlledFailure(reason: string): number {
   return 1
 }
 
-// ─── Two-file publication (all-or-nothing) ─────────────────────────────────
-
-/** Test-only failure injection phases; production callers never pass hooks. */
-export type EvidencePublishPhase =
-  | 'stage-json'
-  | 'stage-markdown'
-  | 'publish-json'
-  | 'publish-markdown'
-
-export interface EvidencePublishHooks {
-  failOn?: (phase: EvidencePublishPhase) => void
-}
-
-/**
- * Publish the JSON and Markdown outputs atomically as a set:
- *
- * 1. both complete strings are staged into exclusive temporary files (mode
- *    0600) inside the corresponding output directories;
- * 2. only after both temporaries are written and closed are the final paths
- *    published with same-directory renames;
- * 3. any staging or publication failure removes every temporary file and any
- *    final file published by THIS run, leaves pre-existing files untouched,
- *    and rethrows (the CLI converts it to a controlled error + exit 1);
- * 4. on success both finals exist with mode 0600 (renames preserve the temp
- *    modes) and no temporary files remain.
- *
- * Final paths are never overwritten: callers preflight existence.
- */
-export function publishEvidenceOutputs(
-  jsonPath: string,
-  markdownPath: string,
-  jsonContent: string,
-  markdownContent: string,
-  hooks?: EvidencePublishHooks,
-): void {
-  const tempPaths: string[] = []
-  const published: string[] = []
-  const fail = (phase: EvidencePublishPhase): void => {
-    if (hooks?.failOn) hooks.failOn(phase)
-  }
-  const cleanup = (): void => {
-    for (const temp of tempPaths) {
-      try { rmSync(temp, { force: true }) } catch { /* best-effort */ }
-    }
-    for (const final of published) {
-      try { rmSync(final, { force: true }) } catch { /* best-effort */ }
-    }
-  }
-  const tempPathFor = (finalPath: string): string => {
-    const dir = path.dirname(finalPath)
-    const base = path.basename(finalPath)
-    return path.join(dir, `.${base}.evidence-${randomBytes(8).toString('hex')}.tmp`)
-  }
-  const stage = (finalPath: string, content: string, phase: EvidencePublishPhase): string => {
-    const temp = tempPathFor(finalPath)
-    tempPaths.push(temp)
-    const fd = openSync(temp, 'wx', 0o600)
-    try {
-      writeFileSync(fd, content, 'utf8')
-    } finally {
-      closeSync(fd)
-    }
-    fail(phase)
-    return temp
-  }
-
-  try {
-    const jsonTemp = stage(jsonPath, jsonContent, 'stage-json')
-    const markdownTemp = stage(markdownPath, markdownContent, 'stage-markdown')
-    renameSync(jsonTemp, jsonPath)
-    published.push(jsonPath)
-    fail('publish-json')
-    renameSync(markdownTemp, markdownPath)
-    published.push(markdownPath)
-    fail('publish-markdown')
-  } catch (error) {
-    cleanup()
-    throw error
-  }
-}
-
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 export async function main(argv: string[]): Promise<number> {
@@ -222,6 +142,18 @@ export async function main(argv: string[]): Promise<number> {
 
   console.log('🔎 Sanitized Historical Snapshot Evidence (read-only)')
   console.log('=====================================================')
+
+  // Output-path safety happens BEFORE any file or database access: the JSON
+  // and Markdown final paths must be distinct. Resolving and normalizing
+  // both paths also guarantees a later no-clobber publication cannot be
+  // bypassed through equivalent spellings of the same destination.
+  const jsonFinalPath = path.resolve(options.jsonPath!)
+  const markdownFinalPath = path.resolve(options.markdownPath!)
+  if (jsonFinalPath === markdownFinalPath) {
+    return controlledFailure(
+      'the JSON and Markdown output paths resolve to the same file (refusing to write one file twice)',
+    )
+  }
 
   let expected: SnapshotEvidenceExpected
   try {
@@ -238,13 +170,13 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   // Output safety: existing files are never silently overwritten.
-  for (const path of [options.jsonPath!, options.markdownPath!]) {
+  for (const outputPath of [jsonFinalPath, markdownFinalPath]) {
     try {
-      readFileSync(path)
-      return controlledFailure(`output file already exists (refusing to overwrite): ${path}`)
+      readFileSync(outputPath)
+      return controlledFailure(`output file already exists (refusing to overwrite): ${outputPath}`)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        return controlledFailure(`cannot inspect output path: ${path}`)
+        return controlledFailure(`cannot inspect output path: ${outputPath}`)
       }
     }
   }
@@ -292,7 +224,7 @@ export async function main(argv: string[]): Promise<number> {
     const markdown = renderSnapshotEvidenceMarkdown(report)
 
     try {
-      publishEvidenceOutputs(options.jsonPath!, options.markdownPath!, json, markdown)
+      publishEvidenceOutputs(jsonFinalPath, markdownFinalPath, json, markdown)
     } catch {
       return controlledFailure('output publication failed — no partial evidence set was left behind')
     }
