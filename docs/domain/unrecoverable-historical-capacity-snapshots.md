@@ -746,6 +746,25 @@ fields; it does not restate or broaden the policy.
   reason for non-restorable rows and does not render the Rollback control;
   Diff/inspection remains available.
 
+### Authoritative production outcome (post-install dry-runs, Issue #430)
+
+At the merged release `ffed1fa` two stable read-only production dry-runs
+(identical fingerprints and baseline-state hash) observed: **574 quarantined
+snapshot-entry findings (all Class A), 49 policy-accepted quarantined
+snapshots, 18 defect-classified snapshots, 366 remaining snapshot decisions
+(359 windowless entries inside 11 mixed-defect snapshots + 7 single-`-1`
+with a null other edge), 130 live-state decisions, 0 unsupported, 0 snapshot
+rewrite operations** (Issue #404 comment `5172781179`).
+
+The earlier 940 expectation was the pass-2 per-entry decision inventory
+(933 windowless + 7 single-`-1`), not a quarantine outcome: the approved
+snapshot-level fail-closed rule (§3) and the explicit `-1`+null exclusion
+reduce the authoritative quarantine boundary to 574, with
+`940 = 574 + 366`. The reconciliation, the `-1`+null analysis and the
+mixed-defect snapshot analysis are documented in
+[`remaining-historical-snapshot-investigation.md`](remaining-historical-snapshot-investigation.md)
+(Issue #430); no policy change is authorized by that issue.
+
 ## Appendix — Sources reviewed
 
 Repository code (worktree at `e99b20e…`, branch
