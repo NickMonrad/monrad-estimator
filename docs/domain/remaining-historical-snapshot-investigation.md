@@ -1,10 +1,11 @@
 # Remaining Historical Snapshot Quarantine Blockers — Investigation (Issue #430)
 
 Status: **investigation / design only** — no runtime, API, UI, schema or
-migration change is authorized by this issue. This document reconciles the
-authoritative quarantine boundary observed at the merged PR #429 release and
-defines the smallest evidence-backed next step for the 366 snapshot decisions
-that remain outside the approved quarantine policy.
+migration change is authorized by this issue. This document records the
+quarantine boundary observed at the merged PR #429 release, assesses its
+deterministic-semantics implications, and defines the smallest
+evidence-backed next step for the 366 snapshot decisions that remain outside
+the approved quarantine policy.
 
 Parent: #342 · Coordinates with: #404, #418, #421, #426, #428 ·
 Depends on: merged PR #429 (`ffed1fa`, Issue #428)
@@ -31,8 +32,12 @@ so the result is not production drift):
 The observed 574 + 366 = 940: the old expectation counted the pass-2 per-entry
 decision inventory (933 windowless + 7 single-`-1`), not the outcome of the
 approved fail-closed snapshot-level classifier. The expectation was broader
-than the approved predicate boundary; **574 is the authoritative quarantine
-count** (see Sections 6–8).
+than the approved predicate boundary. **574 is the current classifier's
+quarantine count — the correct expected result for the merged implementation
+at `ffed1fa`** — and it is not yet final as a policy boundary: Section 3.5
+assesses whether the legacy scheduler proves a deterministic unbounded
+outcome for current NamedResource Class A entries, which would narrow the
+quarantine class.
 
 ## 2. Repository and Git-history evidence
 
@@ -177,29 +182,124 @@ and the scheduler result came from the null fallback and the other edge.
 
 **Conclusion: the class does not have one deterministic meaning without the
 field orientation.** Three of the four possible orientations are provably
-equivalent to the windowless Class A shape (unbounded via scheduler defaults,
-no captured window stored); the fourth (`startWeek = null`, `endWeek = -1`)
-is provably equivalent to the never-active `(-1, -1)` shape (zero capacity,
-deterministic translation already exists). No orientation requires inventing
-a window, but the sanitized evidence does not currently distinguish them.
+**unbounded** (the scheduler gate defaulted to `0..∞` and the `-1` value was
+stray); the fourth (`startWeek = null`, `endWeek = -1`) is provably **zero**
+(never-active, identical to `(-1, -1)`). In every orientation the historical
+weekly capacity is fully determined by the proven scheduler contract — no
+orientation requires inventing a window. The sanitized evidence does not
+currently distinguish the orientations, so the per-entry outcome is not yet
+assignable.
 
 ### 3.4 Per the required conclusion options
 
-- **Deterministic translation** — justified **only** for a proven
-  `startWeek = null` + `endWeek = -1` (aliases null) shape: provable zero
-  capacity, same scheduler semantics as `(-1, -1)`; the never-active policy
-  would need the exact predicate extension `(null, -1)` with focused tests.
-- **New exact quarantine class** — justified for the other orientations:
-  provably identical semantics to Class A (no captured window; scheduler
-  default, not a captured window). The amendment would extend Class A's exact
-  predicate to "one effective edge `-1`, the other null, every populated
-  field otherwise clean, no other defect".
-- **Separately reviewed repair / decision-required** — the current state
-  (decision-required, blocking) remains correct while orientation is unknown.
+All seven entries remain **decision-required** until sanitized evidence
+identifies their exact raw-field orientation and alias state (Section 5.1
+item 1). Once the orientation is established, each exact shape is evaluated
+as a **deterministic translation candidate** — never as a quarantine
+candidate, because the historical capacity outcome is provable and therefore
+reproducible without guessing.
+
+**Proven zero-capacity orientation.** For the exact raw shape
+`startWeek = null` and `endWeek = -1` (all other window fields null, effective
+`CAPACITY_PLAN`), the historical outer scheduler gate never admitted an
+active week (`start = 0`, `end = -1`), so the entry contributed zero capacity
+— identical to the proven never-active `(-1, -1)` semantics. This is a
+deterministic zero-capacity candidate, subject to:
+
+- exact alias constraints (every other captured window field null);
+- effective allocation mode exactly `CAPACITY_PLAN`;
+- valid percentage and ownership;
+- no independent defect;
+- focused future implementation tests.
+
+It is **not** a quarantine candidate.
+
+**Proven unbounded orientations.** For the exact raw shapes
+`startWeek = -1` + `endWeek = null`, or only `allocationStartWeek = -1`, or
+only `allocationEndWeek = -1` (with the scheduler-consumed `startWeek` /
+`endWeek` aliases null), Git history and the scheduler contract prove
+unbounded historical capacity: the gate defaulted to `0..∞` and
+`effectiveAllocationPct` returned the captured percentage unconditionally for
+`CAPACITY_PLAN`. These are deterministic unbounded-capacity candidates.
+
+They are **not**:
+
+- Class A quarantine extensions;
+- "unrecoverable";
+- non-restorable merely because a conventional window pair is absent.
+
+The historical capacity semantics are deterministic; the smallest future
+design task is selecting the **existing valid profile representation** that
+reproduces those semantics. A structurally valid null-window
+`AVAILABILITY_WINDOW` representation already exists and is used for
+windowless `TIMELINE` entries; whether it (or another existing
+representation) is the correct target for `CAPACITY_PLAN`/`LEGACY` entries
+is an unresolved design question (Section 3.5). Inventing a finite window is
+neither required nor allowed.
 
 Do **not** infer the meaning from `(-1, -1)`: that pair is the planner's
 intentional never-active sentinel; the single-`-1`+null shape has a different
 writer origin and splits by orientation as shown.
+
+### 3.5 Assessment — current NamedResource Class A policy
+
+The scheduler reasoning above is not limited to the seven `-1`+null entries.
+The current approved policy quarantines every windowless effective
+`CAPACITY_PLAN` entry (Class A) because the translator requires a captured
+start and end window. For historical NamedResource entries, however, the
+legacy scheduler used `startWeek ?? 0` / `endWeek ?? Infinity` as the outer
+capacity gate (stable across the whole snapshot window: `f783b26`
+2026-05-01 → `b194e6c` 2026-07-14) and `effectiveAllocationPct` returned the
+captured percentage for `CAPACITY_PLAN` **without applying an inner
+allocation-window gate**. A NamedResource entry with all four window fields
+null therefore provably produced unbounded historical capacity
+(`allocationPercent` for every week ≥ 0).
+
+The three questions are separated deliberately:
+
+1. **Is the historical scheduler outcome provable?** Yes for NamedResource
+   entries under the legacy scheduler contract cited above, across the
+   writer/scheduler era covering the production snapshot window. This is a
+   proven scheduler outcome, not an inference about intent.
+2. **Is the correct authoritative profile representation already proven?**
+   No. The #421 deterministic matrix and the approved #426 policy treat
+   windowless `CAPACITY_PLAN` as untranslatable-without-guessing and the
+   merged classifier quarantines it; no reviewed mapping reproduces a proven
+   unbounded historical outcome as an authoritative profile for
+   `CAPACITY_PLAN`/`LEGACY` entries. A structurally valid null-window
+   `AVAILABILITY_WINDOW` profile exists (used for windowless `TIMELINE`), but
+   whether that (or another existing representation) is the correct target is
+   an unresolved design question that belongs in a focused future amendment.
+3. **Does the existing Class A quarantine policy therefore remain valid,
+   require narrowing, or require a focused design amendment?** Under
+   assessment. The merged policy is not silently invalidated: it remains in
+   force and its outcome (574 quarantined) remains the correct expectation
+   for the current implementation. Whether some or all current NamedResource
+   Class A entries should instead be deterministic unbounded translations
+   cannot be concluded from sanitized evidence alone, because the proof must
+   hold for:
+
+   - ResourceType **and** NamedResource entries **separately** — the legacy
+     `getWeeklyCapacity` gate consulted only NamedResource rows and phantom
+     slots (`max(0, count - namedResources.length)` full-time); the
+     ResourceType's own allocation fields were not the capacity source in
+     that function, so no unbounded conclusion transfers to RT entries from
+     this gate;
+   - every applicable writer era (legacy planner column writes, client
+     PUT/PATCH, clone propagation, and the post-#359 profile-first era in
+     which the legacy columns became a compatibility projection);
+   - percentage semantics (`allocationPercent` vs `allocationPct`,
+     `effectiveAllocationPct` behaviour per mode);
+   - primary and fallback aliases (which pair the scheduler consumed);
+   - effective-mode inheritance (`v2EffectiveNamedMode`);
+   - all structurally valid neighbouring shapes (a translated profile set
+     must validate as a complete set).
+
+   The sanitized evidence cannot currently split the 574 Class A entries into
+   ResourceType vs NamedResource counts, nor by writer era (Section 5.1 item
+   4). Until that split exists, **the investigation does not claim that 574
+   is the final authoritative policy boundary**; it is the current
+   implementation outcome.
 
 ## 4. Mixed-defect snapshot analysis (11 snapshots, 359 windowless entries)
 
@@ -261,18 +361,23 @@ cannot be derived from repository history:
 
 1. For the 7 single-`-1`+null entries: which of the four captured window
    fields holds `-1`, and whether the other three are null (decisive for
-   deterministic-zero vs Class-A-equivalent quarantine).
+   assigning deterministic-zero vs deterministic-unbounded semantics).
 2. For the 11 defect-classified snapshots: the distinct independent-defect
    reasons with counts (decisive for the outcome of the 359 entries).
 3. Whether the 359 include partial-window entries (one-null/one-valid) or are
    purely both-null — the plan message cannot distinguish them.
+4. For the current Class A assessment (Section 3.5): the ResourceType vs
+   NamedResource split of the 574 quarantined entries and 49 quarantined
+   snapshots, with writer-era grouping where derivable from existing snapshot
+   metadata (no payloads) — required before 574 can be called final.
 
 ### 5.1 Smallest safe read-only evidence request (for the #404 production agent)
 
 All items are read-only aggregates of the **existing** plan and readiness
 outputs already on the production machine (`plan-1.json`/`plan-2.json` at
-`ffed1fa`, readiness log `a1b4237b…`). No new database access, no payload
-copy, no identifiers required.
+`ffed1fa`, readiness log `a1b4237b…`), supporting the deterministic-semantics
+analysis (Sections 3.4–3.5) and the mixed-defect assessment (Section 4). No
+new database access, no payload copy, no identifiers required.
 
 1. For the 7 decisions with message "single -1/negative window edge without
    established meaning": a shape-category table — per entry, which of
@@ -288,17 +393,21 @@ copy, no identifiers required.
 3. Per-snapshot classification counts for the 11 mixed snapshots:
    `decisionRequired` by message (windowless vs partial vs single-negative),
    `alreadyValid`, `unsupported`, `quarantined` (expected 0/0/0/0).
+4. For the current Class A assessment: ResourceType vs NamedResource split of
+   the 574 quarantined entries and 49 quarantined snapshots (the plan already
+   carries `ownerKind` per snapshot-entry finding), with writer-era grouping
+   where derivable from existing snapshot metadata.
 
 Nothing in the request asks for complete plan JSON, snapshot payloads,
 customer/project names, decision IDs, credentials or database copies.
 
-## 6. Outcome table (one row per remaining defect class)
+## 6. Outcome table (one row per remaining defect class; current implementation outcome)
 
 | Class | Observed count | Proven historical semantics | Recommended outcome | Evidence |
 | ----- | -------------: | --------------------------- | ------------------- | -------- |
-| Class A windowless entries in fully-clean snapshots | 574 entries / 49 snapshots | no captured window; unrecoverable without guessing | **Quarantine (unchanged — authoritative)** | #404 `5172781179`; classifier at `ffed1fa` |
+| Class A windowless entries in fully-clean snapshots | 574 entries / 49 snapshots | no captured window; for NamedResource entries the legacy scheduler gate proves unbounded historical capacity (§3.5); RT semantics are not established by that gate | **Quarantine (current implementation outcome — unchanged); NamedResource subset under assessment (§3.5)** | #404 `5172781179`; classifier at `ffed1fa`; scheduler gate `f783b26`→`b194e6c` |
 | Windowless `CAPACITY_PLAN` entries inside 11 mixed-defect snapshots | 359 entries / 11 snapshots | same raw shape as Class A; snapshot carries ≥1 unidentified independent defect | **Decision-required (unchanged)** until defect classes are identified (Section 5.1 item 2) | #404 `5172781179`; fail-closed snapshot rule |
-| `-1` + null (effective `CAPACITY_PLAN`) | 7 entries / 7 snapshots | orientation-dependent provable: `startWeek=null, endWeek=-1` → zero (≡ never-active); all other orientations → unbounded (≡ windowless Class A) | **Decision-required (unchanged)** until orientation evidence (Section 5.1 item 1); then deterministic (zero) or Class A-extension quarantine (unbounded) | scheduler gate (`d179cbe`), planner writer trace (§3.2–3.3) |
+| `-1` + null (effective `CAPACITY_PLAN`) | 7 entries / 7 snapshots | orientation-dependent provable: `startWeek=null, endWeek=-1` → zero (≡ never-active); all other orientations → unbounded | **Decision-required (unchanged)** until orientation evidence (Section 5.1 item 1); then deterministic zero or deterministic unbounded candidate — never quarantine | scheduler gate (`d179cbe`), planner writer trace (§3.2–3.3) |
 | `(-1,-1)` / non-negative inverted never-active | 205 normalized, not findings | zero capacity | Deterministic (unchanged) | #421 policy; `scheduler.test.ts` |
 | Single `-1` + non-negative other edge (Class B) | 0 | — | n/a (no production match) | #404 `5172781179` |
 | Valid non-`CAPACITY_PLAN` entries | not findings | restorable per existing translation | Restorable (unchanged) | classifier tests |
@@ -307,49 +416,69 @@ customer/project names, decision IDs, credentials or database copies.
 
 ## 7. Recommended policy
 
-**Path A — no policy change now**, with a precise evidence request (Section
-5.1) and a documented count reconciliation (Section 8).
+**Path A — no runtime or policy change yet; obtain the minimal sanitized
+evidence and complete the deterministic-semantics assessment.**
 
-- The current implementation is faithful to the approved design (Section
+- The current implementation follows the currently approved policy (Section
   2.3); no classifier correction is justified (**Path C not applicable**).
-- No repository evidence yet proves a new exact quarantine class or a
-  deterministic extension: the `-1`+null class splits by field orientation
-  into two provable meanings, neither of which needs a *new* semantic —
-  zero (never-active deterministic, predicate extension `(null, -1)`) or
-  unbounded (Class A-equivalent, exact predicate extension). The orientation
-  is the missing fact (**Path B deferred until Section 5.1 item 1 is
-  returned**).
+- The old expectation that all 940 would immediately quarantine was
+  incorrect; 574/366 is the observed outcome of the current classifier.
+- The seven `-1`+null entries remain blocked until their orientation is
+  known; each proven orientation then belongs to deterministic translation
+  analysis (zero or unbounded), not quarantine. No Class A extension for
+  `-1`+null is proposed and no new quarantine class is created by this PR.
+- Proven zero and proven unbounded historical outcomes are deterministic
+  states — potentially restorable — not unrecoverable quarantine candidates.
+- The effect on current NamedResource Class A entries (Section 3.5) must be
+  resolved before 574 is called the final policy count.
+- Mixed-defect snapshots remain fail-closed (Section 4.3).
 - A separate evidence-bound repair (**Path D**) is not applicable: no stored
-  or reviewed evidence determines historical intent for any of the 366 (the
-  #404 evidence review proposed zero resolutions, comment `5162109939`).
+  or reviewed evidence determines historical *intent* for any of the 366 —
+  the #404 evidence review proposed zero resolutions (comment `5162109939`);
+  the deterministic question here is about proven scheduler *outcomes*, not
+  intent.
 - The 11 snapshots' independent defects must be identified before any
   per-class outcome (Section 4.3); quarantine must not be broadened to absorb
   them (fail-closed).
+- #404 and #418 remain blocked.
 
 ### 7.1 Post-evidence forks (design boundary only, not implemented here)
 
-If Section 5.1 item 1 returns `startWeek=null, endWeek=-1` (all else null) for
-some entries: those entries are deterministic never-active (zero capacity) —
-extend the never-active predicate with the exact raw shape and focused tests;
-they leave the decision set.
+If Section 5.1 item 1 returns `startWeek=null, endWeek=-1` (all other window
+fields null) for some entries: those entries are deterministic zero-capacity
+candidates (never-active-equivalent). A future focused amendment would define
+the exact raw predicate, alias constraints and effective-mode rules and add
+focused implementation tests; the entries then leave the decision set without
+a human decision. They are not quarantine candidates.
 
-For every other orientation: the entry is provably unbounded — the semantic
-equivalent of windowless Class A (no captured window; the scheduler's default,
-not a captured window). Extend Class A's exact predicate to "one effective
-edge `-1`, other null, all populated fields otherwise clean, effective
-`CAPACITY_PLAN`, no other defect" with focused tests; these entries quarantine
-with the Class A reason and receive no decision.
+If item 1 returns any other orientation (`startWeek=-1` + `endWeek=null`, or
+a single `-1` in the primary pair with null aliases): the entry is a
+deterministic unbounded-capacity candidate. A future focused amendment would
+select the **existing valid profile representation** that reproduces the
+proven unbounded semantics (a null-window `AVAILABILITY_WINDOW`
+representation already exists and is used for windowless `TIMELINE`);
+inventing a finite window is neither required nor allowed. The
+profile-representation choice is the smallest open design task — the
+historical capacity semantics themselves are already deterministic. These
+entries are not quarantine candidates.
 
-If Section 5.1 item 2 identifies, for example, partial-window entries
-(one-null/one-valid): the same orientation analysis applies —
-`(start=null, end=N)` in the alias pair is a provable window `[0, N]`
-(deterministic), while `(start=0, end=null)` and primary-pair partials are
-provably unbounded (Class A-equivalent). Each identified class receives its
-own exact predicate; nothing is absorbed by structural similarity.
+If Section 5.1 item 2 identifies partial-window entries (one-null/one-valid):
+the same orientation analysis applies — `(start=null, end=N)` in the alias
+pair is a provable window `[0, N]` (deterministic), while `(start=0,
+end=null)` and primary-pair partials are provably unbounded. Each identified
+class receives its own exact predicate; nothing is absorbed by structural
+similarity, and none of these outcomes is quarantine.
 
-## 8. Authoritative expected production counts (Path A)
+The Section 3.5 assessment may additionally conclude that some or all current
+NamedResource Class A entries are deterministic unbounded translations; that
+conclusion, if reached, requires the same focused design-amendment +
+implementation flow — it does not change any runtime behaviour through this
+PR.
 
-Under the current implementation at `ffed1fa` (unchanged by this issue):
+## 8. Current implementation outcome (observed production result at `ffed1fa`)
+
+Under the merged implementation at `ffed1fa` (unchanged by this issue and by
+this PR):
 
 | Metric | Value |
 | ------ | ----- |
@@ -366,31 +495,41 @@ Under the current implementation at `ffed1fa` (unchanged by this issue):
 
 The 940 figure is superseded: it was the pass-2 per-entry decision inventory,
 not a quarantine outcome. `940 = 574 quarantined + 366 remaining` under the
-approved fail-closed snapshot-level rule.
+approved fail-closed snapshot-level rule. These figures are the **current
+policy/classifier boundary**: they are the correct expected result for the
+currently merged classifier, and they remain subject to the Section 3.5
+assessment before any later focused policy amendment is considered.
 
 ## 9. Implementation boundary
 
 None authorized by this issue. If the evidence returned by Section 5.1
-establishes a deterministic extension or a Class A predicate extension, that
-is a **separate focused design amendment** (an updated `#426` policy section)
-followed by a separate implementation issue mirroring the #426 → #428 flow —
-not part of this investigation. #404 and #418 PR 2 remain blocked.
+establishes a deterministic zero or deterministic unbounded candidate (or the
+Section 3.5 assessment narrows Class A), that is a **separate focused design
+amendment** (an updated `#426` policy section) followed by a separate
+implementation issue mirroring the #426 → #428 flow — not part of this
+investigation. No quarantine extension is proposed. #404 and #418 PR 2
+remain blocked.
 
 ## 10. Simplicity Check
 
 - **What is the minimum correct next step?** Post the Section 5.1 evidence
-  request to #404, record the authoritative 574/366 boundary, and change no
-  code. No runtime change is authorized or required.
+  request to #404, record the observed 574/366 boundary as the current
+  implementation outcome, complete the Section 3.5 deterministic-semantics
+  assessment, and change no code. No runtime change is authorized or
+  required.
 - **Is a code change actually required?** No. The implementation matches the
   approved design; the deviation is an expectation-count error, not a code
   defect.
 - **Which exact new abstraction or predicate, if any, is essential?** None
-  now. At most two future exact predicate extensions (never-active
-  `(null, -1)`; Class A "one `-1` + null") — each only if orientation
-  evidence proves the corresponding historical semantics.
-- **Can the issue be resolved by correcting expected counts instead?** Yes —
-  that is exactly the recommendation (Section 8): 574/366/49/18 are
-  authoritative under the approved policy.
+  now. At most two future deterministic translation candidates
+  (`(null, -1)` zero-capacity; unbounded orientations) — each only if
+  orientation evidence proves the corresponding historical semantics; both
+  require a focused design amendment, and neither is a quarantine class.
+- **Can the issue be resolved by correcting expected counts instead?** Only
+  partially. The observed counts are the correct expected result for the
+  current implementation (the 940 expectation was wrong), but Issue #430 is
+  not resolved by counts alone: the Section 3.5 assessment must determine
+  whether the NamedResource Class A boundary narrows.
 - **Is any proposed complexity present only to avoid human decisions?** No.
   The 366 stay decision-required until provable semantics exist; quarantine
   is never broadened by similarity.
@@ -403,7 +542,7 @@ not part of this investigation. #404 and #418 PR 2 remain blocked.
 
 - `unrecoverable-historical-capacity-snapshots.md` — approved quarantine
   policy (#426); Section 11 carries the implementation record and the
-  authoritative-count note.
+  observed-outcome note.
 - `capacity-profile-readiness-remediation.md` — #421 deterministic matrix,
   `-1` sentinel evidence, manifest flow.
 - `legacy-capacity-column-runtime-cutover.md` — #418 runtime cutover.

@@ -746,7 +746,7 @@ fields; it does not restate or broaden the policy.
   reason for non-restorable rows and does not render the Rollback control;
   Diff/inspection remains available.
 
-### Authoritative production outcome (post-install dry-runs, Issue #430)
+### Observed production outcome at the PR #429 implementation
 
 At the merged release `ffed1fa` two stable read-only production dry-runs
 (identical fingerprints and baseline-state hash) observed: **574 quarantined
@@ -756,14 +756,23 @@ snapshots, 18 defect-classified snapshots, 366 remaining snapshot decisions
 with a null other edge), 130 live-state decisions, 0 unsupported, 0 snapshot
 rewrite operations** (Issue #404 comment `5172781179`).
 
-The earlier 940 expectation was the pass-2 per-entry decision inventory
-(933 windowless + 7 single-`-1`), not a quarantine outcome: the approved
-snapshot-level fail-closed rule (§3) and the explicit `-1`+null exclusion
-reduce the authoritative quarantine boundary to 574, with
-`940 = 574 + 366`. The reconciliation, the `-1`+null analysis and the
-mixed-defect snapshot analysis are documented in
+These figures supersede the earlier operational expectation that all 940
+pass-2 snapshot decisions (933 windowless + 7 single-`-1`) would immediately
+quarantine: 940 was the per-entry decision inventory, not a quarantine
+outcome, and `940 = 574 + 366` under the approved snapshot-level fail-closed
+rule (§3) and the explicit `-1`+null exclusion. They remain the **correct
+expected result for the currently merged classifier**.
+
+Issue #430 is still determining whether sanitized evidence supports a later
+focused policy amendment: the legacy scheduler gate may prove deterministic
+unbounded historical capacity for NamedResource `CAPACITY_PLAN` entries,
+which would move the proven-unbounded shapes (and possibly part of the
+current NamedResource Class A class) into deterministic translation analysis
+rather than quarantine. No current runtime behaviour changes through that
+investigation. The reconciliation, the `-1`+null analysis, the NamedResource
+Class A assessment and the mixed-defect snapshot analysis are documented in
 [`remaining-historical-snapshot-investigation.md`](remaining-historical-snapshot-investigation.md)
-(Issue #430); no policy change is authorized by that issue.
+(Issue #430).
 
 ## Appendix — Sources reviewed
 
