@@ -189,6 +189,39 @@ function evaluateResourceTypeEntry(rt: SnapshotResourceType, index: number): Ent
   return errors.length > 0 ? { kind: 'defect' } : { kind: 'restorable' }
 }
 
+export type V2AliasEdge = 'start' | 'end'
+
+/**
+ * Per-edge conflicting-populated-alias predicate. A conflict exists when
+ * both captured fields of one edge are populated and disagree. Window-using
+ * modes only; any other mode reports no conflict on either edge.
+ */
+export function v2NamedResourceEdgeAliasConflict(
+  nr: Pick<SnapshotNamedResource, 'allocationStartWeek' | 'allocationEndWeek' | 'startWeek' | 'endWeek'>,
+  mode: string | null,
+  edge: V2AliasEdge,
+): boolean {
+  if (mode !== 'TIMELINE' && mode !== 'CAPACITY_PLAN') return false
+  if (edge === 'start') {
+    return nr.allocationStartWeek != null && nr.startWeek != null && nr.allocationStartWeek !== nr.startWeek
+  }
+  return nr.allocationEndWeek != null && nr.endWeek != null && nr.allocationEndWeek !== nr.endWeek
+}
+
+/**
+ * Conflicting populated aliases (the two captured fields of one edge
+ * disagree) cannot be reconciled under the v2 rules and are a blocking
+ * defect for window-using modes (policy #426, Section 3). Shared by the
+ * classifier and the Issue #432 evidence command (verdict-neutral export).
+ * Derived from the per-edge predicate so both share one definition.
+ */
+export function v2NamedResourceAliasConflict(
+  nr: Pick<SnapshotNamedResource, 'allocationStartWeek' | 'allocationEndWeek' | 'startWeek' | 'endWeek'>,
+  mode: string | null,
+): boolean {
+  return v2NamedResourceEdgeAliasConflict(nr, mode, 'start') || v2NamedResourceEdgeAliasConflict(nr, mode, 'end')
+}
+
 function evaluateNamedResourceEntry(
   nr: SnapshotNamedResource,
   parentRt: SnapshotResourceType | undefined,
@@ -218,16 +251,10 @@ function evaluateNamedResourceEntry(
       return { kind: 'quarantined', entryClass }
     }
   }
-  // Conflicting populated aliases (the two captured fields of one edge
-  // disagree) cannot be reconciled under the v2 rules and are a blocking
-  // defect for window-using modes (policy #426, Section 3).
-  if (mode === 'TIMELINE' || mode === 'CAPACITY_PLAN') {
-    if (
-      (nr.allocationStartWeek != null && nr.startWeek != null && nr.allocationStartWeek !== nr.startWeek) ||
-      (nr.allocationEndWeek != null && nr.endWeek != null && nr.allocationEndWeek !== nr.endWeek)
-    ) {
-      return { kind: 'defect' }
-    }
+  // Conflicting populated aliases are a blocking defect for window-using
+  // modes (shared helper; identical predicate to the previous inline check).
+  if (v2NamedResourceAliasConflict(nr, mode)) {
+    return { kind: 'defect' }
   }
   const errors = v2NamedResourceEntryErrors(nr, parentRt, prefix)
   return errors.length > 0 ? { kind: 'defect' } : { kind: 'restorable' }

@@ -20,6 +20,7 @@ try {
       'test:transfer-integration',
       'test:legacy-alias-removal-integration',
       'test:remediation-integration',
+      'test:snapshot-evidence-integration',
     ]) {
       if (guard.triggered) break
       await runCommand('npm', ['run', script, '--workspace=server'], { cwd: root, env: environment, signal: guard.abortSignal })

@@ -372,18 +372,22 @@ The three questions are separated deliberately:
    investigation does not claim that 574 is the final authoritative policy
    boundary**; it is the current implementation outcome.
 
-## 4. Mixed-defect snapshot analysis (11 snapshots, 359 windowless entries)
+## 4. Mixed-defect snapshot analysis (18 snapshots, 359 windowless decisions)
 
 ### 4.1 Established facts
 
-- 11 of the 18 defect-classified snapshots contain 359 decision-required
-  entries whose message is the windowless `CAPACITY_PLAN` translation error
-  ("cannot be translated without guessing capacity"). The other 7 defect
-  snapshots are the single-`-1`+null class of Section 3 (7 entries; each of
-  those snapshots has no windowless entries — otherwise they would count in
-  the 359).
+- The **359 windowless decisions span all 18 defect-classified snapshots**
+  (production evidence comment `5174355909`):
+  - the **11-snapshot windowless-only subgroup** holds **226** windowless
+    decisions (per-snapshot: 21 each × 10, 16 × 1) and no recorded
+    single-`-1` signal;
+  - the **7-snapshot single-`-1` subgroup** holds **133** windowless plus
+    **7** single-`-1` decisions — **140 total decisions** (19 windowless +
+    1 single-`-1` per snapshot).
+  The earlier topology claiming all 359 windowless decisions occur only in
+  the 11-snapshot subgroup is superseded.
 - The plan reports **0 unsupported findings**, so the independent defects in
-  the 11 snapshots are **not** orphan NamedResources, unknown modes, or
+  the 18 snapshots are **not** orphan NamedResources, unknown modes, or
   malformed/unknown-version payloads.
 - The classifier's defect verdict for these snapshots is driven by per-entry
   errors and/or structural validation of the complete translated profile set
@@ -408,7 +412,7 @@ From `snapshotRestorability.ts` + `projectSnapshotCapacity.ts` +
 The 282f9bd-era readiness inventory (comment `5155476979`) recorded "211 NR
 entries with startWeek/endWeek = -1 (422 messages) + 415 synthetic-profile
 shape errors"; after the #421 never-active policy, the `(-1,-1)`-derived shape
-errors vanished, and the surviving structural errors in the 11 snapshots are
+errors vanished, and the surviving structural errors in the 18 snapshots are
 what remains. The exact surviving classes cannot be named from sanitized
 GitHub evidence (Section 5).
 
@@ -421,7 +425,7 @@ GitHub evidence (Section 5).
   - **window-exceed / never-active** are already handled deterministically
     (not present as defects);
   - **orphans / unknown modes** are provably absent (unsupported = 0).
-- The fail-closed principle is preserved: none of the 11 snapshots may
+- The fail-closed principle is preserved: none of the 18 defect snapshots may
   quarantine while their independent defect is unidentified, and no Class A
   entry inside them may quarantine (the approved snapshot-level rule).
 
@@ -437,7 +441,7 @@ cannot be derived from repository history:
    the sanitized percentage fields (decisive for assigning
    deterministic-zero vs deterministic-unbounded interval semantics and the
    historically used percentage).
-2. For the 11 defect-classified snapshots: the distinct independent-defect
+2. For the 18 defect-classified snapshots: the distinct independent-defect
    reasons with counts (decisive for the outcome of the 359 entries).
 3. Whether the 359 include partial-window entries (one-null/one-valid) or are
    purely both-null — the plan message cannot distinguish them.
@@ -471,7 +475,7 @@ identifiers required.
    the distinct non-"without captured window" messages (percent-range,
    alias-conflict, partial-window, below-`-1`, fractional, duplicate-owner,
    structural) and their counts.
-3. Per-snapshot classification counts for the 11 mixed snapshots:
+3. Per-snapshot classification counts for the 18 defect snapshots:
    `decisionRequired` by message (windowless vs partial vs single-negative),
    `alreadyValid`, `unsupported`, `quarantined` (expected 0/0/0/0).
 4. For the current Class A assessment: aggregate counts of the 574
@@ -490,7 +494,7 @@ customer/project names, decision IDs, credentials or database copies.
 | Class | Observed count | Proven historical semantics | Recommended outcome | Evidence |
 | ----- | -------------: | --------------------------- | ------------------- | -------- |
 | Class A windowless entries in fully-clean snapshots | 574 entries / 49 snapshots | no captured window; for NamedResource entries the legacy scheduler gate proves an unbounded active interval, with percentage per explicit/inherited mode (§3.5); RT semantics are not established by that gate | **Quarantine (current implementation outcome — unchanged); NamedResource subset under assessment (§3.5)** | #404 `5172781179`; classifier at `ffed1fa`; scheduler gate `f783b26`→`b194e6c` (percentage branch `74b98d3`) |
-| Windowless `CAPACITY_PLAN` entries inside 11 mixed-defect snapshots | 359 entries / 11 snapshots | same raw shape as Class A; snapshot carries ≥1 unidentified independent defect | **Decision-required (unchanged)** until defect classes are identified (Section 5.1 item 2) | #404 `5172781179`; fail-closed snapshot rule |
+| Windowless `CAPACITY_PLAN` entries inside all 18 defect-classified snapshots | 359 entries / 18 snapshots (226 in the 11-snapshot windowless-only subgroup, 133 in the 7-snapshot single-`-1` subgroup) | same raw shape as Class A; each containing snapshot carries ≥1 unidentified independent defect | **Decision-required (unchanged)** until defect classes are identified (Section 5.1 item 2) | #404 `5172781179`, `5174355909`; fail-closed snapshot rule |
 | `-1` + null (effective `CAPACITY_PLAN`) | 7 entries / 7 snapshots | orientation-dependent provable: `startWeek=null, endWeek=-1` → zero interval (≡ never-active); all other orientations → unbounded interval at the category-specific percentage (explicit `allocationPercent` or inherited `100` default) | **Decision-required (unchanged)** until orientation, alias and mode-source evidence exists (Section 5.1 item 1); zero orientation is deterministic zero; unbounded orientation is deterministic only when the historically used percentage is also established; explicit and inherited modes may require different deterministic target profiles — never quarantine | scheduler gate (`f783b26`→`b194e6c`; percentage branch `74b98d3`), planner writer trace (§3.2–3.3) |
 | `(-1,-1)` / non-negative inverted never-active | 205 normalized, not findings | zero capacity | Deterministic (unchanged) | #421 policy; `scheduler.test.ts` |
 | Single `-1` + non-negative other edge (Class B) | 0 | — | n/a (no production match) | #404 `5172781179` |
@@ -526,7 +530,7 @@ evidence and complete the deterministic interval-and-percentage assessment.**
   the #404 evidence review proposed zero resolutions (comment `5162109939`);
   the deterministic question here is about proven scheduler *outcomes*, not
   intent.
-- The 11 snapshots' independent defects must be identified before any
+- The 18 snapshots' independent defects must be identified before any
   per-class outcome (Section 4.3); quarantine must not be broadened to absorb
   them (fail-closed).
 - #404 and #418 remain blocked.

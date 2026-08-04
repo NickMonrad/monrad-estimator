@@ -24,7 +24,7 @@
     "test:integration:local": "node scripts/run-integration-local.mjs",
     "db:backup": "node scripts/db-backup.mjs",
     "test:backup": "node --test scripts/db-backup.test.mjs",
-    "test:local-db": "node --test scripts/local-postgres.test.mjs scripts/runner-lifecycle.test.mjs scripts/runner-monitoring.test.mjs scripts/aggregated-error.test.mjs scripts/db-setup.test.mjs scripts/remediate-forwarding.test.mjs",
+    "test:local-db": "node --test scripts/local-postgres.test.mjs scripts/runner-lifecycle.test.mjs scripts/runner-monitoring.test.mjs scripts/aggregated-error.test.mjs scripts/db-setup.test.mjs scripts/remediate-forwarding.test.mjs scripts/snapshot-evidence-forwarding.test.mjs",
     "test:pdf-cleanup": "node --import tsx --test server/src/test/pdf-cleanup.test.mjs",
     "test:pdf-smoke": "node --import tsx --test server/src/test/pdf-smoke.test.mjs",
     "test:install-chrome": "node --test scripts/install-chrome-lifecycle.test.mjs",
@@ -33,6 +33,7 @@
     "capacity-profiles:audit:repair": "npm run capacity-profiles:audit:repair --workspace=server",
     "capacity-profiles:readiness": "npm run capacity-profiles:readiness --workspace=server",
     "capacity-profiles:remediate-readiness": "npm run capacity-profiles:remediate-readiness --workspace=server --",
+    "capacity-profiles:snapshot-evidence": "npm run capacity-profiles:snapshot-evidence --workspace=server --",
     "capacity-profiles:backfill": "npm run capacity-profiles:backfill --workspace=server",
     "capacity-profiles:reconcile": "npm run capacity-profiles:reconcile --workspace=server"
   },

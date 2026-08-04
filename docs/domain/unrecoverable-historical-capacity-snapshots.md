@@ -752,9 +752,12 @@ At the merged release `ffed1fa` two stable read-only production dry-runs
 (identical fingerprints and baseline-state hash) observed: **574 quarantined
 snapshot-entry findings (all Class A), 49 policy-accepted quarantined
 snapshots, 18 defect-classified snapshots, 366 remaining snapshot decisions
-(359 windowless entries inside 11 mixed-defect snapshots + 7 single-`-1`
-with a null other edge), 130 live-state decisions, 0 unsupported, 0 snapshot
-rewrite operations** (Issue #404 comment `5172781179`).
+(359 windowless entries across all 18 defect-classified snapshots — 226 in
+the 11-snapshot windowless-only subgroup and 133 in the 7-snapshot
+single-`-1` subgroup — plus 7 single-`-1` with a null other edge, the
+seven-snapshot subgroup holding 140 total decisions), 130 live-state
+decisions, 0 unsupported, 0 snapshot rewrite operations** (Issue #404
+comments `5172781179`, `5174355909`).
 
 These figures supersede the earlier operational expectation that all 940
 pass-2 snapshot decisions (933 windowless + 7 single-`-1`) would immediately
