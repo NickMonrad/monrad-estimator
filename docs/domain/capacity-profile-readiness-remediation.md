@@ -355,6 +355,208 @@ PR 2 migration during the Phase 4 `prisma migrate deploy` — acceptable but
 couples the steps; the separate step is preferred. This PR does not modify,
 apply or fold in that migration.
 
+## Sanitized snapshot evidence command (Issue #432)
+
+A standalone, explicitly invoked, **read-only** command that extracts the
+sanitized aggregate historical snapshot evidence required by the Issue #430
+design investigation. It is evidence tooling only: it changes no
+classifier, readiness, rollback, retention or remediation behaviour, creates
+no manifest, selects no decisions and authorizes nothing. It never runs
+during application startup or HTTP requests.
+
+### Exact root command
+
+```bash
+npm run capacity-profiles:snapshot-evidence -- \
+  --json <output.json> \
+  --markdown <output.md> \
+  --expected <expected.json>
+```
+
+Equivalent standalone invocation from `server/`:
+
+```bash
+npx tsx src/scripts/generateSnapshotEvidence.ts \
+  --json <output.json> --markdown <output.md> --expected <expected.json>
+```
+
+All three arguments are required. Root arguments are forwarded exactly once
+and in order (regression-tested, same seam as the #424 forwarding fix).
+There is deliberately **no `--dry-run` option**: the command is inherently
+read-only.
+
+The JSON and Markdown output paths must resolve to **distinct** files: the
+command resolves and normalizes both paths and refuses (exit `1`) before
+reading the expectations file, inspecting the database or creating any
+temporary or final output when they are equal (including equivalent
+spellings such as `out.json` and `./out.json`).
+
+### Expected-file schema (reviewed production-run input)
+
+The reviewed expectations are supplied explicitly per run; they are never
+hard-coded as application constants. Shape:
+
+```json
+{
+  "fingerprint": "<64-hex remediation-plan fingerprint>",
+  "baselineStateHash": "<64-hex baseline-state hash>",
+  "quarantinedEntries": 574,
+  "quarantinedSnapshots": 49,
+  "defectSnapshots": 18,
+  "windowlessDecisions": 359,
+  "singleMinusOneDecisions": 7,
+  "snapshotDecisions": 366,
+  "liveDecisions": 130,
+  "unsupported": 0,
+  "rewriteOperations": 0,
+  "topology11Snapshots": 11,
+  "topology7Snapshots": 7,
+  "topology11WindowlessDecisions": 226,
+  "topology7WindowlessDecisions": 133,
+  "topology7SingleMinusOneDecisions": 7
+}
+```
+
+The reviewed subgroup **snapshot counts** (`topology11Snapshots`, `topology7Snapshots`) are gated explicitly: reconciliation fails unless the observed eleven-subgroup and seven-subgroup snapshot counts match, the expected subgroup sum equals `defectSnapshots`, and the observed subgroup counts sum to the observed defect-snapshot count. The reviewed subgroup decision totals (`topology11WindowlessDecisions` 226, `topology7WindowlessDecisions` 133, `topology7SingleMinusOneDecisions` 7) remain gated as before. A 10/8 subgroup split with otherwise matching decision totals is refused.
+
+Current reviewed production values (Issue #404 comment `5172781179`):
+fingerprint `eccf77edde816d59d2625b7988175f41dfa14f2ca792483bfcb2c271ba2130dc`,
+baseline-state hash
+`09b504b5e27ee8362f7d983c2d00cda68711ed7e71c2f7737d90668ad50a02df`.
+
+### Exit contract
+
+- `0` — all gates passed (fingerprint, baseline, reviewed counts,
+  reconciliation) and both output files were written.
+- `1` — any refusal: bad arguments, malformed/unsafe expected values,
+  existing output file (never silently overwritten), snapshot parse failure,
+  unsupported schema version, fingerprint/baseline/count mismatch,
+  reconciliation failure, or output-write failure.
+
+No evidence is emitted until every gate passes.
+
+### Output schema and redaction guarantees
+
+Versioned JSON (`formatVersion: 1`) with `runMetadata`, `expectedBoundary`,
+`observedBoundary`, `integrityResult`, `topology`, `singleNegativeEntries`
+(S1… labels), `defectSnapshots` (M1… labels), `classAAggregates`,
+`unavailableEvidence`, `reconciliation` and `policyDecision:
+"not-assessed"`. Markdown is rendered from the same evidence object and
+carries **all** evidence categories required by the #430 review: S-record
+entry and structural error categories, exact sanitized mode categories,
+percentage categories and the independent-defect classification; M-record
+subgroup, per-snapshot decision counts (windowless, single-`-1`, and other
+decision-required reasons), alreadyValid/quarantined/unsupported counts,
+entry and structural error categories; and the complete Class A percentage
+evidence split by owner kind / mode source (`resourceType`, `explicit`,
+`inherited`, `other`, `unavailable` × `allocationPercent`/`allocationPct` ×
+every bucket). Output ordering is deterministic apart from the explicit run
+timestamp.
+
+Class A aggregates also include **affected-snapshot counts** in addition to
+entry counts: `affectedSnapshotsByOwnerKind` (`resourceType` /
+`namedResource` / `unavailable`) and `affectedSnapshotsByNamedModeSource`
+(`explicit` / `inherited` / `other` / `unavailable`). The mode-source
+aggregate counts only snapshots containing Class A **NamedResource** entries
+in the applicable category — ResourceType entries carry no NamedResource
+mode-source category and ResourceType-only snapshots contribute zero to all
+four mode-source categories. Categories may overlap: a snapshot containing
+explicit and inherited NamedResource entries counts once in both; the
+aggregate is not expected to sum to the 49 Class A snapshots. A snapshot
+counts at most once per category.
+`snapshotsByOwnerKindMix` retains the mutually exclusive overall mix and the
+total Class A snapshot reconciliation stays at 49.
+
+Unknown or malformed historical mode strings are never copied into evidence
+output: the command normalizes every outward-facing mode value to the fixed
+vocabulary (`TIMELINE`, `CAPACITY_PLAN`, `EFFORT`, `FULL_PROJECT`, `null`,
+`other`), and unknown strings render only as `other`. This applies to JSON,
+Markdown and the content-derived labels.
+
+Each S record reports the sanitized state of **all four raw window fields**
+(`allocationStartWeek`, `allocationEndWeek`, `startWeek`, `endWeek`) with
+exactly one value from the fixed vocabulary `minus-one` / `absent-null` /
+`populated` — populated numeric values are never emitted. `minusOneField`
+is reconciled one-to-one with the single `minus-one` field. Alias-conflict
+evidence is reported **per logical edge** (`aliasConflicts.startEdge` /
+`aliasConflicts.endEdge`) using the shared classifier alias semantics
+(window-using modes only), so a conflict on the start edge is distinguished
+from a conflict on the end edge. The aggregate `alternateAliasState` is
+derived from the same per-field states.
+
+S records are selected from the plan's single-negative decision class; the
+Markdown section is titled **"Single-negative decision entries"** (a clean
+`-1` + null shape may instead be classified through the windowless or Class
+B quarantine branch and is never implied by the heading).
+
+The command prevents output of project/snapshot/owner/finding/decision IDs,
+names, complete payloads, credentials and database details by construction
+(aggregates only, content-derived labels) and automated redaction tests scan
+serialized output for seeded sensitive fixture values and fail if any
+appear. Runtime errors are converted to controlled reason codes and concise
+safe messages.
+
+### Output publication (all-or-nothing, no-clobber)
+
+Both output files are published as a set: both complete strings are staged
+into exclusive temporary files (mode `0600`) in the corresponding output
+directories, and only after both are written and closed are the final paths
+published. The final publication step itself refuses an existing
+destination: each final path is created as a hard link to the staged file
+(`link` fails with `EEXIST` when the destination exists), never a
+check-then-rename sequence — so a destination created by another process
+between the preflight and the final step can never be overwritten.
+
+Ownership is tracked explicitly: on any staging or publication failure the
+command removes every temporary file created by the run and only final
+files the run itself created (verified by inode); destinations that existed
+before or appeared independently are preserved. The command returns exit
+`1` with a controlled message. On success both finals exist as distinct
+files with mode `0600` (POSIX), contain the intended complete content, and
+no temporary files remain. Existing final files are never silently
+overwritten.
+
+### Corrected 18-snapshot topology (evidence basis)
+
+The 359 windowless decisions span **all 18** defect-classified snapshots
+(Issue #404 comment `5174355909`): 226 windowless decisions in the
+11-snapshot windowless-only subgroup (21 each × 10, 16 × 1) and 133
+windowless + 7 single-`-1` decisions in the 7-snapshot subgroup (19
+windowless + 1 single-`-1` per snapshot, 140 total). The earlier topology
+attributing all 359 to the 11-snapshot subgroup is superseded.
+
+### Zero-write and read-only guarantee
+
+The command uses ordinary read queries through `loadRemediationState` and a
+separate read-only `createdAt` metadata query, then aggregates in pure code.
+It never invokes remediation apply, manifest resolution, migrations, schema
+mutation, snapshot rewrite/deletion or retention pruning. Focused
+integration tests capture canonical database state before and after a run
+and assert exact equality.
+
+### #404 run procedure (Issue #432 handoff)
+
+1. Install the reviewed merge commit without running migrations; confirm a
+   clean checkout at the exact expected commit and a healthy service.
+2. Create or retain the required #404 backup according to the documented
+   backup command — this evidence command is not migration authorization.
+3. Run the command once, writing outputs **outside the repository** (e.g.
+   `~/.monrad-estimator/ops/…/snapshot-evidence.json` and `.md`) with
+   restrictive permissions (directory 700, files 600).
+4. Verify fingerprint, baseline and reviewed counts against the handoff
+   values above (or the values recorded in the reviewed PR description).
+5. Post only the sanitized Markdown summary and the output file hashes to
+   Issue #404; never post or copy complete snapshot payloads or the useful
+   database.
+6. Return the evidence to Issue #430 for design review.
+7. Stop on any drift, mismatch, redaction failure or reconciliation failure.
+
+### Stop conditions and scope confirmation
+
+The command output is evidence only. It does **not** authorize remediation
+apply, migration deployment, manifest creation or decision selection.
+#404 and #418 remain blocked until the evidence is reviewed under #430.
+
 ## #404 Production handoff procedure
 
 The production machine must execute exactly these steps; stop on any failure
