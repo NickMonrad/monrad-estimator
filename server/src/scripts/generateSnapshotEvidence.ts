@@ -48,7 +48,9 @@
  */
 
 import { execSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
@@ -124,6 +126,87 @@ function usage(): string {
 function controlledFailure(reason: string): number {
   console.error(`❌ snapshot evidence command refused: ${reason}`)
   return 1
+}
+
+// ─── Two-file publication (all-or-nothing) ─────────────────────────────────
+
+/** Test-only failure injection phases; production callers never pass hooks. */
+export type EvidencePublishPhase =
+  | 'stage-json'
+  | 'stage-markdown'
+  | 'publish-json'
+  | 'publish-markdown'
+
+export interface EvidencePublishHooks {
+  failOn?: (phase: EvidencePublishPhase) => void
+}
+
+/**
+ * Publish the JSON and Markdown outputs atomically as a set:
+ *
+ * 1. both complete strings are staged into exclusive temporary files (mode
+ *    0600) inside the corresponding output directories;
+ * 2. only after both temporaries are written and closed are the final paths
+ *    published with same-directory renames;
+ * 3. any staging or publication failure removes every temporary file and any
+ *    final file published by THIS run, leaves pre-existing files untouched,
+ *    and rethrows (the CLI converts it to a controlled error + exit 1);
+ * 4. on success both finals exist with mode 0600 (renames preserve the temp
+ *    modes) and no temporary files remain.
+ *
+ * Final paths are never overwritten: callers preflight existence.
+ */
+export function publishEvidenceOutputs(
+  jsonPath: string,
+  markdownPath: string,
+  jsonContent: string,
+  markdownContent: string,
+  hooks?: EvidencePublishHooks,
+): void {
+  const tempPaths: string[] = []
+  const published: string[] = []
+  const fail = (phase: EvidencePublishPhase): void => {
+    if (hooks?.failOn) hooks.failOn(phase)
+  }
+  const cleanup = (): void => {
+    for (const temp of tempPaths) {
+      try { rmSync(temp, { force: true }) } catch { /* best-effort */ }
+    }
+    for (const final of published) {
+      try { rmSync(final, { force: true }) } catch { /* best-effort */ }
+    }
+  }
+  const tempPathFor = (finalPath: string): string => {
+    const dir = path.dirname(finalPath)
+    const base = path.basename(finalPath)
+    return path.join(dir, `.${base}.evidence-${randomBytes(8).toString('hex')}.tmp`)
+  }
+  const stage = (finalPath: string, content: string, phase: EvidencePublishPhase): string => {
+    const temp = tempPathFor(finalPath)
+    tempPaths.push(temp)
+    const fd = openSync(temp, 'wx', 0o600)
+    try {
+      writeFileSync(fd, content, 'utf8')
+    } finally {
+      closeSync(fd)
+    }
+    fail(phase)
+    return temp
+  }
+
+  try {
+    const jsonTemp = stage(jsonPath, jsonContent, 'stage-json')
+    const markdownTemp = stage(markdownPath, markdownContent, 'stage-markdown')
+    renameSync(jsonTemp, jsonPath)
+    published.push(jsonPath)
+    fail('publish-json')
+    renameSync(markdownTemp, markdownPath)
+    published.push(markdownPath)
+    fail('publish-markdown')
+  } catch (error) {
+    cleanup()
+    throw error
+  }
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
@@ -208,8 +291,11 @@ export async function main(argv: string[]): Promise<number> {
     const json = `${JSON.stringify(report, null, 2)}\n`
     const markdown = renderSnapshotEvidenceMarkdown(report)
 
-    writeFileSync(options.jsonPath!, json, { encoding: 'utf-8', flag: 'wx' })
-    writeFileSync(options.markdownPath!, markdown, { encoding: 'utf-8', flag: 'wx' })
+    try {
+      publishEvidenceOutputs(options.jsonPath!, options.markdownPath!, json, markdown)
+    } catch {
+      return controlledFailure('output publication failed — no partial evidence set was left behind')
+    }
 
     console.log(`✅ fingerprint matched (${report.observedBoundary.fingerprint.slice(0, 12)}…)`)
     console.log(`✅ baseline-state hash matched (${report.observedBoundary.baselineStateHash.slice(0, 12)}…)`)

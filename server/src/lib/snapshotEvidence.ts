@@ -24,8 +24,9 @@
  * metadata, reviewed expectations); performs zero writes; contains no I/O.
  */
 
-import { parseSnapshotData, isSnapshotV2, type SnapshotData, type SnapshotV2, type SnapshotResourceType, type SnapshotNamedResource } from './projectSnapshotTypes.js'
+  import { parseSnapshotData, isSnapshotV2, type SnapshotData, type SnapshotV2, type SnapshotResourceType, type SnapshotNamedResource } from './projectSnapshotTypes.js'
 import {
+  isKnownV2Mode,
   v2EffectiveNamedMode,
   v2ResourceTypeEntryErrors,
   v2NamedResourceEntryErrors,
@@ -121,7 +122,11 @@ export interface SnapshotEvidenceExpected {
   liveDecisions: number
   unsupported: number
   rewriteOperations: number
-  /** Corrected topology: 11-snapshot windowless-only subgroup. */
+  /** Corrected topology: 11-snapshot windowless-only subgroup snapshot count. */
+  topology11Snapshots: number
+  /** Corrected topology: 7-snapshot single-`-1` subgroup snapshot count. */
+  topology7Snapshots: number
+  /** Corrected topology: 11-snapshot windowless-only subgroup decisions. */
   topology11WindowlessDecisions: number
   /** Corrected topology: 7-snapshot subgroup windowless decisions. */
   topology7WindowlessDecisions: number
@@ -183,9 +188,10 @@ export interface SnapshotEvidenceReport {
     entryKind: OwnerKindCategory
     minusOneField: MinusOneField
     alternateAliasState: AlternateAliasState
-    rawMode: string | null
-    parentMode: string | null
-    effectiveMode: string | null
+    /** Sanitized mode values only (fixed evidence vocabulary). */
+    rawMode: SanitizedMode
+    parentMode: SanitizedMode
+    effectiveMode: SanitizedMode
     modeSource: NamedModeSourceCategory
     allocationPercentCategory: PercentCategory
     allocationPctCategory: PercentCategory
@@ -264,19 +270,48 @@ export function isExpectedBoundaryShape(value: unknown): value is SnapshotEviden
   return (
     typeof v.fingerprint === 'string' && isHex64(v.fingerprint) &&
     typeof v.baselineStateHash === 'string' && isHex64(v.baselineStateHash) &&
-    typeof v.quarantinedEntries === 'number' && Number.isInteger(v.quarantinedEntries) &&
-    typeof v.quarantinedSnapshots === 'number' && Number.isInteger(v.quarantinedSnapshots) &&
-    typeof v.defectSnapshots === 'number' && Number.isInteger(v.defectSnapshots) &&
-    typeof v.windowlessDecisions === 'number' && Number.isInteger(v.windowlessDecisions) &&
-    typeof v.singleMinusOneDecisions === 'number' && Number.isInteger(v.singleMinusOneDecisions) &&
-    typeof v.snapshotDecisions === 'number' && Number.isInteger(v.snapshotDecisions) &&
-    typeof v.liveDecisions === 'number' && Number.isInteger(v.liveDecisions) &&
-    typeof v.unsupported === 'number' && Number.isInteger(v.unsupported) &&
-    typeof v.rewriteOperations === 'number' && Number.isInteger(v.rewriteOperations) &&
-    typeof v.topology11WindowlessDecisions === 'number' && Number.isInteger(v.topology11WindowlessDecisions) &&
-    typeof v.topology7WindowlessDecisions === 'number' && Number.isInteger(v.topology7WindowlessDecisions) &&
-    typeof v.topology7SingleMinusOneDecisions === 'number' && Number.isInteger(v.topology7SingleMinusOneDecisions)
+    typeof v.quarantinedEntries === 'number' && Number.isInteger(v.quarantinedEntries) && v.quarantinedEntries >= 0 &&
+    typeof v.quarantinedSnapshots === 'number' && Number.isInteger(v.quarantinedSnapshots) && v.quarantinedSnapshots >= 0 &&
+    typeof v.defectSnapshots === 'number' && Number.isInteger(v.defectSnapshots) && v.defectSnapshots >= 0 &&
+    typeof v.windowlessDecisions === 'number' && Number.isInteger(v.windowlessDecisions) && v.windowlessDecisions >= 0 &&
+    typeof v.singleMinusOneDecisions === 'number' && Number.isInteger(v.singleMinusOneDecisions) && v.singleMinusOneDecisions >= 0 &&
+    typeof v.snapshotDecisions === 'number' && Number.isInteger(v.snapshotDecisions) && v.snapshotDecisions >= 0 &&
+    typeof v.liveDecisions === 'number' && Number.isInteger(v.liveDecisions) && v.liveDecisions >= 0 &&
+    typeof v.unsupported === 'number' && Number.isInteger(v.unsupported) && v.unsupported >= 0 &&
+    typeof v.rewriteOperations === 'number' && Number.isInteger(v.rewriteOperations) && v.rewriteOperations >= 0 &&
+    typeof v.topology11Snapshots === 'number' && Number.isInteger(v.topology11Snapshots) && v.topology11Snapshots >= 0 &&
+    typeof v.topology7Snapshots === 'number' && Number.isInteger(v.topology7Snapshots) && v.topology7Snapshots >= 0 &&
+    typeof v.topology11WindowlessDecisions === 'number' && Number.isInteger(v.topology11WindowlessDecisions) && v.topology11WindowlessDecisions >= 0 &&
+    typeof v.topology7WindowlessDecisions === 'number' && Number.isInteger(v.topology7WindowlessDecisions) && v.topology7WindowlessDecisions >= 0 &&
+    typeof v.topology7SingleMinusOneDecisions === 'number' && Number.isInteger(v.topology7SingleMinusOneDecisions) && v.topology7SingleMinusOneDecisions >= 0
   )
+}
+
+/**
+ * Fixed evidence mode values. Arbitrary historical mode strings are never
+ * copied into evidence output: known modes pass through, unknown or
+ * malformed strings map to `other`, absent values map to null. The allowed
+ * known set is exactly the repository's current known allocation modes
+ * (checked through the shared `isKnownV2Mode` helper — no second list).
+ */
+export type SanitizedMode =
+  | 'TIMELINE'
+  | 'CAPACITY_PLAN'
+  | 'EFFORT'
+  | 'FULL_PROJECT'
+  | null
+  | 'other'
+  | 'unavailable'
+
+/** Pure mode normalization for outward-facing evidence only. */
+export function sanitizeMode(value: string | null | undefined): SanitizedMode {
+  if (value == null) return null
+  if (isKnownV2Mode(value)) {
+    // isKnownV2Mode is the shared known-mode check; the result is a known
+    // mode by construction.
+    return value as Exclude<SanitizedMode, null | 'other' | 'unavailable'>
+  }
+  return 'other'
 }
 
 /** Deterministic percentage bucket used for evidence only. */
@@ -663,9 +698,9 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     entryKind: OwnerKindCategory
     minusOneField: MinusOneField
     alternateAliasState: AlternateAliasState
-    rawMode: string | null
-    parentMode: string | null
-    effectiveMode: string | null
+    rawMode: SanitizedMode
+    parentMode: SanitizedMode
+    effectiveMode: SanitizedMode
     modeSource: NamedModeSourceCategory
     allocationPercentCategory: PercentCategory
     allocationPctCategory: PercentCategory
@@ -700,15 +735,15 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
       if (finding.classification !== 'decisionRequired') continue
       if (!finding.message.includes(SINGLE_NEGATIVE_DECISION_MESSAGE)) continue
 
-      let rawMode: string | null
-      let parentMode: string | null
+      let rawMode: SanitizedMode
+      let parentMode: SanitizedMode
       let percent: number | null | undefined
       let pct: number | null | undefined
       let aliasState: AlternateAliasState
       let sanitizedForKey: Record<string, unknown>
       if (kind === 'resourceType') {
         const rt = raw as SnapshotResourceType
-        rawMode = rt.allocationMode ?? null
+        rawMode = sanitizeMode(rt.allocationMode)
         parentMode = null
         percent = rt.allocationPercent
         aliasState = aliasStateFor(rt.allocationStartWeek, rt.allocationEndWeek, null, null, entry.minusOneFields[0])
@@ -721,8 +756,8 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
         }
       } else {
         const nr = raw as SnapshotNamedResource
-        rawMode = nr.allocationMode ?? null
-        parentMode = rtById.get(nr.resourceTypeId ?? '')?.allocationMode ?? null
+        rawMode = sanitizeMode(nr.allocationMode)
+        parentMode = sanitizeMode(rtById.get(nr.resourceTypeId ?? '')?.allocationMode)
         percent = nr.allocationPercent
         pct = nr.allocationPct
         aliasState = aliasStateFor(
@@ -731,7 +766,7 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
         )
         sanitizedForKey = {
           kind: entry.kind,
-          mode: nr.allocationMode ?? null,
+          mode: rawMode,
           percent: nr.allocationPercent ?? null,
           pct: nr.allocationPct ?? null,
           asw: nr.allocationStartWeek ?? null,
@@ -748,7 +783,7 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
         alternateAliasState: aliasState,
         rawMode,
         parentMode,
-        effectiveMode: entry.effectiveMode,
+        effectiveMode: sanitizeMode(entry.effectiveMode),
         modeSource: entry.modeSource,
         allocationPercentCategory: percentCategory(percent),
         allocationPctCategory: percentCategory(pct),
@@ -791,7 +826,7 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
       for (const category of entry.entryErrorCategories) entryErrors[category]++
       sanitizedEntries.push({
         kind: entry.kind,
-        mode: entry.effectiveMode,
+        mode: sanitizeMode(entry.effectiveMode),
         source: entry.modeSource,
         errors: entry.entryErrorCategories,
       })
@@ -902,6 +937,10 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     check('live decisions', liveDecisions, expected.liveDecisions),
     check('unsupported findings', plan.summary.findings.unsupported, expected.unsupported),
     check('rewrite operations', rewriteOperations, expected.rewriteOperations),
+    check('topology 11 subgroup snapshots', elevenRecords.length, expected.topology11Snapshots),
+    check('topology 7 subgroup snapshots', sevenRecords.length, expected.topology7Snapshots),
+    check('expected subgroup snapshot sum = expected defect snapshots', expected.topology11Snapshots + expected.topology7Snapshots, expected.defectSnapshots),
+    check('observed subgroup snapshots = observed defect snapshots', elevenRecords.length + sevenRecords.length, defectSnapshots),
     check('topology 11 subgroup windowless', elevenWindowless, expected.topology11WindowlessDecisions),
     check('topology 7 subgroup windowless', sevenWindowless, expected.topology7WindowlessDecisions),
     check('topology 7 subgroup single -1', sevenSingle, expected.topology7SingleMinusOneDecisions),
@@ -1083,14 +1122,15 @@ export function renderSnapshotEvidenceMarkdown(report: SnapshotEvidenceReport): 
   if (report.singleNegativeEntries.length > 0) {
     lines.push('## Single -1 + null entries')
     lines.push('')
-    lines.push('| Label | Kind | -1 field | Alternate aliases | Raw mode | Parent mode | Effective mode | Mode source | allocationPercent | allocationPct | Entry errors | Independent defect |')
-    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|')
+    lines.push('| Label | Kind | -1 field | Alternate aliases | Raw mode | Parent mode | Effective mode | Mode source | allocationPercent | allocationPct | Entry errors | Structural errors | Independent defect |')
+    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|')
     for (const entry of report.singleNegativeEntries) {
       lines.push([
         entry.label, entry.entryKind, entry.minusOneField, entry.alternateAliasState,
         entry.rawMode ?? 'null', entry.parentMode ?? 'null', entry.effectiveMode ?? 'null', entry.modeSource,
         entry.allocationPercentCategory, entry.allocationPctCategory,
-        entry.entryErrorCategories.join(','), entry.independentDefect,
+        entry.entryErrorCategories.join(','), entry.structuralErrorCategories.join(','),
+        entry.independentDefect,
       ].join(' | '))
     }
     lines.push('')
@@ -1098,11 +1138,12 @@ export function renderSnapshotEvidenceMarkdown(report: SnapshotEvidenceReport): 
   if (report.defectSnapshots.length > 0) {
     lines.push('## Defect-classified snapshots')
     lines.push('')
-    lines.push('| Label | Subgroup | Windowless decisions | Single -1 decisions | Already valid | Quarantined | Unsupported | Entry error categories | Structural categories | Independent defect |')
-    lines.push('|---|---|---|---|---|---|---|---|---|---|')
+    lines.push('| Label | Subgroup | Windowless decisions | Single -1 decisions | Other decision reasons | Already valid | Quarantined | Unsupported | Entry error categories | Structural categories | Independent defect |')
+    lines.push('|---|---|---|---|---|---|---|---|---|---|---|')
     for (const snapshot of report.defectSnapshots) {
       lines.push([
         snapshot.label, snapshot.subgroup, snapshot.windowlessDecisionCount, snapshot.singleMinusOneDecisionCount,
+        summarizeCounts(snapshot.otherDecisionRequiredCounts),
         snapshot.alreadyValidCount, snapshot.quarantinedCount, snapshot.unsupportedCount,
         summarizeCounts(snapshot.entryErrorCategories), summarizeCounts(snapshot.structuralErrorCategories),
         snapshot.independentDefect,
@@ -1120,6 +1161,20 @@ export function renderSnapshotEvidenceMarkdown(report: SnapshotEvidenceReport): 
   lines.push(`- snapshotsByOwnerKindMix: ${JSON.stringify(report.classAAggregates.snapshotsByOwnerKindMix)}`)
   lines.push(`- entriesByEra: ${JSON.stringify(report.classAAggregates.entriesByEra)} (timestamp is not proof of the exact historical writer)`)
   lines.push(`- snapshotsByEra: ${JSON.stringify(report.classAAggregates.snapshotsByEra)}`)
+  lines.push('')
+  lines.push('### Class A percentage evidence (by owner kind / mode source)')
+  lines.push('')
+  lines.push('| Category | allocationPercent buckets | allocationPct buckets |')
+  lines.push('|---|---|---|')
+  for (const category of ['resourceType', 'explicit', 'inherited', 'other', 'unavailable'] as const) {
+    const byCategory = report.classAAggregates.percentageByCategory[category]
+    if (!byCategory) continue
+    lines.push([
+      category,
+      summarizeCounts(byCategory.allocationPercent),
+      summarizeCounts(byCategory.allocationPct),
+    ].join(' | '))
+  }
   lines.push('')
   lines.push('## Reconciliation')
   lines.push('')

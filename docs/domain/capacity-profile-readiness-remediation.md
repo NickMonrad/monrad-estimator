@@ -403,11 +403,15 @@ hard-coded as application constants. Shape:
   "liveDecisions": 130,
   "unsupported": 0,
   "rewriteOperations": 0,
+  "topology11Snapshots": 11,
+  "topology7Snapshots": 7,
   "topology11WindowlessDecisions": 226,
   "topology7WindowlessDecisions": 133,
   "topology7SingleMinusOneDecisions": 7
 }
 ```
+
+The reviewed subgroup **snapshot counts** (`topology11Snapshots`, `topology7Snapshots`) are gated explicitly: reconciliation fails unless the observed eleven-subgroup and seven-subgroup snapshot counts match, the expected subgroup sum equals `defectSnapshots`, and the observed subgroup counts sum to the observed defect-snapshot count. The reviewed subgroup decision totals (`topology11WindowlessDecisions` 226, `topology7WindowlessDecisions` 133, `topology7SingleMinusOneDecisions` 7) remain gated as before. A 10/8 subgroup split with otherwise matching decision totals is refused.
 
 Current reviewed production values (Issue #404 comment `5172781179`):
 fingerprint `eccf77edde816d59d2625b7988175f41dfa14f2ca792483bfcb2c271ba2130dc`,
@@ -431,9 +435,23 @@ Versioned JSON (`formatVersion: 1`) with `runMetadata`, `expectedBoundary`,
 `observedBoundary`, `integrityResult`, `topology`, `singleNegativeEntries`
 (S1… labels), `defectSnapshots` (M1… labels), `classAAggregates`,
 `unavailableEvidence`, `reconciliation` and `policyDecision:
-"not-assessed"`. Markdown is rendered from the same evidence object, so JSON
-and Markdown cannot diverge. Output ordering is deterministic apart from the
-explicit run timestamp.
+"not-assessed"`. Markdown is rendered from the same evidence object and
+carries **all** evidence categories required by the #430 review: S-record
+entry and structural error categories, exact sanitized mode categories,
+percentage categories and the independent-defect classification; M-record
+subgroup, per-snapshot decision counts (windowless, single-`-1`, and other
+decision-required reasons), alreadyValid/quarantined/unsupported counts,
+entry and structural error categories; and the complete Class A percentage
+evidence split by owner kind / mode source (`resourceType`, `explicit`,
+`inherited`, `other`, `unavailable` × `allocationPercent`/`allocationPct` ×
+every bucket). Output ordering is deterministic apart from the explicit run
+timestamp.
+
+Unknown or malformed historical mode strings are never copied into evidence
+output: the command normalizes every outward-facing mode value to the fixed
+vocabulary (`TIMELINE`, `CAPACITY_PLAN`, `EFFORT`, `FULL_PROJECT`, `null`,
+`other`), and unknown strings render only as `other`. This applies to JSON,
+Markdown and the content-derived labels.
 
 The command prevents output of project/snapshot/owner/finding/decision IDs,
 names, complete payloads, credentials and database details by construction
@@ -441,6 +459,17 @@ names, complete payloads, credentials and database details by construction
 serialized output for seeded sensitive fixture values and fail if any
 appear. Runtime errors are converted to controlled reason codes and concise
 safe messages.
+
+### Output publication (all-or-nothing)
+
+Both output files are published as a set: both complete strings are staged
+into exclusive temporary files (mode `0600`) in the corresponding output
+directories, and only after both are written and closed are the final paths
+published with same-directory renames. Any staging or publication failure
+removes every temporary file and any final file published by that run
+(leaving pre-existing files untouched), emits a controlled error and exits
+`1`. On success both finals exist with mode `0600` and no temporary files
+remain. Existing final files are never silently overwritten.
 
 ### Corrected 18-snapshot topology (evidence basis)
 

@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PrismaPg } from '@prisma/adapter-pg'
@@ -234,6 +234,8 @@ async function expectedBoundary(): Promise<SnapshotEvidenceExpected> {
     liveDecisions: 0,
     unsupported: 0,
     rewriteOperations: 0,
+    topology11Snapshots: 2,
+    topology7Snapshots: 1,
     topology11WindowlessDecisions: 37,
     topology7WindowlessDecisions: 19,
     topology7SingleMinusOneDecisions: 1,
@@ -278,6 +280,13 @@ describeIf('snapshot evidence command (integration)', () => {
       elevenSnapshotSubgroup: { snapshots: 2, windowlessDecisions: 37 },
       sevenSnapshotSubgroup: { snapshots: 1, windowlessDecisions: 19, singleMinusOneDecisions: 1, totalDecisions: 20 },
     })
+
+    // Output file modes (POSIX only) and no temporary residue.
+    if (process.platform !== 'win32') {
+      expect(statSync(jsonPath).mode & 0o777).toBe(0o600)
+      expect(statSync(mdPath).mode & 0o777).toBe(0o600)
+    }
+    expect(readdirSync(dir).filter(name => name.includes('.tmp'))).toEqual([])
     expect(report.classAAggregates.totalEntries).toBe(3)
     expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 2, namedResource: 1, unavailable: 0 })
     expect(report.singleNegativeEntries).toHaveLength(1)

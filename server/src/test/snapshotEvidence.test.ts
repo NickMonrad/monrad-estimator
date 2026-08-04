@@ -11,6 +11,9 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import {
   buildSnapshotEvidenceReport,
@@ -18,10 +21,12 @@ import {
   isExpectedBoundaryShape,
   percentCategory,
   renderSnapshotEvidenceMarkdown,
+  sanitizeMode,
   snapshotEraCategory,
   SnapshotEvidenceError,
   type SnapshotEvidenceExpected,
 } from '../lib/snapshotEvidence.js'
+import { publishEvidenceOutputs } from '../scripts/generateSnapshotEvidence.js'
 import {
   buildRemediationPlan,
   computePlanFingerprint,
@@ -251,6 +256,8 @@ const COMPOSITE_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baseline
   liveDecisions: 0,
   unsupported: 0,
   rewriteOperations: 0,
+  topology11Snapshots: 1,
+  topology7Snapshots: 1,
   topology11WindowlessDecisions: 20,
   topology7WindowlessDecisions: 19,
   topology7SingleMinusOneDecisions: 1,
@@ -291,6 +298,7 @@ describe('isExpectedBoundaryShape', () => {
     quarantinedEntries: 574, quarantinedSnapshots: 49, defectSnapshots: 18,
     windowlessDecisions: 359, singleMinusOneDecisions: 7, snapshotDecisions: 366,
     liveDecisions: 130, unsupported: 0, rewriteOperations: 0,
+    topology11Snapshots: 11, topology7Snapshots: 7,
     topology11WindowlessDecisions: 226, topology7WindowlessDecisions: 133,
     topology7SingleMinusOneDecisions: 7,
   }
@@ -301,6 +309,8 @@ describe('isExpectedBoundaryShape', () => {
     expect(isExpectedBoundaryShape({ ...base, fingerprint: 'zz' })).toBe(false)
     expect(isExpectedBoundaryShape({ ...base, baselineStateHash: 'Z'.repeat(64) })).toBe(false)
     expect(isExpectedBoundaryShape({ ...base, quarantinedEntries: 574.5 })).toBe(false)
+    expect(isExpectedBoundaryShape({ ...base, topology11Snapshots: 11.5 })).toBe(false)
+    expect(isExpectedBoundaryShape({ ...base, topology7Snapshots: -1 })).toBe(false)
     const missing = { ...base }
     delete (missing as Partial<SnapshotEvidenceExpected>).fingerprint
     expect(isExpectedBoundaryShape(missing)).toBe(false)
@@ -440,6 +450,40 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
     expect(markdown).toContain('This report is evidence only.')
   })
 
+  it('Markdown carries every required Issue #432/#430 evidence category', () => {
+    const report = buildReport(state, COMPOSITE_COUNTS)
+    const markdown = renderSnapshotEvidenceMarkdown(report)
+    // Topology snapshot and decision counts for both subgroups.
+    expect(markdown).toContain('11-snapshot subgroup: 1 snapshots, 20 windowless decisions')
+    expect(markdown).toContain('7-snapshot subgroup: 1 snapshots, 19 windowless + 1 single-(-1) = 20 total decisions')
+    // S records: entry errors AND structural errors, modes, percentages, defect class.
+    const sRow = markdown.split('\n').find(line => line.startsWith('S1 |'))!
+    expect(sRow).toContain('negative-one-window-value')
+    expect(sRow).toContain('profile-window')
+    expect(sRow).toContain('CAPACITY_PLAN')
+    expect(sRow).toContain('hundred')
+    expect(sRow).toContain('both')
+    // M records: other decision reasons column plus entry/structural categories.
+    expect(markdown).toContain('Other decision reasons')
+    const elevenRow = markdown.split('\n').find(line => line.includes('eleven-windowless-only'))!
+    expect(elevenRow).toContain('alias-conflict:1')
+    // Class A percentage evidence for every category (resourceType/explicit/inherited/other/unavailable).
+    expect(markdown).toContain('### Class A percentage evidence (by owner kind / mode source)')
+    expect(markdown).toContain('| Category | allocationPercent buckets | allocationPct buckets |')
+    const resourceTypeRow = markdown.split('\n').find(line => line.startsWith('resourceType |'))!
+    expect(resourceTypeRow).toContain('hundred:2')
+    const inheritedRow = markdown.split('\n').find(line => line.startsWith('inherited |'))!
+    expect(inheritedRow).toContain('hundred:1')
+    expect(markdown).toContain('explicit |')
+    expect(markdown).toContain('other |')
+    expect(markdown).toContain('unavailable |')
+    // JSON carries the same categories (parity over the same evidence object).
+    const json = JSON.stringify(report)
+    expect(json).toContain('profile-window')
+    expect(json).toContain('alias-conflict')
+    expect(json).toContain('percentageByCategory')
+  })
+
   it('fails closed on fingerprint mismatch without policy involvement', () => {
     const counts = { ...COMPOSITE_COUNTS }
     const plan = buildRemediationPlan(state, 'test-commit')
@@ -525,6 +569,7 @@ describe('all four raw -1 orientations', () => {
         quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
         windowlessDecisions: 0, singleMinusOneDecisions: 1, snapshotDecisions: 1,
         liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+        topology11Snapshots: 0, topology7Snapshots: 1,
         topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
         topology7SingleMinusOneDecisions: 1,
       }
@@ -555,6 +600,7 @@ describe('all four raw -1 orientations', () => {
       quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
       windowlessDecisions: 1, singleMinusOneDecisions: 0, snapshotDecisions: 1,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 1, topology7Snapshots: 0,
       topology11WindowlessDecisions: 1, topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
@@ -566,8 +612,225 @@ describe('all four raw -1 orientations', () => {
   })
 })
 
-describe('structural defect classification', () => {
-  it('classifies a duplicate-owner structural defect as structural', () => {
+describe('sanitizeMode', () => {
+  it('passes known modes, nulls absent values, maps unknown strings to other', () => {
+    expect(sanitizeMode('TIMELINE')).toBe('TIMELINE')
+    expect(sanitizeMode('CAPACITY_PLAN')).toBe('CAPACITY_PLAN')
+    expect(sanitizeMode('EFFORT')).toBe('EFFORT')
+    expect(sanitizeMode('FULL_PROJECT')).toBe('FULL_PROJECT')
+    expect(sanitizeMode(null)).toBe(null)
+    expect(sanitizeMode(undefined)).toBe(null)
+    expect(sanitizeMode('TOTALLY-BOGUS-MODE-SECRET-1')).toBe('other')
+    expect(sanitizeMode('')).toBe('other')
+  })
+})
+
+describe('subgroup snapshot-count gating', () => {
+  function subgroupMismatchState(): RemediationDatabaseState {
+    // 10 eleven-subgroup snapshots (1 windowless RT + 1 alias-conflict NR
+    // each) + 8 seven-subgroup snapshots (1 windowless RT + 1 single-`-1`
+    // NR each) = 18 defect snapshots.
+    const snapshots: StateSnapshot[] = []
+    for (let i = 0; i < 10; i++) {
+      snapshots.push({
+        id: `snap-eleven-${i}`,
+        projectId: PROJECT_ID,
+        payload: makeV2Snapshot(
+          [makeRt({ id: `rt-e-${i}`, allocationMode: 'CAPACITY_PLAN' })],
+          [makeNr({
+            id: `nr-e-${i}`,
+            resourceTypeId: `rt-e-${i}`,
+            allocationMode: null,
+            allocationStartWeek: 5,
+            allocationEndWeek: 10,
+            startWeek: 5,
+            endWeek: 9,
+          })],
+        ),
+      })
+    }
+    for (let i = 0; i < 8; i++) {
+      snapshots.push({
+        id: `snap-seven-${i}`,
+        projectId: PROJECT_ID,
+        payload: makeV2Snapshot(
+          [makeRt({ id: `rt-s-${i}`, allocationMode: 'CAPACITY_PLAN' })],
+          [makeNr({
+            id: `nr-s-${i}`,
+            resourceTypeId: `rt-s-${i}`,
+            allocationMode: 'CAPACITY_PLAN',
+            allocationStartWeek: -1,
+            allocationEndWeek: 5,
+            startWeek: 5,
+            endWeek: null,
+          })],
+        ),
+      })
+    }
+    return makeState(snapshots)
+  }
+  const SUBGROUP_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 18,
+    windowlessDecisions: 18, singleMinusOneDecisions: 8, snapshotDecisions: 26,
+    liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+    topology11Snapshots: 10, topology7Snapshots: 8,
+    topology11WindowlessDecisions: 10, topology7WindowlessDecisions: 8,
+    topology7SingleMinusOneDecisions: 8,
+  }
+
+  it('accepts matching subgroup snapshot counts', () => {
+    const report = buildReport(subgroupMismatchState(), SUBGROUP_COUNTS)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.topology.elevenSnapshotSubgroup.snapshots).toBe(10)
+    expect(report.topology.sevenSnapshotSubgroup.snapshots).toBe(8)
+  })
+
+  it('refuses 10/8 observed subgroups against 11/7 expected snapshot counts even with matching decision totals', () => {
+    const report = buildReport(subgroupMismatchState(), {
+      ...SUBGROUP_COUNTS,
+      topology11Snapshots: 11,
+      topology7Snapshots: 7,
+    })
+    expect(report.integrityResult.reconciliationPassed).toBe(false)
+    expect(report.reconciliation.details.some(d => d.includes('topology 11 subgroup snapshots') && d.includes('MISMATCH'))).toBe(true)
+    expect(report.reconciliation.details.some(d => d.includes('topology 7 subgroup snapshots') && d.includes('MISMATCH'))).toBe(true)
+  })
+
+  it('refuses an expected subgroup snapshot sum inconsistent with defectSnapshots', () => {
+    // Expected 10 + 9 = 19 while defectSnapshots = 18: refused even though
+    // the observed 10 + 8 = 18 is internally consistent.
+    const report = buildReport(subgroupMismatchState(), {
+      ...SUBGROUP_COUNTS,
+      topology11Snapshots: 10,
+      topology7Snapshots: 9,
+    })
+    expect(report.integrityResult.reconciliationPassed).toBe(false)
+    expect(report.reconciliation.details.some(d => d.includes('expected subgroup snapshot sum = expected defect snapshots') && d.includes('MISMATCH'))).toBe(true)
+  })
+})
+
+describe('mode redaction', () => {
+  it('never emits arbitrary historical mode strings in JSON or Markdown', () => {
+    const BOGUS_NR = 'TOTALLY-BOGUS-MODE-SECRET-1'
+    const BOGUS_PARENT = 'BOGUS-PARENT-SECRET-2'
+    const state = makeState([{
+      id: 'snap-bogus',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-1', allocationMode: BOGUS_PARENT })],
+        [makeNr({ id: 'nr-1', resourceTypeId: 'rt-1', allocationMode: BOGUS_NR, startWeek: 0, endWeek: 5, allocationStartWeek: 0, allocationEndWeek: 5 })],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+      liveDecisions: 0, unsupported: 2, rewriteOperations: 0,
+      topology11Snapshots: 1, topology7Snapshots: 0,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.defectSnapshots[0]!.unsupportedCount).toBe(2)
+    expect(report.defectSnapshots[0]!.entryErrorCategories['unknown-mode']).toBe(2)
+    const json = JSON.stringify(report)
+    const markdown = renderSnapshotEvidenceMarkdown(report)
+    expect(json).not.toContain(BOGUS_NR)
+    expect(json).not.toContain(BOGUS_PARENT)
+    expect(markdown).not.toContain(BOGUS_NR)
+    expect(markdown).not.toContain(BOGUS_PARENT)
+  })
+
+  it('sanitizes the S record parent mode (bogus parent string becomes other)', () => {
+    const BOGUS_PARENT = 'BOGUS-PARENT-SECRET-2'
+    const state = makeState([{
+      id: 'snap-p',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-1', allocationMode: BOGUS_PARENT })],
+        [makeNr({ id: 'nr-1', resourceTypeId: 'rt-1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5, startWeek: 5, endWeek: null })],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+      windowlessDecisions: 0, singleMinusOneDecisions: 1, snapshotDecisions: 1,
+      liveDecisions: 0, unsupported: 1, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 1,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 1,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    const s = report.singleNegativeEntries[0]!
+    expect(s.parentMode).toBe('other')
+    expect(s.effectiveMode).toBe('CAPACITY_PLAN')
+    expect(JSON.stringify(report)).not.toContain(BOGUS_PARENT)
+  })
+})
+
+describe('publishEvidenceOutputs', () => {
+  it('publishes both files with mode 0600 and leaves no temporaries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-pub-'))
+    try {
+      const json = path.join(dir, 'out.json')
+      const md = path.join(dir, 'out.md')
+      publishEvidenceOutputs(json, md, '{"a":1}', '# markdown')
+      expect(readFileSync(json, 'utf8')).toBe('{"a":1}')
+      expect(readFileSync(md, 'utf8')).toBe('# markdown')
+      if (process.platform !== 'win32') {
+        expect(statSync(json).mode & 0o777).toBe(0o600)
+        expect(statSync(md).mode & 0o777).toBe(0o600)
+      }
+      expect(readdirSync(dir).sort()).toEqual(['out.json', 'out.md'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('failure while staging the second output leaves neither final output and no temporaries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-pub-'))
+    try {
+      const json = path.join(dir, 'out.json')
+      const md = path.join(dir, 'out.md')
+      expect(() => publishEvidenceOutputs(json, md, 'json', 'md', {
+        failOn: phase => { if (phase === 'stage-markdown') throw new Error('injected staging failure') },
+      })).toThrow('injected staging failure')
+      expect(readdirSync(dir)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('failure while publishing the first output removes it and all temporaries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-pub-'))
+    try {
+      const json = path.join(dir, 'out.json')
+      const md = path.join(dir, 'out.md')
+      expect(() => publishEvidenceOutputs(json, md, 'json', 'md', {
+        failOn: phase => { if (phase === 'publish-json') throw new Error('injected publish failure') },
+      })).toThrow('injected publish failure')
+      expect(readdirSync(dir)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('failure while publishing the second output cleans up the first final output and all temporaries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'evidence-pub-'))
+    try {
+      const json = path.join(dir, 'out.json')
+      const md = path.join(dir, 'out.md')
+      expect(() => publishEvidenceOutputs(json, md, 'json', 'md', {
+        failOn: phase => { if (phase === 'publish-markdown') throw new Error('injected second publish failure') },
+      })).toThrow('injected second publish failure')
+      expect(readdirSync(dir)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('structural defect classification', () => {  it('classifies a duplicate-owner structural defect as structural', () => {
     const state = makeState([{
       id: 'snap-dup',
       projectId: PROJECT_ID,
@@ -583,6 +846,7 @@ describe('structural defect classification', () => {
       quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
       windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 1, topology7Snapshots: 0,
       topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
