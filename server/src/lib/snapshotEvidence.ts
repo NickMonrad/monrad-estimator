@@ -952,9 +952,9 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
         byOwnerKind.resourceType++
         rtCount++
         ownerKindsInSnapshot.add('resourceType')
-        // ResourceType entries carry no mode-source concept; their snapshots
-        // surface under the unavailable mode-source category.
-        modeSourcesInSnapshot.add('unavailable')
+        // ResourceType entries carry no NamedResource mode-source category;
+        // affectedSnapshotsByNamedModeSource is fed only by Class A
+        // NamedResource entries below.
         percentageByCategory.resourceType.allocationPercent[entry.allocationPercentCategory]++
         aliasShapes.primaryAbsentNull++
       } else {

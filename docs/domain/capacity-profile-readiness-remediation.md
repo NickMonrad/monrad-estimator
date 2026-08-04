@@ -456,13 +456,16 @@ timestamp.
 Class A aggregates also include **affected-snapshot counts** in addition to
 entry counts: `affectedSnapshotsByOwnerKind` (`resourceType` /
 `namedResource` / `unavailable`) and `affectedSnapshotsByNamedModeSource`
-(`explicit` / `inherited` / `other` / `unavailable`). A snapshot counts at
-most once per category; a mixed ResourceType/NamedResource snapshot may
-count in both owner-kind categories and a snapshot containing explicit and
-inherited NamedResource entries in both mode-source categories — the
-categories are not forced mutually exclusive. `snapshotsByOwnerKindMix`
-retains the mutually exclusive overall mix and the total Class A snapshot
-reconciliation stays at 49.
+(`explicit` / `inherited` / `other` / `unavailable`). The mode-source
+aggregate counts only snapshots containing Class A **NamedResource** entries
+in the applicable category — ResourceType entries carry no NamedResource
+mode-source category and ResourceType-only snapshots contribute zero to all
+four mode-source categories. Categories may overlap: a snapshot containing
+explicit and inherited NamedResource entries counts once in both; the
+aggregate is not expected to sum to the 49 Class A snapshots. A snapshot
+counts at most once per category.
+`snapshotsByOwnerKindMix` retains the mutually exclusive overall mix and the
+total Class A snapshot reconciliation stays at 49.
 
 Unknown or malformed historical mode strings are never copied into evidence
 output: the command normalizes every outward-facing mode value to the fixed

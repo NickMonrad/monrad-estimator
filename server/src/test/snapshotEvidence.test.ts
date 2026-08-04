@@ -855,7 +855,9 @@ describe('Class A affected-snapshot aggregates', () => {
     const report = buildReport(state, countsFor(1, 1))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 1, namedResource: 0, unavailable: 0 })
-    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 1 })
+    // ResourceType-only snapshots contribute zero to every NamedResource
+    // mode-source category.
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
     expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 1, namedResourceOnly: 0, mixed: 0 })
   })
 
@@ -880,7 +882,9 @@ describe('Class A affected-snapshot aggregates', () => {
     const report = buildReport(state, countsFor(2, 1))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 1, namedResource: 1, unavailable: 0 })
-    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 0, other: 0, unavailable: 1 })
+    // The ResourceType entry contributes no mode-source category: only the
+    // explicit NamedResource entry does.
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 0, other: 0, unavailable: 0 })
     expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 1 })
   })
 
@@ -901,10 +905,30 @@ describe('Class A affected-snapshot aggregates', () => {
     }])
     const report = buildReport(state, countsFor(3, 1))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    // byNamedModeSource counts NamedResource entries only (the ResourceType
-    // entry's unavailable mode source surfaces in the snapshot aggregate).
+    // byNamedModeSource counts NamedResource entries only; the ResourceType
+    // entry contributes no mode-source category to either aggregate.
     expect(report.classAAggregates.byNamedModeSource).toEqual({ explicit: 1, inherited: 1, other: 0, unavailable: 0 })
-    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 1, other: 0, unavailable: 1 })
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 1, other: 0, unavailable: 0 })
+  })
+
+  it('counts a snapshot with genuine unavailable NamedResource provenance correctly (never Class A)', () => {
+    // Shared predicate boundary: a NamedResource whose mode provenance is
+    // genuinely unavailable (no explicit mode, no CAPACITY_PLAN parent)
+    // resolves to a null effective mode and is therefore NOT Class A, so it
+    // cannot contribute to the unavailable mode-source category. The
+    // category is provably fed only by Class A NamedResource entries.
+    const state = makeState([{
+      id: 'snap-unavailable-provenance',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-u', allocationMode: null, allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null })],
+        [makeNr({ id: 'nr-u', resourceTypeId: 'rt-u', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
+      ),
+    }])
+    const report = buildReport(state, countsFor(0, 0))
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.classAAggregates.totalEntries).toBe(0)
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
   })
 
   it('counts repeated Class A entries in one category as a single affected snapshot', () => {
@@ -923,7 +947,7 @@ describe('Class A affected-snapshot aggregates', () => {
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.classAAggregates.totalEntries).toBe(2)
     expect(report.classAAggregates.affectedSnapshotsByOwnerKind.resourceType).toBe(1)
-    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource.unavailable).toBe(1)
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
   })
 
   it('renders both aggregates in JSON and Markdown in parity', () => {
@@ -936,7 +960,7 @@ describe('Class A affected-snapshot aggregates', () => {
     const markdown = renderSnapshotEvidenceMarkdown(report)
     expect(json).toContain('"affectedSnapshotsByOwnerKind":{"resourceType":1,"namedResource":1,"unavailable":0}')
     expect(markdown).toContain('affectedSnapshotsByOwnerKind: {"resourceType":1,"namedResource":1,"unavailable":0}')
-    expect(markdown).toContain('affectedSnapshotsByNamedModeSource: {"explicit":1,"inherited":0,"other":0,"unavailable":1}')
+    expect(markdown).toContain('affectedSnapshotsByNamedModeSource: {"explicit":1,"inherited":0,"other":0,"unavailable":0}')
   })
 })
 
