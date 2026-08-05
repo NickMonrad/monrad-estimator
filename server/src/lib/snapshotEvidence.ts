@@ -626,33 +626,33 @@ function edgeOfMinusOneField(field: MinusOneField): 'start' | 'end' {
 }
 
 /** Deterministic exact-field pick for a plan single-negative decision: the
- * primary of the negative effective edge when it holds `-1`, otherwise its
- * fallback. Historical payloads may hold `-1` on more than one raw field of
- * the same edge; every such field is still reported as `minus-one` in
- * `windowFields`, while `minusOneField` names the plan-relevant exact field. */
+ * raw field that SUPPLIED the negative effective edge (primary when
+ * non-null, otherwise its fallback). A shadowed fallback alias is never
+ * selected, even when it contains -1 and the primary effective value is
+ * negative-but-not-minus-one. */
 function deterministicMinusOneField(
   raw: SnapshotResourceType | SnapshotNamedResource,
   kind: 'resourceType' | 'namedResource',
 ): MinusOneField {
-  if (kind === 'resourceType') {
-    const rt = raw as SnapshotResourceType
-    if (rt.allocationStartWeek != null && rt.allocationStartWeek < 0) return 'allocationStartWeek'
-    if (rt.allocationEndWeek != null && rt.allocationEndWeek < 0) return 'allocationEndWeek'
-  } else {
-    const nr = raw as SnapshotNamedResource
-    const effectiveStart = nr.allocationStartWeek ?? nr.startWeek ?? null
-    const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek ?? null
-    if (effectiveStart != null && effectiveStart < 0) {
-      return nr.allocationStartWeek === -1 ? 'allocationStartWeek' : 'startWeek'
-    }
-    if (effectiveEnd != null && effectiveEnd < 0) {
-      return nr.allocationEndWeek === -1 ? 'allocationEndWeek' : 'endWeek'
-    }
+  const edges = effectiveWindowEdges(raw, kind)
+  if (edges.start.value != null && edges.start.value < 0 && edges.start.sourceField != null) {
+    return edges.start.sourceField
+  }
+  if (edges.end.value != null && edges.end.value < 0 && edges.end.sourceField != null) {
+    return edges.end.sourceField
   }
   throw new SnapshotEvidenceError(
     'decision-correlation-failure',
     'cannot determine the negative window edge of a correlated single-negative decision',
   )
+}
+
+/** Effective edge result: the effective value plus the exact raw field that
+ * supplied it (primary when non-null, otherwise the fallback alias; null
+ * source when no raw field supplies the edge). */
+interface EffectiveWindowEdge {
+  value: number | null
+  sourceField: MinusOneField | null
 }
 
 /** Effective primary/fallback window edges for a v2 entry (shared
@@ -661,15 +661,30 @@ function deterministicMinusOneField(
 function effectiveWindowEdges(
   raw: SnapshotResourceType | SnapshotNamedResource,
   kind: 'resourceType' | 'namedResource',
-): { effectiveStart: number | null; effectiveEnd: number | null } {
+): { start: EffectiveWindowEdge; end: EffectiveWindowEdge } {
   if (kind === 'resourceType') {
     const rt = raw as SnapshotResourceType
-    return { effectiveStart: rt.allocationStartWeek ?? null, effectiveEnd: rt.allocationEndWeek ?? null }
+    return {
+      start: {
+        value: rt.allocationStartWeek ?? null,
+        sourceField: rt.allocationStartWeek != null ? 'allocationStartWeek' : null,
+      },
+      end: {
+        value: rt.allocationEndWeek ?? null,
+        sourceField: rt.allocationEndWeek != null ? 'allocationEndWeek' : null,
+      },
+    }
   }
   const nr = raw as SnapshotNamedResource
   return {
-    effectiveStart: nr.allocationStartWeek ?? nr.startWeek ?? null,
-    effectiveEnd: nr.allocationEndWeek ?? nr.endWeek ?? null,
+    start: {
+      value: nr.allocationStartWeek ?? nr.startWeek ?? null,
+      sourceField: nr.allocationStartWeek != null ? 'allocationStartWeek' : nr.startWeek != null ? 'startWeek' : null,
+    },
+    end: {
+      value: nr.allocationEndWeek ?? nr.endWeek ?? null,
+      sourceField: nr.allocationEndWeek != null ? 'allocationEndWeek' : nr.endWeek != null ? 'endWeek' : null,
+    },
   }
 }
 
@@ -700,7 +715,10 @@ const ALL_WINDOW_FIELDS: readonly MinusOneField[] = [
  * decision. Validates the RAW entry with the same effective primary/fallback
  * semantics the shared classifier uses:
  *   - exactly one effective edge is negative;
- *   - minusOneField holds -1 and supplies that negative effective edge;
+ *   - the raw field that supplied that negative effective edge is known and
+ *     equals minusOneField;
+ *   - the supplied effective value is exactly -1 (an effective value below
+ *     -1 fails closed even when a shadowed fallback alias holds -1);
  *   - every additional raw -1 field is shadowed by a non-null primary field
  *     on its own edge (a fallback -1 whose primary is null would be an
  *     effective negative edge and is never shadowed);
@@ -713,17 +731,17 @@ function effectiveWindowReconciliationReason(
   kind: 'resourceType' | 'namedResource',
   minusOneField: MinusOneField,
 ): string | null {
-  const { effectiveStart, effectiveEnd } = effectiveWindowEdges(raw, kind)
+  const edges = effectiveWindowEdges(raw, kind)
   const negativeEdges: Array<'start' | 'end'> = []
-  if (effectiveStart != null && effectiveStart < 0) negativeEdges.push('start')
-  if (effectiveEnd != null && effectiveEnd < 0) negativeEdges.push('end')
+  if (edges.start.value != null && edges.start.value < 0) negativeEdges.push('start')
+  if (edges.end.value != null && edges.end.value < 0) negativeEdges.push('end')
   if (negativeEdges.length !== 1) return 'the correlated entry does not have exactly one negative effective edge'
-  if (edgeOfMinusOneField(minusOneField) !== negativeEdges[0]) {
-    return 'the minus-one field does not supply the negative effective edge'
-  }
-  if (rawWindowFieldValue(raw, kind, minusOneField) !== -1) {
-    return 'the minus-one field does not hold -1'
-  }
+  const negativeEdge = negativeEdges[0]!
+  const sourceField = negativeEdge === 'start' ? edges.start.sourceField : edges.end.sourceField
+  if (sourceField == null) return 'the negative effective edge is not supplied by a raw field'
+  if (sourceField !== minusOneField) return 'the negative effective edge is not supplied by the minus-one field'
+  const negativeValue = negativeEdge === 'start' ? edges.start.value : edges.end.value
+  if (negativeValue !== -1) return 'the negative effective value is not exactly minus one'
   for (const field of ALL_WINDOW_FIELDS) {
     if (field === minusOneField) continue
     if (rawWindowFieldValue(raw, kind, field) !== -1) continue
