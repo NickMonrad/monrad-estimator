@@ -1441,7 +1441,7 @@ describe('plan-decision-anchored S-record correlation', () => {
         projectId: PROJECT_ID,
         payload: makeV2Snapshot(
           Array.from({ length: 19 }, (_, j) => makeRt({ id: `rt-s-${i}-${j}`, allocationMode: 'CAPACITY_PLAN' })),
-          [makeNr({ id: `nr-s-${i}`, resourceTypeId: rtId, allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: -1, allocationEndWeek: 5, endWeek: null })],
+          [makeNr({ id: `nr-s-${i}`, resourceTypeId: rtId, allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 })],
         ),
       })
     }
@@ -1667,5 +1667,301 @@ describe('plan-decision-anchored S-record correlation', () => {
       expect(message).not.toContain(PROJECT_ID)
       expect(message).not.toContain('Secret')
     }
+  })
+})
+
+describe('effective-edge window reconciliation (shadowed minus-one)', () => {
+  /** One explicit CAPACITY_PLAN NR with a unique parent in a defect snapshot. */
+  function shadowState(nrOverrides: Parameters<typeof makeNr>[0], id = 'snap-shadow'): RemediationDatabaseState {
+    return makeState([{
+      id,
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-shadow', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, ...nrOverrides })],
+      ),
+    }])
+  }
+
+  const SINGLE_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+    windowlessDecisions: 0, singleMinusOneDecisions: 1, snapshotDecisions: 1,
+    liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+    topology11Snapshots: 0, topology7Snapshots: 1,
+    topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+    topology7SingleMinusOneDecisions: 1,
+  }
+
+  it('accepts the sanitized production shape: shadowed opposite-edge fallback -1 (startWeek and endWeek both -1)', () => {
+    // Production shape: allocationStartWeek null, startWeek -1 (effective
+    // negative start), allocationEndWeek 5 (populated primary end), endWeek -1
+    // (shadowed fallback — reported, not rejected).
+    const state = shadowState({ allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 })
+    const report = buildReport(state, SINGLE_COUNTS)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(1)
+    const s = report.singleNegativeEntries[0]!
+    expect(s.minusOneField).toBe('startWeek')
+    expect(s.windowFields).toEqual({
+      allocationStartWeek: 'absent-null',
+      allocationEndWeek: 'populated',
+      startWeek: 'minus-one',
+      endWeek: 'minus-one',
+    })
+    // JSON and Markdown carry the same sanitized evidence.
+    const json = JSON.stringify(report)
+    const markdown = renderSnapshotEvidenceMarkdown(report)
+    expect(json).toContain('"startWeek":"minus-one","endWeek":"minus-one"')
+    expect(markdown).toContain('startWeek:minus-one')
+    expect(markdown).toContain('endWeek:minus-one')
+  })
+
+  it('accepts the effective-end mirror: populated primary start shadows a fallback -1', () => {
+    // allocationStartWeek 5 (populated primary start), startWeek -1 (shadowed
+    // fallback), allocationEndWeek null, endWeek -1 (effective negative end).
+    const state = shadowState({ allocationStartWeek: 5, startWeek: -1, allocationEndWeek: null, endWeek: -1 })
+    const report = buildReport(state, SINGLE_COUNTS)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    const s = report.singleNegativeEntries[0]!
+    expect(s.minusOneField).toBe('endWeek')
+    expect(s.windowFields).toEqual({
+      allocationStartWeek: 'populated',
+      allocationEndWeek: 'absent-null',
+      startWeek: 'minus-one',
+      endWeek: 'minus-one',
+    })
+  })
+
+  it('accepts a primary -1 with an opposite-edge shadowed fallback -1', () => {
+    const state = shadowState({ allocationStartWeek: -1, startWeek: null, allocationEndWeek: 5, endWeek: -1 })
+    const report = buildReport(state, SINGLE_COUNTS)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    const s = report.singleNegativeEntries[0]!
+    expect(s.minusOneField).toBe('allocationStartWeek')
+    expect(s.windowFields.endWeek).toBe('minus-one')
+    expect(s.windowFields.allocationEndWeek).toBe('populated')
+  })
+
+  it('keeps the same-edge dual-alias -1 fixture valid', () => {
+    const state = shadowState({ allocationStartWeek: -1, startWeek: -1, allocationEndWeek: 5, endWeek: null })
+    const report = buildReport(state, SINGLE_COUNTS)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    const s = report.singleNegativeEntries[0]!
+    expect(s.minusOneField).toBe('allocationStartWeek')
+    expect(s.windowFields).toEqual({
+      allocationStartWeek: 'minus-one',
+      allocationEndWeek: 'populated',
+      startWeek: 'minus-one',
+      endWeek: 'absent-null',
+    })
+  })
+
+  it('keeps a ResourceType single-negative entry valid (no fallback aliases)', () => {
+    const state = makeState([{
+      id: 'snap-rt-single',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [
+          makeRt({ id: 'rt-a', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+          makeRt({ id: 'rt-b', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+          makeRt({ id: 'rt-conf', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 }),
+        ],
+        [
+          // Defect-inducing conflicting-alias NamedResource (no decision of
+          // its own; keeps the snapshot defect-classified so the RTs are
+          // evaluated as decisions rather than Class B quarantines).
+          makeNr({ id: 'nr-conf', resourceTypeId: 'rt-conf', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: 5, allocationEndWeek: 10, startWeek: 5, endWeek: 9 }),
+        ],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+      windowlessDecisions: 0, singleMinusOneDecisions: 2, snapshotDecisions: 2,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 1,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 2,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(2)
+    for (const s of report.singleNegativeEntries) {
+      expect(s.entryKind).toBe('resourceType')
+      expect(s.minusOneField).toBe('allocationStartWeek')
+    }
+  })
+
+  it('does not select a both-effective-edges-negative entry (never-active class, no plan decision)', () => {
+    const state = shadowState({ allocationStartWeek: null, startWeek: -1, allocationEndWeek: null, endWeek: -1 })
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 0,
+      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 0,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(0)
+  })
+
+  it('fails closed on an incoherent both-negative shape even with a supplied decision', () => {
+    // (-2, -1): the shared classifier still emits the single-negative message,
+    // but the fixed minus-one vocabulary cannot represent the -2 effective
+    // start — the effective-window reconciliation refuses.
+    const state = shadowState({ allocationStartWeek: -2, startWeek: null, allocationEndWeek: -1, endWeek: null })
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    const decision = {
+      id: 'd', projectId: PROJECT_ID, ownerId: 'o', ownerKind: 'namedPerson' as const,
+      profileId: null, snapshotId: 'snap-shadow', entryId: 'nr-shadow', legacyBase: null,
+      evidenceHash: 'h', allowedResolutions: ['snapshot-window-interpretation'],
+      message: 'single -1/negative window edge without established meaning — explicit window interpretation required',
+    }
+    try {
+      correlateSingleNegativeDecisions({ ...plan, decisions: [decision] }, state, classified)
+      throw new Error('expected refusal')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      expect(message).toContain('does not have exactly one negative effective edge')
+      expect(message).not.toContain('nr-shadow')
+      expect(message).not.toContain('rt-p')
+      expect(message).not.toContain('-2')
+      expect(message).not.toContain('-1')
+    }
+  })
+
+  it('emits seven S records for seven production-shaped entries with zero reconciliation violations', () => {
+    const snapshots = Array.from({ length: 7 }, (_, i) => ({
+      id: `snap-${i}`,
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: `rt-w-${i}`, allocationMode: 'CAPACITY_PLAN' })],
+        [makeNr({ id: `nr-m-${i}`, resourceTypeId: `rt-w-${i}`, allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 })],
+      ),
+    }))
+    const state = makeState(snapshots)
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 7,
+      windowlessDecisions: 7, singleMinusOneDecisions: 7, snapshotDecisions: 14,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 7,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 7,
+      topology7SingleMinusOneDecisions: 7,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(7)
+    for (const s of report.singleNegativeEntries) {
+      expect(s.minusOneField).toBe('startWeek')
+      expect(s.windowFields.endWeek).toBe('minus-one')
+    }
+  })
+})
+
+describe('effective-source reconciliation (minusOneField must supply the effective value)', () => {
+  const MISMATCH_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+    windowlessDecisions: 0, singleMinusOneDecisions: 1, snapshotDecisions: 1,
+    liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+    topology11Snapshots: 0, topology7Snapshots: 1,
+    topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+    topology7SingleMinusOneDecisions: 1,
+  }
+
+  it('fails closed when a negative effective source below -1 has a shadowed fallback -1 (start edge)', () => {
+    // allocationStartWeek -2 supplies the effective start (below -1);
+    // startWeek -1 is shadowed and must NOT be selected as minusOneField.
+    const state = makeState([{
+      id: 'snap-source-mismatch',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-mismatch', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -2, startWeek: -1, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }])
+    try {
+      buildReport(state, MISMATCH_COUNTS)
+      throw new Error('expected refusal')
+    } catch (error) {
+      expect(error).toBeInstanceOf(SnapshotEvidenceError)
+      const message = error instanceof Error ? error.message : String(error)
+      expect(message).toContain('the negative effective value is not exactly minus one')
+      expect(message).not.toContain('-2')
+      expect(message).not.toContain('-1')
+      expect(message).not.toContain('nr-mismatch')
+      expect(message).not.toContain('rt-p')
+      expect(message).not.toContain('snap-source-mismatch')
+      expect(message).not.toContain('CAPACITY_PLAN')
+    }
+  })
+
+  it('fails closed for the end-edge mirror (effective source below -1, shadowed fallback -1)', () => {
+    const state = makeState([{
+      id: 'snap-source-mismatch-end',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-mismatch-end', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, startWeek: null, allocationEndWeek: -2, endWeek: -1 })],
+      ),
+    }])
+    try {
+      buildReport(state, MISMATCH_COUNTS)
+      throw new Error('expected refusal')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      expect(message).toContain('the negative effective value is not exactly minus one')
+      expect(message).not.toContain('-2')
+      expect(message).not.toContain('-1')
+      expect(message).not.toContain('nr-mismatch-end')
+    }
+  })
+
+  it('a primary effective -1 with a same-edge fallback -1 selects the primary (source-based)', () => {
+    const state = makeState([{
+      id: 'snap-primary-fallback',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-pf', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: -1, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }])
+    const report = buildReport(state, MISMATCH_COUNTS)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    const s = report.singleNegativeEntries[0]!
+    // The primary supplied the effective value; the fallback is shadowed.
+    expect(s.minusOneField).toBe('allocationStartWeek')
+    expect(s.windowFields.startWeek).toBe('minus-one')
+  })
+
+  it('a fallback effective -1 with a null primary selects the fallback (source-based)', () => {
+    const state = makeState([{
+      id: 'snap-fallback-effective',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-fe', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, startWeek: -1, allocationEndWeek: 4, endWeek: 5 })],
+      ),
+    }])
+    const report = buildReport(state, MISMATCH_COUNTS)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries[0]!.minusOneField).toBe('startWeek')
+  })
+
+  it('keeps the shadowed opposite-edge fallback -1 valid (production shape)', () => {
+    const state = makeState([{
+      id: 'snap-shadow-valid',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-sv', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 })],
+      ),
+    }])
+    const report = buildReport(state, MISMATCH_COUNTS)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    const s = report.singleNegativeEntries[0]!
+    expect(s.minusOneField).toBe('startWeek')
+    expect(s.windowFields.endWeek).toBe('minus-one')
   })
 })

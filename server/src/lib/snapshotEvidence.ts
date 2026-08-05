@@ -626,33 +626,131 @@ function edgeOfMinusOneField(field: MinusOneField): 'start' | 'end' {
 }
 
 /** Deterministic exact-field pick for a plan single-negative decision: the
- * primary of the negative effective edge when it holds `-1`, otherwise its
- * fallback. Historical payloads may hold `-1` on more than one raw field of
- * the same edge; every such field is still reported as `minus-one` in
- * `windowFields`, while `minusOneField` names the plan-relevant exact field. */
+ * raw field that SUPPLIED the negative effective edge (primary when
+ * non-null, otherwise its fallback). A shadowed fallback alias is never
+ * selected, even when it contains -1 and the primary effective value is
+ * negative-but-not-minus-one. */
 function deterministicMinusOneField(
   raw: SnapshotResourceType | SnapshotNamedResource,
   kind: 'resourceType' | 'namedResource',
 ): MinusOneField {
-  if (kind === 'resourceType') {
-    const rt = raw as SnapshotResourceType
-    if (rt.allocationStartWeek != null && rt.allocationStartWeek < 0) return 'allocationStartWeek'
-    if (rt.allocationEndWeek != null && rt.allocationEndWeek < 0) return 'allocationEndWeek'
-  } else {
-    const nr = raw as SnapshotNamedResource
-    const effectiveStart = nr.allocationStartWeek ?? nr.startWeek ?? null
-    const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek ?? null
-    if (effectiveStart != null && effectiveStart < 0) {
-      return nr.allocationStartWeek === -1 ? 'allocationStartWeek' : 'startWeek'
-    }
-    if (effectiveEnd != null && effectiveEnd < 0) {
-      return nr.allocationEndWeek === -1 ? 'allocationEndWeek' : 'endWeek'
-    }
+  const edges = effectiveWindowEdges(raw, kind)
+  if (edges.start.value != null && edges.start.value < 0 && edges.start.sourceField != null) {
+    return edges.start.sourceField
+  }
+  if (edges.end.value != null && edges.end.value < 0 && edges.end.sourceField != null) {
+    return edges.end.sourceField
   }
   throw new SnapshotEvidenceError(
     'decision-correlation-failure',
     'cannot determine the negative window edge of a correlated single-negative decision',
   )
+}
+
+/** Effective edge result: the effective value plus the exact raw field that
+ * supplied it (primary when non-null, otherwise the fallback alias; null
+ * source when no raw field supplies the edge). */
+interface EffectiveWindowEdge {
+  value: number | null
+  sourceField: MinusOneField | null
+}
+
+/** Effective primary/fallback window edges for a v2 entry (shared
+ * semantics: the primary field supplies the edge when non-null, otherwise
+ * the fallback alias). ResourceType entries have no fallback aliases. */
+function effectiveWindowEdges(
+  raw: SnapshotResourceType | SnapshotNamedResource,
+  kind: 'resourceType' | 'namedResource',
+): { start: EffectiveWindowEdge; end: EffectiveWindowEdge } {
+  if (kind === 'resourceType') {
+    const rt = raw as SnapshotResourceType
+    return {
+      start: {
+        value: rt.allocationStartWeek ?? null,
+        sourceField: rt.allocationStartWeek != null ? 'allocationStartWeek' : null,
+      },
+      end: {
+        value: rt.allocationEndWeek ?? null,
+        sourceField: rt.allocationEndWeek != null ? 'allocationEndWeek' : null,
+      },
+    }
+  }
+  const nr = raw as SnapshotNamedResource
+  return {
+    start: {
+      value: nr.allocationStartWeek ?? nr.startWeek ?? null,
+      sourceField: nr.allocationStartWeek != null ? 'allocationStartWeek' : nr.startWeek != null ? 'startWeek' : null,
+    },
+    end: {
+      value: nr.allocationEndWeek ?? nr.endWeek ?? null,
+      sourceField: nr.allocationEndWeek != null ? 'allocationEndWeek' : nr.endWeek != null ? 'endWeek' : null,
+    },
+  }
+}
+
+function rawWindowFieldValue(
+  raw: SnapshotResourceType | SnapshotNamedResource,
+  kind: 'resourceType' | 'namedResource',
+  field: MinusOneField,
+): number | null {
+  if (kind === 'resourceType') {
+    const rt = raw as SnapshotResourceType
+    if (field === 'allocationStartWeek') return rt.allocationStartWeek ?? null
+    if (field === 'allocationEndWeek') return rt.allocationEndWeek ?? null
+    return null
+  }
+  const nr = raw as SnapshotNamedResource
+  if (field === 'allocationStartWeek') return nr.allocationStartWeek ?? null
+  if (field === 'allocationEndWeek') return nr.allocationEndWeek ?? null
+  if (field === 'startWeek') return nr.startWeek ?? null
+  return nr.endWeek ?? null
+}
+
+const ALL_WINDOW_FIELDS: readonly MinusOneField[] = [
+  'allocationStartWeek', 'allocationEndWeek', 'startWeek', 'endWeek',
+]
+
+/**
+ * Effective-window reconciliation for one correlated single-negative
+ * decision. Validates the RAW entry with the same effective primary/fallback
+ * semantics the shared classifier uses:
+ *   - exactly one effective edge is negative;
+ *   - the raw field that supplied that negative effective edge is known and
+ *     equals minusOneField;
+ *   - the supplied effective value is exactly -1 (an effective value below
+ *     -1 fails closed even when a shadowed fallback alias holds -1);
+ *   - every additional raw -1 field is shadowed by a non-null primary field
+ *     on its own edge (a fallback -1 whose primary is null would be an
+ *     effective negative edge and is never shadowed);
+ *   - every raw field is represented truthfully in the emitted windowFields.
+ * Returns a fixed sanitized reason, or null when valid. Never emits raw
+ * values or identifiers.
+ */
+function effectiveWindowReconciliationReason(
+  raw: SnapshotResourceType | SnapshotNamedResource,
+  kind: 'resourceType' | 'namedResource',
+  minusOneField: MinusOneField,
+): string | null {
+  const edges = effectiveWindowEdges(raw, kind)
+  const negativeEdges: Array<'start' | 'end'> = []
+  if (edges.start.value != null && edges.start.value < 0) negativeEdges.push('start')
+  if (edges.end.value != null && edges.end.value < 0) negativeEdges.push('end')
+  if (negativeEdges.length !== 1) return 'the correlated entry does not have exactly one negative effective edge'
+  const negativeEdge = negativeEdges[0]!
+  const sourceField = negativeEdge === 'start' ? edges.start.sourceField : edges.end.sourceField
+  if (sourceField == null) return 'the negative effective edge is not supplied by a raw field'
+  if (sourceField !== minusOneField) return 'the negative effective edge is not supplied by the minus-one field'
+  const negativeValue = negativeEdge === 'start' ? edges.start.value : edges.end.value
+  if (negativeValue !== -1) return 'the negative effective value is not exactly minus one'
+  for (const field of ALL_WINDOW_FIELDS) {
+    if (field === minusOneField) continue
+    if (rawWindowFieldValue(raw, kind, field) !== -1) continue
+    const primary = edgeOfMinusOneField(field) === 'start'
+      ? (kind === 'resourceType' ? (raw as SnapshotResourceType).allocationStartWeek : (raw as SnapshotNamedResource).allocationStartWeek)
+      : (kind === 'resourceType' ? (raw as SnapshotResourceType).allocationEndWeek : (raw as SnapshotNamedResource).allocationEndWeek)
+    if (primary == null) return 'a raw -1 field is not shadowed by a populated primary'
+  }
+  return null
 }
 
 /**
@@ -717,13 +815,19 @@ export function correlateSingleNegativeDecisions(
       if (parents.length > 1) fail('the named-resource parent matched multiple resource types')
       parentRt = parents[0]
     }
+    // Effective-window reconciliation: the raw entry must re-derive exactly
+    // one negative effective edge supplied by minusOneField; any additional
+    // raw -1 field must be shadowed by a populated primary on its own edge.
+    const minusOneField = deterministicMinusOneField(rawEntry, kind)
+    const windowReason = effectiveWindowReconciliationReason(rawEntry, kind, minusOneField)
+    if (windowReason != null) fail(windowReason)
     correlations.push({
       decision,
       snapshotIndex,
       kind,
       rawEntry,
       parentRt,
-      minusOneField: deterministicMinusOneField(rawEntry, kind),
+      minusOneField,
     })
   })
   return correlations
@@ -1106,14 +1210,13 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
   const windowFieldReconciliationViolations = singleNegativeRecords.filter(record => {
     const fields = Object.keys(record.windowFields) as MinusOneField[]
     const minusOneFields = fields.filter(field => record.windowFields[field] === 'minus-one')
-    // At least one raw field must hold -1, minusOneField must be among them,
-    // every minus-one field must lie on the same effective edge (historical
-    // payloads may hold -1 on both aliases of one edge), and every other
-    // field must be absent-null or populated.
+    // Structural invariants on the emitted records: at least one raw field
+    // holds -1, minusOneField must be among the minus-one fields, and every
+    // other field must be absent-null or populated. Effective-edge and
+    // shadowing semantics are validated earlier on the raw correlated entry
+    // (effectiveWindowReconciliationReason), which has the raw values.
     if (minusOneFields.length === 0) return true
     if (!minusOneFields.includes(record.minusOneField)) return true
-    const edge = edgeOfMinusOneField(record.minusOneField)
-    if (minusOneFields.some(field => edgeOfMinusOneField(field) !== edge)) return true
     return fields.some(
       field => !minusOneFields.includes(field) && record.windowFields[field] !== 'absent-null' && record.windowFields[field] !== 'populated',
     )
