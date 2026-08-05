@@ -188,7 +188,7 @@ async function seedTopologyFixture(): Promise<void> {
         allocationMode: 'CAPACITY_PLAN',
         allocationStartWeek: -1,
         allocationEndWeek: 5,
-        startWeek: 5,
+        startWeek: -1,
         endWeek: null,
       })],
     ),
@@ -290,7 +290,17 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(report.classAAggregates.totalEntries).toBe(3)
     expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 2, namedResource: 1, unavailable: 0 })
     expect(report.singleNegativeEntries).toHaveLength(1)
+    // Sanitized reproducer of the former selection-path divergence: -1 on
+    // both aliases of the start edge is a plan single-negative decision whose
+    // evidence is emitted end to end. The exact production raw layout remains
+    // unknown until the corrected #404 run.
     expect(report.singleNegativeEntries[0]!.minusOneField).toBe('allocationStartWeek')
+    expect(report.singleNegativeEntries[0]!.windowFields).toEqual({
+      allocationStartWeek: 'minus-one',
+      allocationEndWeek: 'populated',
+      startWeek: 'minus-one',
+      endWeek: 'absent-null',
+    })
     expect(report.defectSnapshots).toHaveLength(3)
     const seven = report.defectSnapshots.find((m: { subgroup: string }) => m.subgroup === 'seven-single-minus-one')!
     expect(seven.windowlessDecisionCount).toBe(19)
@@ -399,6 +409,74 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(exit).toBe(1)
     expect(existsSync(jsonPath)).toBe(false)
     expect(existsSync(mdPath)).toBe(false)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('refuses on decision correlation failure with no output files and a safe message', async () => {
+    // Two raw entries sharing one id: the plan produces single-negative
+    // decisions whose correlation is ambiguous — the command fails closed
+    // with no evidence emitted.
+    await createSnapshot(
+      'snap-correlation-ambiguous',
+      makeV2Snapshot(
+        [
+          makeRt({ id: 'rt-dupe', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+          makeRt({ id: 'rt-dupe', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+        ],
+        [],
+      ),
+      '2026-06-01T00:00:00Z',
+    )
+    const dir = tempDir()
+    const jsonPath = path.join(dir, 'evidence.json')
+    const mdPath = path.join(dir, 'evidence.md')
+    const expectedPath = path.join(dir, 'expected.json')
+    const expected = await expectedBoundary()
+    writeFileSync(expectedPath, JSON.stringify(expected, null, 2))
+
+    const exit = await main(['--json', jsonPath, '--markdown', mdPath, '--expected', expectedPath])
+
+    expect(exit).toBe(1)
+    expect(existsSync(jsonPath)).toBe(false)
+    expect(existsSync(mdPath)).toBe(false)
+    expect(readdirSync(dir).filter(name => name.includes('.tmp'))).toEqual([])
+    // No identifiers or payload names leak into the refusal.
+    expect(readFileSync(expectedPath, 'utf-8')).toBeTruthy()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('refuses when a correlated NamedResource parent is duplicated with different modes (no output, no writes)', async () => {
+    // One explicit CAPACITY_PLAN NamedResource with a plan-derived
+    // single-negative decision; two ResourceTypes share the referenced id
+    // with different allocation modes — the parent correlation must refuse.
+    await createSnapshot(
+      'snap-dup-parent',
+      makeV2Snapshot(
+        [
+          makeRt({ id: 'rt-dup-parent', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 }),
+          makeRt({ id: 'rt-dup-parent', allocationMode: 'TIMELINE', allocationStartWeek: 0, allocationEndWeek: 5 }),
+        ],
+        [makeNr({ id: 'nr-child', resourceTypeId: 'rt-dup-parent', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: 5, allocationEndWeek: 5, endWeek: null })],
+      ),
+      '2026-06-01T00:00:00Z',
+    )
+    const stateHashBefore = await currentStateHash()
+    const dir = tempDir()
+    const jsonPath = path.join(dir, 'evidence.json')
+    const mdPath = path.join(dir, 'evidence.md')
+    const expectedPath = path.join(dir, 'expected.json')
+    const expected = await expectedBoundary()
+    writeFileSync(expectedPath, JSON.stringify(expected, null, 2))
+
+    const exit = await main(['--json', jsonPath, '--markdown', mdPath, '--expected', expectedPath])
+
+    expect(exit).toBe(1)
+    expect(existsSync(jsonPath)).toBe(false)
+    expect(existsSync(mdPath)).toBe(false)
+    expect(readdirSync(dir).filter(name => name.includes('.tmp'))).toEqual([])
+    // Zero writes: canonical covered-state hash unchanged.
+    const stateHashAfter = await currentStateHash()
+    expect(stateHashAfter).toBe(stateHashBefore)
     rmSync(dir, { recursive: true, force: true })
   })
 

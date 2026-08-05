@@ -475,19 +475,41 @@ Markdown and the content-derived labels.
 
 Each S record reports the sanitized state of **all four raw window fields**
 (`allocationStartWeek`, `allocationEndWeek`, `startWeek`, `endWeek`) with
-exactly one value from the fixed vocabulary `minus-one` / `absent-null` /
-`populated` — populated numeric values are never emitted. `minusOneField`
-is reconciled one-to-one with the single `minus-one` field. Alias-conflict
-evidence is reported **per logical edge** (`aliasConflicts.startEdge` /
-`aliasConflicts.endEdge`) using the shared classifier alias semantics
-(window-using modes only), so a conflict on the start edge is distinguished
-from a conflict on the end edge. The aggregate `alternateAliasState` is
-derived from the same per-field states.
+values from the fixed vocabulary `minus-one` / `absent-null` / `populated`
+— populated numeric values are never emitted. Historical payloads may hold
+`-1` on more than one raw field of the same edge (for example both aliases
+of the start edge); every such field is reported as `minus-one`, while
+`minusOneField` names the plan-relevant exact field (the primary of the
+negative effective edge when it holds `-1`, otherwise its fallback).
+Alias-conflict evidence is reported **per logical edge**
+(`aliasConflicts.startEdge` / `aliasConflicts.endEdge`) using the shared
+classifier alias semantics (window-using modes only), so a conflict on the
+start edge is distinguished from a conflict on the end edge. The aggregate
+`alternateAliasState` is derived from the same per-field states.
 
-S records are selected from the plan's single-negative decision class; the
-Markdown section is titled **"Single-negative decision entries"** (a clean
-`-1` + null shape may instead be classified through the windowless or Class
-B quarantine branch and is never implied by the heading).
+**S-record selection is authoritative from the remediation plan's
+single-negative snapshot decisions** (shared `snapshotDecisionCategory`);
+raw payload entries are correlated internally one-to-one using the
+identifiers the plan decisions already carry (`snapshotId`, `entryId`,
+owner kind) and are used only to populate the sanitized evidence. Raw entry
+scanning is never an independent policy or selection path. Missing,
+ambiguous or inconsistent correlation (no stored snapshot, non-v2 payload,
+missing entry identifier, zero or multiple matching raw entries, entry-kind
+mismatch, an entry that does not re-derive the single-negative decision, two
+decisions resolving to the same raw entry, or a NamedResource whose parent
+reference is absent, unmatched or duplicated) fails closed with a fixed
+safe message and no evidence is emitted. Parent correlation never resolves
+ambiguity with `find`, a `Map` or positional picks: every correlated
+NamedResource must match exactly one ResourceType. Inherited effective mode
+is
+preserved in evidence when present (`rawMode: null`, `parentMode:
+CAPACITY_PLAN`, `effectiveMode: CAPACITY_PLAN`, `modeSource: inherited`).
+Identifiers remain internal and are never emitted. The reviewed production
+expectations remain **seven**, not zero.
+
+The Markdown section is titled **"Single-negative decision entries"** (a
+clean `-1` + null shape may instead be classified through the windowless or
+Class B quarantine branch and is never implied by the heading).
 
 The command prevents output of project/snapshot/owner/finding/decision IDs,
 names, complete payloads, credentials and database details by construction
@@ -535,6 +557,13 @@ integration tests capture canonical database state before and after a run
 and assert exact equality.
 
 ### #404 run procedure (Issue #432 handoff)
+
+**Do not retry the production run until this fix is reviewed and merged**: the
+2026-08-04 production run stopped at the evidence boundary
+(`single-negative records: observed 0, expected 7`) because the merged
+command selected S records by an independent raw-entry reclassification that
+dropped the plan's single-negative decisions. The plan-anchored correlation
+fix above is the reviewed replacement.
 
 1. Install the reviewed merge commit without running migrations; confirm a
    clean checkout at the exact expected commit and a healthy service.
