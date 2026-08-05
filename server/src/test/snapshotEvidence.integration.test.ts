@@ -217,8 +217,15 @@ async function seedTopologyFixture(): Promise<void> {
       [
         makeRt({ id: 'rt-q1-a', allocationMode: 'CAPACITY_PLAN' }),
         makeRt({ id: 'rt-q1-b', allocationMode: 'CAPACITY_PLAN' }),
+        // Issue #440 companion: windowless EFFORT at 100% (alreadyValid).
+        makeRt({ id: 'rt-q1-effort', allocationMode: 'EFFORT' }),
       ],
-      [makeNr({ id: 'nr-q1-inherited', resourceTypeId: 'rt-q1-a', allocationMode: null })],
+      [
+        makeNr({ id: 'nr-q1-inherited', resourceTypeId: 'rt-q1-a', allocationMode: null }),
+        // Issue #440 companion: explicit windowed TIMELINE at 100/100
+        // (alreadyValid; populated non-negative window states).
+        makeNr({ id: 'nr-q1-timeline', resourceTypeId: 'rt-q1-b', allocationMode: 'TIMELINE', allocationStartWeek: 2, allocationEndWeek: 9, startWeek: 2, endWeek: 9 }),
+      ],
     ),
     '2026-06-01T00:00:00Z',
   )
@@ -282,7 +289,7 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(existsSync(jsonPath)).toBe(true)
     expect(existsSync(mdPath)).toBe(true)
     const report = JSON.parse(readFileSync(jsonPath, 'utf-8'))
-    expect(report.formatVersion).toBe(1)
+    expect(report.formatVersion).toBe(2)
     expect(report.integrityResult).toEqual({
       fingerprintMatch: true, baselineMatch: true, countsMatch: true, reconciliationPassed: true,
     })
@@ -306,6 +313,69 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(readdirSync(dir).filter(name => name.includes('.tmp'))).toEqual([])
     expect(report.classAAggregates.totalEntries).toBe(3)
     expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 2, namedResource: 1, unavailable: 0 })
+    // Issue #440: sanitized Class A companion evidence for the quarantined
+    // snapshot (exact RTs stay exact; every other entry is a companion).
+    expect(report.classACompanionEvidence.population).toEqual({
+      classAQuarantinedSnapshots: 1,
+      snapshotsWithCompanions: 1,
+      exactClassAResourceTypeEntries: 2,
+      exactClassANamedResourceEntries: 0,
+      companionResourceTypeEntries: 1,
+      companionNamedResourceEntries: 2,
+      totalCompanionEntries: 3,
+      excludedMixedClassABSnapshots: 0,
+    })
+    expect(report.classACompanionEvidence.planClassifications).toEqual({
+      deterministic: 0,
+      decisionRequired: 0,
+      unsupported: 0,
+      alreadyValid: 2,
+      quarantined: 1,
+    })
+    expect(report.classACompanionEvidence.snapshotFlags).toEqual({
+      allEntriesWindowless: 0,
+      notAllEntriesWindowless: 1,
+      allEntriesApproved100: 1,
+      notAllEntriesApproved100: 0,
+      allCompanionsWindowless: 0,
+      notAllCompanionsWindowless: 1,
+      allCompanionsApproved100: 1,
+      notAllCompanionsApproved100: 0,
+      anyCompanionInheritedMode: 1,
+      noCompanionInheritedMode: 0,
+    })
+    const companionRows = report.classACompanionEvidence.shapeRows
+    const rowSum = companionRows.reduce((sum: number, row: { count: number }) => sum + row.count, 0)
+    expect(rowSum).toBe(3)
+    // Inherited-mode windowless companion row (current plan: quarantined).
+    const inheritedRow = companionRows.find((row: { modeSource: string }) => row.modeSource === 'inherited')!
+    expect(inheritedRow).toMatchObject({
+      entryKind: 'namedResource',
+      rawMode: null,
+      parentMode: 'CAPACITY_PLAN',
+      effectiveMode: 'CAPACITY_PLAN',
+      allocationStartWeekState: 'absent-null',
+      allocationEndWeekState: 'absent-null',
+      startWeekState: 'absent-null',
+      endWeekState: 'absent-null',
+      allocationPercentCategory: 'hundred',
+      allocationPctCategory: 'hundred',
+      currentPlanClassification: 'quarantined',
+      count: 1,
+    })
+    // Windowed TIMELINE companion row (current plan: alreadyValid).
+    const timelineRow = companionRows.find((row: { rawMode: string | null }) => row.rawMode === 'TIMELINE')!
+    expect(timelineRow).toMatchObject({
+      entryKind: 'namedResource',
+      effectiveMode: 'TIMELINE',
+      allocationStartWeekState: 'populated-nonnegative-integer',
+      allocationEndWeekState: 'populated-nonnegative-integer',
+      startWeekState: 'populated-nonnegative-integer',
+      endWeekState: 'populated-nonnegative-integer',
+      currentPlanClassification: 'alreadyValid',
+    })
+    // The current quarantine boundary is unchanged by the tooling.
+    expect(report.observedBoundary.summary.quarantined).toBe(3)
     // Issue #438: the seeded S entry is deterministic zero — no single-
     // negative decision exists, so no S record is emitted.
     expect(report.singleNegativeEntries).toHaveLength(0)
@@ -325,6 +395,7 @@ describeIf('snapshot evidence command (integration)', () => {
       'fixture-project-42-abc', 'fixture-user-7-xyz',
       'snap-e1', 'snap-e2', 'snap-s7', 'snap-q1', 'snap-r1',
       'rt-e1-0', 'nr-s7-minus-one', 'nr-q1-inherited',
+      'rt-q1-effort', 'nr-q1-timeline',
       'Fixture Secret Project', 'Fixture Secret Role', 'Fixture Secret Person',
     ]) {
       expect(readFileSync(jsonPath, 'utf-8')).not.toContain(secret)
@@ -332,6 +403,10 @@ describeIf('snapshot evidence command (integration)', () => {
     }
     expect(markdown).toContain('windowlessDecisions: 56')
     expect(markdown).toContain('policyDecision: not-assessed')
+    // Issue #440 companion section is mirrored in Markdown.
+    expect(markdown).toContain('## Class A companion evidence')
+    expect(markdown).toContain('- totalCompanionEntries: 3')
+    expect(markdown).toContain('- anyCompanionInheritedMode: 1')
 
     rmSync(dir, { recursive: true, force: true })
   })

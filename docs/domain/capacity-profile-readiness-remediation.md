@@ -437,21 +437,21 @@ No evidence is emitted until every gate passes.
 
 ### Output schema and redaction guarantees
 
-Versioned JSON (`formatVersion: 1`) with `runMetadata`, `expectedBoundary`,
+Versioned JSON (`formatVersion: 2`) with `runMetadata`, `expectedBoundary`,
 `observedBoundary`, `integrityResult`, `topology`, `singleNegativeEntries`
 (S1… labels), `defectSnapshots` (M1… labels), `classAAggregates`,
-`unavailableEvidence`, `reconciliation` and `policyDecision:
-"not-assessed"`. Markdown is rendered from the same evidence object and
-carries **all** evidence categories required by the #430 review: S-record
-entry and structural error categories, exact sanitized mode categories,
-percentage categories and the independent-defect classification; M-record
-subgroup, per-snapshot decision counts (windowless, single-`-1`, and other
-decision-required reasons), alreadyValid/quarantined/unsupported counts,
-entry and structural error categories; and the complete Class A percentage
-evidence split by owner kind / mode source (`resourceType`, `explicit`,
-`inherited`, `other`, `unavailable` × `allocationPercent`/`allocationPct` ×
-every bucket). Output ordering is deterministic apart from the explicit run
-timestamp.
+`classACompanionEvidence`, `unavailableEvidence`, `reconciliation` and
+`policyDecision: "not-assessed"`. Markdown is rendered from the same evidence
+object and carries **all** evidence categories required by the #430 review:
+S-record entry and structural error categories, exact sanitized mode
+categories, percentage categories and the independent-defect
+classification; M-record subgroup, per-snapshot decision counts
+(windowless, single-`-1`, and other decision-required reasons),
+alreadyValid/quarantined/unsupported counts, entry and structural error
+categories; and the complete Class A percentage evidence split by owner kind
+/ mode source (`resourceType`, `explicit`, `inherited`, `other`,
+`unavailable` × `allocationPercent`/`allocationPct` × every bucket). Output
+ordering is deterministic apart from the explicit run timestamp.
 
 Class A aggregates also include **affected-snapshot counts** in addition to
 entry counts: `affectedSnapshotsByOwnerKind` (`resourceType` /
@@ -466,6 +466,34 @@ aggregate is not expected to sum to the 49 Class A snapshots. A snapshot
 counts at most once per category.
 `snapshotsByOwnerKindMix` retains the mutually exclusive overall mix and the
 total Class A snapshot reconciliation stays at 49.
+
+The `classACompanionEvidence` section (issue #440) is sanitized
+**observational evidence** for the #438 companion-rule review — it never
+decides or implements the future companion predicate. Selection uses the
+currently merged policy only: stored V2 snapshots whose shared
+`classifySnapshotRestorability` verdict is `quarantined` with quarantine
+classes exactly `['A']`. Within a selected snapshot, an entry is exact Class
+A iff it satisfies the existing `isClassAResourceTypeEntry` /
+`isClassANamedResourceEntry` predicates with its current captured parent;
+every other captured entry is a companion. Restorable, defect and
+Class-B-only snapshots are excluded; mixed Class-A/Class-B quarantined
+snapshots are counted separately in `excludedMixedClassABSnapshots` and are
+never mixed into the companion population. The section reports population
+totals, deterministic sorted aggregate shape rows (fixed sanitized
+vocabularies only: entry kind, raw/parent/effective mode, mode source,
+per-field window state `unavailable` / `absent-null` / `minus-one` /
+`populated-nonnegative-integer` / `populated-other`, percent categories,
+current plan classification) plus a count, aggregate companion totals by
+current remediation-plan classification, and snapshot-level flags answering
+the three production questions (all entries / all companions windowless;
+all entries / all companions at the approved 100% categories defined
+per entry kind; any companion using inherited mode). Companions are
+correlated internally to exactly one existing remediation-plan
+snapshot-entry finding; any missing, ambiguous or duplicate match, unresolvable
+ownership or reconciliation failure refuses output with a controlled safe
+reason. The companion values are observational and are NOT required in the
+reviewed expected file; the existing fingerprint, baseline, count and
+topology gates remain required.
 
 Unknown or malformed historical mode strings are never copied into evidence
 output: the command normalizes every outward-facing mode value to the fixed
