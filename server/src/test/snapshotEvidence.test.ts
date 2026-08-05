@@ -1272,11 +1272,16 @@ describe('plan-decision-anchored S-record correlation', () => {
     }])
   }
 
-  it('reproduces the production failure shape: dual-alias -1 is a plan decision that now emits one S record', () => {
-    // Production regression: a raw payload holding -1 on both aliases of the
-    // start edge (allocationStartWeek AND startWeek) is a plan single-negative
-    // decision; the pre-fix independent raw-entry scan dropped it via the
-    // one-minus-one prefilter and reported observed 0 against expected 7.
+  it('emits one S record for the sanitized dual-alias reproducer of the former selection divergence', () => {
+    // Sanitized regression reproducer (NOT confirmed production evidence):
+    // production observed zero S records against seven plan-derived
+    // single-negative decisions, and the confirmed code defect is the
+    // independent raw selection path (its one-minus-one prefilter could
+    // diverge from the plan-authoritative set). This fixture — -1 on both
+    // aliases of the start edge — is one concrete raw shape capable of
+    // causing that mismatch; the corrected implementation emits its
+    // sanitized evidence. The exact production raw layout remains unknown
+    // until the corrected #404 run.
     const state = correlateFixtureState()
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
       quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
@@ -1535,6 +1540,112 @@ describe('plan-decision-anchored S-record correlation', () => {
       state,
       classified,
     )).toThrowError(/does not re-derive the single-negative decision/)
+  })
+
+  it('correlates a NamedResource only when exactly one parent ResourceType matches', () => {
+    const state = makeState([{
+      id: 'snap-parent',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-child', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: 5, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+      windowlessDecisions: 0, singleMinusOneDecisions: 1, snapshotDecisions: 1,
+      liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+      topology11Snapshots: 0, topology7Snapshots: 1,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 1,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(1)
+    expect(report.singleNegativeEntries[0]!.modeSource).toBe('explicit')
+  })
+
+  it('fails closed on an absent parent reference', () => {
+    const state = makeState([{
+      id: 'snap-no-parent-ref',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [{
+          id: 'nr-orphan',
+          resourceTypeId: null,
+          name: 'Secret Person Name',
+          startWeek: null,
+          endWeek: null,
+          allocationPct: 100,
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 100,
+          allocationStartWeek: -1,
+          allocationEndWeek: 5,
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+      ),
+    }])
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    expect(() => correlateSingleNegativeDecisions(
+      { ...plan, decisions: [fakeDecision({ snapshotId: 'snap-no-parent-ref', entryId: 'nr-orphan' })] },
+      state,
+      classified,
+    )).toThrowError(/carries no parent reference/)
+  })
+
+  it('fails closed when no parent ResourceType matches', () => {
+    const state = makeState([{
+      id: 'snap-no-parent',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-other', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-child', resourceTypeId: 'rt-ghost', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: null, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }])
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    expect(() => correlateSingleNegativeDecisions(
+      { ...plan, decisions: [fakeDecision({ snapshotId: 'snap-no-parent', entryId: 'nr-child' })] },
+      state,
+      classified,
+    )).toThrowError(/matched 0 resource types/)
+  })
+
+  it('fails closed on duplicate parents even with different allocation modes', () => {
+    const state = makeState([{
+      id: 'snap-dup-parents',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [
+          makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 }),
+          makeRt({ id: 'rt-p', allocationMode: 'TIMELINE', allocationStartWeek: 0, allocationEndWeek: 5 }),
+        ],
+        [makeNr({ id: 'nr-child', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, startWeek: null, allocationEndWeek: 5, endWeek: null })],
+      ),
+    }])
+    const classified = classifyAllSnapshots(state)
+    const plan = buildRemediationPlan(state, 'test-commit')
+    try {
+      correlateSingleNegativeDecisions(
+        { ...plan, decisions: [fakeDecision({ snapshotId: 'snap-dup-parents', entryId: 'nr-child' })] },
+        state,
+        classified,
+      )
+      throw new Error('expected refusal')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      expect(message).toContain('matched multiple resource types')
+      // Controlled messages expose no identifiers, names, modes or payload
+      // values — the duplicate parents held different allocation modes and
+      // neither may influence evidence.
+      expect(message).not.toContain('rt-p')
+      expect(message).not.toContain('nr-child')
+      expect(message).not.toContain('CAPACITY_PLAN')
+      expect(message).not.toContain('TIMELINE')
+      expect(message).not.toContain('snap-dup-parents')
+    }
   })
 
   it('correlation errors carry only fixed safe reasons and counts (no ids or payloads)', () => {

@@ -704,9 +704,19 @@ export function correlateSingleNegativeDecisions(
     const key = `${decision.snapshotId}\u0000${kind}\u0000${decision.entryId}`
     if (correlatedKeys.has(key)) fail('two selected decisions resolve to the same raw entry')
     correlatedKeys.add(key)
-    const parentRt = kind === 'namedResource'
-      ? parsed.resourceTypes.find(rt => rt.id === (rawEntry as SnapshotNamedResource).resourceTypeId)
-      : undefined
+    // A correlated NamedResource must resolve to exactly one parent
+    // ResourceType: an absent, unmatched or duplicated parent reference would
+    // otherwise let parent-dependent evidence come from an arbitrary
+    // ResourceType. Never resolve ambiguity with find/Map/positional picks.
+    let parentRt: SnapshotResourceType | undefined
+    if (kind === 'namedResource') {
+      const parentId = (rawEntry as SnapshotNamedResource).resourceTypeId
+      if (parentId == null || parentId === '') fail('the named-resource entry carries no parent reference')
+      const parents = parsed.resourceTypes.filter(rt => rt.id === parentId)
+      if (parents.length === 0) fail('the named-resource parent matched 0 resource types')
+      if (parents.length > 1) fail('the named-resource parent matched multiple resource types')
+      parentRt = parents[0]
+    }
     correlations.push({
       decision,
       snapshotIndex,

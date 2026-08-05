@@ -495,9 +495,13 @@ owner kind) and are used only to populate the sanitized evidence. Raw entry
 scanning is never an independent policy or selection path. Missing,
 ambiguous or inconsistent correlation (no stored snapshot, non-v2 payload,
 missing entry identifier, zero or multiple matching raw entries, entry-kind
-mismatch, an entry that does not re-derive the single-negative decision, or
-two decisions resolving to the same raw entry) fails closed with a fixed
-safe message and no evidence is emitted. Inherited effective mode is
+mismatch, an entry that does not re-derive the single-negative decision, two
+decisions resolving to the same raw entry, or a NamedResource whose parent
+reference is absent, unmatched or duplicated) fails closed with a fixed
+safe message and no evidence is emitted. Parent correlation never resolves
+ambiguity with `find`, a `Map` or positional picks: every correlated
+NamedResource must match exactly one ResourceType. Inherited effective mode
+is
 preserved in evidence when present (`rawMode: null`, `parentMode:
 CAPACITY_PLAN`, `effectiveMode: CAPACITY_PLAN`, `modeSource: inherited`).
 Identifiers remain internal and are never emitted. The reviewed production
