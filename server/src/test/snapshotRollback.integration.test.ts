@@ -2723,7 +2723,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     expect(nrAfter.endWeek).toBe(nrBefore.endWeek)
   })
 
-  it('rejects quarantined CAPACITY_PLAN (no captured window) before any change', async () => {
+  it('rolls back the exact all-windowless-100% Class A snapshot, materialising lossless profiles (issue #438)', async () => {
     const projectId2 = await createProject()
     const rtId2 = await createResourceType(projectId2, 'rt-g-bad', 'Bad Plan', {
       allocationMode: 'CAPACITY_PLAN',
@@ -2771,11 +2771,11 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
         allocationEndWeek: null,
       })),
     } as unknown as SnapshotV2
-    const badSnap = (
+    const snap = (
       await prisma.backlogSnapshot.create({
         data: {
           projectId: projectId2,
-          label: 'untranslatable v2',
+          label: 'exact class a v2',
           trigger: 'manual',
           snapshot: v2Data as unknown as object,
           createdById: userId,
@@ -2785,12 +2785,110 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     // Persisted value as PostgreSQL actually stored it (jsonb may normalise
     // object-key ordering, so the in-memory object is not a valid string
     // comparison baseline). This is the byte-preservation baseline.
-    const persistedBefore = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: badSnap } })
+    const persistedBefore = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snap } })
+
+    // Issue #438: this reviewed windowless-100% all-explicit shape is the
+    // exact Class A predicate — deterministic full capacity, so rollback is
+    // accepted and materialises the lossless translated profiles.
+    await rollbackProjectSnapshot({ projectId: projectId2, snapshotId: snap, userId, db: prisma })
+
+    const profiles = await prisma.capacityProfile.findMany({
+      where: { projectId: projectId2 },
+      include: { segments: true },
+    })
+    expect(profiles).toHaveLength(2)
+    // ROLE: null-window aggregate percent max(0, count − namedResources) × 100
+    // with count 2 and one named resource → 100 (not a plain 100% ROLE for
+    // the n=0 case — the aggregate is derived from the captured count).
+    const role = profiles.find(p => p.ownerKind === 'ROLE')!
+    expect(role.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(role.source).toBe('LEGACY')
+    expect(role.defaultPercent).toBe(100)
+    expect(role.startWeek).toBeNull()
+    expect(role.endWeek).toBeNull()
+    expect(role.segments).toHaveLength(0)
+    // NAMED_PERSON: null-window 100%.
+    const named = profiles.find(p => p.ownerKind === 'NAMED_PERSON')!
+    expect(named.namedResourceId).toBe('nr-g-bad')
+    expect(named.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(named.source).toBe('LEGACY')
+    expect(named.defaultPercent).toBe(100)
+    expect(named.startWeek).toBeNull()
+    expect(named.endWeek).toBeNull()
+    expect(named.segments).toHaveLength(0)
+
+    // Scheduler equivalence (count 2, one named resource):
+    // max(count, namedResources) × hoursPerDay × 5 per week.
+    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const resolved = await resolveSchedulerCapacity(prisma as any, projectId2)
+    const resolvedRt = resolved.resourceTypes.find(rt => rt.id === rtId2)!
+    const hoursPerDay = resolvedRt.hoursPerDay ?? 8
+    expect(getWeeklyCapacity(resolvedRt, 0, 8)).toBe(2 * hoursPerDay * 5)
+    expect(getWeeklyCapacity(resolvedRt, 10, 8)).toBe(2 * hoursPerDay * 5)
+    expect(resolvedRt.roleSegments).toEqual([{ startWeek: 0, endWeek: Infinity, allocationPercent: 100 }])
+
+    // The persisted target row is unchanged (raw historical records are never
+    // rewritten by rollback) — compared against the value read from
+    // PostgreSQL before the rollback.
+    const persistedAfter = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snap } })
+    expect(persistedAfter.snapshot).toEqual(persistedBefore.snapshot)
+  })
+
+  it('rejects a windowless CAPACITY_PLAN snapshot outside the exact Class A predicate before any write', async () => {
+    // Issue #438 fail-closed boundary: a non-100 percentage is NOT the
+    // approved all-windowless-100% shape, so the snapshot stays quarantined
+    // and rollback is refused pre-write with the stable reason.
+    const projectId2 = await createProject()
+    const rtId2 = await createResourceType(projectId2, 'rt-g-p80', 'Plan 80', {
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 80,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })
+    await createEpicBacklog(projectId2, rtId2, null)
+    await createProfile(
+      projectId2, 'prof-g-p80-role', 'ROLE', rtId2, null,
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
+      Prisma.DbNull,
+    )
+
+    const v4Data = await buildSnapshot(projectId2, prisma)
+    const v2Data = {
+      ...v4Data,
+      schemaVersion: 2,
+      resourceTypes: (v4Data.resourceTypes as Array<Record<string, unknown>>).map(rt => ({
+        ...rt,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 80,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      })),
+      namedResources: (v4Data.namedResources as Array<Record<string, unknown>>).map(nr => ({
+        ...nr,
+        startWeek: null,
+        endWeek: null,
+        allocationPct: 100,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      })),
+    } as unknown as SnapshotV2
+    const badSnap = (
+      await prisma.backlogSnapshot.create({
+        data: {
+          projectId: projectId2,
+          label: 'windowless 80 v2',
+          trigger: 'manual',
+          snapshot: v2Data as unknown as object,
+          createdById: userId,
+        },
+      })
+    ).id
     const profileCountBefore = await prisma.capacityProfile.count({ where: { projectId: projectId2 } })
     const snapshotCountBefore = await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })
 
-    // Issue #428: this reviewed windowless CAPACITY_PLAN shape is derived
-    // quarantine — rollback is refused pre-write with the stable reason.
     let caught: unknown
     try {
       await rollbackProjectSnapshot({ projectId: projectId2, snapshotId: badSnap, userId, db: prisma })
@@ -2803,19 +2901,10 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     expect(message).toContain('Class A')
 
     // No state changed: profiles untouched, no pre_rollback snapshot, and the
-    // persisted target row is unchanged — compared against the value read
-    // from PostgreSQL before the attempt (deep structural equality, immune to
-    // jsonb key-ordering normalisation).
+    // persisted target row is unchanged.
     expect(await prisma.capacityProfile.count({ where: { projectId: projectId2 } })).toBe(profileCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })).toBe(snapshotCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2, trigger: 'pre_rollback' } })).toBe(0)
-    const persistedAfter = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: badSnap } })
-    expect(persistedAfter.id).toBe(persistedBefore.id)
-    expect(persistedAfter.projectId).toBe(persistedBefore.projectId)
-    expect(persistedAfter.label).toBe(persistedBefore.label)
-    expect(persistedAfter.trigger).toBe(persistedBefore.trigger)
-    expect(persistedAfter.createdById).toBe(persistedBefore.createdById)
-    expect(persistedAfter.snapshot).toEqual(persistedBefore.snapshot)
   })
 
   it('rejects quarantined CAPACITY_PLAN with a single -1 edge before any write', async () => {

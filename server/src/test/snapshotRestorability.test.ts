@@ -21,12 +21,14 @@ import {
   QUARANTINE_CLASS_B_REASON,
   type V2QuarantineWindowFields,
 } from '../lib/snapshotRestorability.js'
+import { translateV2SnapshotProfiles } from '../lib/projectSnapshotCapacity.js'
 
 // ─── Fixture helpers ────────────────────────────────────────────────────────
 
 interface RtFixture {
   id?: string
   name?: string
+  count?: number
   allocationMode?: string | null
   allocationPercent?: number | null
   allocationStartWeek?: number | null
@@ -96,6 +98,7 @@ function makeV2(resourceTypes: Array<ReturnType<typeof makeResourceType>>, named
 }
 
 const CAPACITY_PLAN_RT_A = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })
+const CAPACITY_PLAN_RT_A_NON100 = makeResourceType({ id: 'rt-non100', name: 'Non-100 Role', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, allocationPercent: 80 })
 const CAPACITY_PLAN_RT_B_START = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 })
 const CAPACITY_PLAN_RT_B_END = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: -1 })
 
@@ -155,14 +158,24 @@ describe('classifyV2QuarantineShape', () => {
 describe('classifySnapshotRestorability — quarantined', () => {
   const classify = (snapshot: unknown) => classifySnapshotRestorability(snapshot, 'proj-1')
 
-  it('ResourceType Class A — windowless CAPACITY_PLAN', () => {
-    const verdict = classify(makeV2([CAPACITY_PLAN_RT_A]))
+  it('ResourceType windowless CAPACITY_PLAN outside the exact 100% predicate stays Class A quarantined', () => {
+    // Issue #438: only the EXACT all-windowless-100% shape is restorable; a
+    // non-100 percentage is outside the approved predicate and keeps the
+    // Class A quarantine verdict (fail closed).
+    const verdict = classify(makeV2([CAPACITY_PLAN_RT_A_NON100]))
     expect(verdict.kind).toBe('quarantined')
     expect(verdict.restoreStatus).toBe('non-restorable')
     expect(verdict.restoreReason).toBe(QUARANTINE_CLASS_A_REASON)
     if (verdict.kind === 'quarantined') {
       expect(verdict.quarantineClasses).toEqual(['A'])
     }
+  })
+
+  it('exact Class A ResourceType snapshot is restorable, never quarantined (issue #438)', () => {
+    const verdict = classify(makeV2([CAPACITY_PLAN_RT_A]))
+    expect(verdict.kind).toBe('restorable')
+    expect(verdict.restoreStatus).toBe('restorable')
+    expect(verdict.restoreReason).toBeNull()
   })
 
   it('ResourceType Class B — -1 on either edge', () => {
@@ -236,9 +249,11 @@ describe('classifySnapshotRestorability — quarantined', () => {
   })
 
   it('multiple quarantine entries in one snapshot', () => {
+    // The second entry is non-100, so the snapshot-wide all-windowless-100%
+    // condition fails and both windowless entries stay Class A quarantined.
     const snapshot = makeV2([
       CAPACITY_PLAN_RT_A,
-      makeResourceType({ id: 'rt-2', name: 'Designer', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null }),
+      CAPACITY_PLAN_RT_A_NON100,
     ])
     const verdict = classify(snapshot)
     expect(verdict.kind).toBe('quarantined')
@@ -313,6 +328,45 @@ describe('classifySnapshotRestorability — restorable', () => {
 
   it('CAPACITY_PLAN with a valid captured window', () => {
     expectRestorable(makeV2([makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })]))
+  })
+
+  it('exact S shape — raw (-1,-1) alias pair with populated primary end (issue #438)', () => {
+    // The exact approved shadowed-primary shape: both aliases -1,
+    // allocationStartWeek null, allocationEndWeek a non-negative integer,
+    // explicit CAPACITY_PLAN, valid percents, resolvable parent. The raw
+    // (-1,-1) alias pair is the scheduler-consumed never-active sentinel, so
+    // the entry is deterministic zero and the containing snapshot is
+    // restorable.
+    const parent = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expectRestorable(makeV2([parent], [nr]))
+  })
+
+  it('exact Class A snapshot with ResourceType and NamedResource entries (issue #438)', () => {
+    const rt = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+    expectRestorable(makeV2([rt], [nr]))
+  })
+
+  it('exact Class A snapshot with multiple ResourceTypes is restorable per owner (issue #438)', () => {
+    const rtA = makeResourceType({ id: 'rt-a', name: 'Engineers', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, count: 3 })
+    const rtB = makeResourceType({ id: 'rt-b', name: 'Designers', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, count: 2 })
+    const nrA = makeNamedResource({ id: 'nr-a', resourceTypeId: 'rt-a', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100 })
+    expectRestorable(makeV2([rtA, rtB], [nrA]))
   })
 
   it('V1 snapshot (epic-only)', () => {
@@ -419,9 +473,245 @@ describe('classifySnapshotRestorability — blocking defects', () => {
     expectDefect(makeV2([CAPACITY_PLAN_RT_A], [orphan]))
   })
 
+  // ── Issue #438 S-predicate fail-closed boundaries ────────────────────────
+  // Every listed variant keeps its current verdict: the S predicate is
+  // evaluated on the raw alias pair only for the EXACT approved shape.
+
+  it('S variant: inherited mode is not the exact S shape (defect via alias conflict)', () => {
+    const parent = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })
+    const nr = makeNamedResource({
+      allocationMode: null,
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expectDefect(makeV2([parent], [nr]))
+  })
+
+  it('S variant: populated allocationStartWeek is not the exact S shape (defect via alias conflict)', () => {
+    const parent = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationStartWeek: 0,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expectDefect(makeV2([parent], [nr]))
+  })
+
+  it('S variant: one alias -1 with the other null stays Class B quarantine', () => {
+    const parent = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: null,
+    })
+    const verdict = classify(makeV2([parent], [nr]))
+    expect(verdict.kind).toBe('quarantined')
+    if (verdict.kind === 'quarantined') expect(verdict.quarantineClasses).toEqual(['B'])
+  })
+
+  it('S variant: values below -1 are not the exact S shape (defect)', () => {
+    const parent = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -2,
+      endWeek: -1,
+    })
+    expectDefect(makeV2([parent], [nr]))
+  })
+
+  it('S variant: fractional primary end is not the exact S shape (defect)', () => {
+    const parent = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationStartWeek: null,
+      allocationEndWeek: 1.5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expectDefect(makeV2([parent], [nr]))
+  })
+
+  it('S variant: non-finite percentage is not the exact S shape (defect)', () => {
+    const parent = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: Number.POSITIVE_INFINITY,
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expectDefect(makeV2([parent], [nr]))
+  })
+
+  it('S variant: unresolvable parent is not the exact S shape (defect)', () => {
+    const nr = makeNamedResource({
+      resourceTypeId: 'rt-missing',
+      allocationMode: 'CAPACITY_PLAN',
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expectDefect(makeV2([makeResourceType()], [nr]))
+  })
+
+  // ── Issue #438 Class A fail-closed boundaries (snapshot-wide) ────────────
+
+  it('Class A variant: inherited NamedResource mode fails the snapshot-wide condition (stays quarantined)', () => {
+    const rt = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })
+    const nr = makeNamedResource({
+      allocationMode: null,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+    const verdict = classify(makeV2([rt], [nr]))
+    expect(verdict.kind).toBe('quarantined')
+    if (verdict.kind === 'quarantined') expect(verdict.quarantineClasses).toEqual(['A', 'A'])
+  })
+
+  it('Class A variant: a non-100 percentage anywhere fails the snapshot-wide condition (stays quarantined)', () => {
+    const rt = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 80,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+    const verdict = classify(makeV2([rt], [nr]))
+    expect(verdict.kind).toBe('quarantined')
+  })
+
+  it('Class A variant: a partial window anywhere fails the snapshot-wide condition (defect)', () => {
+    const rtA = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })
+    const rtB = makeResourceType({ id: 'rt-b', name: 'Partial', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 3, allocationEndWeek: null })
+    // The partial-window entry is itself a defect, so the snapshot is a
+    // blocking defect (fail closed; windowless decisions stay decision-
+    // required at plan level).
+    expectDefect(makeV2([rtA, rtB]))
+  })
+
+  it('Class A variant: an alias conflict anywhere fails the snapshot-wide condition (defect)', () => {
+    const rt = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })
+    const nr = makeNamedResource({
+      id: 'nr-c',
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: 5,
+      allocationEndWeek: 10,
+      startWeek: 5,
+      endWeek: 9,
+    })
+    expectDefect(makeV2([rt], [nr]))
+  })
+
   it('duplicate resourceType ids fail structural validation (never quarantine)', () => {
     const dup = makeResourceType({ id: 'rt-dup', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })
     expectDefect(makeV2([dup, { ...dup, name: 'Clone' }]))
+  })
+})
+
+// ─── Issue #438 deterministic translations (shared translator) ─────────────
+
+describe('translateV2SnapshotProfiles — issue #438 deterministic translations', () => {
+  const translate = (snapshot: unknown) => translateV2SnapshotProfiles(snapshot as never, 'proj-1')
+
+  it('S shape translates to the never-active zero-capacity representation', () => {
+    const parent = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 })
+    const nr = makeNamedResource({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    const result = translate(makeV2([parent], [nr]))
+    expect(result.errors).toEqual([])
+    const sProfile = result.profiles.find(p => p.namedResourceId === 'nr-1')!
+    expect(sProfile.ownerKind).toBe('NAMED_PERSON')
+    expect(sProfile.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(sProfile.source).toBe('LEGACY')
+    expect(sProfile.defaultPercent).toBe(0)
+    expect(sProfile.startWeek).toBeNull()
+    expect(sProfile.endWeek).toBeNull()
+  })
+
+  it('Class A snapshot translates to NAMED_PERSON 100% and the aggregate ROLE percent', () => {
+    const rt = makeResourceType({ id: 'rt-a', name: 'Engineers', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, count: 3 })
+    const nr = makeNamedResource({
+      id: 'nr-a',
+      resourceTypeId: 'rt-a',
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      startWeek: null,
+      endWeek: null,
+    })
+    const result = translate(makeV2([rt], [nr]))
+    expect(result.errors).toEqual([])
+    const role = result.profiles.find(p => p.resourceTypeId === 'rt-a')!
+    // max(0, count − namedResources) × 100 = max(0, 3 − 1) × 100 = 200.
+    expect(role.ownerKind).toBe('ROLE')
+    expect(role.planningBasis).toBe('AVAILABILITY_WINDOW')
+    expect(role.source).toBe('LEGACY')
+    expect(role.defaultPercent).toBe(200)
+    expect(role.startWeek).toBeNull()
+    expect(role.endWeek).toBeNull()
+    const named = result.profiles.find(p => p.namedResourceId === 'nr-a')!
+    expect(named.defaultPercent).toBe(100)
+    expect(named.startWeek).toBeNull()
+    expect(named.endWeek).toBeNull()
+  })
+
+  it('Class A snapshot with multiple ResourceTypes derives the aggregate per owner', () => {
+    const rtA = makeResourceType({ id: 'rt-a', name: 'Engineers', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, count: 3 })
+    const rtB = makeResourceType({ id: 'rt-b', name: 'Designers', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, count: 2 })
+    const nrA = makeNamedResource({ id: 'nr-a', resourceTypeId: 'rt-a', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100 })
+    const nrB1 = makeNamedResource({ id: 'nr-b1', resourceTypeId: 'rt-b', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100 })
+    const nrB2 = makeNamedResource({ id: 'nr-b2', resourceTypeId: 'rt-b', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100 })
+    const result = translate(makeV2([rtA, rtB], [nrA, nrB1, nrB2]))
+    expect(result.errors).toEqual([])
+    const roleA = result.profiles.find(p => p.resourceTypeId === 'rt-a')!
+    const roleB = result.profiles.find(p => p.resourceTypeId === 'rt-b')!
+    // Never aggregated across owners: rt-a has one NR (200%), rt-b has two (0%).
+    expect(roleA.defaultPercent).toBe(200)
+    expect(roleB.defaultPercent).toBe(0)
+    expect(result.profiles.filter(p => p.ownerKind === 'NAMED_PERSON')).toHaveLength(3)
+  })
+
+  it('Class A translation covers the n=0 and n=count cardinality edges', () => {
+    const rtNone = makeResourceType({ id: 'rt-none', name: 'No People', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, count: 4 })
+    const rtFull = makeResourceType({ id: 'rt-full', name: 'All People', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, count: 2 })
+    const nrFull1 = makeNamedResource({ id: 'nr-f1', resourceTypeId: 'rt-full', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100 })
+    const nrFull2 = makeNamedResource({ id: 'nr-f2', resourceTypeId: 'rt-full', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100 })
+    const result = translate(makeV2([rtNone, rtFull], [nrFull1, nrFull2]))
+    expect(result.errors).toEqual([])
+    expect(result.profiles.find(p => p.resourceTypeId === 'rt-none')!.defaultPercent).toBe(400)
+    expect(result.profiles.find(p => p.resourceTypeId === 'rt-full')!.defaultPercent).toBe(0)
+  })
+
+  it('a mixed snapshot never translates the windowless entries (fail closed)', () => {
+    const rtA = makeResourceType({ allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })
+    const rtB = makeResourceType({ id: 'rt-b', name: 'Valid', allocationMode: 'TIMELINE', allocationStartWeek: 2, allocationEndWeek: 9 })
+    const result = translate(makeV2([rtA, rtB]))
+    // The windowless entry keeps its rejection error; nothing is guessed.
+    expect(result.errors.join('; ')).toContain('without a captured start/end window')
   })
 })
 

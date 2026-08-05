@@ -151,12 +151,15 @@ async function createSnapshot(id: string, payload: unknown, createdAtIso: string
 /** Corrected-topology fixture set (smaller than production, same rules):
  * - E1: eleven-subgroup with 21 windowless decisions + alias-conflict NR;
  * - E2: eleven-subgroup with 16 windowless decisions + alias-conflict NR;
- * - S7: seven-subgroup with 19 windowless + 1 single-`-1` decision;
+ * - S7: seven-subgroup with 19 windowless decisions + 1 deterministic S
+ *   entry + a residual alias-conflict NR (production M1–M6/M8 shape: the
+ *   snapshot stays defect, the S entry leaves the decision set);
  * - Q1: quarantined snapshot with 2 RT + 1 inherited-NR Class A entries;
  * - R1: restorable TIMELINE snapshot.
- * Expected: quarantined 3 entries / 1 snapshot; defect 3; windowless 37+19=56;
- * single 1; snapshot decisions 57; live 0; unsupported 0; rewrite 0;
- * topology 11 = 37, topology 7 = 19 windowless + 1 single. */
+ * Expected: quarantined 3 entries / 1 snapshot; defect 3; windowless
+ * 37+19=56; single 0; snapshot decisions 56; live 0; unsupported 0;
+ * rewrite 0; topology 11 = 56 (all defect snapshots are windowless-only now:
+ * the S decisions are gone). */
 async function seedTopologyFixture(): Promise<void> {
   const conflictNr = (id: string, parentId: string) => makeNr({
     id, resourceTypeId: parentId, allocationMode: null,
@@ -182,15 +185,29 @@ async function seedTopologyFixture(): Promise<void> {
     'snap-s7',
     makeV2Snapshot(
       Array.from({ length: 19 }, (_, i) => makeRt({ id: `rt-s7-${i}`, allocationMode: 'CAPACITY_PLAN' })),
-      [makeNr({
-        id: 'nr-s7-minus-one',
-        resourceTypeId: 'rt-s7-0',
-        allocationMode: 'CAPACITY_PLAN',
-        allocationStartWeek: null,
-        allocationEndWeek: 5,
-        startWeek: -1,
-        endWeek: -1,
-      })],
+      [
+        makeNr({
+          id: 'nr-s7-minus-one',
+          resourceTypeId: 'rt-s7-0',
+          allocationMode: 'CAPACITY_PLAN',
+          allocationStartWeek: null,
+          allocationEndWeek: 5,
+          startWeek: -1,
+          endWeek: -1,
+        }),
+        // Residual independent defect (production M1–M6/M8: two alias-
+        // conflict entries per snapshot): the snapshot stays defect while the
+        // S entry itself is deterministic zero.
+        makeNr({
+          id: 'nr-s7-conflict',
+          resourceTypeId: 'rt-s7-0',
+          allocationMode: null,
+          allocationStartWeek: 5,
+          allocationEndWeek: 10,
+          startWeek: 5,
+          endWeek: 9,
+        }),
+      ],
     ),
     '2026-05-10T00:00:00Z',
   )
@@ -229,16 +246,16 @@ async function expectedBoundary(): Promise<SnapshotEvidenceExpected> {
     quarantinedSnapshots: 1,
     defectSnapshots: 3,
     windowlessDecisions: 56,
-    singleMinusOneDecisions: 1,
-    snapshotDecisions: 57,
+    singleMinusOneDecisions: 0,
+    snapshotDecisions: 56,
     liveDecisions: 0,
     unsupported: 0,
     rewriteOperations: 0,
-    topology11Snapshots: 2,
-    topology7Snapshots: 1,
-    topology11WindowlessDecisions: 37,
-    topology7WindowlessDecisions: 19,
-    topology7SingleMinusOneDecisions: 1,
+    topology11Snapshots: 3,
+    topology7Snapshots: 0,
+    topology11WindowlessDecisions: 56,
+    topology7WindowlessDecisions: 0,
+    topology7SingleMinusOneDecisions: 0,
   }
 }
 
@@ -274,11 +291,11 @@ describeIf('snapshot evidence command (integration)', () => {
       quarantinedSnapshots: 1,
       defectSnapshots: 3,
       windowlessDecisions: 56,
-      singleMinusOneDecisions: 1,
-      snapshotDecisions: 57,
+      singleMinusOneDecisions: 0,
+      snapshotDecisions: 56,
       liveDecisions: 0,
-      elevenSnapshotSubgroup: { snapshots: 2, windowlessDecisions: 37 },
-      sevenSnapshotSubgroup: { snapshots: 1, windowlessDecisions: 19, singleMinusOneDecisions: 1, totalDecisions: 20 },
+      elevenSnapshotSubgroup: { snapshots: 3, windowlessDecisions: 56 },
+      sevenSnapshotSubgroup: { snapshots: 0, windowlessDecisions: 0, singleMinusOneDecisions: 0, totalDecisions: 0 },
     })
 
     // Output file modes (POSIX only) and no temporary residue.
@@ -289,21 +306,14 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(readdirSync(dir).filter(name => name.includes('.tmp'))).toEqual([])
     expect(report.classAAggregates.totalEntries).toBe(3)
     expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 2, namedResource: 1, unavailable: 0 })
-    expect(report.singleNegativeEntries).toHaveLength(1)
-    // The seeded sanitized production shape: -1 fallback on the start edge
-    // (effective negative start) plus a shadowed -1 fallback on the end edge
-    // (populated primary end) — both reported, reconciliation passes.
-    expect(report.singleNegativeEntries[0]!.minusOneField).toBe('startWeek')
-    expect(report.singleNegativeEntries[0]!.windowFields).toEqual({
-      allocationStartWeek: 'absent-null',
-      allocationEndWeek: 'populated',
-      startWeek: 'minus-one',
-      endWeek: 'minus-one',
-    })
+    // Issue #438: the seeded S entry is deterministic zero — no single-
+    // negative decision exists, so no S record is emitted.
+    expect(report.singleNegativeEntries).toHaveLength(0)
     expect(report.defectSnapshots).toHaveLength(3)
-    const seven = report.defectSnapshots.find((m: { subgroup: string }) => m.subgroup === 'seven-single-minus-one')!
+    const seven = report.defectSnapshots.find((m: { windowlessDecisionCount: number }) => m.windowlessDecisionCount === 19)!
     expect(seven.windowlessDecisionCount).toBe(19)
-    expect(seven.singleMinusOneDecisionCount).toBe(1)
+    expect(seven.singleMinusOneDecisionCount).toBe(0)
+    expect(seven.entryErrorCategories['alias-conflict']).toBeGreaterThanOrEqual(2)
 
     // Zero writes: canonical covered-state hash unchanged.
     const stateHashAfter = await currentStateHash()

@@ -35,7 +35,7 @@ import {
   type CapacityProfileDTO,
 } from './capacityProfileMapping.js'
 import { buildRoleProfileData } from './squadPlannerProfileWriter.js'
-import { isNeverActiveWindow, v2EffectiveNamedMode } from './projectSnapshotCapacity.js'
+import { isNeverActiveWindow, v2EffectiveNamedMode, v2PercentIsValid, isClassASnapshot, isClassAResourceTypeEntry, isClassANamedResourceEntry } from './projectSnapshotCapacity.js'
 import {
   classifySnapshotRestorability,
   classifyV2QuarantineShape,
@@ -872,12 +872,47 @@ export interface SnapshotEntryFinding {
   message: string
 }
 
+/**
+ * Issue #438 deterministic zero (S shape) finding message — the raw
+ * (-1,-1) alias pair is the never-active scheduler sentinel, so the entry
+ * translates to the existing zero-capacity representation with no write
+ * required.
+ */
+export const DETERMINISTIC_ZERO_ALIAS_PAIR_MESSAGE =
+  'raw (-1,-1) alias pair normalized by policy to a zero-capacity profile (no write required)'
+
+/**
+ * Issue #438 Class A full-capacity finding message — the exact
+ * all-windowless-100% CAPACITY_PLAN shape translates deterministically at
+ * full capacity (ROLE aggregate percent from the captured count, NAMED_PERSON
+ * 100% per person) with no write required.
+ */
+export const CLASS_A_FULL_CAPACITY_MESSAGE =
+  'windowless 100% CAPACITY_PLAN translated deterministically at full capacity (no write required)'
+
 export function classifySnapshotEntry(
   entry: { allocationMode: string | null; allocationPercent: number | null; allocationPct?: number | null; allocationStartWeek: number | null; allocationEndWeek: number | null; startWeek?: number | null; endWeek?: number | null },
 ): SnapshotEntryFinding {
   const mode = entry.allocationMode ?? null
   if (mode != null && mode !== 'EFFORT' && mode !== 'TIMELINE' && mode !== 'FULL_PROJECT' && mode !== 'CAPACITY_PLAN') {
     return { classification: 'unsupported', message: `unknown allocationMode ${JSON.stringify(mode)}` }
+  }
+  // Issue #438 S predicate — evaluate the raw scheduler-consumed (-1,-1)
+  // alias pair BEFORE the effective-edge rejection: the populated primary
+  // end is never a scheduler input for CAPACITY_PLAN and the end-edge alias
+  // conflict is scheduler-irrelevant, so the exact shadowed-primary shape is
+  // deterministic zero, never a decision. Non-finite percentages and every
+  // listed variant fail the predicate and keep their current verdict.
+  if (
+    mode === 'CAPACITY_PLAN' &&
+    entry.startWeek === -1 &&
+    entry.endWeek === -1 &&
+    entry.allocationStartWeek == null &&
+    isNonNegativeInteger(entry.allocationEndWeek) &&
+    v2PercentIsValid(entry.allocationPercent) &&
+    v2PercentIsValid(entry.allocationPct ?? null)
+  ) {
+    return { classification: 'deterministic', message: DETERMINISTIC_ZERO_ALIAS_PAIR_MESSAGE }
   }
   const effectiveStart = entry.allocationStartWeek ?? entry.startWeek ?? null
   const effectiveEnd = entry.allocationEndWeek ?? entry.endWeek ?? null
@@ -1266,6 +1301,13 @@ export function buildRemediationPlan(
     // quarantined.
     const restorability = classifySnapshotRestorability(snapshot.snapshot, snapshot.projectId)
     const quarantinedSnapshot = restorability.kind === 'quarantined'
+    // Issue #438: a snapshot is Class A only when the shared classifier
+    // verdicts it restorable AND the exact approved snapshot-wide
+    // all-windowless-100% condition holds. Every entry then receives a
+    // deterministic full-capacity finding; any other snapshot keeps the
+    // existing per-entry classifications (fail closed on mixed or unresolved
+    // snapshots).
+    const classASnapshot = restorability.kind === 'restorable' && isClassASnapshot(v2)
     const quarantineMessage = (entryClass: V2QuarantineClass): string =>
       entryClass === 'A' ? QUARANTINE_CLASS_A_REASON : QUARANTINE_CLASS_B_REASON
 
@@ -1298,6 +1340,20 @@ export function buildRemediationPlan(
           }, buildSnapshotEntryEvidence(snapshot.id, 'resourceType', rt.id, entryPayload))
           continue
         }
+      }
+      if (classASnapshot && isClassAResourceTypeEntry(rt)) {
+        addFinding({
+          category: 'snapshot-entry',
+          projectId: snapshot.projectId,
+          ownerId: rt.id,
+          ownerName: rt.name,
+          profileId: null,
+          snapshotId: snapshot.id,
+          entryId: rt.id,
+          classification: 'deterministic',
+          message: CLASS_A_FULL_CAPACITY_MESSAGE,
+        }, buildSnapshotEntryEvidence(snapshot.id, 'resourceType', rt.id, entryPayload))
+        continue
       }
       const classified = classifySnapshotEntry(entryPayload)
       const evidence = buildSnapshotEntryEvidence(snapshot.id, 'resourceType', rt.id, entryPayload)
@@ -1362,6 +1418,20 @@ export function buildRemediationPlan(
         allocationEndWeek: nr.allocationEndWeek ?? null,
         startWeek: nr.startWeek ?? null,
         endWeek: nr.endWeek ?? null,
+      }
+      if (classASnapshot && isClassANamedResourceEntry(nr, rtById.get(nr.resourceTypeId ?? ''))) {
+        addFinding({
+          category: 'snapshot-entry',
+          projectId: snapshot.projectId,
+          ownerId: nr.id,
+          ownerName: nr.name,
+          profileId: null,
+          snapshotId: snapshot.id,
+          entryId: nr.id,
+          classification: 'deterministic',
+          message: CLASS_A_FULL_CAPACITY_MESSAGE,
+        }, buildSnapshotEntryEvidence(snapshot.id, 'namedResource', nr.id, entryPayload))
+        continue
       }
       if (quarantinedSnapshot) {
         const mode = v2EffectiveNamedMode(nr, rtById.get(nr.resourceTypeId ?? ''))

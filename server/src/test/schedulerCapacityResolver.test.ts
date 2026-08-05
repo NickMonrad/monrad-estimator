@@ -1504,3 +1504,192 @@ describe('transfer provenance suppression (issue #411)', () => {
     expect(nr.capacitySegments!.length).toBeGreaterThan(0)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Issue #438 — scheduler equivalence for the exact Class A translation.
+// The lossless representation is a null-window LEGACY ROLE profile at the
+// aggregate percent max(0, count − namedResources.length) × 100 plus NAMED_PERSON
+// null-window 100% profiles. The current scheduler contract consumes ROLE
+// segments as aggregate FTE (may exceed 100) and NAMED_PERSON segments as
+// per-person percent, so getWeeklyCapacity must reproduce
+// max(count, namedResources.length) × hoursPerDay × 5 in all four cardinality
+// cases, per ResourceType owner, never aggregating across owners.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('issue #438 Class A translation scheduler equivalence', () => {
+  /** Build the restored profile state for one or more resource types. */
+  function classARestoredFixture(rtSpecs: Array<{
+    id: string
+    count: number
+    namedResourceIds: string[]
+  }>): ReturnType<typeof mockClient> {
+    const resourceTypes: any[] = []
+    const capacityProfiles: any[] = []
+    for (const spec of rtSpecs) {
+      const namedResources = spec.namedResourceIds.map((id, index) => ({
+        id,
+        name: `Person ${index}`,
+        startWeek: null,
+        endWeek: null,
+        allocationPct: 100,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+        synthetic: false,
+        createdAt: new Date(2026, 0, index + 1),
+      }))
+      resourceTypes.push({
+        id: spec.id,
+        name: `Role ${spec.id}`,
+        count: spec.count,
+        hoursPerDay: 8,
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        namedResources,
+      })
+      const aggregatePercent = Math.max(0, spec.count - namedResources.length) * 100
+      capacityProfiles.push({
+        id: `cp-role-${spec.id}`,
+        projectId: 'proj-1',
+        resourceTypeId: spec.id,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'LEGACY',
+        defaultPercent: aggregatePercent,
+        startWeek: null,
+        endWeek: null,
+        legacy: null,
+        segments: [],
+      })
+      for (const nr of namedResources) {
+        capacityProfiles.push({
+          id: `cp-nr-${nr.id}`,
+          projectId: 'proj-1',
+          resourceTypeId: null,
+          namedResourceId: nr.id,
+          ownerKind: 'NAMED_PERSON',
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'LEGACY',
+          defaultPercent: 100,
+          startWeek: null,
+          endWeek: null,
+          legacy: null,
+          segments: [],
+        })
+      }
+    }
+    return mockClient({ resourceTypes, capacityProfiles })
+  }
+
+  function expectEquivalence(spec: { id: string; count: number; namedResourceIds: string[] }, expectedFte: number): () => Promise<void> {
+    return async () => {
+      const client = classARestoredFixture([spec])
+      const result = await resolveSchedulerCapacity(client as any, 'proj-1')
+      const rt = result.resourceTypes.find(r => r.id === spec.id)!
+      const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+      const expected = expectedFte * 8 * 5
+      // Unbounded interval: every week carries the same full capacity.
+      for (const week of [0, 1, 26, 100]) {
+        expect(getWeeklyCapacity(rt, week, 8)).toBe(expected)
+      }
+    }
+  }
+
+  it('n = 0 → count × hoursPerDay × 5 (ROLE aggregate at count × 100%)', expectEquivalence(
+    { id: 'rt-c3', count: 3, namedResourceIds: [] },
+    3,
+  ))
+
+  it('0 < n < count → count × hoursPerDay × 5 (ROLE aggregate fills the gap)', expectEquivalence(
+    { id: 'rt-c3', count: 3, namedResourceIds: ['nr-a', 'nr-b'] },
+    3,
+  ))
+
+  it('n = count → count × hoursPerDay × 5 (ROLE aggregate at 0%)', expectEquivalence(
+    { id: 'rt-c2', count: 2, namedResourceIds: ['nr-a', 'nr-b'] },
+    2,
+  ))
+
+  it('n > count → n × hoursPerDay × 5 (ROLE aggregate at 0%, NRs dominate)', expectEquivalence(
+    { id: 'rt-c2', count: 2, namedResourceIds: ['nr-a', 'nr-b', 'nr-c'] },
+    3,
+  ))
+
+  it('multiple ResourceTypes are resolved independently per owner, never aggregated across owners', async () => {
+    const client = classARestoredFixture([
+      { id: 'rt-engineers', count: 3, namedResourceIds: [] }, // n=0 → 3 FTE
+      { id: 'rt-designers', count: 1, namedResourceIds: ['nr-d1'] }, // n=c → 1 FTE
+      { id: 'rt-qa', count: 2, namedResourceIds: ['nr-q1', 'nr-q2', 'nr-q3'] }, // n>c → 3 FTE
+    ])
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    expect(result.resourceTypes).toHaveLength(3)
+    const engineers = result.resourceTypes.find(r => r.id === 'rt-engineers')!
+    const designers = result.resourceTypes.find(r => r.id === 'rt-designers')!
+    const qa = result.resourceTypes.find(r => r.id === 'rt-qa')!
+    expect(engineers.roleSegments).toEqual([{ startWeek: 0, endWeek: Infinity, allocationPercent: 300 }])
+    expect(designers.roleSegments).toEqual([{ startWeek: 0, endWeek: Infinity, allocationPercent: 0 }])
+    expect(qa.roleSegments).toEqual([{ startWeek: 0, endWeek: Infinity, allocationPercent: 0 }])
+    for (const week of [0, 5, 99]) {
+      expect(getWeeklyCapacity(engineers, week, 8)).toBe(3 * 8 * 5)
+      expect(getWeeklyCapacity(designers, week, 8)).toBe(1 * 8 * 5)
+      expect(getWeeklyCapacity(qa, week, 8)).toBe(3 * 8 * 5)
+    }
+  })
+
+  it('a plain null-window 100% ROLE profile is NOT the lossless translation (n = count)', async () => {
+    // Counter-proof from the approved design: a plain 100% ROLE yields
+    // (n + 1) FTE, which equals max(count, n) only when n = count − 1.
+    const client = mockClient({
+      resourceTypes: [
+        {
+          id: 'rt-c2', name: 'Role', count: 2, hoursPerDay: 8,
+          allocationMode: 'EFFORT', allocationPercent: 100,
+          allocationStartWeek: null, allocationEndWeek: null,
+          namedResources: [
+            {
+              id: 'nr-a', name: 'A', startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(2026, 0, 1),
+            },
+            {
+              id: 'nr-b', name: 'B', startWeek: null, endWeek: null,
+              allocationPct: 100, allocationMode: 'CAPACITY_PLAN',
+              allocationPercent: 100, allocationStartWeek: null,
+              allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS',
+              synthetic: false, createdAt: new Date(2026, 0, 2),
+            },
+          ],
+        },
+      ],
+      capacityProfiles: [
+        {
+          id: 'cp-role-plain', projectId: 'proj-1',
+          resourceTypeId: 'rt-c2', namedResourceId: null,
+          ownerKind: 'ROLE', planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'LEGACY', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null, segments: [],
+        },
+        ...['nr-a', 'nr-b'].map(id => ({
+          id: `cp-nr-${id}`, projectId: 'proj-1',
+          resourceTypeId: null, namedResourceId: id,
+          ownerKind: 'NAMED_PERSON', planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'LEGACY', defaultPercent: 100,
+          startWeek: null, endWeek: null, legacy: null, segments: [],
+        })),
+      ],
+    })
+    const result = await resolveSchedulerCapacity(client as any, 'proj-1')
+    const rt = result.resourceTypes.find(r => r.id === 'rt-c2')!
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    // Historical result for count 2, n=2: 2 FTE. The plain 100% ROLE gives 3.
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(3 * 8 * 5)
+  })
+})

@@ -3371,3 +3371,162 @@ describe('profile-first read adoption integration', () => {
     })
   })
 })
+// ═════════════════════════════════════════════════════════════════════════════
+// Issue #438 — n=0 display branch for the restored Class A ROLE profile.
+// The Class A translation is a null-window LEGACY ROLE profile carrying the
+// AGGREGATE percent max(0, count − n) × 100. The display path must not
+// count-scale the aggregate (that would double-count the headcount); the
+// scheduler contract remains the acceptance authority.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('GET /resource-profile — restored Class A n=0 display (issue #438)', () => {
+  // The file-level adapter mock is left overridden by earlier describes; the
+  // display tests exercise the REAL buildResourceCapacityProfileMap (the
+  // production adapter path) so the gate under test sees authentic
+  // camelCase profile data.
+  beforeEach(() => {
+    const realFn = testCtx.realBuildFn
+    if (!realFn) throw new Error('buildResourceCapacityProfileMap original unavailable')
+    vi.mocked(capacityProfileAdapter.buildResourceCapacityProfileMap)
+      .mockImplementation(realFn as (typeof capacityProfileAdapter.buildResourceCapacityProfileMap))
+  })
+
+  afterEach(() => {
+    vi.mocked(capacityProfileAdapter.buildResourceCapacityProfileMap)
+      .mockImplementation(() => ({ roleProfiles: new Map(), namedResourceProfiles: new Map() }))
+  })
+
+  function classAProjectFixture(profileOverrides: Record<string, unknown> = {}) {
+    return {
+      id: 'proj-1',
+      ownerId: userId,
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      resourceTypes: [
+        {
+          id: 'rt-dev',
+          name: 'Developer',
+          category: 'ENGINEERING',
+          count: 3,
+          hoursPerDay: 8,
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          dayRate: null,
+          globalType: null,
+          namedResources: [],
+        },
+      ],
+      epics: [
+        {
+          id: 'epic-1',
+          name: 'Delivery',
+          order: 0,
+          isActive: true,
+          features: [
+            {
+              id: 'feat-1',
+              name: 'Build',
+              order: 0,
+              isActive: true,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Implement',
+                  order: 0,
+                  isActive: true,
+                  tasks: [
+                    {
+                      id: 'task-1',
+                      hoursEffort: 8,
+                      durationDays: 3,
+                      resourceTypeId: 'rt-dev',
+                      resourceType: { name: 'Developer', hoursPerDay: 8 },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      overheads: [],
+      timelineEntries: [],
+      storyTimelineEntries: [{ storyId: 'story-1', startWeek: 0, durationWeeks: 4 }],
+      capacityPlans: [],
+      capacityProfiles: [
+        {
+          id: 'cp-role-class-a',
+          projectId: 'proj-1',
+          resourceTypeId: 'rt-dev',
+          namedResourceId: null,
+          ownerKind: 'ROLE',
+          planningBasis: 'AVAILABILITY_WINDOW',
+          source: 'LEGACY',
+          defaultPercent: 300,
+          startWeek: null,
+          endWeek: null,
+          legacy: { kind: 'DB_NULL' },
+          segments: [],
+          ...profileOverrides,
+        },
+      ],
+    }
+  }
+
+  it('does not count-scale the aggregate ROLE percent for a restored n=0 role', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(classAProjectFixture() as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    expect(devRow).toBeTruthy()
+    // Demand window W0..W3 (4 weeks): the aggregate 300% ROLE is 3 FTE, so the
+    // display shows 4 × 5 × 3 = 60 days — NOT count-scaled (4 × 5 × 3 × 3 = 180).
+    expect(devRow.allocatedDays).toBe(60)
+    expect(devRow.effortDays).toBe(3)
+    // The projected legacy shape is the availability-window (TIMELINE) mode
+    // with the aggregate percent; the restored profile is surfaced faithfully.
+    expect(devRow.allocationMode).toBe('TIMELINE')
+    expect(devRow.allocationPercent).toBe(300)
+    expect(devRow.capacityProfile.planningBasis).toBe('availabilityWindow')
+    expect(devRow.capacityProfile.source).toBe('legacy')
+    expect(devRow.capacityProfile.defaultPercent).toBe(300)
+    // The persisted profile is never corrupted by the display path.
+    expect(devRow.capacityProfile.startWeek).toBeNull()
+    expect(devRow.capacityProfile.endWeek).toBeNull()
+
+    // Scheduler capacity is the acceptance authority: 3 FTE × 8h × 5 days.
+    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
+    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
+    const resolved = await resolveSchedulerCapacity(prisma as any, 'proj-1')
+    const rt = resolved.resourceTypes.find(r => r.id === 'rt-dev')!
+    expect(getWeeklyCapacity(rt, 0, 8)).toBe(120)
+    expect(getWeeklyCapacity(rt, 20, 8)).toBe(120)
+  })
+
+  it('keeps the existing count scaling for windowed per-slot LEGACY profiles (unchanged display)', async () => {
+    // A windowed LEGACY ROLE (the windowed CAPACITY_PLAN translation) is
+    // per-slot semantics: count scaling is correct and must stay untouched.
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(classAProjectFixture({
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 3,
+    }) as any)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
+    // Window W0..W3 = 3 demand weeks × 5 days × count 3 × 100% — the
+    // pre-existing count-scaled per-slot display, untouched by the gate.
+    expect(devRow.allocatedDays).toBe(45)
+  })
+})
