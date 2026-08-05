@@ -368,6 +368,7 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(timelineRow).toMatchObject({
       entryKind: 'namedResource',
       effectiveMode: 'TIMELINE',
+      modeSource: 'explicit',
       allocationStartWeekState: 'populated-nonnegative-integer',
       allocationEndWeekState: 'populated-nonnegative-integer',
       startWeekState: 'populated-nonnegative-integer',

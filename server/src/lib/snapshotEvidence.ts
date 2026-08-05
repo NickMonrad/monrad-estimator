@@ -1319,7 +1319,7 @@ function buildClassACompanionEvidence(
         : sanitizeMode(v2EffectiveNamedMode(nr!, rtById.get(nr!.resourceTypeId ?? '')))
       const modeSource = kind === 'resourceType'
         ? 'unavailable'
-        : namedModeSourceCategory(nr!.allocationMode ?? null, rtById.get(nr!.resourceTypeId ?? '')?.allocationMode ?? null)
+        : companionModeSourceCategory(nr!.allocationMode ?? null, rtById.get(nr!.resourceTypeId ?? '')?.allocationMode ?? null)
       if (modeSource === 'inherited') snapshotAnyCompanionInherited = true
 
       const key: CompanionAggregateKey = {
@@ -1785,13 +1785,46 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
  * mode wins when present; a CAPACITY_PLAN parent provides inherited
  * provenance; otherwise the source is unavailable (or other for a
  * non-CAPACITY_PLAN parent). Single definition shared by the entry evidence
- * and the correlated S records. */
+ * and the correlated S records. CAPACITY_PLAN-specific on purpose — its
+ * existing consumers (S records and the Class A aggregates) rely on it; do
+ * not reuse it for the generic companion evidence (see
+ * `companionModeSourceCategory`). */
 function namedModeSourceCategory(rawMode: string | null, parentMode: string | null): NamedModeSourceCategory {
   if (rawMode === 'CAPACITY_PLAN') return 'explicit'
   if (rawMode != null) return 'other'
   if (parentMode === 'CAPACITY_PLAN') return 'inherited'
   if (parentMode == null) return 'unavailable'
   return 'other'
+}
+
+/** Companion-specific mode-source categorisation (issue #440 review): the
+ * generic companion evidence must report whether a companion mode is
+ * explicitly stored or inherited for ALL known allocation modes, not only
+ * CAPACITY_PLAN:
+ *
+ *   - any populated known raw mode → explicit (TIMELINE, CAPACITY_PLAN,
+ *     EFFORT, FULL_PROJECT);
+ *   - absent raw mode with a populated known parent mode → inherited;
+ *   - populated unknown/unsupported raw mode → other;
+ *   - absent raw mode with a populated unknown/unsupported parent mode →
+ *     other;
+ *   - both raw and parent modes absent → unavailable.
+ *
+ * Used only when building `ClassACompanionShapeRow.modeSource`. The raw,
+ * parent and effective modes themselves are still sanitized independently
+ * through `sanitizeMode`, so arbitrary unknown strings never reach output.
+ * Exported so the categorisation is directly testable for the states a
+ * selected (Class-A-quarantined) snapshot cannot reach (unknown modes make
+ * the snapshot a defect and are therefore excluded from the population). */
+export function companionModeSourceCategory(
+  rawMode: string | null | undefined,
+  parentMode: string | null | undefined,
+): NamedModeSourceCategory {
+  if (rawMode != null) {
+    return isKnownV2Mode(rawMode) ? 'explicit' : 'other'
+  }
+  if (parentMode == null) return 'unavailable'
+  return isKnownV2Mode(parentMode) ? 'inherited' : 'other'
 }
 
 function windowFieldStateFor(value: number | null | undefined): WindowFieldState {

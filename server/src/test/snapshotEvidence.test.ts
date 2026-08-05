@@ -21,6 +21,7 @@ import {
   buildSingleNegativeEvidenceEntry,
   classifyAllSnapshots,
   classifySnapshotEvidence,
+  companionModeSourceCategory,
   correlateSingleNegativeDecisions,
   isExpectedBoundaryShape,
   percentCategory,
@@ -1116,12 +1117,12 @@ describe('Class A companion evidence (issue #440)', () => {
       allocationPctCategory: 'hundred',
     })
     // NR companion: explicit windowed TIMELINE → populated non-negative
-    // states, modeSource other (raw explicit non-CAPACITY_PLAN mode), alreadyValid.
+    // states, modeSource explicit (raw known mode), alreadyValid.
     const nrTl = rowByKind('namedResource', 'TIMELINE', 'alreadyValid')!
     expect(nrTl).toMatchObject({
       parentMode: 'EFFORT',
       effectiveMode: 'TIMELINE',
-      modeSource: 'other',
+      modeSource: 'explicit',
       allocationStartWeekState: 'populated-nonnegative-integer',
       allocationEndWeekState: 'populated-nonnegative-integer',
       startWeekState: 'populated-nonnegative-integer',
@@ -1144,9 +1145,9 @@ describe('Class A companion evidence (issue #440)', () => {
       allocationPctCategory: 'hundred',
       currentPlanClassification: 'quarantined',
     })
-    // NR companion: explicit EFFORT windowless → alreadyValid.
+    // NR companion: explicit EFFORT windowless → modeSource explicit.
     const nrEffort = rowByKind('namedResource', 'EFFORT', 'alreadyValid')!
-    expect(nrEffort.modeSource).toBe('other')
+    expect(nrEffort.modeSource).toBe('explicit')
 
     // Deterministic ordering: sorted by the same canonical fixed-category
     // key the builder uses.
@@ -1532,6 +1533,142 @@ describe('Class A companion evidence (issue #440)', () => {
     expect(markdown).toContain('### Snapshot-level flags')
     expect(markdown).toContain('- anyCompanionInheritedMode: 1')
     expect(markdown).toContain('- noCompanionInheritedMode: 0')
+  })
+
+  it('companionModeSourceCategory distinguishes explicit and inherited modes for all known modes', () => {
+    // Explicit known raw modes (issue #440 review: the companion evidence
+    // must not reuse the CAPACITY_PLAN-specific namedModeSourceCategory).
+    expect(companionModeSourceCategory('TIMELINE', null)).toBe('explicit')
+    expect(companionModeSourceCategory('CAPACITY_PLAN', null)).toBe('explicit')
+    expect(companionModeSourceCategory('EFFORT', null)).toBe('explicit')
+    expect(companionModeSourceCategory('FULL_PROJECT', null)).toBe('explicit')
+    expect(companionModeSourceCategory('TIMELINE', 'WARP_DRIVE')).toBe('explicit')
+    // Inherited known parent modes (including the missed non-CAPACITY_PLAN
+    // regression).
+    expect(companionModeSourceCategory(null, 'TIMELINE')).toBe('inherited')
+    expect(companionModeSourceCategory(null, 'CAPACITY_PLAN')).toBe('inherited')
+    expect(companionModeSourceCategory(null, 'EFFORT')).toBe('inherited')
+    expect(companionModeSourceCategory(null, 'FULL_PROJECT')).toBe('inherited')
+    expect(companionModeSourceCategory(undefined, 'TIMELINE')).toBe('inherited')
+    // Unknown/unsupported populated sources map to other.
+    expect(companionModeSourceCategory('WARP_DRIVE', null)).toBe('other')
+    expect(companionModeSourceCategory(null, 'WARP_DRIVE')).toBe('other')
+    // Both raw and parent modes absent → unavailable.
+    expect(companionModeSourceCategory(null, null)).toBe('unavailable')
+    expect(companionModeSourceCategory(undefined, undefined)).toBe('unavailable')
+  })
+
+  it('reports explicit and inherited mode sources through the builder, including non-CAPACITY_PLAN inheritance', () => {
+    // One selected Class-A-quarantined snapshot whose companions cover the
+    // reachable mode-source categories. No classifier or predicate is
+    // weakened: every entry is valid under the current policy and the
+    // snapshot stays quarantined via the non-100 windowless RT.
+    const state = makeState([{
+      id: 'snap-modes',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [
+          // Quarantine Class A shape (non-exact: 80%) keeps the snapshot
+          // selected; this RT companion itself reports modeSource unavailable.
+          makeRt({ id: 'rt-q', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, allocationPercent: 80 }),
+          makeRt({ id: 'rt-t', name: 'Timeline Role', allocationMode: 'TIMELINE', allocationStartWeek: null, allocationEndWeek: null }),
+          makeRt({ id: 'rt-e', name: 'Effort Role', allocationMode: 'EFFORT', allocationStartWeek: null, allocationEndWeek: null }),
+          makeRt({ id: 'rt-f', name: 'Full Project Role', allocationMode: 'FULL_PROJECT', allocationStartWeek: null, allocationEndWeek: null }),
+          makeRt({ id: 'rt-null', name: 'Null Mode Role', allocationMode: null, allocationStartWeek: null, allocationEndWeek: null }),
+        ],
+        [
+          // Inherited known modes with raw allocationMode absent.
+          makeNr({ id: 'nr-inh-tl', resourceTypeId: 'rt-t', allocationMode: null }),
+          makeNr({ id: 'nr-inh-eff', resourceTypeId: 'rt-e', allocationMode: null }),
+          makeNr({ id: 'nr-inh-fp', resourceTypeId: 'rt-f', allocationMode: null }),
+          makeNr({ id: 'nr-inh-cp', resourceTypeId: 'rt-q', allocationMode: null }),
+          // Explicit known raw mode.
+          makeNr({ id: 'nr-exp-tl', resourceTypeId: 'rt-t', allocationMode: 'TIMELINE' }),
+          // Absent raw and absent parent mode → unavailable.
+          makeNr({ id: 'nr-none', resourceTypeId: 'rt-null', allocationMode: null }),
+        ],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 2,
+      quarantinedSnapshots: 1,
+      defectSnapshots: 0,
+      windowlessDecisions: 0,
+      singleMinusOneDecisions: 0,
+      snapshotDecisions: 0,
+      liveDecisions: 0,
+      unsupported: 0,
+      rewriteOperations: 0,
+      topology11Snapshots: 0,
+      topology7Snapshots: 0,
+      topology11WindowlessDecisions: 0,
+      topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    const rows = report.classACompanionEvidence.shapeRows
+    const inheritedRow = (parentMode: 'TIMELINE' | 'EFFORT' | 'FULL_PROJECT' | 'CAPACITY_PLAN' | null, effectiveMode: string | null) =>
+      rows.find(row => row.entryKind === 'namedResource' && row.modeSource === 'inherited' && row.parentMode === parentMode && row.effectiveMode === effectiveMode)
+    // Inherited known modes from non-CAPACITY_PLAN parents (the missed
+    // regression) and from CAPACITY_PLAN.
+    expect(inheritedRow('TIMELINE', 'TIMELINE')).toMatchObject({ modeSource: 'inherited', rawMode: null })
+    expect(inheritedRow('EFFORT', 'EFFORT')).toMatchObject({ modeSource: 'inherited', rawMode: null })
+    expect(inheritedRow('FULL_PROJECT', 'FULL_PROJECT')).toMatchObject({ modeSource: 'inherited', rawMode: null })
+    expect(inheritedRow('CAPACITY_PLAN', 'CAPACITY_PLAN')).toMatchObject({ modeSource: 'inherited', rawMode: null })
+    // Explicit known raw mode.
+    const explicitTimeline = rows.find(row => row.entryKind === 'namedResource' && row.rawMode === 'TIMELINE' && row.modeSource === 'explicit')!
+    expect(explicitTimeline).toMatchObject({ effectiveMode: 'TIMELINE', parentMode: 'TIMELINE' })
+    // Absent raw + absent parent → unavailable (fixture-reachable state).
+    const unavailable = rows.find(row => row.entryKind === 'namedResource' && row.modeSource === 'unavailable')!
+    expect(unavailable).toMatchObject({ rawMode: null, parentMode: null, effectiveMode: null })
+    // ResourceType companions keep modeSource unavailable.
+    const rtCompanion = rows.find(row => row.entryKind === 'resourceType')!
+    expect(rtCompanion.modeSource).toBe('unavailable')
+    // Snapshot-level flag: inheritance from non-CAPACITY_PLAN parents counts.
+    expect(report.classACompanionEvidence.snapshotFlags.anyCompanionInheritedMode).toBe(1)
+    expect(report.classACompanionEvidence.snapshotFlags.noCompanionInheritedMode).toBe(0)
+  })
+
+  it('reports the complementary no-inherited flag for a snapshot without inherited companions', () => {
+    const state = makeState([{
+      id: 'snap-no-inherited',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [
+          makeRt({ id: 'rt-q', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, allocationPercent: 80 }),
+          makeRt({ id: 'rt-t', allocationMode: 'TIMELINE', allocationStartWeek: null, allocationEndWeek: null }),
+        ],
+        [
+          // Explicit known mode only — no inherited companion in this snapshot.
+          makeNr({ id: 'nr-exp', resourceTypeId: 'rt-t', allocationMode: 'TIMELINE' }),
+        ],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 1,
+      quarantinedSnapshots: 1,
+      defectSnapshots: 0,
+      windowlessDecisions: 0,
+      singleMinusOneDecisions: 0,
+      snapshotDecisions: 0,
+      liveDecisions: 0,
+      unsupported: 0,
+      rewriteOperations: 0,
+      topology11Snapshots: 0,
+      topology7Snapshots: 0,
+      topology11WindowlessDecisions: 0,
+      topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.classACompanionEvidence.snapshotFlags.anyCompanionInheritedMode).toBe(0)
+    expect(report.classACompanionEvidence.snapshotFlags.noCompanionInheritedMode).toBe(1)
+    const explicit = report.classACompanionEvidence.shapeRows.find(
+      row => row.entryKind === 'namedResource' && row.rawMode === 'TIMELINE',
+    )!
+    expect(explicit.modeSource).toBe('explicit')
   })
 })
 

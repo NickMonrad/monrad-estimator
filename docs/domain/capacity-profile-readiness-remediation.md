@@ -487,7 +487,14 @@ current plan classification) plus a count, aggregate companion totals by
 current remediation-plan classification, and snapshot-level flags answering
 the three production questions (all entries / all companions windowless;
 all entries / all companions at the approved 100% categories defined
-per entry kind; any companion using inherited mode). Companions are
+per entry kind; any companion using inherited mode). Companion mode-source
+categories are companion-specific (all known allocation modes, not only
+CAPACITY_PLAN): `explicit` — a known mode exists on the companion entry;
+`inherited` — the raw mode is absent and a known mode comes from its parent;
+`other` — a populated mode source is unknown or unsupported; `unavailable`
+— no raw or parent mode source exists, or not applicable to the entry kind.
+The raw, parent and effective modes are sanitized independently (unknown
+strings render only as `other`). Companions are
 correlated internally to exactly one existing remediation-plan
 snapshot-entry finding; any missing, ambiguous or duplicate match, unresolvable
 ownership or reconciliation failure refuses output with a controlled safe
