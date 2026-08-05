@@ -838,23 +838,48 @@ ResourceType-only + 43 mixed snapshots; eras before 2026-05-05 and
   before it the default was also 100) — provably **unbounded 100% weekly
   capacity**, era-independent.
 - **ResourceType entries**: the scheduler never consumed a ResourceType's
-own allocation fields (`getWeeklyCapacity` sums NamedResource contributions
-gated on their own alias pairs plus full-time phantom slots
-`max(0, count − namedResources.length)`). With every snapshot entry
-windowless at 100%, each ResourceType's scheduler weekly capacity is
-provably `count × hoursPerDay × 5` for every week; `count` and
-`hoursPerDay` are captured in the V2 payload. The condition is
-snapshot-wide: the predicate fails closed if any entry of the snapshot is
-not windowless-100% (or otherwise deterministically full-capacity).
+own allocation fields. `getWeeklyCapacity` summed NamedResource
+contributions (each gated on its own alias pair) plus full-time phantom
+slots `max(0, count − namedResources.length)`, so with every snapshot entry
+windowless at 100% the exact historical weekly capacity is
+`max(count, namedResources.length) × hoursPerDay × 5` — **not**
+unconditionally `count × hoursPerDay × 5`. The `max()` cannot be collapsed:
+the legacy `resourceTypes.ts` `PUT` (`74b98d3`) accepted `count` from the
+request body without synchronising the NamedResource collection, so no
+historical invariant guaranteed `count ≥ namedResources.length`. `count`,
+`hoursPerDay` and the per-RT NamedResource set are all captured in the V2
+payload. The condition is snapshot-wide: the predicate fails closed if any
+entry of the snapshot is not windowless-100% (or otherwise
+deterministically full-capacity).
+
+**Lossless translation (verified against the current capacity-consumption
+contract):** the current scheduler contract consumes ROLE profile segments
+as aggregate FTE percent (may exceed 100 for ROLE — the squad-planner
+headcount convention) and NAMED_PERSON segments as per-person percent; a
+plain null-window `defaultPercent 100` ROLE contributes exactly one FTE and
+therefore reproduces `max(count, namedResources.length) × hoursPerDay × 5`
+only when `namedResources.length = count − 1`. The lossless representation
+uses the captured `count`: ROLE profile with null window at aggregate
+percent `max(0, count − namedResources.length) × 100` plus NAMED_PERSON
+profiles at 100%, null window — the scheduler then yields
+`max(count, namedResources.length) × hoursPerDay × 5` in all four
+cardinality cases (`n = 0`, `0 < n < c`, `n = c`, `n > c`). The full
+four-case proof and the required acceptance matrix are in the investigation
+document (Section 11.5 and Section 11.7).
 
 The deterministic result is the **scheduler capacity** — the authoritative
-capacity contract snapshot restoration must reproduce. The non-scheduler
-display path (`routes/resourceProfile.ts` at `74b98d3`) derived a display
-window from the then-active CapacityPlan; that live derivation is not stored
-in snapshots and is not a capacity input.
+capacity contract snapshot restoration must reproduce (and the acceptance
+authority for the future implementation). One pre-existing contract caveat
+is recorded for the implementation issue: `routes/resourceProfile.ts`
+(current) count-scales per-slot percents for RT rows without named
+resources (TIMELINE/FULL_PROJECT display branches); focused tests must cover
+both consumers. The non-scheduler display path at `74b98d3` derived a
+display window from the then-active CapacityPlan; that live derivation is
+not stored in snapshots and is not a capacity input.
 
 Outcome: the exact observed Class A predicate is **deterministic** — the 49
-snapshots translate (null-window 100% profiles) instead of quarantining.
+snapshots translate (ROLE null-window at `max(0, count − n) × 100`% + NAMED
+_PERSON 100% null-window profiles) instead of quarantining.
 No broadening: inherited mode (0 observed), percents ≠ 100, partial windows,
 alias conflicts, below-`-1`/fractional values and structural defects stay
 excluded and decision-required/defect.

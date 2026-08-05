@@ -885,26 +885,83 @@ era-independent, and reproduces exactly as a null-window 100% profile. No
 broadening to inherited `CAPACITY_PLAN` (observed count 0) or any other
 percentage category.
 
-**ResourceType Class A (531) — deterministic.** The legacy scheduler never
-consumed a ResourceType's own allocation fields: `getWeeklyCapacity` sums
-the row's NamedResource contributions (each gated on its own alias pair) plus
-`max(0, count − namedResources.length)` full-time phantom slots. For the 49
-observed snapshots every entry is windowless-100% `CAPACITY_PLAN`, so every
-NamedResource overlay is unbounded at 100% and the scheduler weekly capacity
-for each ResourceType is provably `count × hoursPerDay × 5` for every week
-(6 ResourceType-only snapshots: all slots phantom, same result). `count` and
-`hoursPerDay` are captured in the V2 payload (snapshot capture at `c54870c`
-stores them; the rollback restore reads them). The translated ROLE profile
-(null window, defaultPercent 100) reproduces that scheduler result exactly.
-The non-scheduler display path (`routes/resourceProfile.ts` at `74b98d3`)
-derived a display window from the then-active CapacityPlan when the row's
-own window was null; that live derivation is not stored in snapshots and is
-not a capacity input — the deterministic result claimed here is the
-**scheduler capacity**, the authoritative capacity contract snapshot
-restoration must reproduce.
+**ResourceType Class A (531) — deterministic, with the exact scheduler
+arithmetic.** The legacy scheduler never consumed a ResourceType's own
+allocation fields. `getWeeklyCapacity` (at `74b98d3`) computed:
+
+```text
+weeklyHours = Σ_namedResource active? (pct/100) × hoursPerDay × 5
+            + max(0, count − namedResources.length) × hoursPerDay × 5
+```
+
+For the observed Class A condition — every NamedResource unbounded at 100% —
+this simplifies exactly to:
+
+```text
+weeklyHours = (namedResources.length + max(0, count − namedResources.length)) × hoursPerDay × 5
+            = max(count, namedResources.length) × hoursPerDay × 5
+```
+
+It is **not** unconditionally `count × hoursPerDay × 5`: the `max()` cannot
+be collapsed to `count` because no historical invariant guaranteed
+`namedResources.length ≤ count`. The legacy `resourceTypes.ts` `PUT`
+(`74b98d3`) accepted `count` from the request body without synchronising the
+NamedResource collection (other create/delete/count-management paths commonly
+synchronised them, but the PUT did not), so both `count > namedResources`
+and `count < namedResources` are possible historical states. The two
+quantities are both captured in the V2 payload (`SnapshotResourceType.count`,
+`hoursPerDay`, and the snapshot's `namedResources` grouped by
+`resourceTypeId`), so `max(count, namedResources.length)` is computable from
+the stored record.
+
+**Translation equivalence under the current capacity-consumption contract.
+** The current profile-first contract (verified in
+`schedulerCapacityResolver.ts` → `scheduler.ts` `getWeeklyCapacity`) consumes
+ROLE profile segments as **aggregate** FTE percent — they may exceed 100
+(`materializeRoleCapacitySegments` writes headcount × 100; the structural
+validator `capacityProfileStructureValidation.ts` permits non-negative
+percents above 100 for ROLE profiles only) — and NAMED_PERSON segments as
+per-person percent; `count` enters capacity only through the legacy
+phantom-slot fallback when no ROLE profile exists. Under that contract a
+plain **null-window `defaultPercent 100` ROLE profile is NOT lossless**: it
+contributes exactly one FTE, giving `(namedResources.length + 1) × hoursPerDay
+× 5`, which equals `max(count, namedResources.length) × hoursPerDay × 5` only
+in the degenerate case `namedResources.length = count − 1` (including
+`count = 1` with no named resources); it under-represents for
+`namedResources.length < count − 1` and over-represents for
+`namedResources.length ≥ count` (e.g. `count = namedResources` yields
+`count + 1` FTE instead of `count`).
+
+The lossless representation uses the captured `count`: a ROLE profile with a
+null window at the aggregate percent `max(0, count − namedResources.length) ×
+100` (the phantom-slot capacity expressed as aggregate FTE, exactly the
+squad-planner role-segment convention) plus NAMED_PERSON profiles at 100%,
+null window. The scheduler then yields `(namedResources.length + max(0, count
+− namedResources.length)) × hoursPerDay × 5 = max(count,
+namedResources.length) × hoursPerDay × 5` in all four cardinality cases:
+
+| Case | Historical weekly capacity | Lossless translation output |
+|---|---|---|
+| `namedResources = 0` | `count × hpd × 5` | ROLE null-window at `count × 100`%; no NR profiles |
+| `0 < namedResources < count` | `count × hpd × 5` | ROLE at `(count − n) × 100`% + n NRs at 100% |
+| `namedResources = count` | `count × hpd × 5` | ROLE at 0% + n NRs at 100% |
+| `namedResources > count` | `namedResources × hpd × 5` | ROLE at 0% + n NRs at 100% |
+
+The deterministic claim here is the **scheduler capacity** — the capacity
+contract snapshot restoration must reproduce (the review acceptance
+authority). One contract caveat is recorded for the implementation issue:
+`routes/resourceProfile.ts` (current) count-scales per-slot percents for RT
+rows without named resources (TIMELINE/FULL_PROJECT display branches) — a
+pre-existing profile-first display quirk that also affects today's approved
+scalar translations — so the implementation must add focused tests for both
+consumers, not silently assume one. The legacy display path
+(`routes/resourceProfile.ts` at `74b98d3`) derived a display window from the
+then-active CapacityPlan when the row's own window was null; that live
+derivation is not stored in snapshots and is not a capacity input.
 
 The exact observed Class A predicate therefore has **one provable
-historical weekly-capacity result** (full capacity) and is classified
+historical weekly-capacity result** (`max(count, namedResources.length) ×
+hoursPerDay × 5` per week, unbounded interval) and is classified
 **deterministic** — not quarantine, not decision-required. This supersedes
 the Section 3.5 open assessment: the evidence (explicit 43/43, hundred
 574/574, all-windowless 49/49 snapshots, both eras covered) closes the
@@ -921,7 +978,7 @@ the predicate per snapshot and fail closed otherwise (Section 11.7).
 | Alias-conflict entries (2/snapshot in M1–M6/M8; 3 in M7) | conflicting populated primary/alias pair, `CAPACITY_PLAN`-era | scheduler-irrelevant for NR `CAPACITY_PLAN` (alias pair consumed); per-entry mode unproven | per-entry unproven | defect entry (already-valid finding at plan level) | **decision-required** | per-entry mode/alias evidence absent; deterministic candidates, not unrecoverable | no mode assumption | none now |
 | Partial-window entries (≥1 per M9–M18) | one effective edge non-negative integer, other null, `CAPACITY_PLAN` | per-orientation provable (`[0,N]`, `[N,∞)`, `[0,∞)`) | unproven | defect entry → `decisionRequired` (windowless message) | **decision-required** | orientation + percent not in sanitized report | no invented windows | none now |
 | NamedResource Class A (43) | all four window fields null; explicit `CAPACITY_PLAN`; `allocationPercent` 100 + `allocationPct` 100; no conflicts/defects | unbounded (`0..∞` gate) | 100 (both era branches) | quarantined (Class A) | **deterministic unbounded 100%** | scheduler gate + explicit percentage branch prove the weekly capacity | inherited mode; percents ≠ 100; partial windows; any conflict/defect | deterministic translation (null-window 100% profile); count changes |
-| ResourceType Class A (531) | `allocationStartWeek`/`allocationEndWeek` null; `CAPACITY_PLAN`; `allocationPercent` 100; snapshot-wide all-windowless-100% condition | unbounded (all weeks) | full capacity (`count × hpd × 5` per week; RT fields not scheduler inputs) | quarantined (Class A) | **deterministic full capacity** | scheduler consumed only NR rows + phantom slots; snapshot-wide condition proven for the 49 snapshots | any non-windowless/partial/conflicted entry in the snapshot (fail closed per snapshot) | deterministic translation (null-window 100% ROLE profiles) |
+| ResourceType Class A (531) | `allocationStartWeek`/`allocationEndWeek` null; `CAPACITY_PLAN`; `allocationPercent` 100; snapshot-wide all-windowless-100% condition | unbounded (all weeks) | `max(count, namedResources.length) × hpd × 5` per week (RT fields not scheduler inputs; `count` not guaranteed ≥ NR count — legacy PUT wrote it unsynchronised) | quarantined (Class A) | **deterministic full capacity** | scheduler summed NR rows + phantom slots; snapshot-wide condition proven for the 49 snapshots; lossless representation uses the captured `count` (Section 11.5 four-case table) | any non-windowless/partial/conflicted entry in the snapshot (fail closed per snapshot) | deterministic translation (ROLE null-window at `max(0, count − n) × 100`% + NRs at 100%; NOT a plain 100% ROLE — Section 11.7) |
 | Live decisions (130) | unchanged (104 RT + 13 segmentless + 13 owner-kind) | n/a | n/a | `decisionRequired` | **unchanged, blocking** | out of snapshot scope | — | none |
 | Unsupported findings (0) | — | — | — | — | unchanged | — | — | none |
 
@@ -975,9 +1032,15 @@ windowless quarantine class for the exact observed shape):**
   every entry of the snapshot matches this predicate or translates
   deterministically at full capacity (proven for the 49 observed snapshots).
 - Translation result: `AVAILABILITY_WINDOW`/`LEGACY` profiles with null
-  window and `defaultPercent 100` (ROLE for ResourceType, NAMED_PERSON for
-  NamedResource) — reproducing the proven full-capacity scheduler result.
-  Plan finding: `deterministic`; classifier verdict: restorable.
+  window — NAMED_PERSON at 100% (per-person percent) and the ROLE at the
+  aggregate percent `max(0, count − namedResources.length) × 100` derived
+  from the captured `SnapshotResourceType.count` and the snapshot's per-RT
+  NamedResource set — reproducing `max(count, namedResources.length) ×
+  hoursPerDay × 5` per week under the current scheduler contract (Section
+  11.5 four-case proof). A plain null-window `defaultPercent 100` ROLE is
+  explicitly NOT the spec: it reproduces the historical result only when
+  `namedResources.length = count − 1` (Section 11.5). Plan finding:
+  `deterministic`; classifier verdict: restorable.
 - Readiness: the 49 snapshots move from policy-accepted quarantine notes to
   restorable; no readiness failure is introduced or removed.
 - Rollback/retention: the 49 snapshots become rollback-eligible and
@@ -991,10 +1054,29 @@ windowless quarantine class for the exact observed shape):**
 
 **Focused tests for the implementation issue:** classifier predicates
 (accept the exact S and Class A shapes; reject every listed exclusion),
-translation outputs (zero-capacity and 100% null-window profiles),
-plan-count expectations (updated `expected.json`), readiness, rollback
-(including the newly restorable 49), retention, and the snapshot-evidence
-command reconciliation with updated expectations.
+translation outputs (zero-capacity; NAMED_PERSON 100% null-window; ROLE
+null-window at `max(0, count − n) × 100`% — including the n=0, n<c, n=c and
+n>c cardinality cases), plan-count expectations (updated `expected.json`),
+readiness, rollback (including the newly restorable 49), retention, and the
+snapshot-evidence command reconciliation with updated expectations.
+
+**Required acceptance/test matrix (future implementation):** for each of
+the four cardinality cases below, the restored weekly capacity computed via
+`resolveSchedulerCapacity` + `getWeeklyCapacity` (the historical scheduler
+contract) must equal the historical result — demonstrating lossless
+restoration rather than asserting `count` authority:
+
+| Case (count c, NRs n, all NRs 100% unbounded) | Historical weekly capacity | Required restored capacity |
+|---|---|---|
+| n = 0 | `c × hpd × 5` | `c × hpd × 5` |
+| 0 < n < c | `c × hpd × 5` | `c × hpd × 5` |
+| n = c | `c × hpd × 5` | `c × hpd × 5` |
+| n > c | `n × hpd × 5` | `n × hpd × 5` |
+
+The matrix must be exercised per ResourceType owner in a snapshot (each RT
+independently, with its own count and NR set), plus a focused test for the
+`routes/resourceProfile.ts` n=0 display branch (which count-scales per-slot
+percents; Section 11.5 records the pre-existing caveat).
 
 **Production revalidation under #404:** rerun the reviewed read-only
 evidence command and remediation dry-run on the amended commit with the
@@ -1020,7 +1102,12 @@ Arithmetic from the current reviewed boundary (`019db41b`, evidence report):
 - Amendment 1 (S): 7 decisions become deterministic → 489 decisions total
   (359 snapshot + 130 live); deterministic +7.
 - Amendment 2 (Class A): 574 quarantined findings become deterministic;
-  quarantined snapshots 49 → 0; restorable snapshots 38 → 87.
+  quarantined snapshots 49 → 0; restorable snapshots 38 → 87. The totals are
+  unchanged by the corrected ResourceType proof (Section 11.5): `count` and
+the per-RT NamedResource set are captured for every one of the 531
+ResourceType entries, so the lossless aggregate representation is derivable
+for all of them; the classification change is per-entry-predicate, not
+per-count-dependent.
 
 | Metric | Current | Recommended |
 |---|---|---|
@@ -1052,17 +1139,22 @@ historical-data machinery.
 - **Abstractions essential now:** none beyond the existing shared classifier,
 translator and plan pipeline. The S predicate is the never-active family
 extended to the raw alias pair; the Class A predicate is the existing
-windowless shape with the percentage and ownership constraints made exact.
+windowless shape with the percentage and ownership constraints made exact,
+plus the ROLE aggregate percent `max(0, count − namedResources.length) ×
+100` derived from the captured `count` (the one value that makes the
+translation lossless under the current scheduler contract; Section 11.5).
 - **Deferred extensions:** partial-window and alias-conflict entry
 resolution (decision-required pending per-entry evidence); inherited-mode
 or non-100-percent variants (absent from the evidence; not addressed); any
 generic snapshot-history translation capability.
 - **One clear reason to change per component:** classifier — the observed
 shapes have proven deterministic outcomes, so they are not unrecoverable;
-translator — the existing zero-capacity and 100%-unbounded representations
-reproduce the proven scheduler results; plan — deterministic findings
-instead of decisions/quarantine reflect provable semantics; readiness,
-rollback, retention and evidence expectations follow the same verdicts.
+translator — the zero-capacity representation and the aggregate-percent
+ROLE (with per-person NAMED_PERSON profiles) reproduce the proven scheduler
+results, which a plain 100% ROLE does not (Section 11.5 four-case proof);
+plan — deterministic findings instead of decisions/quarantine reflect
+provable semantics; readiness, rollback, retention and evidence
+expectations follow the same verdicts.
 - **No hypothetical complexity:** nothing is built for unseen shapes; every
 excluded variant stays decision-required under the current fail-closed
 rules.
