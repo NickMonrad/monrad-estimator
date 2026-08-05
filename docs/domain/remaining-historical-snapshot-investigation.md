@@ -7,8 +7,18 @@ deterministic-semantics implications, and defines the smallest
 evidence-backed next step for the 366 snapshot decisions that remain outside
 the approved quarantine policy.
 
+> **Superseded in part (2026-08-05) — final evidence-backed classification in
+> [Section 11](#11-final-evidence-backed-classification-issue-430).** The
+> sanitized production evidence emitted at the reviewed merge commit
+> `019db41b` (PR #436; Issue #404 comment `5187338312`, Issue #430 comment
+> `5187339153`) resolves the orientation and mode-source gaps that Sections
+> 3–7 left open. Sections 1–10 below remain the accurate record of the
+> pre-evidence investigation; where Section 11 contradicts them, Section 11
+> is authoritative and the superseded conclusion is marked there.
+
 Parent: #342 · Coordinates with: #404, #418, #421, #426, #428 ·
-Depends on: merged PR #429 (`ffed1fa`, Issue #428)
+Depends on: merged PR #429 (`ffed1fa`, Issue #428) · Final evidence at:
+PR #436 merge `019db41b` (Issue #432)
 
 ## 1. Production observation summary
 
@@ -645,11 +655,543 @@ is proposed. #404 and #418 PR 2 remain blocked.
   mixed-defect snapshots remain defects; unsupported stays zero; nothing is
   absorbed into quarantine without an exact proven predicate.
 
+## 11. Final evidence-backed classification (Issue #430, post-evidence)
+
+**Status: investigation / design only.** This section completes Issue #430
+with the sanitized production evidence emitted at the reviewed merge commit
+`019db41b4888a24a3b9ed16b1cd5f22aba725fed` (PR #436, Issue #432) and records
+the recommended policy amendment. No runtime, API, UI, schema or migration
+change is made by this document.
+
+### 11.1 Evidence sources and integrity
+
+- Sanitized Markdown evidence: Issue #404 comment `5187338312`
+  (full report quoted in the comment); cross-link and review request: Issue
+  #430 comment `5187339153`.
+- Evidence JSON SHA-256: `99745f68e172829f4f6ec868206f8822bc2782948c542c9dff069075830b1e41`
+- Evidence Markdown SHA-256: `b0ad5fcb133e86794fb07d1036c4bada9384af984ea38c248b8576a89c55d312`
+- Plan fingerprint: `eccf77edde816d59d2625b7988175f41dfa14f2ca792483bfcb2c271ba2130dc`;
+  baseline-state hash: `09b504b5e27ee8362f7d983c2d00cda68711ed7e71c2f7737d90668ad50a02df`.
+- All gates passed on the production run: fingerprint, baseline, counts,
+  topology, 27/27 reconciliation, JSON/Markdown parity, privacy;
+  `policyDecision` remains `not-assessed`.
+- Repository contracts verified for this section: the legacy scheduler gate
+  (`server/src/lib/scheduler.ts` at `f783b26` 2026-05-01, `74b98d3`
+  2026-05-05 and `b194e6c` 2026-07-14), the legacy writers (`squadPlan.ts`
+  at `74b98d3`; `namedResources.ts` PUT/PATCH at `74b98d3`;
+  `capacityPlanExit.ts`; V2 capture `snapshots.ts` at `c54870c`
+  2026-04-29), the shared translator (`projectSnapshotCapacity.ts`), the
+  classifier (`snapshotRestorability.ts`), the plan-level entry classifier
+  (`productionRemediationPlan.ts` `classifySnapshotEntry`) and the evidence
+  command (`snapshotEvidence.ts`).
+
+### 11.2 The seven S records — exact historical semantics: **deterministic zero**
+
+All seven S records are identical sanitized NamedResource entries:
+
+```text
+raw NamedResource mode:    CAPACITY_PLAN
+parent ResourceType mode:  CAPACITY_PLAN
+effective mode:            CAPACITY_PLAN
+mode source:               explicit
+
+allocationStartWeek:       absent-null
+startWeek:                 minus-one
+allocationEndWeek:         populated
+endWeek:                   minus-one
+minusOneField:             startWeek
+
+allocationPercent:         hundred
+allocationPct:             hundred
+
+entry errors:              negative-one-window-value, alias-conflict
+structural:                profile-window
+independent defect:        both
+```
+
+**Historical scheduler contract (file and commit evidence, verified in this
+investigation):** for the entire snapshot era the legacy scheduler consumed,
+for a NamedResource row, only the alias pair `startWeek`/`endWeek` as the
+outer capacity gate and the row's own `allocationMode` for the percentage:
+
+```ts
+// scheduler.ts, identical at f783b26 (2026-05-01), 74b98d3 (2026-05-05)
+// and b194e6c (2026-07-14):
+const start = nr.startWeek ?? 0       // null = project start (week 0)
+const end = nr.endWeek ?? Infinity    // null = project end
+if (week >= start && week <= end) {
+  const pct = effectiveAllocationPct(nr, week)   // inclusive gate
+  totalHours += (pct / 100) * hoursPerDay * 5
+}
+```
+
+`effectiveAllocationPct`: `FULL_PROJECT` → `allocationPercent`;
+`TIMELINE` → inner window gate over `allocationStartWeek ?? startWeek ?? 0` /
+`allocationEndWeek ?? endWeek ?? Infinity`; `CAPACITY_PLAN` →
+`allocationPercent` (branch introduced `74b98d3`, 2026-05-05; before that
+commit every other mode fell to the default `100`); null mode → `100`.
+`allocationStartWeek`/`allocationEndWeek` were **never** a scheduler input
+for `CAPACITY_PLAN`, and the outer gate never consulted the primary pair for
+any mode.
+
+For the S records the scheduler-consumed alias pair is exactly `(-1, -1)`:
+`start = -1`, `end = -1`, and the inclusive gate `week >= -1 && week <= -1`
+admits **no non-negative week**. The entry contributed **zero weekly
+capacity across the whole project** — the identical result the approved
+`(-1,-1)` never-active predicate already proves — regardless of the 100%
+percentage fields (a zero active interval cannot be overridden by percentage
+evidence) and regardless of the populated `allocationEndWeek`, which the
+historical scheduler never read for this mode. The populated primary end
+field is a partial, unvalidated client write layered over the planner
+sentinel: the only server writer of the `(-1,-1)` alias pair was the legacy
+Squad Planner apply path (`squadPlan.ts` at `74b98d3`…`e7c461b`/`c42f678`,
+`slotWindows[idx] ?? { startWeek: -1, endWeek: -1, allocationPercent: 100 }`
+— a single atomic update of both aliases), and `allocationStartWeek`/
+`allocationEndWeek` were only ever written by the unvalidated client PUT/PATCH
+routes (`namedResources.ts` at `74b98d3`), the planner-exit path
+(`capacityPlanExit.ts` nulls all four fields) or verbatim clone/snapshot
+propagation. No server writer emitted a single populated primary field over
+an intact `(-1,-1)` alias pair; the shape is stale partial client state.
+
+**Outcome: deterministic** — the historical weekly capacity is provably zero,
+reproducible without guessing. The exact S predicate and its smallest valid
+authoritative representation are defined in Section 11.7. The S records are
+**not** quarantine candidates (their outcome is provable, not unrecoverable)
+and **not** decision-required (the scheduler result is fully determined).
+
+Exact predicate boundaries (no generalization):
+
+- `startWeek === -1` **and** `endWeek === -1` (both aliases; the never-active
+  sentinel) — not one alias at `-1` with the other null, not a single
+  primary-field `-1`;
+- `allocationStartWeek === null` (absent) — a populated primary start is a
+  different, unproven shape;
+- `allocationEndWeek` populated with a non-negative integer — the scheduler
+  proof is value-agnostic, but the evidence only establishes the
+  `populated` bucket, so the predicate fails closed on values below `-1` or
+  fractional (those variants keep the current decision-required verdict);
+- raw `allocationMode === 'CAPACITY_PLAN'` (explicit) — no inherited mode
+  (the evidence contains none);
+- `allocationPercent`/`allocationPct` valid (null or finite; observed
+  `hundred`/`hundred`);
+- exactly one resolvable parent ResourceType (no orphan, no duplicate);
+- no structural defect in the translated set.
+
+### 11.3 Seven-snapshot subgroup (M1–M6, M8) — snapshots **remain defect**
+
+Each of the seven snapshots contains 23 entries: 19 windowless decisions,
+1 S record (single-`-1` decision) and 3 already-valid findings; entry-error
+categories per snapshot: `windowless-capacity-plan:19`,
+`negative-one-window-value:1`, `alias-conflict:3`; structural:
+`profile-window:1`; independent defect: `both`.
+
+The `alias-conflict:3` count is per-entry and includes the S record's own
+end-edge conflict (`allocationEndWeek` populated vs `endWeek` `-1`), so at
+least **two additional entries per snapshot carry a conflicting-populated-
+alias defect**. Those entries produce no plan decision, so they sit either
+in the 3 already-valid findings (complete effective windows that translate)
+or among the 19 windowless decisions (a partial effective window reports the
+same `CAPACITY_PLAN without captured window` message while the populated
+primary/alias pair conflicts); the aggregate cannot split the 19 further.
+The structural `profile-window:1` is caused by the S record's translated
+`(-1, N)` window and resolves with the S predicate.
+
+**Conclusion: deterministic handling of the S record does NOT remove the
+only independent defect.** Two alias-conflict entries per snapshot remain
+(residual entry-level defect), so all seven snapshots stay
+`defect`-classified and the 133 windowless entries stay decision-required
+under the approved snapshot-level fail-closed rule. The S decisions (7)
+leave the decision set; the 133 do not.
+
+The alias-conflict entries themselves: for `CAPACITY_PLAN` NamedResources
+the legacy scheduler consumed only the alias pair, so a conflicting primary
+field is scheduler-irrelevant and the historical capacity follows the alias
+pair — but the per-entry mode and alias-pair windows are not in the sanitized
+report, so these entries remain **decision-required** (deterministic
+candidates, not quarantine candidates).
+
+### 11.4 Eleven-snapshot subgroup (M7, M9–M18) — snapshots **remain defect**
+
+**M7** (16 windowless decisions, 4 already-valid, `alias-conflict:3`, no
+structural categories, independent defect `entry-level`): at least three
+entries carry a conflicting-populated-alias defect (they sit among the 4
+already-valid findings or among the 16 windowless decisions if partial; the
+aggregate cannot split them). The snapshot remains defect; the 16 windowless
+decisions stay decision-required.
+
+**M9–M18** (10 snapshots, 21 windowless decisions each, no already-valid, no
+structural categories, independent defect reported `unavailable`): the
+classifier and translator code prove the only defect path consistent with
+this record. A fully windowless `CAPACITY_PLAN` entry (all effective edges
+null, valid percents) is always Class A at classifier level, so an
+all-windowless snapshot would quarantine; a non-finite percent, alias
+conflict, orphan or unknown mode would surface a non-windowless error
+category; inverted windows are never-active (deterministic); nothing else
+produces a defect. Therefore **every one of the ten snapshots contains at
+least one partial-window `CAPACITY_PLAN` entry** — exactly one effective
+edge a non-negative integer and the other null — which the plan-level
+classifier reports with the same `CAPACITY_PLAN without captured window`
+message as fully-windowless entries (`classifySnapshotEntry`,
+`productionRemediationPlan.ts`), hence the shared `windowless` decision
+category and the `windowless-capacity-plan` evidence category. The ten
+snapshots stay defect; the 210 windowless decisions stay decision-required.
+
+Partial-window entries have orientation-dependent provable historical
+intervals under the legacy gate (the alias pair is the scheduler input; a
+primary-pair partial with null aliases gates on `null`/`null` → `0..∞`):
+
+| Orientation (other fields null) | Legacy gate result | Proven interval |
+|---|---|---|
+| `startWeek = N`, `endWeek = null` | `start = N`, `end = ∞` | `[N, ∞)` |
+| `startWeek = null`, `endWeek = N` | `start = 0`, `end = N` | `[0, N]` |
+| `allocationStartWeek = N` (aliases null) | gate on `null`/`null` | `[0, ∞)` |
+| `allocationEndWeek = N` (aliases null) | gate on `null`/`null` | `[0, ∞)` |
+
+The percentage for the partial entries is not in the sanitized report
+(valid-null-or-finite, explicit `CAPACITY_PLAN` → `allocationPercent`), so
+the complete weekly capacity is not assignable. Per the required conclusion
+options the partial-window class is **decision-required** — deterministic
+candidates per orientation, **not** quarantine candidates (unrecoverability
+is not proven for any orientation), and **not** separately repairable (the
+shape is stale client state with provable scheduler semantics, not
+corruption to repair). Resolving them needs per-entry orientation and
+percent-category evidence, which the versioned report does not contain; that
+is a precise, non-blocking gap for a future step (Section 11.7), not a
+request this issue makes.
+
+Fail-closed behaviour is preserved: none of the 18 defect snapshots
+quarantines while an independent defect remains, and no Class A entry inside
+a defect snapshot quarantines or translates.
+
+### 11.5 Class A reassessment — **deterministic**, not quarantine (exact observed predicate)
+
+Evidence (all 49 quarantined snapshots): 574 entries = 531 ResourceType +
+43 NamedResource; all 574 windowless (`primaryAbsentNull: 574`); all 43
+NamedResource entries additionally fallback-windowless (`fallbackAbsentNull:
+43`) with explicit `CAPACITY_PLAN` mode source (`explicit: 43`, `inherited:
+0`); percentages `hundred: 531` (ResourceType `allocationPercent`) and
+`hundred: 43` on both `allocationPercent` and `allocationPct`
+(NamedResource); snapshot mix: 6 ResourceType-only + 43 mixed; eras: 40
+entries / 5 snapshots before 2026-05-05, 534 entries / 44 snapshots
+2026-05-05→2026-07-13, 0 later. No alias conflicts, no structural defects.
+
+**NamedResource Class A (43) — deterministic.** The legacy scheduler gate
+(`startWeek ?? 0` / `endWeek ?? Infinity`) defaulted to `0..∞` for the
+null/null alias pair, and the explicit `CAPACITY_PLAN` percentage branch
+returned `allocationPercent` = 100 from `74b98d3` (2026-05-05) onward, with
+the pre-`74b98d3` default also 100. The historical weekly capacity is
+provably **unbounded at 100%** (`100% × hoursPerDay × 5` every week),
+era-independent, and reproduces exactly as a null-window 100% profile. No
+broadening to inherited `CAPACITY_PLAN` (observed count 0) or any other
+percentage category.
+
+**ResourceType Class A (531) — deterministic, with the exact scheduler
+arithmetic.** The legacy scheduler never consumed a ResourceType's own
+allocation fields. `getWeeklyCapacity` (at `74b98d3`) computed:
+
+```text
+weeklyHours = Σ_namedResource active? (pct/100) × hoursPerDay × 5
+            + max(0, count − namedResources.length) × hoursPerDay × 5
+```
+
+For the observed Class A condition — every NamedResource unbounded at 100% —
+this simplifies exactly to:
+
+```text
+weeklyHours = (namedResources.length + max(0, count − namedResources.length)) × hoursPerDay × 5
+            = max(count, namedResources.length) × hoursPerDay × 5
+```
+
+It is **not** unconditionally `count × hoursPerDay × 5`: the `max()` cannot
+be collapsed to `count` because no historical invariant guaranteed
+`namedResources.length ≤ count`. The legacy `resourceTypes.ts` `PUT`
+(`74b98d3`) accepted `count` from the request body without synchronising the
+NamedResource collection (other create/delete/count-management paths commonly
+synchronised them, but the PUT did not), so both `count > namedResources`
+and `count < namedResources` are possible historical states. The two
+quantities are both captured in the V2 payload (`SnapshotResourceType.count`,
+`hoursPerDay`, and the snapshot's `namedResources` grouped by
+`resourceTypeId`), so `max(count, namedResources.length)` is computable from
+the stored record.
+
+**Translation equivalence under the current capacity-consumption contract.
+** The current profile-first contract (verified in
+`schedulerCapacityResolver.ts` → `scheduler.ts` `getWeeklyCapacity`) consumes
+ROLE profile segments as **aggregate** FTE percent — they may exceed 100
+(`materializeRoleCapacitySegments` writes headcount × 100; the structural
+validator `capacityProfileStructureValidation.ts` permits non-negative
+percents above 100 for ROLE profiles only) — and NAMED_PERSON segments as
+per-person percent; `count` enters capacity only through the legacy
+phantom-slot fallback when no ROLE profile exists. Under that contract a
+plain **null-window `defaultPercent 100` ROLE profile is NOT lossless**: it
+contributes exactly one FTE, giving `(namedResources.length + 1) × hoursPerDay
+× 5`, which equals `max(count, namedResources.length) × hoursPerDay × 5` only
+in the degenerate case `namedResources.length = count − 1` (including
+`count = 1` with no named resources); it under-represents for
+`namedResources.length < count − 1` and over-represents for
+`namedResources.length ≥ count` (e.g. `count = namedResources` yields
+`count + 1` FTE instead of `count`).
+
+The lossless representation uses the captured `count`: a ROLE profile with a
+null window at the aggregate percent `max(0, count − namedResources.length) ×
+100` (the phantom-slot capacity expressed as aggregate FTE, exactly the
+squad-planner role-segment convention) plus NAMED_PERSON profiles at 100%,
+null window. The scheduler then yields `(namedResources.length + max(0, count
+− namedResources.length)) × hoursPerDay × 5 = max(count,
+namedResources.length) × hoursPerDay × 5` in all four cardinality cases:
+
+| Case | Historical weekly capacity | Lossless translation output |
+|---|---|---|
+| `namedResources = 0` | `count × hpd × 5` | ROLE null-window at `count × 100`%; no NR profiles |
+| `0 < namedResources < count` | `count × hpd × 5` | ROLE at `(count − n) × 100`% + n NRs at 100% |
+| `namedResources = count` | `count × hpd × 5` | ROLE at 0% + n NRs at 100% |
+| `namedResources > count` | `namedResources × hpd × 5` | ROLE at 0% + n NRs at 100% |
+
+The deterministic claim here is the **scheduler capacity** — the capacity
+contract snapshot restoration must reproduce (the review acceptance
+authority). One contract caveat is recorded for the implementation issue:
+`routes/resourceProfile.ts` (current) count-scales per-slot percents for RT
+rows without named resources (TIMELINE/FULL_PROJECT display branches) — a
+pre-existing profile-first display quirk that also affects today's approved
+scalar translations — so the implementation must add focused tests for both
+consumers, not silently assume one. The legacy display path
+(`routes/resourceProfile.ts` at `74b98d3`) derived a display window from the
+then-active CapacityPlan when the row's own window was null; that live
+derivation is not stored in snapshots and is not a capacity input.
+
+The exact observed Class A predicate therefore has **one provable
+historical weekly-capacity result** (`max(count, namedResources.length) ×
+hoursPerDay × 5` per week, unbounded interval) and is classified
+**deterministic** — not quarantine, not decision-required. This supersedes
+the Section 3.5 open assessment: the evidence (explicit 43/43, hundred
+574/574, all-windowless 49/49 snapshots, both eras covered) closes the
+previously missing splits. A translation implementation must still verify
+the predicate per snapshot and fail closed otherwise (Section 11.7).
+
+### 11.6 Final policy table
+
+| Class | Exact raw predicate (sanitized category) | Proven historical interval | Proven historical percentage | Current classification | Recommended classification | Rationale | Fail-closed exclusions | Required implementation |
+|---|---|---|---|---|---|---|---|---|
+| S1–S7 | NR v2 entry; `startWeek`/`endWeek` both `-1`; `allocationStartWeek` null; `allocationEndWeek` populated (non-negative integer); raw mode explicit `CAPACITY_PLAN`; percents valid; parent resolvable | zero (never-active; gate admits no week) | n/a (zero interval dominates; observed 100/100) | defect entry → `decisionRequired` (single-negative) | **deterministic zero** | legacy gate consumed only the alias pair; `(-1,-1)` is the proven never-active sentinel | inherited mode; populated `allocationStartWeek`; one alias `-1` + other null; below-`-1`/fractional anywhere; other percent categories; structural defects | S predicate in classifier + zero-capacity translation; plan finding deterministic; counts change |
+| 7-snapshot subgroup, 133 windowless | fully windowless `CAPACITY_PLAN` entries inside defect snapshots (Class-A-shaped; partial presence unproven) | unbounded (Class-A-shaped subset) | 100 (explicit) | `decisionRequired` | **decision-required** (unchanged) | snapshot-level fail-closed: ≥2 alias-conflict entries per snapshot remain | nothing absorbed by similarity | none now; resolves after the residual defects |
+| 11-snapshot subgroup, 226 windowless | 210 inside partial-window snapshots (M9–M18) + 16 in M7; per-entry composition unproven | per-orientation provable (partials); unbounded (windowless subset) | per-entry unproven | `decisionRequired` | **decision-required** (unchanged) | ≥1 partial-window entry per M9–M18 snapshot; orientation/percent evidence absent | no quarantine by similarity; no orientation guessing | none now; orientation+percent evidence needed to resolve partials |
+| Alias-conflict entries (2/snapshot in M1–M6/M8; 3 in M7) | conflicting populated primary/alias pair, `CAPACITY_PLAN`-era | scheduler-irrelevant for NR `CAPACITY_PLAN` (alias pair consumed); per-entry mode unproven | per-entry unproven | defect entry (already-valid finding at plan level) | **decision-required** | per-entry mode/alias evidence absent; deterministic candidates, not unrecoverable | no mode assumption | none now |
+| Partial-window entries (≥1 per M9–M18) | one effective edge non-negative integer, other null, `CAPACITY_PLAN` | per-orientation provable (`[0,N]`, `[N,∞)`, `[0,∞)`) | unproven | defect entry → `decisionRequired` (windowless message) | **decision-required** | orientation + percent not in sanitized report | no invented windows | none now |
+| NamedResource Class A (43) | all four window fields null; explicit `CAPACITY_PLAN`; `allocationPercent` 100 + `allocationPct` 100; no conflicts/defects | unbounded (`0..∞` gate) | 100 (both era branches) | quarantined (Class A) | **deterministic unbounded 100%** | scheduler gate + explicit percentage branch prove the weekly capacity | inherited mode; percents ≠ 100; partial windows; any conflict/defect | deterministic translation (null-window 100% profile); count changes |
+| ResourceType Class A (531) | `allocationStartWeek`/`allocationEndWeek` null; `CAPACITY_PLAN`; `allocationPercent` 100; snapshot-wide all-windowless-100% condition | unbounded (all weeks) | `max(count, namedResources.length) × hpd × 5` per week (RT fields not scheduler inputs; `count` not guaranteed ≥ NR count — legacy PUT wrote it unsynchronised) | quarantined (Class A) | **deterministic full capacity** | scheduler summed NR rows + phantom slots; snapshot-wide condition proven for the 49 snapshots; lossless representation uses the captured `count` (Section 11.5 four-case table) | any non-windowless/partial/conflicted entry in the snapshot (fail closed per snapshot) | deterministic translation (ROLE null-window at `max(0, count − n) × 100`% + NRs at 100%; NOT a plain 100% ROLE — Section 11.7) |
+| Live decisions (130) | unchanged (104 RT + 13 segmentless + 13 owner-kind) | n/a | n/a | `decisionRequired` | **unchanged, blocking** | out of snapshot scope | — | none |
+| Unsupported findings (0) | — | — | — | — | unchanged | — | — | none |
+
+### 11.7 Recommended implementation boundary (defined, NOT implemented)
+
+**Recommended minimum next step: one focused policy amendment and
+implementation issue** — a narrow amendment to the approved policy document
+(`unrecoverable-historical-capacity-snapshots.md`, Section 12) followed by a
+separate implementation issue mirroring the #426 → #428 flow. No classifier
+defect fix (the classifier implements the current approved policy exactly)
+and no evidence-bound repair design (no stored intent exists to repair) is
+indicated; the 359 remaining decisions stay blocking by design.
+
+**Amendment 1 — S predicate (deterministic zero, supersedes the `(-1,-1)`
+never-active handling for shadowed-primary shapes):**
+
+- Exact predicate: NamedResource v2 entry with raw `startWeek === -1` AND
+  `endWeek === -1`, `allocationStartWeek === null`, `allocationEndWeek` a
+  non-negative integer, raw `allocationMode === 'CAPACITY_PLAN'` (explicit),
+  `allocationPercent`/`allocationPct` null-or-finite, exactly one resolvable
+  parent, no other negative/fractional window field, no structural defect.
+- Translation result: the existing never-active representation —
+  `AVAILABILITY_WINDOW`/`LEGACY` profile, `defaultPercent 0`, null window
+  (identical to `translateV2SnapshotProfiles` output for `(-1,-1)` pairs).
+  Plan finding: `deterministic` (no write required; translation materializes
+  at rollback). Classifier verdict: restorable entry.
+- Classifier change: evaluate the never-active predicate on the raw
+  scheduler-consumed alias pair before the effective-edge/alias-conflict
+  checks for `CAPACITY_PLAN` NamedResources; the end-edge alias conflict
+  becomes part of the accepted shape (scheduler-irrelevant), reported in
+evidence but not a defect.
+- Readiness: no change (the seven containing snapshots remain defect).
+- Remediation plan: 7 decisions leave the decision set (single-negative 7 →
+  0); 7 deterministic findings appear.
+- Retention/rollback: containing snapshots stay non-restorable; the S
+  translation applies only when a containing snapshot becomes restorable.
+- Fail-closed exclusions: every variant listed in Section 11.2 stays
+  decision-required.
+- Expected count changes: snapshot decisions 366 → 359; deterministic
+  findings +7; single-negative decisions 7 → 0.
+
+**Amendment 2 — Class A predicate (deterministic unbounded, supersedes the
+windowless quarantine class for the exact observed shape):**
+
+- Exact predicate: entry effective mode `CAPACITY_PLAN`; all captured window
+  fields null (ResourceType: both; NamedResource: all four); NamedResource
+  raw mode explicit (inherited excluded); `allocationPercent` 100
+  (ResourceType) and `allocationPercent` 100 + `allocationPct` 100
+  (NamedResource); no alias conflict, no other entry error, no structural
+  defect. For ResourceType entries additionally the snapshot-wide condition:
+  every entry of the snapshot matches this predicate or translates
+  deterministically at full capacity (proven for the 49 observed snapshots).
+- Translation result: `AVAILABILITY_WINDOW`/`LEGACY` profiles with null
+  window — NAMED_PERSON at 100% (per-person percent) and the ROLE at the
+  aggregate percent `max(0, count − namedResources.length) × 100` derived
+  from the captured `SnapshotResourceType.count` and the snapshot's per-RT
+  NamedResource set — reproducing `max(count, namedResources.length) ×
+  hoursPerDay × 5` per week under the current scheduler contract (Section
+  11.5 four-case proof). A plain null-window `defaultPercent 100` ROLE is
+  explicitly NOT the spec: it reproduces the historical result only when
+  `namedResources.length = count − 1` (Section 11.5). Plan finding:
+  `deterministic`; classifier verdict: restorable.
+- Readiness: the 49 snapshots move from policy-accepted quarantine notes to
+  restorable; no readiness failure is introduced or removed.
+- Rollback/retention: the 49 snapshots become rollback-eligible and
+  retention-prunable (behaviour change — rollback materializes full-capacity
+  profiles; retention cap applies again).
+- Fail-closed exclusions: partial windows, alias conflicts, inherited mode,
+  percents ≠ 100, non-finite percents, below-`-1`/fractional values,
+  structural defects, mixed snapshots with unresolved defects.
+- Expected count changes: quarantined 574 → 0; quarantined snapshots 49 →
+  0; restorable snapshots 38 → 87; deterministic findings +574.
+
+**Focused tests for the implementation issue:** classifier predicates
+(accept the exact S and Class A shapes; reject every listed exclusion),
+translation outputs (zero-capacity; NAMED_PERSON 100% null-window; ROLE
+null-window at `max(0, count − n) × 100`% — including the n=0, n<c, n=c and
+n>c cardinality cases), plan-count expectations (updated `expected.json`),
+readiness, rollback (including the newly restorable 49), retention, and the
+snapshot-evidence command reconciliation with updated expectations.
+
+**Required acceptance/test matrix (future implementation):** for each of
+the four cardinality cases below, the restored weekly capacity computed via
+`resolveSchedulerCapacity` + `getWeeklyCapacity` (the historical scheduler
+contract) must equal the historical result — demonstrating lossless
+restoration rather than asserting `count` authority:
+
+| Case (count c, NRs n, all NRs 100% unbounded) | Historical weekly capacity | Required restored capacity |
+|---|---|---|
+| n = 0 | `c × hpd × 5` | `c × hpd × 5` |
+| 0 < n < c | `c × hpd × 5` | `c × hpd × 5` |
+| n = c | `c × hpd × 5` | `c × hpd × 5` |
+| n > c | `n × hpd × 5` | `n × hpd × 5` |
+
+The matrix must be exercised per ResourceType owner in a snapshot (each RT
+independently, with its own count and NR set), plus a focused test for the
+`routes/resourceProfile.ts` n=0 display branch (which count-scales per-slot
+percents; Section 11.5 records the pre-existing caveat).
+
+**Production revalidation under #404:** rerun the reviewed read-only
+evidence command and remediation dry-run on the amended commit with the
+updated reviewed expectations; the 18 defect snapshots and 130 live
+decisions must remain blocking.
+
+**The 359 windowless decisions are NOT part of the amendment.** They remain
+decision-required; resolving the partial-window class is a separate
+future step that would need the precise per-entry orientation and
+percent-category evidence that the versioned report does not contain
+(Section 11.4). Do not request that evidence while this issue's policy
+decision does not depend on it.
+
+### 11.8 Authoritative expected counts (recommended policy)
+
+Arithmetic from the current reviewed boundary (`019db41b`, evidence report):
+
+- Current: 4,536 findings = 2,216 deterministic + 496 decisionRequired + 0
+  unsupported + 1,250 alreadyValid + 574 quarantined; 2,011 operations
+  (0 rewrite); 496 decisions = 366 snapshot (359 windowless + 7
+  single-negative) + 130 live; 105 snapshots = 38 restorable + 49
+  quarantined + 18 defect; plan exit 2; readiness exit 1.
+- Amendment 1 (S): 7 decisions become deterministic → 489 decisions total
+  (359 snapshot + 130 live); deterministic +7.
+- Amendment 2 (Class A): 574 quarantined findings become deterministic;
+  quarantined snapshots 49 → 0; restorable snapshots 38 → 87. The totals are
+  unchanged by the corrected ResourceType proof (Section 11.5): `count` and
+the per-RT NamedResource set are captured for every one of the 531
+ResourceType entries, so the lossless aggregate representation is derivable
+for all of them; the classification change is per-entry-predicate, not
+per-count-dependent.
+
+| Metric | Current | Recommended |
+|---|---|---|
+| Deterministic snapshot-entry findings | 205 (never-active) | **786** (205 + 574 Class A + 7 S) |
+| Deterministic findings total (plan) | 2,216 | **2,797** (2,216 + 581) |
+| Quarantined entries (by class) | 574 (Class A) | **0** |
+| Quarantined snapshots | 49 | **0** |
+| Defect snapshots | 18 | **18** (unchanged) |
+| Restorable snapshots | 38 | **87** |
+| Snapshot decisions | 366 | **359** (133 seven-subgroup + 226 eleven-subgroup) |
+| Live decisions | 130 | **130** (unchanged, blocking) |
+| Unsupported findings | 0 | **0** |
+| Rewrite operations | 0 | **0** |
+| Plan exit | 2 | **2** (359 + 130 decisions remain) |
+| Readiness exit | 1 | **1** (18 defect snapshots + live-state blockers) |
+
+No double counting: the 7 S records are separate from the 133 windowless
+decisions (they leave the decision set while the 133 stay); the 574 Class A
+entries were quarantine findings (not decisions), so their reclassification
+changes no decision count.
+
+### 11.9 Simplicity Check (final)
+
+- **Minimum correct solution:** two exact raw-value predicate extensions in
+the one shared classifier (S zero-capacity; Class A full-capacity), reusing
+the existing never-active profile representation and the existing
+deterministic plan-finding path — no new framework, no generic
+historical-data machinery.
+- **Abstractions essential now:** none beyond the existing shared classifier,
+translator and plan pipeline. The S predicate is the never-active family
+extended to the raw alias pair; the Class A predicate is the existing
+windowless shape with the percentage and ownership constraints made exact,
+plus the ROLE aggregate percent `max(0, count − namedResources.length) ×
+100` derived from the captured `count` (the one value that makes the
+translation lossless under the current scheduler contract; Section 11.5).
+- **Deferred extensions:** partial-window and alias-conflict entry
+resolution (decision-required pending per-entry evidence); inherited-mode
+or non-100-percent variants (absent from the evidence; not addressed); any
+generic snapshot-history translation capability.
+- **One clear reason to change per component:** classifier — the observed
+shapes have proven deterministic outcomes, so they are not unrecoverable;
+translator — the zero-capacity representation and the aggregate-percent
+ROLE (with per-person NAMED_PERSON profiles) reproduce the proven scheduler
+results, which a plain 100% ROLE does not (Section 11.5 four-case proof);
+plan — deterministic findings instead of decisions/quarantine reflect
+provable semantics; readiness, rollback, retention and evidence
+expectations follow the same verdicts.
+- **No hypothetical complexity:** nothing is built for unseen shapes; every
+excluded variant stays decision-required under the current fail-closed
+rules.
+
+### 11.10 Superseded conclusions (explicit)
+
+- Section 3.4 ("All seven entries remain decision-required until sanitized
+evidence identifies their exact raw-field orientation…"): superseded for
+the S shape — orientation is now established (alias pair `(-1,-1)`,
+`allocationStartWeek` null, `allocationEndWeek` populated) and the outcome
+is deterministic zero.
+- Section 3.5 ("Under assessment… the investigation does not claim that 574
+is the final authoritative policy boundary"): completed — 574 is final as
+the current implementation outcome and is reclassified deterministic under
+the recommended amendment (Section 11.5).
+- Section 4.3 ("cannot be decided from the available sanitized evidence"):
+superseded for M9–M18 — the partial-window class is now proven by
+classifier-path deduction (Section 11.4); per-entry orientation remains
+unproven.
+- Section 5 evidence gaps 1–4: resolved by the emitted report (S orientation
+and modes; defect categories; Class A splits) except the per-entry
+orientation/percent of the partial entries and the per-entry mode/alias
+state of the alias-conflict entries, which remain non-blocking gaps
+(Sections 11.3–11.4).
+- Sections 6–7 outcome recommendations ("decision-required (unchanged)" for
+the 7 and "quarantine (current implementation outcome — unchanged);
+NamedResource subset under assessment" for Class A): superseded by Sections
+11.2 and 11.5.
+- `unrecoverable-historical-capacity-snapshots.md` Section 11 observed-
+outcome note: updated in the same release (PR for this issue).
+
 ## Cross-links
 
 - `unrecoverable-historical-capacity-snapshots.md` — approved quarantine
   policy (#426); Section 11 carries the implementation record and the
-  observed-outcome note.
+  observed-outcome note; Section 12 carries the evidence-backed amendment
+  defined by this investigation.
 - `capacity-profile-readiness-remediation.md` — #421 deterministic matrix,
   `-1` sentinel evidence, manifest flow.
 - `legacy-capacity-column-runtime-cutover.md` — #418 runtime cutover.
