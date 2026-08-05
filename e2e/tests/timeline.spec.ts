@@ -1867,24 +1867,12 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// Snapshot History — derived quarantine (issue #428)
+// Snapshot History — derived quarantine (issue #428) and the issue #438
+// exact-Class-A restorability amendment
 // ════════════════════════════════════════════════════════════════════════════
 
 test.describe('Snapshot History — derived quarantine display', () => {
-  test('quarantined historical snapshot shows non-restorable status and reason; rollback is refused server-side', async ({ page }) => {
-    test.setTimeout(90_000)
-    const projectName = `E2E Quarantine ${Date.now()}`
-
-    await login(page)
-    await createProject(page, projectName)
-    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
-
-    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
-    if (!projectId) throw new Error('Could not determine project ID')
-
-    // Insert a windowless CAPACITY_PLAN v2 snapshot row directly — the
-    // reviewed Class A shape the UI would never produce (v4 snapshots are
-    // always restorable).
+  async function insertV2Snapshot(projectId: string, label: string, resourceTypeAllocationPercent: number) {
     const db = new Client({ connectionString: DATABASE_URL })
     await db.connect()
     const userRes = await db.query(`SELECT id FROM "User" WHERE email = $1`, [process.env.TEST_EMAIL ?? 'test@example.com'])
@@ -1902,7 +1890,7 @@ test.describe('Snapshot History — derived quarantine display', () => {
         dayRate: null,
         globalTypeId: null,
         allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: 100,
+        allocationPercent: resourceTypeAllocationPercent,
         allocationStartWeek: null,
         allocationEndWeek: null,
       }],
@@ -1916,9 +1904,40 @@ test.describe('Snapshot History — derived quarantine display', () => {
     await db.query(
       `INSERT INTO "BacklogSnapshot" ("id", "projectId", "label", "trigger", "snapshot", "createdAt", "createdById") ` +
       `VALUES ($1, $2, $3, 'manual', $4::jsonb, NOW(), $5)`,
-      [`snap-q-${Date.now()}`, projectId, 'quarantined historical', JSON.stringify(v2Payload), userRes.rows[0].id],
+      [`snap-q-${Date.now()}`, projectId, label, JSON.stringify(v2Payload), userRes.rows[0].id],
     )
     await db.end()
+  }
+
+  async function listingRow(page: Page, projectId: string, label: string) {
+    return page.evaluate(async ({ id, label }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      }
+      const list = await (await fetch(`/api/projects/${id}/snapshots`, { headers })).json() as Array<{ id: string; label: string | null }>
+      return list.find(s => s.label === label)!
+    }, { id: projectId, label })
+  }
+
+  test('quarantined historical snapshot shows non-restorable status and reason; rollback is refused server-side', async ({ page }) => {
+    test.setTimeout(90_000)
+    const projectName = `E2E Quarantine ${Date.now()}`
+
+    await login(page)
+    await createProject(page, projectName)
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
+    if (!projectId) throw new Error('Could not determine project ID')
+
+    // Insert a windowless CAPACITY_PLAN v2 snapshot row directly — the
+    // reviewed Class A shape the UI would never produce (v4 snapshots are
+    // always restorable). Issue #438: the EXACT all-windowless-100% shape is
+    // now restorable, so this fixture uses a non-100 percentage — outside
+    // the approved predicate, still Class A quarantined (fail closed).
+    await insertV2Snapshot(projectId, 'quarantined historical', 80)
 
     // Open the History panel on Timeline.
     await page.goto(`/projects/${projectId}/timeline`)
@@ -1966,5 +1985,63 @@ test.describe('Snapshot History — derived quarantine display', () => {
     }, { id: projectId, label: 'quarantined historical' })
     expect(rollbackAttempt.status).toBe(400)
     expect((rollbackAttempt.body as { error: string }).error).toContain('quarantined')
+  })
+
+  test('the exact all-windowless-100% Class A snapshot is restorable and rolls back (issue #438)', async ({ page }) => {
+    test.setTimeout(90_000)
+    const projectName = `E2E Class A Restorable ${Date.now()}`
+
+    await login(page)
+    await createProject(page, projectName)
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
+    if (!projectId) throw new Error('Could not determine project ID')
+
+    // The EXACT approved Class A shape: windowless CAPACITY_PLAN at 100%.
+    await insertV2Snapshot(projectId, 'exact class a historical', 100)
+
+    // Open the History panel on Timeline.
+    await page.goto(`/projects/${projectId}/timeline`)
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 8_000 })
+    await page.getByRole('button', { name: /history/i }).click()
+    await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
+
+    // The row renders no quarantine status/reason (restorable rows carry
+    // only the Rollback control — no status text).
+    await expect(page.getByText('Non-restorable', { exact: true })).toHaveCount(0)
+    await expect(page.getByText(/original capacity window is not recoverable/)).toHaveCount(0)
+    // The rollback control is rendered for a restorable row.
+    await expect(page.getByRole('button', { name: /^rollback$/i })).toHaveCount(1)
+
+    // The listing API exposes the derived restorable fields.
+    const listing = await page.evaluate(async ({ id }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      }
+      const res = await fetch(`/api/projects/${id}/snapshots`, { headers })
+      return { status: res.status, body: await res.json() }
+    }, { id: projectId })
+    expect(listing.status).toBe(200)
+    const restorableRow = (listing.body as Array<{ label: string | null; restoreStatus: string; restoreReason: string | null }>)
+      .find(s => s.label === 'exact class a historical')
+    expect(restorableRow?.restoreStatus).toBe('restorable')
+    expect(restorableRow?.restoreReason).toBeNull()
+
+    // Rollback is accepted server-side and materialises the lossless
+    // translation (count 1, no named resources → ROLE at 100%).
+    const target = await listingRow(page, projectId, 'exact class a historical')
+    const rollbackResponse = await page.evaluate(async ({ id, snapshotId }) => {
+      const token = localStorage.getItem('token')
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      }
+      const res = await fetch(`/api/projects/${id}/snapshots/${snapshotId}/rollback`, { method: 'POST', headers })
+      return { status: res.status, body: await res.json() }
+    }, { id: projectId, snapshotId: target.id })
+    expect(rollbackResponse.status).toBe(200)
   })
 })

@@ -12,7 +12,9 @@
  *   - parseSnapshotData / isSnapshotV2 (projectSnapshotTypes.ts);
  *   - v2EffectiveNamedMode / v2ResourceTypeEntryErrors /
  *     v2NamedResourceEntryErrors / v2PercentIsValid /
- *     translateV2SnapshotProfiles / validateV2TranslatedProfiles
+ *     translateV2SnapshotProfiles / validateV2TranslatedProfiles /
+ *     isDeterministicZeroSnapshotEntry / isClassAResourceTypeEntry /
+ *     isClassANamedResourceEntry / isClassASnapshot
  *     (projectSnapshotCapacity.ts).
  *
  * It never decides whether an entry should be translated, quarantined,
@@ -24,7 +26,7 @@
  * metadata, reviewed expectations); performs zero writes; contains no I/O.
  */
 
-  import { parseSnapshotData, isSnapshotV2, type SnapshotData, type SnapshotV2, type SnapshotResourceType, type SnapshotNamedResource } from './projectSnapshotTypes.js'
+import { parseSnapshotData, isSnapshotV2, type SnapshotData, type SnapshotV2, type SnapshotResourceType, type SnapshotNamedResource } from './projectSnapshotTypes.js'
 import {
   isKnownV2Mode,
   v2EffectiveNamedMode,
@@ -33,6 +35,10 @@ import {
   v2PercentIsValid,
   translateV2SnapshotProfiles,
   validateV2TranslatedProfiles,
+  isDeterministicZeroSnapshotEntry,
+  isClassAResourceTypeEntry,
+  isClassANamedResourceEntry,
+  isClassASnapshot,
 } from './projectSnapshotCapacity.js'
 import {
   classifySnapshotRestorability,
@@ -437,8 +443,12 @@ export interface V2EntryEvidence {
   quarantineClass: 'A' | 'B' | null
 }
 
-function resourceTypeEntryEvidence(rt: SnapshotResourceType, index: number): V2EntryEvidence {
-  const errors = v2ResourceTypeEntryErrors(rt, `v2 snapshot resourceTypes[${index}]`)
+function resourceTypeEntryEvidence(
+  rt: SnapshotResourceType,
+  index: number,
+  approvedDeterministic = false,
+): V2EntryEvidence {
+  const errors = v2ResourceTypeEntryErrors(rt, `v2 snapshot resourceTypes[${index}]`, approvedDeterministic)
   const categories: EntryErrorCategory[] = []
   for (const error of errors) {
     const category = entryErrorCategory(error, rt)
@@ -475,8 +485,9 @@ function namedResourceEntryEvidence(
   nr: SnapshotNamedResource,
   parentRt: SnapshotResourceType | undefined,
   index: number,
+  approvedDeterministic = false,
 ): V2EntryEvidence {
-  const errors = v2NamedResourceEntryErrors(nr, parentRt, `v2 snapshot namedResources[${index}]`)
+  const errors = v2NamedResourceEntryErrors(nr, parentRt, `v2 snapshot namedResources[${index}]`, approvedDeterministic)
   const categories: EntryErrorCategory[] = []
   for (const error of errors) {
     const category = entryErrorCategory(error, nr)
@@ -556,13 +567,23 @@ export function classifySnapshotEvidence(raw: unknown, projectId: string): Snaps
   }
   const restorability = classifySnapshotRestorability(raw, projectId)
   const rtById = new Map(parsed.resourceTypes.map(rt => [rt.id, rt]))
+  // Issue #438: approved deterministic shapes (S and the exact Class A
+  // snapshot-wide condition) suppress the accepted-shape translator errors
+  // in the sanitized entry evidence; the scheduler-irrelevant end-edge alias
+  // conflict of the S shape is still reported (evidence, not a defect).
+  const classASnapshot = isClassASnapshot(parsed)
   const entries: V2EntryEvidence[] = []
   for (let i = 0; i < parsed.resourceTypes.length; i++) {
-    entries.push(resourceTypeEntryEvidence(parsed.resourceTypes[i]!, i))
+    const rt = parsed.resourceTypes[i]!
+    entries.push(resourceTypeEntryEvidence(rt, i, classASnapshot && isClassAResourceTypeEntry(rt)))
   }
   for (let i = 0; i < parsed.namedResources.length; i++) {
     const nr = parsed.namedResources[i]!
-    entries.push(namedResourceEntryEvidence(nr, rtById.get(nr.resourceTypeId ?? ''), i))
+    const parentRt = rtById.get(nr.resourceTypeId ?? '')
+    const approved =
+      isDeterministicZeroSnapshotEntry(nr, parentRt) ||
+      (classASnapshot && isClassANamedResourceEntry(nr, parentRt))
+    entries.push(namedResourceEntryEvidence(nr, parentRt, i, approved))
   }
   const translation = translateV2SnapshotProfiles(parsed, projectId)
   const structuralErrorCategories = validateV2TranslatedProfiles(translation.profiles, projectId, parsed)

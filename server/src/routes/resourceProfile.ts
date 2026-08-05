@@ -575,7 +575,21 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           allocatedDays = totalDays
         } else if (mode === 'TIMELINE') {
           if (effectiveStartWeek != null && effectiveEndWeek != null) {
-            allocatedDays = round2((effectiveEndWeek - effectiveStartWeek) * 5 * count * (percent / 100))
+            // Issue #438: a null-window LEGACY ROLE profile (the deterministic
+            // historical translations — Class A full capacity and the
+            // never-active zero) carries an AGGREGATE percent, not a per-slot
+            // percent, so count-scaling it would double-count the headcount
+            // (e.g. a restored count-3 role at 300% would display 900%).
+            // Per-slot TIMELINE profiles (any window or non-LEGACY source)
+            // keep the existing count scaling.
+            const aggregateRolePercent =
+              capacityProfileData?.planningBasis === 'availabilityWindow' &&
+              capacityProfileData?.source === 'legacy' &&
+              capacityProfileData?.startWeek == null &&
+              capacityProfileData?.endWeek == null
+            allocatedDays = round2(
+              (effectiveEndWeek - effectiveStartWeek) * 5 * (aggregateRolePercent ? 1 : count) * (percent / 100),
+            )
           } else {
             allocatedDays = totalDays
           }

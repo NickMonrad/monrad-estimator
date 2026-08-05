@@ -43,6 +43,10 @@ import {
   v2NamedResourceEntryErrors,
   v2ProfilesToStructureInput,
   isNonNegativeInteger,
+  isDeterministicZeroSnapshotEntry,
+  isClassAResourceTypeEntry,
+  isClassANamedResourceEntry,
+  isClassASnapshot,
   type TranslatedV2Profile,
 } from './projectSnapshotCapacity.js'
 import { validatePersistedCapacityProfiles } from './persistedCapacityProfileValidation.js'
@@ -169,12 +173,18 @@ type EntryVerdict =
   | { kind: 'quarantined'; entryClass: V2QuarantineClass }
   | { kind: 'defect' }
 
-function evaluateResourceTypeEntry(rt: SnapshotResourceType, index: number): EntryVerdict {
+function evaluateResourceTypeEntry(rt: SnapshotResourceType, index: number, classASnapshot: boolean): EntryVerdict {
   const prefix = `v2 snapshot resourceTypes[${index}] (${rt.name})`
   if (rt.allocationMode != null && !isKnownV2Mode(rt.allocationMode)) {
     return { kind: 'defect' }
   }
   if (rt.allocationMode === 'CAPACITY_PLAN') {
+    // Issue #438: the exact Class A ResourceType shape inside an approved
+    // all-windowless-100% snapshot is deterministic full capacity —
+    // restorable, never quarantine.
+    if (classASnapshot && isClassAResourceTypeEntry(rt)) {
+      return { kind: 'restorable' }
+    }
     const entryClass = classifyV2QuarantineShape({
       primaryStart: rt.allocationStartWeek ?? null,
       aliasStart: null,
@@ -185,7 +195,7 @@ function evaluateResourceTypeEntry(rt: SnapshotResourceType, index: number): Ent
       return { kind: 'quarantined', entryClass }
     }
   }
-  const errors = v2ResourceTypeEntryErrors(rt, prefix)
+  const errors = v2ResourceTypeEntryErrors(rt, prefix, classASnapshot && isClassAResourceTypeEntry(rt))
   return errors.length > 0 ? { kind: 'defect' } : { kind: 'restorable' }
 }
 
@@ -226,6 +236,7 @@ function evaluateNamedResourceEntry(
   nr: SnapshotNamedResource,
   parentRt: SnapshotResourceType | undefined,
   index: number,
+  classASnapshot: boolean,
 ): EntryVerdict {
   const prefix = `v2 snapshot namedResources[${index}] (${nr.name})`
   // Orphan ownership is a blocking defect and can never quarantine.
@@ -236,7 +247,20 @@ function evaluateNamedResourceEntry(
   if (mode != null && !isKnownV2Mode(mode)) {
     return { kind: 'defect' }
   }
+  // Issue #438 S predicate: evaluated on the raw scheduler-consumed alias
+  // pair BEFORE the effective-edge and alias-conflict checks — the end-edge
+  // alias conflict is part of the accepted shape (scheduler-irrelevant,
+  // reported in evidence but not a defect).
+  if (isDeterministicZeroSnapshotEntry(nr, parentRt)) {
+    return { kind: 'restorable' }
+  }
   if (mode === 'CAPACITY_PLAN') {
+    // Issue #438: the exact Class A NamedResource shape inside an approved
+    // all-windowless-100% snapshot is deterministic unbounded 100% —
+    // restorable, never quarantine.
+    if (classASnapshot && isClassANamedResourceEntry(nr, parentRt)) {
+      return { kind: 'restorable' }
+    }
     const entryClass = classifyV2QuarantineShape({
       primaryStart: nr.allocationStartWeek ?? null,
       aliasStart: nr.startWeek ?? null,
@@ -256,7 +280,12 @@ function evaluateNamedResourceEntry(
   if (v2NamedResourceAliasConflict(nr, mode)) {
     return { kind: 'defect' }
   }
-  const errors = v2NamedResourceEntryErrors(nr, parentRt, prefix)
+  const errors = v2NamedResourceEntryErrors(
+    nr,
+    parentRt,
+    prefix,
+    classASnapshot && isClassANamedResourceEntry(nr, parentRt),
+  )
   return errors.length > 0 ? { kind: 'defect' } : { kind: 'restorable' }
 }
 
@@ -319,6 +348,12 @@ export function classifySnapshotRestorability(
   if (isSnapshotV2(parsed)) {
     const translation = translateV2SnapshotProfiles(parsed, projectId)
     const rtById = new Map(parsed.resourceTypes.map(rt => [rt.id, rt]))
+    // Issue #438: the approved snapshot-wide all-windowless-100% condition.
+    // Only an exact Class A snapshot (every captured entry matching the
+    // per-entry predicate) becomes restorable; every other shape keeps its
+    // current quarantine/defect classification (fail closed on mixed or
+    // unresolved snapshots).
+    const classASnapshot = isClassASnapshot(parsed)
     const quarantineClasses: V2QuarantineClass[] = []
     // Owner keys of entries matching an approved quarantine shape. Their
     // translated profile windows (e.g. the -1 edge) are the quarantine shape
@@ -332,7 +367,7 @@ export function classifySnapshotRestorability(
 
     for (let i = 0; i < parsed.resourceTypes.length; i++) {
       const rt = parsed.resourceTypes[i]!
-      const verdict = evaluateResourceTypeEntry(rt, i)
+      const verdict = evaluateResourceTypeEntry(rt, i, classASnapshot)
       if (verdict.kind === 'defect') {
         return defectVerdict(translation.errors)
       }
@@ -340,7 +375,7 @@ export function classifySnapshotRestorability(
     }
     for (let i = 0; i < parsed.namedResources.length; i++) {
       const nr = parsed.namedResources[i]!
-      const verdict = evaluateNamedResourceEntry(nr, rtById.get(nr.resourceTypeId ?? ''), i)
+      const verdict = evaluateNamedResourceEntry(nr, rtById.get(nr.resourceTypeId ?? ''), i, classASnapshot)
       if (verdict.kind === 'defect') {
         return defectVerdict(translation.errors)
       }
