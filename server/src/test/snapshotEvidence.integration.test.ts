@@ -18,7 +18,7 @@
  * All tests are skipped unless INTEGRATION_TEST=true.
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -186,10 +186,10 @@ async function seedTopologyFixture(): Promise<void> {
         id: 'nr-s7-minus-one',
         resourceTypeId: 'rt-s7-0',
         allocationMode: 'CAPACITY_PLAN',
-        allocationStartWeek: -1,
+        allocationStartWeek: null,
         allocationEndWeek: 5,
         startWeek: -1,
-        endWeek: null,
+        endWeek: -1,
       })],
     ),
     '2026-05-10T00:00:00Z',
@@ -290,16 +290,15 @@ describeIf('snapshot evidence command (integration)', () => {
     expect(report.classAAggregates.totalEntries).toBe(3)
     expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 2, namedResource: 1, unavailable: 0 })
     expect(report.singleNegativeEntries).toHaveLength(1)
-    // Sanitized reproducer of the former selection-path divergence: -1 on
-    // both aliases of the start edge is a plan single-negative decision whose
-    // evidence is emitted end to end. The exact production raw layout remains
-    // unknown until the corrected #404 run.
-    expect(report.singleNegativeEntries[0]!.minusOneField).toBe('allocationStartWeek')
+    // The seeded sanitized production shape: -1 fallback on the start edge
+    // (effective negative start) plus a shadowed -1 fallback on the end edge
+    // (populated primary end) — both reported, reconciliation passes.
+    expect(report.singleNegativeEntries[0]!.minusOneField).toBe('startWeek')
     expect(report.singleNegativeEntries[0]!.windowFields).toEqual({
-      allocationStartWeek: 'minus-one',
+      allocationStartWeek: 'absent-null',
       allocationEndWeek: 'populated',
       startWeek: 'minus-one',
-      endWeek: 'absent-null',
+      endWeek: 'minus-one',
     })
     expect(report.defectSnapshots).toHaveLength(3)
     const seven = report.defectSnapshots.find((m: { subgroup: string }) => m.subgroup === 'seven-single-minus-one')!
@@ -477,6 +476,50 @@ describeIf('snapshot evidence command (integration)', () => {
     // Zero writes: canonical covered-state hash unchanged.
     const stateHashAfter = await currentStateHash()
     expect(stateHashAfter).toBe(stateHashBefore)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('refuses when the negative effective source is below -1 with a shadowed fallback -1 (no output, no writes)', async () => {
+    // allocationStartWeek -2 supplies the effective start; startWeek -1 is
+    // shadowed and must never be selected as the minus-one field.
+    await createSnapshot(
+      'snap-source-mismatch',
+      makeV2Snapshot(
+        [makeRt({ id: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 5 })],
+        [makeNr({ id: 'nr-mismatch', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -2, startWeek: -1, allocationEndWeek: 5, endWeek: null })],
+      ),
+      '2026-06-01T00:00:00Z',
+    )
+    const stateHashBefore = await currentStateHash()
+    const dir = tempDir()
+    const jsonPath = path.join(dir, 'evidence.json')
+    const mdPath = path.join(dir, 'evidence.md')
+    const expectedPath = path.join(dir, 'expected.json')
+    const expected = await expectedBoundary()
+    writeFileSync(expectedPath, JSON.stringify(expected, null, 2))
+
+    const errors: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation(message => errors.push(String(message)))
+    let exit: number
+    try {
+      exit = await main(['--json', jsonPath, '--markdown', mdPath, '--expected', expectedPath])
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(exit).toBe(1)
+    expect(existsSync(jsonPath)).toBe(false)
+    expect(existsSync(mdPath)).toBe(false)
+    expect(readdirSync(dir).filter(name => name.includes('.tmp'))).toEqual([])
+    // Zero writes: canonical covered-state hash unchanged.
+    expect(await currentStateHash()).toBe(stateHashBefore)
+    // The controlled error contains no seeded identifier, name, mode, raw
+    // numeric value or payload fragment.
+    const stderr = errors.join('\n')
+    expect(stderr).toContain('not exactly minus one')
+    for (const secret of ['nr-mismatch', 'rt-p', 'snap-source-mismatch', 'CAPACITY_PLAN', '-2', 'Secret']) {
+      expect(stderr).not.toContain(secret)
+    }
     rmSync(dir, { recursive: true, force: true })
   })
 

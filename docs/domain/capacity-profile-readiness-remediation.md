@@ -477,15 +477,28 @@ Each S record reports the sanitized state of **all four raw window fields**
 (`allocationStartWeek`, `allocationEndWeek`, `startWeek`, `endWeek`) with
 values from the fixed vocabulary `minus-one` / `absent-null` / `populated`
 — populated numeric values are never emitted. Historical payloads may hold
-`-1` on more than one raw field of the same edge (for example both aliases
-of the start edge); every such field is reported as `minus-one`, while
-`minusOneField` names the plan-relevant exact field (the primary of the
-negative effective edge when it holds `-1`, otherwise its fallback).
-Alias-conflict evidence is reported **per logical edge**
+`-1` on more than one raw field: on the same edge (for example both aliases
+of the start edge) or on the **opposite edge when shadowed** by a populated
+primary field. Every such field is reported as `minus-one`, while
+`minusOneField` names the raw field supplying the effective negative edge
+(the primary of the negative effective edge when it holds `-1`, otherwise
+its fallback). Alias-conflict evidence is reported **per logical edge**
 (`aliasConflicts.startEdge` / `aliasConflicts.endEdge`) using the shared
 classifier alias semantics (window-using modes only), so a conflict on the
 start edge is distinguished from a conflict on the end edge. The aggregate
 `alternateAliasState` is derived from the same per-field states.
+
+Window reconciliation follows the **effective primary/fallback semantics**
+shared by the application and the classifier (`effectiveStart =
+allocationStartWeek ?? startWeek`; `effectiveEnd = allocationEndWeek ??
+endWeek`): the correlated entry must re-derive exactly one negative
+**effective** edge supplied by `minusOneField`, and every additional raw
+`-1` field must be shadowed by a non-null primary field on its own edge — a
+raw fallback `-1` whose primary is null is effective, never shadowed.
+Shadowed raw aliases are evidence, not additional effective-negative edges.
+A genuine both-effective-edges-negative or otherwise inconsistently shaped
+entry stays in its shared classifier class and fails closed when it cannot
+re-derive the single-negative decision.
 
 **S-record selection is authoritative from the remediation plan's
 single-negative snapshot decisions** (shared `snapshotDecisionCategory`);
@@ -558,12 +571,21 @@ and assert exact equality.
 
 ### #404 run procedure (Issue #432 handoff)
 
-**Do not retry the production run until this fix is reviewed and merged**: the
-2026-08-04 production run stopped at the evidence boundary
-(`single-negative records: observed 0, expected 7`) because the merged
-command selected S records by an independent raw-entry reclassification that
-dropped the plan's single-negative decisions. The plan-anchored correlation
-fix above is the reviewed replacement.
+**Do not retry the production run until this correction is reviewed and
+merged.** Two production runs stopped at the evidence boundary without
+emitting evidence:
+
+- 2026-08-04: `single-negative records: observed 0, expected 7` — the merged
+  command selected S records by an independent raw-entry reclassification
+  that dropped the plan's single-negative decisions (fixed by the
+  plan-anchored correlation, PR #435).
+- 2026-08-05: `S records window-field reconciliation: observed 7, expected 0`
+  — the seven correlated S records held a raw `-1` fallback on the end edge
+  shadowed by a populated primary end; the reconciliation wrongly required
+  every raw `-1` field to lie on one effective edge (fixed by the
+  effective-edge reconciliation above). The sanitized production shape
+  (`allocationStartWeek` null, `startWeek` -1, `allocationEndWeek`
+  populated, `endWeek` -1) is the regression fixture.
 
 1. Install the reviewed merge commit without running migrations; confirm a
    clean checkout at the exact expected commit and a healthy service.
