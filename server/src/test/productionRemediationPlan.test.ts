@@ -515,6 +515,117 @@ describe('classifySnapshotEntry', () => {
       allocationStartWeek: 2, allocationEndWeek: 9,
     }).classification).toBe('alreadyValid')
   })
+
+  // ── Issue #438 S predicate (deterministic zero) ─────────────────────────
+
+  it('classifies the exact raw (-1,-1) alias pair with a populated primary end as deterministic', () => {
+    const result = classifySnapshotEntry({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expect(result.classification).toBe('deterministic')
+    expect(result.message).toContain('zero-capacity')
+  })
+
+  it('S predicate accepts null or finite percentages (zero interval dominates)', () => {
+    for (const percent of [null, 0, 100]) {
+      const result = classifySnapshotEntry({
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: percent,
+        allocationPct: percent,
+        allocationStartWeek: null,
+        allocationEndWeek: 5,
+        startWeek: -1,
+        endWeek: -1,
+      })
+      expect(result.classification).toBe('deterministic')
+    }
+  })
+
+  it('S predicate rejects non-finite percentages', () => {
+    const result = classifySnapshotEntry({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: Number.POSITIVE_INFINITY,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expect(result.classification).toBe('decisionRequired')
+  })
+
+  it('S predicate rejects a populated allocationStartWeek (keeps its existing verdict)', () => {
+    const result = classifySnapshotEntry({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: 0,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    // Not the exact S shape: the populated primary start supplies the
+    // effective edge, so the entry keeps its existing already-valid
+    // classification (never deterministic zero).
+    expect(result.classification).toBe('alreadyValid')
+  })
+
+  it('S predicate rejects one alias -1 with the other null', () => {
+    const result = classifySnapshotEntry({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -1,
+      endWeek: null,
+    })
+    expect(result.classification).toBe('decisionRequired')
+  })
+
+  it('S predicate rejects values below -1', () => {
+    const result = classifySnapshotEntry({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      startWeek: -2,
+      endWeek: -1,
+    })
+    expect(result.classification).toBe('decisionRequired')
+  })
+
+  it('S predicate rejects fractional week values', () => {
+    const result = classifySnapshotEntry({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationPct: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: 1.5,
+      startWeek: -1,
+      endWeek: -1,
+    })
+    expect(result.classification).toBe('decisionRequired')
+  })
+
+  it('S predicate does not apply to ResourceType entries (no alias pair)', () => {
+    const result = classifySnapshotEntry({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+    })
+    // No startWeek/endWeek alias pair on a ResourceType payload: the
+    // effective start is absent, so the entry keeps its windowless verdict.
+    expect(result.classification).toBe('decisionRequired')
+  })
 })
 
 // ─── Derived quarantine in plans (issue #428) ───────────────────────────────
@@ -627,6 +738,110 @@ describe('remediation plan — derived quarantine', () => {
     const plan = buildWithSnapshot(makeSnapshot())
     expect(plan.decisions.some(d => d.snapshotId === 'snap-1')).toBe(false)
     expect(plan.summary.findings.decisionRequired).toBe(0)
+  })
+
+  // ── Issue #438 deterministic translations in the plan ────────────────────
+
+  it('an exact all-windowless-100% Class A snapshot produces deterministic findings, never quarantine', () => {
+    const snapshot = makeSnapshot()
+    ;(snapshot.snapshot as Record<string, unknown>).resourceTypes = [{
+      id: 'rt-a1',
+      name: 'Class A Role',
+      category: 'ENGINEERING',
+      count: 2,
+      hoursPerDay: null,
+      dayRate: null,
+      globalTypeId: null,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    }]
+    ;(snapshot.snapshot as Record<string, unknown>).namedResources = [{
+      id: 'nr-a1',
+      resourceTypeId: 'rt-a1',
+      name: 'Class A Person',
+      startWeek: null,
+      endWeek: null,
+      allocationPct: 100,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      pricingModel: 'ACTUAL_DAYS',
+    }]
+    const plan = buildWithSnapshot(snapshot)
+    expect(plan.summary.quarantined).toBe(0)
+    expect(plan.summary.findings.quarantined).toBe(0)
+    expect(plan.summary.findings.deterministic).toBe(2)
+    expect(plan.decisions).toHaveLength(0)
+    expect(plan.operations).toHaveLength(0)
+    for (const entryId of ['rt-a1', 'nr-a1']) {
+      const finding = plan.findings.find(f => f.entryId === entryId)
+      expect(finding?.classification).toBe('deterministic')
+      expect(finding?.message).toContain('full capacity')
+      expect(finding?.decisionId).toBeNull()
+      expect(finding?.operationId).toBeNull()
+    }
+    expect(classifyPlanExit(plan)).toBe(0)
+  })
+
+  it('an exact S entry inside a defect snapshot is deterministic while the snapshot stays defect', () => {
+    const snapshot = makeSnapshot()
+    ;(snapshot.snapshot as Record<string, unknown>).resourceTypes = [{
+      id: 'rt-w0',
+      name: 'Windowless Role',
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: null,
+      dayRate: null,
+      globalTypeId: null,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    }]
+    ;(snapshot.snapshot as Record<string, unknown>).namedResources = [{
+      id: 'nr-s',
+      resourceTypeId: 'rt-w0',
+      name: 'S Person',
+      startWeek: -1,
+      endWeek: -1,
+      allocationPct: 100,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: null,
+      allocationEndWeek: 5,
+      pricingModel: 'ACTUAL_DAYS',
+    }, {
+      // Residual independent defect (production M1–M6/M8): conflicting
+      // populated aliases keep the snapshot defect-classified.
+      id: 'nr-conflict',
+      resourceTypeId: 'rt-w0',
+      name: 'Conflict Person',
+      startWeek: 5,
+      endWeek: 9,
+      allocationPct: 100,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 100,
+      allocationStartWeek: 5,
+      allocationEndWeek: 10,
+      pricingModel: 'ACTUAL_DAYS',
+    }]
+    const plan = buildWithSnapshot(snapshot)
+    // The S entry is a deterministic finding (no single-negative decision).
+    const sFinding = plan.findings.find(f => f.entryId === 'nr-s')
+    expect(sFinding?.classification).toBe('deterministic')
+    expect(sFinding?.message).toContain('zero-capacity')
+    expect(plan.decisions.some(d => d.entryId === 'nr-s')).toBe(false)
+    // The windowless RT entry keeps its decision (defect snapshots are never
+    // silently excluded) and the snapshot stays defect via the conflict entry.
+    const rtFinding = plan.findings.find(f => f.entryId === 'rt-w0')
+    expect(rtFinding?.classification).toBe('decisionRequired')
+    expect(plan.decisions.some(d => d.entryId === 'rt-w0')).toBe(true)
+    expect(plan.summary.quarantined).toBe(0)
+    expect(plan.summary.findings.deterministic).toBe(1)
+    expect(classifyPlanExit(plan)).toBe(2)
   })
 
   it('a mixed quarantine-and-defect snapshot keeps per-entry classifications (never quarantined)', () => {

@@ -818,19 +818,23 @@ describe('subgroup snapshot-count gating', () => {
 })
 
 describe('Class A affected-snapshot aggregates', () => {
-  /** One Class A RT entry per snapshot with the given windows. */
-  function rtOnlySnapshot(id: string, windowStart: number | null = null): StateSnapshot {
+  /** One windowless CAPACITY_PLAN RT entry per snapshot that remains
+   * quarantined as Class A. Issue #438: the EXACT all-windowless-100% shape
+   * is now restorable, so these fixtures use a non-100 percentage — outside
+   * the approved predicate, still quarantined (fail closed). */
+  function rtOnlySnapshot(id: string, windowStart: number | null = null, allocationPercent = 80): StateSnapshot {
     return {
       id,
       projectId: PROJECT_ID,
       payload: makeV2Snapshot(
-        [makeRt({ id: `rt-${id}`, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: windowStart, allocationEndWeek: null })],
+        [makeRt({ id: `rt-${id}`, allocationMode: 'CAPACITY_PLAN', allocationPercent, allocationStartWeek: windowStart, allocationEndWeek: null })],
         [],
       ),
     }
   }
 
-  /** One Class A NR entry (explicit CAPACITY_PLAN) with the given windows. */
+  /** One windowless CAPACITY_PLAN NR entry (explicit, 100/100) with a
+   * windowed parent: the snapshot stays quarantined (mixed). */
   function nrOnlySnapshot(id: string): StateSnapshot {
     return {
       id,
@@ -865,6 +869,28 @@ describe('Class A affected-snapshot aggregates', () => {
     expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 1, namedResourceOnly: 0, mixed: 0 })
   })
 
+  it('treats an exact all-windowless-100% snapshot as restorable, never quarantined (issue #438)', () => {
+    // The EXACT approved Class A shape (windowless CAPACITY_PLAN 100/100,
+    // explicit modes, all entries matching) is deterministic full capacity:
+    // the shared classifier verdicts it restorable, so it contributes zero
+    // entries/snapshots to the quarantine Class A aggregates and produces no
+    // windowless decisions.
+    const state = makeState([{
+      id: 'snap-exact-a',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'rt-a1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null })],
+        [makeNr({ id: 'nr-a1', resourceTypeId: 'rt-a1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
+      ),
+    }])
+    const report = buildReport(state, countsFor(0, 0))
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 1, quarantined: 0, defect: 0 })
+    expect(report.classAAggregates.totalEntries).toBe(0)
+    expect(report.classAAggregates.totalSnapshots).toBe(0)
+    expect(report.topology.windowlessDecisions).toBe(0)
+  })
+
   it('counts a NamedResource-only Class A snapshot under namedResource and explicit mode source', () => {
     const state = makeState([nrOnlySnapshot('nr-a')])
     const report = buildReport(state, countsFor(1, 1))
@@ -875,12 +901,15 @@ describe('Class A affected-snapshot aggregates', () => {
   })
 
   it('counts a mixed ResourceType/NamedResource snapshot once in both owner-kind categories', () => {
+    // The NamedResource carries a non-100 allocationPct so the snapshot is
+    // outside the exact all-windowless-100% predicate and stays quarantined
+    // (both entries remain Class A quarantine candidates).
     const state = makeState([{
       id: 'snap-mixed',
       projectId: PROJECT_ID,
       payload: makeV2Snapshot(
         [makeRt({ id: 'rt-mix', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null })],
-        [makeNr({ id: 'nr-mix', resourceTypeId: 'rt-mix', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
+        [makeNr({ id: 'nr-mix', resourceTypeId: 'rt-mix', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 80, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
       ),
     }])
     const report = buildReport(state, countsFor(2, 1))
@@ -1398,11 +1427,15 @@ describe('plan-decision-anchored S-record correlation', () => {
     expect(seven.singleMinusOneDecisions).toBe(7)
   })
 
-  it('reconciles the reviewed 18-snapshot topology shape (226 + 133/7 decisions)', () => {
-    // Production-shaped topology: 10 eleven-subgroup snapshots with 21
-    // windowless decisions, 1 with 16, and 7 seven-subgroup snapshots with 19
-    // windowless + 1 single-negative decision each. 359 windowless + 7
-    // single-negative = 366 snapshot decisions across 18 defect snapshots.
+  it('reconciles the reviewed 18-snapshot topology shape (359 windowless decisions, no S decisions)', () => {
+    // Production-shaped topology post-issue-#438: 10 eleven-subgroup
+    // snapshots with 21 windowless decisions, 1 with 16, and 7 seven-subgroup
+    // snapshots with 19 windowless + 1 deterministic S entry each. The S
+    // entries are deterministic findings (no single-negative decisions), and
+    // each seven-subgroup snapshot carries a residual alias-conflict entry
+    // (as in production M1–M6/M8) so it stays defect-classified. 359
+    // windowless + 0 single-negative = 359 snapshot decisions across 18
+    // defect snapshots.
     const conflictNr = (rtId: string, i: number) => makeNr({
       id: `nr-c-${i}`,
       resourceTypeId: rtId,
@@ -1441,27 +1474,41 @@ describe('plan-decision-anchored S-record correlation', () => {
         projectId: PROJECT_ID,
         payload: makeV2Snapshot(
           Array.from({ length: 19 }, (_, j) => makeRt({ id: `rt-s-${i}-${j}`, allocationMode: 'CAPACITY_PLAN' })),
-          [makeNr({ id: `nr-s-${i}`, resourceTypeId: rtId, allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 })],
+          [
+            makeNr({ id: `nr-s-${i}`, resourceTypeId: rtId, allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 }),
+            conflictNr(rtId, 1000 + i),
+          ],
         ),
       })
     }
     const state = makeState(snapshots)
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
       quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 18,
-      windowlessDecisions: 359, singleMinusOneDecisions: 7, snapshotDecisions: 366,
+      windowlessDecisions: 359, singleMinusOneDecisions: 0, snapshotDecisions: 359,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-      topology11Snapshots: 11, topology7Snapshots: 7,
-      topology11WindowlessDecisions: 226, topology7WindowlessDecisions: 133,
-      topology7SingleMinusOneDecisions: 7,
+      topology11Snapshots: 18, topology7Snapshots: 0,
+      topology11WindowlessDecisions: 359, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
     }
     const report = buildReport(state, counts)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.singleNegativeEntries).toHaveLength(7)
-    expect(report.topology.elevenSnapshotSubgroup.snapshots).toBe(11)
-    expect(report.topology.elevenSnapshotSubgroup.windowlessDecisions).toBe(226)
-    expect(report.topology.sevenSnapshotSubgroup.windowlessDecisions).toBe(133)
-    expect(report.topology.sevenSnapshotSubgroup.singleMinusOneDecisions).toBe(7)
-    expect(report.topology.snapshotDecisions).toBe(366)
+    expect(report.singleNegativeEntries).toHaveLength(0)
+    expect(report.topology.elevenSnapshotSubgroup.snapshots).toBe(18)
+    expect(report.topology.elevenSnapshotSubgroup.windowlessDecisions).toBe(359)
+    expect(report.topology.sevenSnapshotSubgroup.windowlessDecisions).toBe(0)
+    expect(report.topology.sevenSnapshotSubgroup.singleMinusOneDecisions).toBe(0)
+    expect(report.topology.snapshotDecisions).toBe(359)
+    // The seven S entries are deterministic findings: every seven-subgroup
+    // snapshot still reports 19 windowless decisions (the residual
+    // alias-conflict entry is an already-valid finding, not a decision).
+    const seven = report.defectSnapshots.filter(m => m.windowlessDecisionCount === 19)
+    expect(seven).toHaveLength(7)
+    for (const m of seven) {
+      expect(m.singleMinusOneDecisionCount).toBe(0)
+      expect(m.entryErrorCategories['alias-conflict']).toBeGreaterThanOrEqual(2)
+    }
+    // The S entries leave the decision set: 359 = 359 windowless + 0 single.
+    expect(report.topology.snapshotDecisions).toBe(359)
   })
 
   it('fails closed on a missing stored snapshot', () => {
@@ -1692,28 +1739,32 @@ describe('effective-edge window reconciliation (shadowed minus-one)', () => {
     topology7SingleMinusOneDecisions: 1,
   }
 
-  it('accepts the sanitized production shape: shadowed opposite-edge fallback -1 (startWeek and endWeek both -1)', () => {
-    // Production shape: allocationStartWeek null, startWeek -1 (effective
-    // negative start), allocationEndWeek 5 (populated primary end), endWeek -1
-    // (shadowed fallback — reported, not rejected).
+  // Issue #438: the exact S shape is deterministic zero, so the containing
+  // windowed-parent snapshot is restorable — no defect, no decision, no S
+  // record.
+  const DETERMINISTIC_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 0,
+    windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+    liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+    topology11Snapshots: 0, topology7Snapshots: 0,
+    topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+    topology7SingleMinusOneDecisions: 0,
+  }
+
+  it('classifies the exact production S shape as deterministic zero, never an S record (issue #438)', () => {
+    // Production shape: allocationStartWeek null, startWeek -1 (raw alias
+    // start), allocationEndWeek 5 (populated primary end), endWeek -1 (raw
+    // alias end). The raw (-1,-1) alias pair is the scheduler-consumed
+    // never-active sentinel: deterministic zero capacity. The containing
+    // snapshot (windowed CAPACITY_PLAN parent + S entry) is restorable; no
+    // single-negative decision exists and no S record is emitted.
     const state = shadowState({ allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 })
-    const report = buildReport(state, SINGLE_COUNTS)
+    const report = buildReport(state, DETERMINISTIC_COUNTS)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.singleNegativeEntries).toHaveLength(1)
-    const s = report.singleNegativeEntries[0]!
-    expect(s.minusOneField).toBe('startWeek')
-    expect(s.windowFields).toEqual({
-      allocationStartWeek: 'absent-null',
-      allocationEndWeek: 'populated',
-      startWeek: 'minus-one',
-      endWeek: 'minus-one',
-    })
-    // JSON and Markdown carry the same sanitized evidence.
-    const json = JSON.stringify(report)
-    const markdown = renderSnapshotEvidenceMarkdown(report)
-    expect(json).toContain('"startWeek":"minus-one","endWeek":"minus-one"')
-    expect(markdown).toContain('startWeek:minus-one')
-    expect(markdown).toContain('endWeek:minus-one')
+    expect(report.singleNegativeEntries).toHaveLength(0)
+    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 1, quarantined: 0, defect: 0 })
+    expect(report.observedBoundary.summary.findings.deterministic).toBe(1)
+    expect(report.topology.singleMinusOneDecisions).toBe(0)
   })
 
   it('accepts the effective-end mirror: populated primary start shadows a fallback -1', () => {
@@ -1832,7 +1883,12 @@ describe('effective-edge window reconciliation (shadowed minus-one)', () => {
     }
   })
 
-  it('emits seven S records for seven production-shaped entries with zero reconciliation violations', () => {
+  it('emits no S records for seven exact S entries; the windowless companions keep the snapshots quarantined', () => {
+    // Each snapshot: one windowless CAPACITY_PLAN RT (outside the exact
+    // snapshot-wide Class A condition — the S entry is not windowless) and
+    // one exact S entry. Issue #438: the S entry is a deterministic finding
+    // (no single-negative decision, no S record) while the windowless RT
+    // keeps the snapshot quarantined Class A.
     const snapshots = Array.from({ length: 7 }, (_, i) => ({
       id: `snap-${i}`,
       projectId: PROJECT_ID,
@@ -1843,20 +1899,20 @@ describe('effective-edge window reconciliation (shadowed minus-one)', () => {
     }))
     const state = makeState(snapshots)
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 7,
-      windowlessDecisions: 7, singleMinusOneDecisions: 7, snapshotDecisions: 14,
+      quarantinedEntries: 7, quarantinedSnapshots: 7, defectSnapshots: 0,
+      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-      topology11Snapshots: 0, topology7Snapshots: 7,
-      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 7,
-      topology7SingleMinusOneDecisions: 7,
+      topology11Snapshots: 0, topology7Snapshots: 0,
+      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
     }
     const report = buildReport(state, counts)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.singleNegativeEntries).toHaveLength(7)
-    for (const s of report.singleNegativeEntries) {
-      expect(s.minusOneField).toBe('startWeek')
-      expect(s.windowFields.endWeek).toBe('minus-one')
-    }
+    expect(report.singleNegativeEntries).toHaveLength(0)
+    expect(report.observedBoundary.summary.findings.deterministic).toBe(7)
+    expect(report.observedBoundary.summary.quarantined).toBe(7)
+    expect(report.observedBoundary.snapshotPopulation.quarantined).toBe(7)
+    expect(report.classAAggregates.totalEntries).toBe(7)
   })
 })
 
@@ -1868,6 +1924,18 @@ describe('effective-source reconciliation (minusOneField must supply the effecti
     topology11Snapshots: 0, topology7Snapshots: 1,
     topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
     topology7SingleMinusOneDecisions: 1,
+  }
+
+  // Issue #438: the exact S shape is deterministic zero — the containing
+  // windowed-parent snapshot is restorable, no single-negative decision
+  // exists and no S record is emitted.
+  const DETERMINISTIC_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 0,
+    windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+    liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
+    topology11Snapshots: 0, topology7Snapshots: 0,
+    topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+    topology7SingleMinusOneDecisions: 0,
   }
 
   it('fails closed when a negative effective source below -1 has a shadowed fallback -1 (start edge)', () => {
@@ -1949,7 +2017,7 @@ describe('effective-source reconciliation (minusOneField must supply the effecti
     expect(report.singleNegativeEntries[0]!.minusOneField).toBe('startWeek')
   })
 
-  it('keeps the shadowed opposite-edge fallback -1 valid (production shape)', () => {
+  it('classifies the exact production S shape as deterministic (no S record)', () => {
     const state = makeState([{
       id: 'snap-shadow-valid',
       projectId: PROJECT_ID,
@@ -1958,10 +2026,10 @@ describe('effective-source reconciliation (minusOneField must supply the effecti
         [makeNr({ id: 'nr-sv', resourceTypeId: 'rt-p', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 })],
       ),
     }])
-    const report = buildReport(state, MISMATCH_COUNTS)
+    const report = buildReport(state, DETERMINISTIC_COUNTS)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    const s = report.singleNegativeEntries[0]!
-    expect(s.minusOneField).toBe('startWeek')
-    expect(s.windowFields.endWeek).toBe('minus-one')
+    expect(report.singleNegativeEntries).toHaveLength(0)
+    expect(report.observedBoundary.summary.findings.deterministic).toBe(1)
+    expect(report.observedBoundary.snapshotPopulation.restorable).toBe(1)
   })
 })

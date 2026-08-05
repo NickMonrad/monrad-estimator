@@ -266,13 +266,122 @@ export function v2EffectiveNamedMode(
 }
 
 /**
+ * Issue #438 S predicate — deterministic zero (shadowed-primary `(-1,-1)`
+ * NamedResource, evidence-backed design #430 Section 11.7 Amendment 1).
+ *
+ * Exact approved raw shape: `startWeek === -1` AND `endWeek === -1` (the raw
+ * scheduler-consumed alias pair), `allocationStartWeek === null`,
+ * `allocationEndWeek` a non-negative integer, raw `allocationMode ===
+ * 'CAPACITY_PLAN'` (explicit, never inherited), `allocationPercent` and
+ * `allocationPct` each null or finite (the zero active interval dominates the
+ * percentage), exactly one resolvable parent ResourceType, and no other
+ * negative or fractional window value (the four captured window fields are
+ * exactly: primary start null, primary end non-negative, aliases -1/-1).
+ *
+ * The legacy scheduler consumed only the alias pair as the outer capacity
+ * gate (`start = nr.startWeek ?? 0`, `end = nr.endWeek ?? Infinity`,
+ * inclusive), so `(-1,-1)` admits no non-negative week: provably zero weekly
+ * capacity regardless of the populated primary end (never a scheduler input
+ * for `CAPACITY_PLAN`) and regardless of the percentage fields. The end-edge
+ * alias conflict is part of the accepted shape — scheduler-irrelevant,
+ * reported in evidence but not a defect.
+ *
+ * Evaluated on the raw alias pair BEFORE effective-edge and alias-conflict
+ * rejection. Every variant (one alias `-1` with the other null or
+ * non-`-1`, populated `allocationStartWeek`, values below `-1`, fractional
+ * values, inherited mode, non-finite percents, unresolvable parent) fails
+ * the predicate and keeps its current classification.
+ */
+export function isDeterministicZeroSnapshotEntry(
+  nr: SnapshotNamedResource,
+  parentRt: SnapshotResourceType | undefined,
+): boolean {
+  if (nr.allocationMode !== 'CAPACITY_PLAN') return false
+  if (nr.startWeek !== -1 || nr.endWeek !== -1) return false
+  if (nr.allocationStartWeek != null) return false
+  if (!isNonNegativeInteger(nr.allocationEndWeek)) return false
+  if (!v2PercentIsValid(nr.allocationPercent) || !v2PercentIsValid(nr.allocationPct)) return false
+  // Exactly one resolvable parent ResourceType: an absent/duplicate id or a
+  // missing snapshot RT is not the accepted shape (duplicate RT ids surface
+  // as a structural defect in snapshot-level validation).
+  if (!parentRt) return false
+  return true
+}
+
+/**
+ * Issue #438 Class A predicate (ResourceType entry) — deterministic unbounded
+ * capacity. Exact approved raw shape: effective mode `CAPACITY_PLAN`,
+ * `allocationStartWeek`/`allocationEndWeek` both null,
+ * `allocationPercent === 100`, and a captured non-negative integer `count`
+ * (the lossless translation derives the ROLE aggregate percent from it).
+ * Inherited mode does not apply to ResourceType entries; the snapshot-wide
+ * all-windowless-100% condition is enforced separately by `isClassASnapshot`.
+ */
+export function isClassAResourceTypeEntry(rt: SnapshotResourceType): boolean {
+  if (rt.allocationMode !== 'CAPACITY_PLAN') return false
+  if (rt.allocationStartWeek != null || rt.allocationEndWeek != null) return false
+  if (rt.allocationPercent !== 100) return false
+  if (!isNonNegativeInteger(rt.count)) return false
+  return true
+}
+
+/**
+ * Issue #438 Class A predicate (NamedResource entry) — deterministic
+ * unbounded 100%. Exact approved raw shape: all four captured window fields
+ * null, raw `allocationMode === 'CAPACITY_PLAN'` (explicit, never
+ * inherited), `allocationPercent === 100` AND `allocationPct === 100`, and
+ * exactly one resolvable parent ResourceType. No alias conflict is possible
+ * with all four fields null; the snapshot-wide condition is enforced
+ * separately by `isClassASnapshot`.
+ */
+export function isClassANamedResourceEntry(
+  nr: SnapshotNamedResource,
+  parentRt: SnapshotResourceType | undefined,
+): boolean {
+  if (nr.allocationMode !== 'CAPACITY_PLAN') return false
+  if (!parentRt) return false
+  if (nr.allocationStartWeek != null || nr.allocationEndWeek != null) return false
+  if (nr.startWeek != null || nr.endWeek != null) return false
+  if (nr.allocationPercent !== 100 || nr.allocationPct !== 100) return false
+  return true
+}
+
+/**
+ * Issue #438 snapshot-wide Class A condition: EVERY captured ResourceType and
+ * NamedResource entry of the snapshot matches the exact per-entry Class A
+ * predicate (all-windowless-100%, explicit modes, resolvable ownership). An
+ * empty snapshot is not the approved shape (fail closed). Any partial
+ * window, inherited mode, non-100 percentage, non-finite percentage,
+ * conflict, orphan or structural-deficiency candidate fails the condition,
+ * keeping the snapshot in its current classification.
+ */
+export function isClassASnapshot(snapshot: SnapshotV2): boolean {
+  if (snapshot.resourceTypes.length === 0 && snapshot.namedResources.length === 0) return false
+  for (const rt of snapshot.resourceTypes) {
+    if (!isClassAResourceTypeEntry(rt)) return false
+  }
+  const rtById = new Map(snapshot.resourceTypes.map(rt => [rt.id, rt]))
+  for (const nr of snapshot.namedResources) {
+    if (!isClassANamedResourceEntry(nr, rtById.get(nr.resourceTypeId ?? ''))) return false
+  }
+  return true
+}
+
+/**
  * Per-entry v2 ResourceType validation — the exact checks the authoritative
  * translator applies to one resource type. Shared with the restorability
  * classifier so translation rules exist in exactly one place.
+ *
+ * `approvedDeterministic` (issue #438): when the entry matches an approved
+ * deterministic shape (S or Class A) the accepted raw values are skipped —
+ * the windowless error and the non-negative-window checks are the rejected
+ * shape's own fields, not independent defects. Mode and percent checks still
+ * run (they are guaranteed by the predicates but kept as a hard invariant).
  */
 export function v2ResourceTypeEntryErrors(
   rt: SnapshotResourceType,
   prefix: string,
+  approvedDeterministic = false,
 ): string[] {
   const errors: string[] = []
   if (rt.allocationMode != null && !KNOWN_V2_MODES.has(rt.allocationMode)) {
@@ -289,7 +398,7 @@ export function v2ResourceTypeEntryErrors(
   const rtNeverActive =
     rtModeUsesWindows &&
     isNeverActiveWindow(rt.allocationStartWeek, rt.allocationEndWeek)
-  if (!rtNeverActive) {
+  if (!rtNeverActive && !approvedDeterministic) {
     for (const [key, value] of [
       ['allocationStartWeek', rt.allocationStartWeek],
       ['allocationEndWeek', rt.allocationEndWeek],
@@ -309,7 +418,11 @@ export function v2ResourceTypeEntryErrors(
       errors.push(`${prefix}: allocationStartWeek must not exceed allocationEndWeek`)
     }
   }
-  if (rt.allocationMode === 'CAPACITY_PLAN' && (rt.allocationStartWeek == null || rt.allocationEndWeek == null)) {
+  if (
+    !approvedDeterministic &&
+    rt.allocationMode === 'CAPACITY_PLAN' &&
+    (rt.allocationStartWeek == null || rt.allocationEndWeek == null)
+  ) {
     errors.push(
       `${prefix}: CAPACITY_PLAN without a captured start/end window cannot be ` +
       'translated without guessing capacity',
@@ -322,11 +435,19 @@ export function v2ResourceTypeEntryErrors(
  * Per-entry v2 NamedResource validation — the exact checks the authoritative
  * translator applies to one named resource (orphan rejection, effective-mode
  * rules, alias validation). Shared with the restorability classifier.
+ *
+ * `approvedDeterministic` (issue #438): when the entry matches an approved
+ * deterministic shape (S or Class A) the accepted raw values are skipped —
+ * the `-1` aliases of the S shape and the null windows of the Class A shape
+ * are the approved shape itself, not independent defects. Mode and percent
+ * checks still run (they are guaranteed by the predicates but kept as a hard
+ * invariant).
  */
 export function v2NamedResourceEntryErrors(
   nr: SnapshotNamedResource,
   parentRt: SnapshotResourceType | undefined,
   prefix: string,
+  approvedDeterministic = false,
 ): string[] {
   const errors: string[] = []
   // ── Orphan-owner rejection: every NamedResource must reference a
@@ -364,7 +485,7 @@ export function v2NamedResourceEntryErrors(
   // its window aliases are normalised instead of rejected.
   const nrNeverActive =
     nrModeUsesWindows && isNeverActiveWindow(effectiveStart, effectiveEnd)
-  if (!nrNeverActive) {
+  if (!nrNeverActive && !approvedDeterministic) {
     for (const [key, value] of [
       ['allocationStartWeek', nr.allocationStartWeek],
       ['allocationEndWeek', nr.allocationEndWeek],
@@ -379,7 +500,11 @@ export function v2NamedResourceEntryErrors(
       errors.push(`${prefix}: allocation window start must not exceed end`)
     }
   }
-  if (mode === 'CAPACITY_PLAN' && (effectiveStart == null || effectiveEnd == null)) {
+  if (
+    !approvedDeterministic &&
+    mode === 'CAPACITY_PLAN' &&
+    (effectiveStart == null || effectiveEnd == null)
+  ) {
     errors.push(
       `${prefix}: CAPACITY_PLAN without a captured start/end window cannot be ` +
       'translated without guessing capacity',
@@ -502,6 +627,23 @@ export function isNeverActiveWindow(
  *                              scheduler) translate to a zero-capacity
  *                              AVAILABILITY_WINDOW profile with a null window
  *                              (issue #421 policy, `isNeverActiveWindow`).
+ *   - issue #438 S shape       → the raw (-1,-1) alias pair with a populated
+ *                              non-negative primary end (shadowed-primary
+ *                              shape) is evaluated BEFORE effective-edge and
+ *                              alias-conflict rejection and translates to the
+ *                              same never-active zero-capacity representation
+ *                              (`isDeterministicZeroSnapshotEntry`).
+ *   - issue #438 Class A       → when EVERY captured entry matches the exact
+ *                              all-windowless-100% predicate, ResourceType
+ *                              entries translate to a ROLE profile at the
+ *                              null-window aggregate percent max(0, count −
+ *                              namedResources.length) × 100 and NamedResource
+ *                              entries to null-window 100% NAMED_PERSON
+ *                              profiles (`isClassASnapshot`), reproducing
+ *                              max(count, namedResources.length) × hoursPerDay
+ *                              × 5 per week under the current scheduler
+ *                              contract. A plain null-window 100% ROLE is
+ *                              never emitted (it is not lossless).
  *
  * Every NamedResource must reference a ResourceType included in the same
  * snapshot (orphan rows are rejected with a clear error before any write).
@@ -517,6 +659,20 @@ export function translateV2SnapshotProfiles(
   const errors: string[] = []
   const profiles: TranslatedV2Profile[] = []
   const rtById = new Map(snapshot.resourceTypes.map(rt => [rt.id, rt]))
+  // Issue #438: the approved snapshot-wide all-windowless-100% condition.
+  // Only when EVERY captured entry matches the exact Class A per-entry shape
+  // do the entries translate losslessly (ROLE aggregate percent derived from
+  // the captured count); any other snapshot keeps the current windowless
+  // rejection/quarantine classification.
+  const classASnapshot = isClassASnapshot(snapshot)
+  // Captured per-ResourceType NamedResource set (issue #438: the ROLE
+  // aggregate percent derives from the snapshot's own entries, never from
+  // live state).
+  const nrCountByRt = new Map<string, number>()
+  for (const nr of snapshot.namedResources) {
+    if (!nr.resourceTypeId) continue
+    nrCountByRt.set(nr.resourceTypeId, (nrCountByRt.get(nr.resourceTypeId) ?? 0) + 1)
+  }
 
   const modeBasisSource = (mode: string | null | undefined): {
     basis: TranslatedV2Profile['planningBasis']
@@ -542,12 +698,20 @@ export function translateV2SnapshotProfiles(
       errors.push(`${prefix}: unknown allocationMode "${String(rt.allocationMode)}"`)
       continue
     }
-    errors.push(...v2ResourceTypeEntryErrors(rt, prefix))
+    // Issue #438 Class A ResourceType entry: deterministic full capacity.
+    // The ROLE profile carries the null-window aggregate percent
+    // max(0, count − namedResources.length) × 100 — the phantom-slot
+    // capacity of the captured count expressed as aggregate FTE under the
+    // current scheduler contract (a plain null-window 100% ROLE profile is
+    // explicitly NOT lossless and is never emitted).
+    const rtClassA = classASnapshot && isClassAResourceTypeEntry(rt)
+    errors.push(...v2ResourceTypeEntryErrors(rt, prefix, rtClassA))
     const rtModeUsesWindows = rt.allocationMode === 'TIMELINE' || rt.allocationMode === 'CAPACITY_PLAN'
     // Issue #421 never-active policy: a captured (-1, -1) pair or an inverted
     // window (start > end) never contributed capacity; it translates to a
     // zero-capacity profile with a null window instead of failing.
     const rtNeverActive =
+      !rtClassA &&
       rtModeUsesWindows &&
       isNeverActiveWindow(rt.allocationStartWeek, rt.allocationEndWeek)
     const { basis, source } = modeBasisSource(rt.allocationMode)
@@ -555,8 +719,11 @@ export function translateV2SnapshotProfiles(
     // translation discards them so the resulting DEMAND_FOLLOWING /
     // WHOLE_PROJECT_ALLOCATION profile is structurally valid.
     const modeDiscardsWindows = rt.allocationMode === 'EFFORT' || rt.allocationMode === 'FULL_PROJECT' || rt.allocationMode == null
-    const roleStartWeek = modeDiscardsWindows || rtNeverActive ? null : rt.allocationStartWeek
-    const roleEndWeek = modeDiscardsWindows || rtNeverActive ? null : rt.allocationEndWeek
+    const roleStartWeek = rtClassA ? null : (modeDiscardsWindows || rtNeverActive ? null : rt.allocationStartWeek)
+    const roleEndWeek = rtClassA ? null : (modeDiscardsWindows || rtNeverActive ? null : rt.allocationEndWeek)
+    const roleDefaultPercent = rtClassA
+      ? Math.max(0, rt.count - (nrCountByRt.get(rt.id) ?? 0)) * 100
+      : (rtNeverActive ? 0 : rt.allocationPercent)
     profiles.push({
       id: `snapshot-v2-role-${rt.id}`,
       projectId,
@@ -565,7 +732,7 @@ export function translateV2SnapshotProfiles(
       ownerKind: 'ROLE',
       planningBasis: basis,
       source,
-      defaultPercent: rtNeverActive ? 0 : rt.allocationPercent,
+      defaultPercent: roleDefaultPercent,
       startWeek: roleStartWeek,
       endWeek: roleEndWeek,
       legacy: {
@@ -602,7 +769,19 @@ export function translateV2SnapshotProfiles(
       errors.push(`${prefix}: unknown allocationMode "${String(mode)}"`)
       continue
     }
-    errors.push(...v2NamedResourceEntryErrors(nr, parentRt, prefix))
+    // Issue #438 approved deterministic NamedResource shapes:
+    //  - S: the raw (-1,-1) alias pair (evaluated on the raw scheduler-
+    //    consumed pair BEFORE effective-edge/alias-conflict rejection) —
+    //    translates to the existing never-active zero-capacity
+    //    representation (null window, defaultPercent 0);
+    //  - Class A: all four window fields null, explicit CAPACITY_PLAN,
+    //    100/100 — translates to a null-window 100% NAMED_PERSON profile,
+    //    but ONLY inside a snapshot satisfying the approved snapshot-wide
+    //    condition (fail closed on mixed snapshots).
+    const sShape = isDeterministicZeroSnapshotEntry(nr, parentRt)
+    const nrClassA = classASnapshot && isClassANamedResourceEntry(nr, parentRt)
+    const approvedShape = sShape || nrClassA
+    errors.push(...v2NamedResourceEntryErrors(nr, parentRt, prefix, approvedShape))
     const effectiveStart = nr.allocationStartWeek ?? nr.startWeek
     const effectiveEnd = nr.allocationEndWeek ?? nr.endWeek
     const nrModeUsesWindows = mode === 'TIMELINE' || mode === 'CAPACITY_PLAN'
@@ -610,15 +789,20 @@ export function translateV2SnapshotProfiles(
     // captured (-1, -1) pair or inverted window never contributed capacity;
     // its window aliases are normalised instead of rejected.
     const nrNeverActive =
-      nrModeUsesWindows && isNeverActiveWindow(effectiveStart, effectiveEnd)
+      !approvedShape &&
+      nrModeUsesWindows &&
+      isNeverActiveWindow(effectiveStart, effectiveEnd)
     const { basis, source } = modeBasisSource(mode)
     const effectivePercent = nr.allocationPercent ?? nr.allocationPct
     // EFFORT / FULL_PROJECT never used window aliases — discard them so the
     // resulting DEMAND_FOLLOWING / WHOLE_PROJECT_ALLOCATION profile is
     // structurally valid.
     const modeDiscardsWindows = mode === 'EFFORT' || mode === 'FULL_PROJECT' || mode == null
-    const namedStartWeek = modeDiscardsWindows || nrNeverActive ? null : effectiveStart
-    const namedEndWeek = modeDiscardsWindows || nrNeverActive ? null : effectiveEnd
+    const namedStartWeek = approvedShape ? null : (modeDiscardsWindows || nrNeverActive ? null : effectiveStart)
+    const namedEndWeek = approvedShape ? null : (modeDiscardsWindows || nrNeverActive ? null : effectiveEnd)
+    let namedDefaultPercent = effectivePercent
+    if (sShape || nrNeverActive) namedDefaultPercent = 0
+    else if (nrClassA) namedDefaultPercent = 100
     profiles.push({
       id: `snapshot-v2-named-${nr.id}`,
       projectId,
@@ -627,7 +811,7 @@ export function translateV2SnapshotProfiles(
       ownerKind: 'NAMED_PERSON',
       planningBasis: basis,
       source,
-      defaultPercent: nrNeverActive ? 0 : effectivePercent,
+      defaultPercent: namedDefaultPercent,
       startWeek: namedStartWeek,
       endWeek: namedEndWeek,
       legacy: {

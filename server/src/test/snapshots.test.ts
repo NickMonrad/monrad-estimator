@@ -1849,13 +1849,16 @@ describe('rollbackProjectSnapshot', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('GET /api/projects/:projectId/snapshots — derived restorability fields', () => {
+  // Issue #438: the EXACT all-windowless-100% CAPACITY_PLAN snapshot is now
+  // restorable, so this quarantined fixture uses a non-100 percentage —
+  // outside the approved predicate, still Class A quarantined (fail closed).
   function windowlessV2(label: string) {
     return {
       schemaVersion: 2, epics: [], project: null,
       resourceTypes: [{
         id: 'rt-q', name: 'Quarantine Role', category: 'ENGINEERING', count: 1,
         hoursPerDay: null, dayRate: null, globalTypeId: null,
-        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 80,
         allocationStartWeek: null, allocationEndWeek: null,
       }],
       namedResources: [],
@@ -1896,16 +1899,51 @@ describe('GET /api/projects/:projectId/snapshots — derived restorability field
     expect(quarantined.label).toBe('quarantined')
     expect(quarantined.trigger).toBe('manual')
   })
+
+  it('lists the exact all-windowless-100% Class A shape as restorable (issue #438)', async () => {
+    const exactClassA = {
+      schemaVersion: 2, epics: [], project: null,
+      resourceTypes: [{
+        id: 'rt-a', name: 'Class A Role', category: 'ENGINEERING', count: 1,
+        hoursPerDay: null, dayRate: null, globalTypeId: null,
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationStartWeek: null, allocationEndWeek: null,
+      }],
+      namedResources: [],
+      timelineEntries: [], storyTimelineEntries: [],
+      epicDependencies: [], featureDependencies: [], overheadItems: [],
+    }
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
+    vi.mocked(prisma.backlogSnapshot.findMany).mockResolvedValue([
+      {
+        id: 'snap-class-a', projectId: projId, label: 'class a', trigger: 'manual',
+        createdAt: new Date('2026-01-03'), createdById: userId,
+        snapshot: exactClassA,
+      },
+    ] as never)
+
+    const res = await request(app)
+      .get(`/api/projects/${projId}/snapshots`)
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const listed = res.body.find((s: { id: string }) => s.id === 'snap-class-a')
+    expect(listed.restoreStatus).toBe('restorable')
+    expect(listed.restoreReason).toBeNull()
+  })
 })
 
 describe('POST rollback — quarantined snapshot refused before any write', () => {
   it('returns 400 with the stable reason, no transaction, no pre_rollback row', async () => {
+    // Issue #438: only the EXACT all-windowless-100% shape is restorable;
+    // this non-100 percentage variant stays Class A quarantined and is
+    // still refused pre-write.
     const windowlessV2 = {
       schemaVersion: 2, epics: [], project: null,
       resourceTypes: [{
         id: 'rt-q', name: 'Quarantine Role', category: 'ENGINEERING', count: 1,
         hoursPerDay: null, dayRate: null, globalTypeId: null,
-        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
+        allocationMode: 'CAPACITY_PLAN', allocationPercent: 80,
         allocationStartWeek: null, allocationEndWeek: null,
       }],
       namedResources: [],

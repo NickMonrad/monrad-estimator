@@ -14,7 +14,46 @@ import { QUARANTINE_CLASS_A_REASON } from '../lib/snapshotRestorability.js'
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
+/**
+ * A windowless CAPACITY_PLAN snapshot that REMAINS quarantined (Class A):
+ * issue #438 made only the EXACT all-windowless-100% shape restorable, so
+ * this fixture uses a non-100 percentage — outside the approved predicate,
+ * still quarantined (fail closed), still retention-protected.
+ */
 function v2WindowlessCapacityPlan(id: string) {
+  return {
+    schemaVersion: 2,
+    epics: [],
+    project: null,
+    resourceTypes: [{
+      id: `rt-${id}`,
+      name: `Role ${id}`,
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: null,
+      dayRate: null,
+      globalTypeId: null,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 80,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    }],
+    namedResources: [],
+    timelineEntries: [],
+    storyTimelineEntries: [],
+    epicDependencies: [],
+    featureDependencies: [],
+    overheadItems: [],
+  }
+}
+
+/**
+ * The exact approved Class A snapshot shape (issue #438): every captured
+ * entry windowless CAPACITY_PLAN at 100/100 with explicit modes — the
+ * classifier verdicts it restorable, so retention may prune it like any
+ * other restorable snapshot.
+ */
+function v2ExactClassASnapshot(id: string) {
   return {
     schemaVersion: 2,
     epics: [],
@@ -159,6 +198,21 @@ describe('pruneSnapshots — retention protection (issue #428)', () => {
     const { db, deleteMany } = makeDb(records)
     await pruneSnapshots(db, 'proj-1')
     expect(deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('exact Class A snapshots return to normal retention eligibility (issue #438)', async () => {
+    // The EXACT all-windowless-100% shape is restorable now, so retention
+    // prunes it like any other restorable snapshot — the amendment changes
+    // eligibility only for the newly restorable shape.
+    const records = [
+      ...Array.from({ length: 25 }, (_, i) => restorable(`r-${String(i).padStart(2, '0')}`)),
+      record('class-a-1', v2ExactClassASnapshot('class-a-1')),
+    ]
+    const { db, deleteMany } = makeDb(records)
+    await pruneSnapshots(db, 'proj-1')
+    const deletedIds = deleteMany.mock.calls[0]?.[0].where.id.in as string[]
+    expect(deletedIds).toHaveLength(6) // 26 restorable − 20 cap
+    expect(deletedIds).toContain('class-a-1')
   })
 
   it('the stable quarantine reason is exposed by the classifier used by retention', () => {
