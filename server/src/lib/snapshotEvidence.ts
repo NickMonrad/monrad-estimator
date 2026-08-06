@@ -22,6 +22,16 @@
  * `not-assessed`. It emits aggregate evidence only — no project/snapshot/
  * owner/finding/decision identifiers, no names, no payloads.
  *
+ * Issue #440 adds the `classACompanionEvidence` section: sanitized
+ * observational evidence about the non-Class-A companion entries inside
+ * currently Class-A-quarantined snapshots (selection uses the currently
+ * merged classifier only; exact Class A uses the existing per-entry
+ * predicates; every other entry is a companion). Companions are correlated
+ * to exactly one existing remediation-plan finding and aggregated into
+ * fixed-category rows plus population/plan/flag totals with internal
+ * reconciliation — this is evidence for the #438 companion-rule review, not
+ * a predicate implementation.
+ *
  * Pure function of its inputs (database state, snapshot created-at
  * metadata, reviewed expectations); performs zero writes; contains no I/O.
  */
@@ -39,6 +49,7 @@ import {
   isClassAResourceTypeEntry,
   isClassANamedResourceEntry,
   isClassASnapshot,
+  isNonNegativeInteger,
 } from './projectSnapshotCapacity.js'
 import {
   classifySnapshotRestorability,
@@ -62,7 +73,7 @@ import {
 
 // ─── Version and schema ─────────────────────────────────────────────────────
 
-export const SNAPSHOT_EVIDENCE_FORMAT_VERSION = 1 as const
+export const SNAPSHOT_EVIDENCE_FORMAT_VERSION = 2 as const
 
 /** Stable evidence categories; never raw identifiers or payloads. */
 export type OwnerKindCategory = 'resourceType' | 'namedResource' | 'unavailable'
@@ -146,6 +157,85 @@ export interface SnapshotEvidenceExpected {
 }
 
 // ─── Report schema (versioned, evidence-only) ───────────────────────────────
+
+/** Fixed sanitized state vocabulary for one raw window field of a companion
+ * entry (never numeric values). `unavailable` means the field does not exist
+ * on that entry kind (e.g. startWeek/endWeek on a ResourceType);
+ * `populated-other` covers populated values that are not non-negative
+ * integers (negative other than -1, fractional, non-finite). */
+export type CompanionWindowFieldState =
+  | 'unavailable'
+  | 'absent-null'
+  | 'minus-one'
+  | 'populated-nonnegative-integer'
+  | 'populated-other'
+
+/** Current remediation-plan finding classification of a companion entry
+ * (exactly the shared FindingClassification vocabulary). */
+export type CompanionPlanClassification =
+  | 'deterministic'
+  | 'decisionRequired'
+  | 'unsupported'
+  | 'alreadyValid'
+  | 'quarantined'
+
+/** One deterministic aggregate row of companion entries. Fixed sanitized
+ * categories only, plus a count; never identifiers or raw values. */
+export interface ClassACompanionShapeRow {
+  entryKind: 'resourceType' | 'namedResource'
+  rawMode: SanitizedMode
+  /** The same sanitized vocabulary; `unavailable` for ResourceType entries. */
+  parentMode: SanitizedMode
+  effectiveMode: SanitizedMode
+  modeSource: NamedModeSourceCategory
+  allocationStartWeekState: CompanionWindowFieldState
+  allocationEndWeekState: CompanionWindowFieldState
+  startWeekState: CompanionWindowFieldState
+  endWeekState: CompanionWindowFieldState
+  allocationPercentCategory: PercentCategory
+  /** `unavailable` for ResourceType entries (the field does not exist);
+   * otherwise the fixed percentage vocabulary. */
+  allocationPctCategory: PercentCategory | 'unavailable'
+  currentPlanClassification: CompanionPlanClassification
+  count: number
+}
+
+/** Issue #440 — sanitized observational evidence about the non-Class-A
+ * companion entries inside currently Class-A-quarantined snapshots. This is
+ * evidence for the #438 companion-rule review only; it never decides or
+ * implements the future companion predicate. */
+export interface ClassACompanionEvidence {
+  population: {
+    /** Selected snapshots: current verdict quarantined with classes exactly A. */
+    classAQuarantinedSnapshots: number
+    /** Selected snapshots containing at least one companion entry. */
+    snapshotsWithCompanions: number
+    exactClassAResourceTypeEntries: number
+    exactClassANamedResourceEntries: number
+    companionResourceTypeEntries: number
+    companionNamedResourceEntries: number
+    totalCompanionEntries: number
+    /** Excluded quarantined snapshots carrying BOTH Class A and Class B. */
+    excludedMixedClassABSnapshots: number
+  }
+  /** Deterministic sorted aggregate rows (fixed categories + count). */
+  shapeRows: ClassACompanionShapeRow[]
+  /** Aggregate companion totals by current remediation-plan classification. */
+  planClassifications: Record<CompanionPlanClassification, number>
+  /** Aggregate snapshot counts answering the three production questions. */
+  snapshotFlags: {
+    allEntriesWindowless: number
+    notAllEntriesWindowless: number
+    allEntriesApproved100: number
+    notAllEntriesApproved100: number
+    allCompanionsWindowless: number
+    notAllCompanionsWindowless: number
+    allCompanionsApproved100: number
+    notAllCompanionsApproved100: number
+    anyCompanionInheritedMode: number
+    noCompanionInheritedMode: number
+  }
+}
 
 /** One sanitized S record (single-negative decision evidence). Key is a
  * content-derived internal label input; never emitted. */
@@ -255,6 +345,8 @@ export interface SnapshotEvidenceReport {
     entriesByEra: Record<SnapshotEraCategory, number>
     snapshotsByEra: Record<SnapshotEraCategory, number>
   }
+  /** Issue #440 — sanitized companion-entry evidence for the #438 review. */
+  classACompanionEvidence: ClassACompanionEvidence
   unavailableEvidence: {
     singleEntriesModeSourceUnavailable: number
     defectSnapshotsIndependentDefectUnavailable: number
@@ -270,7 +362,7 @@ export interface SnapshotEvidenceReport {
 
 // ─── Controlled error ───────────────────────────────────────────────────────
 
-export type EvidenceErrorCode = 'unsupported-snapshot' | 'snapshot-parse-failure' | 'decision-correlation-failure'
+export type EvidenceErrorCode = 'unsupported-snapshot' | 'snapshot-parse-failure' | 'decision-correlation-failure' | 'companion-correlation-failure'
 
 export class SnapshotEvidenceError extends Error {
   readonly code: EvidenceErrorCode
@@ -998,6 +1090,318 @@ export function classifyAllSnapshots(state: RemediationDatabaseState): Classifie
   })
 }
 
+// ─── Issue #440 Class A companion evidence ──────────────────────────────────
+
+/** Fixed sanitized state of one raw window field (never numeric values).
+ * `unavailable` for fields that do not exist on the entry kind. */
+function companionWindowFieldState(
+  kind: 'resourceType' | 'namedResource',
+  field: 'allocationStartWeek' | 'allocationEndWeek' | 'startWeek' | 'endWeek',
+  value: number | null | undefined,
+): CompanionWindowFieldState {
+  if (kind === 'resourceType' && (field === 'startWeek' || field === 'endWeek')) return 'unavailable'
+  if (value == null) return 'absent-null'
+  if (value === -1) return 'minus-one'
+  if (isNonNegativeInteger(value)) return 'populated-nonnegative-integer'
+  return 'populated-other'
+}
+
+/** Raw-windowless predicate for one captured entry (all its existing window
+ * fields absent-null). Defined from the raw captured fields, never from
+ * translated output. */
+function companionEntryWindowless(
+  kind: 'resourceType' | 'namedResource',
+  rt: SnapshotResourceType,
+  nr: SnapshotNamedResource,
+): boolean {
+  if (kind === 'resourceType') {
+    return rt.allocationStartWeek == null && rt.allocationEndWeek == null
+  }
+  return (
+    nr.allocationStartWeek == null &&
+    nr.allocationEndWeek == null &&
+    nr.startWeek == null &&
+    nr.endWeek == null
+  )
+}
+
+/** Approved-100 category per entry kind (observational definition, issue
+ * #440): ResourceType — allocationPercent hundred (allocationPct does not
+ * exist); NamedResource — allocationPercent AND allocationPct both hundred.
+ * This is NOT the future companion predicate. */
+function companionEntryApproved100(
+  kind: 'resourceType' | 'namedResource',
+  rt: SnapshotResourceType,
+  nr: SnapshotNamedResource,
+): boolean {
+  if (kind === 'resourceType') return rt.allocationPercent === 100
+  return nr.allocationPercent === 100 && nr.allocationPct === 100
+}
+
+/** Aggregate key of one companion shape row (fixed categories only). */
+interface CompanionAggregateKey {
+  entryKind: 'resourceType' | 'namedResource'
+  rawMode: SanitizedMode
+  parentMode: SanitizedMode
+  effectiveMode: SanitizedMode
+  modeSource: NamedModeSourceCategory
+  allocationStartWeekState: CompanionWindowFieldState
+  allocationEndWeekState: CompanionWindowFieldState
+  startWeekState: CompanionWindowFieldState
+  endWeekState: CompanionWindowFieldState
+  allocationPercentCategory: PercentCategory
+  allocationPctCategory: PercentCategory | 'unavailable'
+  currentPlanClassification: CompanionPlanClassification
+}
+
+/** Deterministic sort key over the fixed categories of one shape row. */
+function companionAggregateKey(categories: CompanionAggregateKey): string {
+  return canonicalJson(categories)
+}
+
+/**
+ * Issue #440 — build the sanitized Class A companion evidence section using
+ * the CURRENTLY MERGED policy only.
+ *
+ * Selection: every stored V2 snapshot whose shared
+ * `classifySnapshotRestorability` verdict is `quarantined` with quarantine
+ * classes exactly `['A']`. Restorable, defect and Class-B-only snapshots are
+ * excluded; mixed Class-A/Class-B snapshots are counted separately in the
+ * excluded-population aggregate. Within a selected snapshot an entry is
+ * exact Class A iff it satisfies the existing `isClassAResourceTypeEntry` /
+ * `isClassANamedResourceEntry` predicates with its current captured parent;
+ * every other entry is a companion. The predicates themselves are NOT
+ * modified or broadened here.
+ *
+ * Every companion is correlated to exactly one existing remediation-plan
+ * snapshot-entry finding (snapshotId + entryId; the plan is the selection
+ * authority). Any missing, ambiguous or duplicate match, unresolvable
+ * ownership or aggregate reconciliation failure fails closed with a
+ * controlled safe reason — never identifiers or payloads.
+ *
+ * The section is observational evidence for the #438 companion-rule review;
+ * it never decides the future companion predicate and its values are NOT
+ * part of the reviewed expected file.
+ */
+function buildClassACompanionEvidence(
+  state: RemediationDatabaseState,
+  plan: RemediationPlan,
+  classified: readonly ClassifiedSnapshot[],
+): { section: ClassACompanionEvidence; checks: Array<{ label: string; observed: number; expected: number }> } {
+  const checks: Array<{ label: string; observed: number; expected: number }> = []
+  const pushCheck = (label: string, observed: number, expected: number): void => {
+    checks.push({ label, observed, expected })
+  }
+  // Function declaration (not an arrow constant): TypeScript narrows control
+  // flow past `never`-returning calls only for function declarations.
+  function fail(reason: string): never {
+    throw new SnapshotEvidenceError(
+      'companion-correlation-failure',
+      `cannot aggregate Class A companion evidence: ${reason}`,
+    )
+  }
+
+  const population = {
+    classAQuarantinedSnapshots: 0,
+    snapshotsWithCompanions: 0,
+    exactClassAResourceTypeEntries: 0,
+    exactClassANamedResourceEntries: 0,
+    companionResourceTypeEntries: 0,
+    companionNamedResourceEntries: 0,
+    totalCompanionEntries: 0,
+    excludedMixedClassABSnapshots: 0,
+  }
+  const planClassifications: Record<CompanionPlanClassification, number> = {
+    deterministic: 0,
+    decisionRequired: 0,
+    unsupported: 0,
+    alreadyValid: 0,
+    quarantined: 0,
+  }
+  const snapshotFlags = {
+    allEntriesWindowless: 0,
+    notAllEntriesWindowless: 0,
+    allEntriesApproved100: 0,
+    notAllEntriesApproved100: 0,
+    allCompanionsWindowless: 0,
+    notAllCompanionsWindowless: 0,
+    allCompanionsApproved100: 0,
+    notAllCompanionsApproved100: 0,
+    anyCompanionInheritedMode: 0,
+    noCompanionInheritedMode: 0,
+  }
+  const rowCounts = new Map<string, { key: CompanionAggregateKey; count: number }>()
+  const companionKeys = new Set<string>()
+  let capturedEntriesTotal = 0
+
+  for (let snapshotIndex = 0; snapshotIndex < state.snapshots.length; snapshotIndex++) {
+    const snapshot = state.snapshots[snapshotIndex]!
+    const item = classified[snapshotIndex]!
+    const restorability = item.evidence.restorability
+    if (restorability.kind !== 'quarantined') continue
+    const classes = restorability.quarantineClasses
+    const hasA = classes.includes('A')
+    const hasB = classes.includes('B')
+    if (hasA && hasB) {
+      // Mixed Class-A/Class-B quarantine: reported separately, never mixed
+      // into the Class A companion population.
+      population.excludedMixedClassABSnapshots++
+      continue
+    }
+    if (!hasA) continue // Class-B-only quarantine: excluded.
+    // Selected: quarantine classes exactly Class A.
+    const parsed = item.parsedV2
+    if (parsed == null) fail(`selected snapshot ${snapshotIndex + 1} of ${state.snapshots.length} is not a parseable v2 payload`)
+    const rtById = new Map(parsed.resourceTypes.map(rt => [rt.id, rt]))
+
+    const captured = parsed.resourceTypes.length + parsed.namedResources.length
+    capturedEntriesTotal += captured
+    population.classAQuarantinedSnapshots++
+
+    let snapshotHasCompanion = false
+    let snapshotAllEntriesWindowless = true
+    let snapshotAllEntriesApproved100 = true
+    let snapshotAllCompanionsWindowless = true
+    let snapshotAllCompanionsApproved100 = true
+    let snapshotAnyCompanionInherited = false
+
+    const considerEntry = (
+      kind: 'resourceType' | 'namedResource',
+      rt: SnapshotResourceType | null,
+      nr: SnapshotNamedResource | null,
+      exact: boolean,
+    ): void => {
+      const entryId = kind === 'resourceType' ? rt!.id : nr!.id
+      const windowless = companionEntryWindowless(kind, rt!, nr!)
+      const approved100 = companionEntryApproved100(kind, rt!, nr!)
+      if (!windowless) snapshotAllEntriesWindowless = false
+      if (!approved100) snapshotAllEntriesApproved100 = false
+      if (exact) {
+        if (kind === 'resourceType') population.exactClassAResourceTypeEntries++
+        else population.exactClassANamedResourceEntries++
+        return
+      }
+      // Companion entry.
+      snapshotHasCompanion = true
+      const companionKey = `${snapshotIndex}\u0000${kind}\u0000${entryId}`
+      if (companionKeys.has(companionKey)) fail('an entry was counted more than once')
+      companionKeys.add(companionKey)
+      if (!windowless) snapshotAllCompanionsWindowless = false
+      if (!approved100) snapshotAllCompanionsApproved100 = false
+
+      // Correlation to the current remediation plan: exactly one
+      // snapshot-entry finding for this entry (the plan is the selection
+      // authority; no second policy engine).
+      const matches = plan.findings.filter(
+        finding =>
+          finding.category === 'snapshot-entry' &&
+          finding.snapshotId === snapshot.id &&
+          finding.entryId === entryId,
+      )
+      if (matches.length !== 1) {
+        fail(`companion entry has ${matches.length} uniquely matching plan findings (exactly one required)`)
+      }
+      const classification = matches[0]!.classification as CompanionPlanClassification
+      planClassifications[classification]++
+      if (kind === 'namedResource') population.companionNamedResourceEntries++
+      else population.companionResourceTypeEntries++
+      population.totalCompanionEntries++
+
+      // Sanitized shape categories (fixed vocabularies only).
+      const rawMode = kind === 'resourceType'
+        ? sanitizeMode(rt!.allocationMode)
+        : sanitizeMode(nr!.allocationMode)
+      const parentMode = kind === 'resourceType'
+        ? 'unavailable'
+        : sanitizeMode(rtById.get(nr!.resourceTypeId ?? '')?.allocationMode)
+      const effectiveMode = kind === 'resourceType'
+        ? rawMode
+        : sanitizeMode(v2EffectiveNamedMode(nr!, rtById.get(nr!.resourceTypeId ?? '')))
+      const modeSource = kind === 'resourceType'
+        ? 'unavailable'
+        : companionModeSourceCategory(nr!.allocationMode ?? null, rtById.get(nr!.resourceTypeId ?? '')?.allocationMode ?? null)
+      if (modeSource === 'inherited') snapshotAnyCompanionInherited = true
+
+      const key: CompanionAggregateKey = {
+        entryKind: kind,
+        rawMode,
+        parentMode,
+        effectiveMode,
+        modeSource,
+        allocationStartWeekState: companionWindowFieldState(kind, 'allocationStartWeek', kind === 'resourceType' ? rt!.allocationStartWeek : nr!.allocationStartWeek),
+        allocationEndWeekState: companionWindowFieldState(kind, 'allocationEndWeek', kind === 'resourceType' ? rt!.allocationEndWeek : nr!.allocationEndWeek),
+        startWeekState: companionWindowFieldState(kind, 'startWeek', kind === 'namedResource' ? nr!.startWeek : null),
+        endWeekState: companionWindowFieldState(kind, 'endWeek', kind === 'namedResource' ? nr!.endWeek : null),
+        allocationPercentCategory: percentCategory(kind === 'resourceType' ? rt!.allocationPercent : nr!.allocationPercent),
+        allocationPctCategory: kind === 'resourceType' ? 'unavailable' : percentCategory(nr!.allocationPct),
+        currentPlanClassification: classification,
+      }
+      const sortKey = companionAggregateKey(key)
+      const existing = rowCounts.get(sortKey)
+      if (existing) existing.count++
+      else rowCounts.set(sortKey, { key, count: 1 })
+    }
+
+    for (const rt of parsed.resourceTypes) {
+      considerEntry('resourceType', rt, null, isClassAResourceTypeEntry(rt))
+    }
+    for (const nr of parsed.namedResources) {
+      // Strict parent resolution: exactly one captured ResourceType. An
+      // absent, unmatched or duplicated parent fails closed (never resolved
+      // with find/Map/positional picks).
+      const parentId = nr.resourceTypeId
+      if (parentId == null || parentId === '') fail('a named-resource entry carries no parent reference')
+      const parents = parsed.resourceTypes.filter(rt => rt.id === parentId)
+      if (parents.length !== 1) fail(`a named-resource entry parent matched ${parents.length} resource types`)
+      const parentRt = parents[0]!
+      considerEntry('namedResource', null, nr, isClassANamedResourceEntry(nr, parentRt))
+    }
+
+    population.snapshotsWithCompanions += snapshotHasCompanion ? 1 : 0
+    snapshotFlags.allEntriesWindowless += snapshotAllEntriesWindowless ? 1 : 0
+    snapshotFlags.notAllEntriesWindowless += snapshotAllEntriesWindowless ? 0 : 1
+    snapshotFlags.allEntriesApproved100 += snapshotAllEntriesApproved100 ? 1 : 0
+    snapshotFlags.notAllEntriesApproved100 += snapshotAllEntriesApproved100 ? 0 : 1
+    snapshotFlags.allCompanionsWindowless += snapshotAllCompanionsWindowless ? 1 : 0
+    snapshotFlags.notAllCompanionsWindowless += snapshotAllCompanionsWindowless ? 0 : 1
+    snapshotFlags.allCompanionsApproved100 += snapshotAllCompanionsApproved100 ? 1 : 0
+    snapshotFlags.notAllCompanionsApproved100 += snapshotAllCompanionsApproved100 ? 0 : 1
+    snapshotFlags.anyCompanionInheritedMode += snapshotAnyCompanionInherited ? 1 : 0
+    snapshotFlags.noCompanionInheritedMode += snapshotAnyCompanionInherited ? 0 : 1
+  }
+
+  // ── Internal reconciliation (observational; refuses output on failure) ──
+  const exactTotal = population.exactClassAResourceTypeEntries + population.exactClassANamedResourceEntries
+  const companionTotal = population.totalCompanionEntries
+  pushCheck('exact Class A entries plus companions equal captured entries', exactTotal + companionTotal, capturedEntriesTotal)
+  pushCheck('companion by-kind totals reconcile', population.companionResourceTypeEntries + population.companionNamedResourceEntries, companionTotal)
+  let rowSum = 0
+  for (const { count } of rowCounts.values()) rowSum += count
+  pushCheck('companion shape-row counts reconcile', rowSum, companionTotal)
+  let planSum = 0
+  for (const value of Object.values(planClassifications)) planSum += value
+  pushCheck('companion plan-classification totals reconcile', planSum, companionTotal)
+  pushCheck('companion entries are unique', companionKeys.size, companionTotal)
+  pushCheck('no selected entry is omitted', companionTotal, capturedEntriesTotal - exactTotal)
+  pushCheck('snapshot flag pair: entries windowless', snapshotFlags.allEntriesWindowless + snapshotFlags.notAllEntriesWindowless, population.classAQuarantinedSnapshots)
+  pushCheck('snapshot flag pair: entries approved 100', snapshotFlags.allEntriesApproved100 + snapshotFlags.notAllEntriesApproved100, population.classAQuarantinedSnapshots)
+  pushCheck('snapshot flag pair: companions windowless', snapshotFlags.allCompanionsWindowless + snapshotFlags.notAllCompanionsWindowless, population.classAQuarantinedSnapshots)
+  pushCheck('snapshot flag pair: companions approved 100', snapshotFlags.allCompanionsApproved100 + snapshotFlags.notAllCompanionsApproved100, population.classAQuarantinedSnapshots)
+  pushCheck('snapshot flag pair: companion inherited mode', snapshotFlags.anyCompanionInheritedMode + snapshotFlags.noCompanionInheritedMode, population.classAQuarantinedSnapshots)
+
+  const sortedRows = [...rowCounts.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, { key, count }]) => ({ ...key, count }))
+
+  const section: ClassACompanionEvidence = {
+    population,
+    shapeRows: sortedRows,
+    planClassifications,
+    snapshotFlags,
+  }
+  return { section, checks }
+}
+
 /**
  * Build the complete sanitized evidence report. Pure: no I/O, no writes, no
  * policy decisions. Throws SnapshotEvidenceError on unsupported/malformed
@@ -1279,6 +1683,13 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
     check('class A entries reconcile', classATotalEntries, expected.quarantinedEntries),
     check('class A snapshots reconcile', classATotalSnapshots, expected.quarantinedSnapshots),
   ]
+  // Issue #440 companion evidence: internal reconciliation checks are
+  // observational (no reviewed expected-file values exist yet); any failure
+  // refuses output through the same reconciliation gate.
+  const companionEvidence = buildClassACompanionEvidence(state, plan, classified)
+  for (const companionCheck of companionEvidence.checks) {
+    checks.push(check(companionCheck.label, companionCheck.observed, companionCheck.expected))
+  }
   const countsMatch = checks.every(ok => ok)
   const fingerprintMatch = observedFingerprint === expected.fingerprint
   const baselineMatch = observedBaseline === expected.baselineStateHash
@@ -1356,6 +1767,7 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
       entriesByEra,
       snapshotsByEra,
     },
+    classACompanionEvidence: companionEvidence.section,
     unavailableEvidence: {
       singleEntriesModeSourceUnavailable: sortedS.filter(record => record.modeSource === 'unavailable').length,
       defectSnapshotsIndependentDefectUnavailable: sortedM.filter(record => record.independentDefect === 'unavailable').length,
@@ -1373,13 +1785,46 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
  * mode wins when present; a CAPACITY_PLAN parent provides inherited
  * provenance; otherwise the source is unavailable (or other for a
  * non-CAPACITY_PLAN parent). Single definition shared by the entry evidence
- * and the correlated S records. */
+ * and the correlated S records. CAPACITY_PLAN-specific on purpose — its
+ * existing consumers (S records and the Class A aggregates) rely on it; do
+ * not reuse it for the generic companion evidence (see
+ * `companionModeSourceCategory`). */
 function namedModeSourceCategory(rawMode: string | null, parentMode: string | null): NamedModeSourceCategory {
   if (rawMode === 'CAPACITY_PLAN') return 'explicit'
   if (rawMode != null) return 'other'
   if (parentMode === 'CAPACITY_PLAN') return 'inherited'
   if (parentMode == null) return 'unavailable'
   return 'other'
+}
+
+/** Companion-specific mode-source categorisation (issue #440 review): the
+ * generic companion evidence must report whether a companion mode is
+ * explicitly stored or inherited for ALL known allocation modes, not only
+ * CAPACITY_PLAN:
+ *
+ *   - any populated known raw mode → explicit (TIMELINE, CAPACITY_PLAN,
+ *     EFFORT, FULL_PROJECT);
+ *   - absent raw mode with a populated known parent mode → inherited;
+ *   - populated unknown/unsupported raw mode → other;
+ *   - absent raw mode with a populated unknown/unsupported parent mode →
+ *     other;
+ *   - both raw and parent modes absent → unavailable.
+ *
+ * Used only when building `ClassACompanionShapeRow.modeSource`. The raw,
+ * parent and effective modes themselves are still sanitized independently
+ * through `sanitizeMode`, so arbitrary unknown strings never reach output.
+ * Exported so the categorisation is directly testable for the states a
+ * selected (Class-A-quarantined) snapshot cannot reach (unknown modes make
+ * the snapshot a defect and are therefore excluded from the population). */
+export function companionModeSourceCategory(
+  rawMode: string | null | undefined,
+  parentMode: string | null | undefined,
+): NamedModeSourceCategory {
+  if (rawMode != null) {
+    return isKnownV2Mode(rawMode) ? 'explicit' : 'other'
+  }
+  if (parentMode == null) return 'unavailable'
+  return isKnownV2Mode(parentMode) ? 'inherited' : 'other'
 }
 
 function windowFieldStateFor(value: number | null | undefined): WindowFieldState {
@@ -1531,6 +1976,51 @@ export function renderSnapshotEvidenceMarkdown(report: SnapshotEvidenceReport): 
       summarizeCounts(byCategory.allocationPercent),
       summarizeCounts(byCategory.allocationPct),
     ].join(' | '))
+  }
+  lines.push('')
+  lines.push('## Class A companion evidence')
+  lines.push('')
+  lines.push('Observational evidence about the non-Class-A companion entries inside currently Class-A-quarantined snapshots (issue #440). Fixed sanitized categories only; no identifiers, names or raw values. It does not decide the future companion predicate.')
+  lines.push('')
+  lines.push('### Population')
+  lines.push('')
+  const companion = report.classACompanionEvidence
+  for (const [key, value] of Object.entries(companion.population)) {
+    lines.push(`- ${key}: ${value}`)
+  }
+  lines.push('')
+  lines.push('### Companion shape rows')
+  lines.push('')
+  lines.push('| Entry kind | Raw mode | Parent mode | Effective mode | Mode source | allocationStartWeek | allocationEndWeek | startWeek | endWeek | allocationPercent | allocationPct | Plan classification | Count |')
+  lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|')
+  for (const row of companion.shapeRows) {
+    lines.push([
+      row.entryKind,
+      row.rawMode ?? 'null',
+      row.parentMode ?? 'null',
+      row.effectiveMode ?? 'null',
+      row.modeSource,
+      row.allocationStartWeekState,
+      row.allocationEndWeekState,
+      row.startWeekState,
+      row.endWeekState,
+      row.allocationPercentCategory,
+      row.allocationPctCategory,
+      row.currentPlanClassification,
+      row.count,
+    ].join(' | '))
+  }
+  lines.push('')
+  lines.push('### Plan classifications')
+  lines.push('')
+  for (const [classification, count] of Object.entries(companion.planClassifications)) {
+    lines.push(`- ${classification}: ${count}`)
+  }
+  lines.push('')
+  lines.push('### Snapshot-level flags')
+  lines.push('')
+  for (const [flag, count] of Object.entries(companion.snapshotFlags)) {
+    lines.push(`- ${flag}: ${count}`)
   }
   lines.push('')
   lines.push('## Reconciliation')
