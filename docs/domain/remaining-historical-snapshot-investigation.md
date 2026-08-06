@@ -1517,7 +1517,7 @@ windowless quarantine class for the exact observed shape):**
   activation instant (instant comparison, never date-only); with no
   proven activation instant the comparison fails closed.
 - Two-phase (or equivalent) translation: (1) exact per-entry qualification
-  (Class A, S, row-11, row-7, row-8-era-gated, ordinary companions) before
+  (Class A, S, row-11, row-7, row-8 activation-gated, ordinary companions) before
   any profile is materialised; (2) build the complete translated profile
   set and structurally validate it as one snapshot set before acceptance.
 - **One aggregate ROLE profile per ResourceType** derived from the captured
