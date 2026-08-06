@@ -788,13 +788,18 @@ contain 1,014 companion entries (71 ResourceType + 943 NamedResource) with
 mixed modes, windows and percentages, including 377 NamedResources with
 `allocationPercent` 1–99 and many windowed entries. The snapshot-wide
 condition in Section 12.2 is therefore corrected: companions are accepted
-only under their own proven historical translation semantics (Section 11.5A
-of the investigation document), the per-ResourceType capacity rule becomes
-the corrected equation of investigation Section 11.5C, and the 71
-ResourceType TIMELINE companions remain an unproven category (blocking
-evidence gap) until per-RT count/cardinality evidence returns. See the
-investigation document Sections 11.5A–11.5D and 11.7 for the full
-corrected proof and the smallest additional extraction.
+only under their own proven historical translation semantics (Sections
+11.5A–11.5B of the investigation document), the per-ResourceType capacity
+rule becomes the corrected equation of investigation Section 11.5C, and
+the 71 ResourceType TIMELINE companions (row 11) are **deterministic from
+the captured snapshot** — their historical phantom contribution
+`max(0, count − total captured NamedResources) × hoursPerDay × 5` is fully
+derivable from the captured `count` and NamedResource collection, so **no
+ResourceType count/cardinality production extraction is required**. Row 8
+(1–99% `allocationPercent` on explicit `CAPACITY_PLAN`) remains the sole
+production evidence gap (era dependency; investigation Section 11.5B). See
+the investigation document Sections 11.5A–11.5E and 11.7 for the full
+corrected proof and the sole remaining extraction.
 
 ## 12. Evidence-backed amendment (Issue #430) — design only, not implemented
 
@@ -870,21 +875,26 @@ payload. The original snapshot-wide condition — every entry windowless-100%
 corrected mixed-Class-A condition** (investigation document Section 11.5D):
 the version-2 companion evidence proves the 49 snapshots contain 1,014
 companion entries, so the corrected condition requires at least one exact
-Class A ResourceType entry, every non-Class-A companion to match an
-already-approved deterministic translation predicate with a proven
-historical scheduler contribution (investigation Section 11.5B rows 1–10
-and 12; row 7 via never-active; row 8 era-qualified), no companion to
+Class A ResourceType entry, every ResourceType entry to be either exact
+Class A or the exact observed row-11 TIMELINE/null-window/100 shape and
+to translate to the captured phantom aggregate ROLE representation, every
+NamedResource companion to match an exact proven observed predicate
+(investigation Section 11.5B rows 1–7, 9–10 and 12; row 7 via the
+never-active rule; row 8 only with trusted capturedAt at/after the
+approved scheduler boundary `2026-05-05T00:00:00Z`), no companion to
 require a decision, be unsupported, quarantined, unresolved, unknown-mode,
 erroring or structurally failing, the S predicate independently accepted,
 all translated profiles validated as one complete set, and fail-closed
 handling of empty snapshots, snapshots without an exact Class A
-ResourceType entry and every unobserved or unproven shape — including
-ResourceType companions (gap G1) and era-unproven row-8 companions (gap
-G2). The per-ResourceType capacity rule is the corrected equation of
-investigation Section 11.5C: `Σ captured NamedResource contributions +
-max(0, count − captured NamedResource count) × hoursPerDay × 5`, where the
-phantom subtraction uses **all** captured NamedResources of the
-ResourceType, never only the exact Class A subset. The simplified
+ResourceType entry, pre-era/unknown-era row-8 entries and every
+unobserved or unproven shape. The per-ResourceType capacity rule is the
+corrected equation of investigation Section 11.5C: `Σ captured
+NamedResource contributions + max(0, count − captured NamedResource count)
+× hoursPerDay × 5`, where the phantom subtraction uses **all** captured
+NamedResources of the ResourceType, never only the exact Class A subset,
+and every approved ResourceType (exact Class A and exact row-11)
+materialises the aggregate ROLE at `max(0, count − total captured
+NamedResources) × 100`. The simplified
 `max(count, namedResources.length) × hoursPerDay × 5` formula is retained
 only as the explanation of the former all-NamedResources-unbounded-100%
 assumption.
@@ -946,11 +956,18 @@ The 1,014 companion entries change no count: they are already represented
 by existing deterministic (204 never-active) and alreadyValid (810) plan
 findings; only the 574 exact Class A entries change from quarantined to
 deterministic; the S changes were already implemented (PR #439); the 359
-snapshot and 130 live decisions remain unchanged. All counts are
-conditional on the corrected condition (investigation Section 11.5D): any
-snapshot whose companions include an unproven category (ResourceType
-companions — gap G1; era-unproven row-8 companions — gap G2) stays
-quarantined until the smallest additional extraction returns.
+snapshot and 130 live decisions remain unchanged. These target values are
+the **conditional target boundary** (investigation Section 11.8), not the
+current production boundary: the current observed boundary at `b6daa16`
+(212 / 2,223 / 574 / 49 / 18 / 38 / 359 / 130 / 0 / 0 / exit 2 / exit 1)
+remains authoritative until a corrected implementation is merged and
+revalidated under #404. The target applies only if the row-8 era evidence
+proves the required population, the trusted capture-timestamp contract is
+approved and implemented, every companion satisfies a proven predicate,
+the complete translated set validates and production revalidation passes;
+any snapshot with a pre-boundary or era-unknown row-8 companion stays
+quarantined and the final counts are recalculated from reviewed evidence
+rather than forced.
 
 ## Appendix — Sources reviewed
 

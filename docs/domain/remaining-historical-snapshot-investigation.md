@@ -24,7 +24,7 @@ the approved quarantine policy.
 > `5199221492`) proves the 49 Class A snapshots are **not** an
 > all-windowless/full-capacity population: they contain 1,014 additional
 > companion entries with mixed modes, windows and percentages. The Section
-> 11.5 snapshot-wide claim is corrected in Sections 11.5A–11.5D; where those
+> 11.5 snapshot-wide claim is corrected in Sections 11.5A–11.5E; where those
 > sections contradict Section 11.5, they are authoritative.
 
 Parent: #342 · Coordinates with: #404, #418, #421, #426, #428 ·
@@ -989,7 +989,7 @@ the 49 snapshots contain 1,014 additional companion entries (71 ResourceType
 per-entry Class A analysis above (43 NamedResource; 531 ResourceType
 entries) remains valid for the 574 Class A entries themselves; the
 **snapshot-wide condition** and the **combined translation proof** are
-corrected in Sections 11.5A–11.5D. `max(count, namedResources.length) ×
+corrected in Sections 11.5A–11.5E. `max(count, namedResources.length) ×
 hoursPerDay × 5` is retained only as the explanation of the former
 all-NamedResources-unbounded-100% assumption; it is replaced as the
 per-ResourceType capacity rule by the corrected equation in Section 11.5C.
@@ -1087,10 +1087,10 @@ all 12 observed rows because `allocationPercent` is present in each).
 | 5 | 75 | `[0, ∞)` at 100 | `AVAILABILITY_WINDOW` null window, 100% | ✅ proven |
 | 6 | 3 | `[sw, ew]` at 100 (TIMELINE inner gate alias fallback) | `AVAILABILITY_WINDOW` window `[sw, ew]`, 100% | ✅ proven |
 | 7 | 204 | zero — outer gate `−1/−1` admits no week (never-active), regardless of percents | zero-capacity profile, null window (never-active path; not the S predicate — `allocationEndWeek` is null, not populated) | ✅ proven |
-| 8 | 369 | `[sw, ew]` at `allocationPercent` (1–99) from `74b98d3` onward; **before `74b98d3` (2026-05-05) the default 100 applied** | `AVAILABILITY_WINDOW`/`LEGACY` window `[sw, ew]` at `allocationPercent` (1–99) | ⚠️ era-dependent — see gap G2 below |
+| 8 | 369 | `[sw, ew]` at `allocationPercent` (1–99) from `74b98d3` onward; **before `74b98d3` (2026-05-05) the default 100 applied** | `AVAILABILITY_WINDOW`/`LEGACY` window `[sw, ew]` at `allocationPercent` (1–99) | ⚠️ era-dependent — sole unresolved row (Section 11.5B) |
 | 9 | 1 | `[0, ∞)` at `allocationPercent` 1–99 (TIMELINE branch existed in both eras) | `AVAILABILITY_WINDOW` null window at `allocationPercent` (1–99) | ✅ proven |
 | 10 | 7 | `[asw, ∞)` at `allocationPercent` 1–99 (TIMELINE inner gate) | `AVAILABILITY_WINDOW` window `[asw, ∞)` at `allocationPercent` (1–99) | ✅ proven |
-| 11 | 71 | phantom `max(0, count − captured NRs) × hoursPerDay × 5` every week (RT fields never consumed); equals the translated ROLE 100% only when `max(0, count − n) = 1` | ROLE `AVAILABILITY_WINDOW` null window at 100% (1 FTE) | ❌ **not proven — blocking gap G1** |
+| 11 | 71 | phantom `max(0, count − captured NRs) × hoursPerDay × 5` every week (RT fields never consumed; both inputs captured in the payload) | current translator: ROLE `AVAILABILITY_WINDOW` null window at `allocationPercent` 100 (1 FTE) — **not generally scheduler-faithful**; corrected: ROLE at `max(0, count − captured NRs) × 100`% | ✅ **proven — deterministic from captured snapshot cardinality** |
 | 12 | 7 | `[0, aew]` at `allocationPercent` 100 (TIMELINE inner gate) | `AVAILABILITY_WINDOW` window `[0, aew]`, 100% | ✅ proven |
 
 Rows 1–10 and 12 translate through the existing approved mode-specific
@@ -1103,51 +1103,56 @@ alias pair), **not** the #438 S predicate (which additionally requires a
 populated non-negative `allocationEndWeek`; the seven S records in the
 18 defect snapshots have that shadowed-primary shape).
 
-**Evidence gaps (design approval stops at these categories):**
+**Row 11 (71 ResourceType TIMELINE companions) — deterministic from the
+captured snapshot (corrected 2026-08-06, review finding).** The legacy
+scheduler ignored ResourceType allocation mode, percentage and window
+fields; a ResourceType contributed only phantom capacity
+`max(0, count − n) × hoursPerDay × 5` every week, where `n` is the total
+captured NamedResource count owned by that ResourceType. Both inputs are
+captured in every V2 snapshot: `SnapshotResourceType.count` and the
+complete captured NamedResource collection with `resourceTypeId`
+ownership. The historical phantom contribution is therefore derivable
+deterministically for every captured ResourceType whether `phantomSlots`
+is 0, 1 or greater than 1 — **no additional production count/cardinality
+extraction is required.** The current translator's plain ROLE-at-100%
+output is **not** generally scheduler-faithful (it equals the phantom
+contribution only when `max(0, count − n) = 1`); the corrected translation
+materialises the aggregate ROLE at `max(0, count − total captured
+NamedResources for that ResourceType) × 100` (Section 11.5C), which is
+scheduler-faithful for every cardinality. Approval boundary is the exact
+observed raw shape: entry kind ResourceType; raw `allocationMode ===
+'TIMELINE'`; `allocationStartWeek`/`allocationEndWeek` absent/null;
+`allocationPercent === 100`; captured `count` a non-negative integer; no
+duplicate owner, unknown mode, invalid/non-finite value or structural
+defect. The approval is not generalised to arbitrary unobserved
+ResourceType shapes.
 
-- **G1 (blocking) — the 71 ResourceType TIMELINE companions (row 11).**
-  The legacy scheduler never consumed a ResourceType's own allocation
-  mode, percent or windows; its weekly contribution was the phantom
-  `max(0, count − n) × hoursPerDay × 5`, where `n` is the captured
-  NamedResource count of that ResourceType. The current translator emits a
-  ROLE profile at `allocationPercent` (100) — exactly one FTE. The two are
-  equivalent only when `max(0, count − n) = 1` for every one of the 71 RT
-  companions. Neither the per-RT `count`, the per-RT captured-NR count,
-  nor the number of snapshots containing RT companions is reported by the
-  version-2 evidence, and no repository invariant guarantees `count − n =
-  1`. **The RT-companion category therefore cannot be approved:** the
-  corrected condition fails closed on snapshots containing ResourceType
-  companions until the evidence below returns. The current plan's
-  `alreadyValid` label is a translation-success classification, not
-  scheduler-capacity proof.
-- **G2 (conditional) — row 8 era split.** Rows 8–10 carry
-  `allocationPercent` 1–99. For TIMELINE (rows 9–10) the percentage branch
-  existed in both eras, so they are era-independent. For explicit
-  `CAPACITY_PLAN` (row 8), the `allocationPercent` branch began at
-  `74b98d3` (2026-05-05); before that the scheduler defaulted to 100, so a
-  pre-2026-05-05 row-8 entry would historically have contributed 100% but
-  translates at 1–99%. The version-2 evidence reports no companion-era
-  buckets (the evidence command already computes snapshot-era categories
-  for Class A), so the row-8 population cannot be proven post-branch.
-  Until the extraction returns the companion-era split, the corrected
-  condition fails closed on row-8 companions (era-unknown), and the era
-  predicate (capture timestamp ≥ the `74b98d3` branch date) is the
-  smallest safe acceptance rule once proven against production.
+**Sole remaining evidence gap — row 8 era dependency.** Rows 8–10 carry
+`allocationPercent` 1–99. For TIMELINE (rows 9–10) the percentage branch
+existed in both eras, so they are era-independent. For explicit
+`CAPACITY_PLAN` (row 8), the `allocationPercent` branch began at
+`74b98d3` (2026-05-05); before that the scheduler defaulted to 100, so a
+pre-boundary row-8 entry would historically have contributed 100% but
+translates at 1–99%. The version-2 evidence reports no companion-era
+buckets, so the row-8 population cannot yet be proven captured under the
+later scheduler contract. Until the row-8 era extraction returns and the
+trusted capture-timestamp contract (Section 11.5E) is approved, the
+corrected condition fails closed on row-8 companions (era-unknown) and
+snapshots containing them keep their current classification. No new
+predicate is invented; no code is implemented here.
 
-**Smallest additional aggregate production extraction needed (read-only,
+**Sole additional aggregate production extraction needed (read-only,
 sanitized, aggregate-only — extend the reviewed snapshot-evidence command's
-`classACompanionEvidence` section, run under #404):**
+`classACompanionEvidence` section with snapshot-era categories, run under
+#404):**
 
-1. For the 71 ResourceType companion entries: aggregate rows of captured
-   `count` category × captured NamedResource count of the owning RT
-   (equivalently, the derived `max(0, count − n)` bucket distribution 0 / 1 /
-   ≥2), plus the number of the 49 snapshots containing at least one
-   ResourceType companion.
-2. Companion shape rows × snapshot-era category (the command already
-   classifies eras for Class A), so row 8's 1–99% `CAPACITY_PLAN`
-   companions can be proven captured at/after 2026-05-05.
+1. Row-8 entry count by trusted snapshot-era category: before the approved
+   scheduler boundary (`2026-05-05T00:00:00Z`); at/after the boundary;
+   capture timestamp unavailable or invalid.
+2. Distinct selected snapshot count containing row-8 entries in each of
+   those categories.
 
-No new predicate is invented for either gap; no code is implemented here.
+No ResourceType count/cardinality extraction is required.
 
 ### 11.5C Corrected per-ResourceType capacity equation
 
@@ -1169,17 +1174,25 @@ The restored form must be:
   already-approved mode-specific translation (Sections 11.5B rows 1–10, 12);
 - each exact Class A NamedResource translated as null-window 100%;
 - each exact S entry translated as deterministic zero;
-- each exact Class A ResourceType ROLE profile translated at
-  `max(0, count − total captured NamedResources for that ResourceType) × 100`;
-- each non-Class-A ResourceType handled by its existing proven translation
-  (row 11 remains unproven — Section 11.5B gap G1);
+- **every approved ResourceType** — each exact Class A ResourceType and
+  each exact observed row-11 ResourceType companion (Section 11.5B) —
+  translated to **one aggregate ROLE profile** at
+  `max(0, count − total captured NamedResources for that ResourceType) × 100`:
+  `ownerKind: ROLE`; `planningBasis: AVAILABILITY_WINDOW`; `source: LEGACY`;
+  `defaultPercent: phantomSlots × 100`; `startWeek: null`; `endWeek: null`;
+  no segments. The current ordinary ResourceType translation (ROLE at the
+  captured `allocationPercent`/windows) is **not** scheduler-faithful for
+  row 11 and must not be used for approved ResourceType entries; a plain
+  100% ROLE may appear only when the derived phantom percentage happens to
+  equal 100, never merely because the ResourceType says TIMELINE/100;
 - the complete translated profile set structurally validated before the
   snapshot is accepted.
 
-The phantom-slot subtraction uses **all** captured NamedResources for that
-ResourceType — exact Class A NamedResources, companions and never-active
-entries alike — never only the exact Class A subset (the current #439
-implementation already counts all captured NRs per RT).
+The phantom-slot subtraction uses **all** captured NamedResources owned by
+that ResourceType — exact Class A NamedResources, ordinary companion
+NamedResources, never-active entries, exact S entries and every other
+accepted captured NamedResource — never only the exact Class A subset (the
+current #439 implementation already counts all captured NRs per RT).
 
 The simplified formula `max(count, namedResources.length) × hoursPerDay ×
 5` is **not** retained as the capacity rule; it appears only as the
@@ -1203,31 +1216,41 @@ and keeps the approved per-entry predicates unchanged:
    - NamedResource: explicit `CAPACITY_PLAN`, all four window fields null,
      `allocationPercent === 100` and `allocationPct === 100`, resolvable
      parent.
-3. Every non-Class-A companion independently matches an **already-approved
-   deterministic translation predicate** — one of the proven observed
-   categories of Section 11.5B (rows 1–10 and 12 under their existing
-   mode-specific rules; row 7 under the never-active rule), with row 8
-   additionally era-qualified and row 11 excluded until gap G1 is
-   resolved.
-4. Companion acceptance is based on shared translation semantics (the
-   translator's mode-specific rules and the proven scheduler contribution),
-   **not** merely the current plan label (`alreadyValid`).
-5. No companion may require a decision, be unsupported, be quarantined,
-   have unresolved ownership, have an unknown mode, produce entry errors
-   or cause structural validation failure.
-6. The exact S predicate remains independently accepted as deterministic
+3. Every ResourceType entry is either:
+   - an exact Class A ResourceType entry; or
+   - the exact observed row-11 shape (Section 11.5B: raw `TIMELINE`,
+     `allocationStartWeek`/`allocationEndWeek` absent/null,
+     `allocationPercent === 100`, captured non-negative integer `count`,
+     no duplicate owner, unknown mode, invalid value or structural defect);
+   and each translates to the captured phantom aggregate ROLE
+   representation (Section 11.5C) — never a plain 100% ROLE unless the
+   derived phantom percentage equals 100.
+4. Every NamedResource companion matches one exact proven observed
+   predicate: rows 1–7, 9–10 and 12 under their existing mode-specific
+   rules; row 7 through the existing never-active rule; row 8 only when
+   the trusted capture timestamp (Section 11.5E) is at/after the approved
+   scheduler boundary `2026-05-05T00:00:00Z`.
+5. Companion acceptance is based on exact raw predicates and proven
+   historical scheduler semantics, **not** on the current plan label
+   (`alreadyValid`), generic translation success, generic deterministic
+   translation, all-windowless, all-100% or "full capacity".
+6. No entry may require a decision, be unsupported, remain quarantined
+   outside the exact Class A entry being resolved, have unresolved
+   ownership, use an unknown mode, carry invalid or non-finite fields,
+   produce entry errors or cause complete-set structural validation
+   failure.
+7. The exact S predicate remains independently accepted as deterministic
    zero.
-7. All translated profiles are validated as **one complete snapshot set**
-   (structural validation of the full translated set, `validateV2TranslatedProfiles`).
-8. Empty snapshots and snapshots without an exact Class A ResourceType
-   entry fail closed.
-9. Any unobserved or unproven shape — including ResourceType companions
-   (gap G1), era-unproven row-8 companions (gap G2), inherited-mode
-   entries, partial CAPACITY_PLAN windows, alias conflicts, percents
-   outside the observed categories and any entry not matching an approved
-   predicate — fails closed (snapshot keeps its current classification;
+8. All translated profiles are validated as **one complete snapshot set**
+   (structural validation of the full translated set, `validateV2TranslatedProfiles`)
+   before the snapshot becomes restorable.
+9. These cases fail closed (the snapshot keeps its current classification;
    the 49 quarantined snapshots remain quarantined until every companion
-   of the snapshot is proven).
+   of the snapshot is proven): empty snapshot; no exact Class A
+   ResourceType entry; pre-boundary row-8 entry; missing/invalid/untrusted
+   capture era; unobserved companion shape; inherited-mode entries;
+   partial CAPACITY_PLAN windows; alias conflicts; percents outside the
+   observed categories; any other unproven entry.
 
 The condition is **not** defined as: every companion windowless; every
 companion 100%; every companion "full capacity"; every entry that happens
@@ -1235,6 +1258,91 @@ to translate without throwing; every entry currently labelled
 `alreadyValid`; or any generic deterministic translation. The accepted
 companion set remains tied to existing, explicitly proven translation
 rules.
+
+### 11.5E Trusted snapshot-era context (design only, for the later #438 implementation)
+
+The row-8 era gate requires trusted capture-time metadata to reach the one
+shared qualification path. This subsection defines the smallest viable
+contract; **nothing here is implemented by this design PR.**
+
+**Authoritative timestamp source — `BacklogSnapshot.createdAt`.**
+Repository evidence:
+
+- `server/prisma/schema.prisma`: `BacklogSnapshot.createdAt DateTime
+  @default(now())` — a required, non-null persisted row field on every
+  snapshot row, including all historical rows.
+- Every `backlogSnapshot.create` call site (snapshot capture in
+  `routes/snapshots.ts`, auto-snapshots in `optimiserApplyService.ts`,
+  `projectSnapshotService.ts` (pre-rollback), `routes/csv.ts`,
+  `routes/squadPlan.ts`, `routes/timeline.ts`) omits `createdAt`, so the
+  DB default sets it at insert time — the capture moment.
+- The only `backlogSnapshot.update` (`productionRemediationApply.ts`)
+  rewrites only the `snapshot` JSON field; no write path modifies
+  `createdAt` — it is immutable in practice.
+- The reviewed snapshot-evidence command already derives
+  `snapshotEraCategory(createdAtIso)` from this field for the era buckets
+  of the emitted reports (`server/src/lib/snapshotEvidence.ts`), with the
+  exact boundary constant `2026-05-05T00:00:00Z` (UTC).
+
+Caveat recorded by the evidence command: the timestamp is the capture/insert
+time, not proof of the exact historical writer. That is sufficient for the
+row-8 era gate, whose boundary is a scheduler-contract date (`74b98d3`,
+2026-05-05); the row-8 era extraction (Section 11.5B) validates the
+production population against the same boundary before the conditional
+target is authorized. Current time, project timestamps, Git commit dates
+and payload-derived eras are never used.
+
+**Shared design contract.** One narrow, direct input — no generic
+historical-policy framework:
+
+```ts
+type SnapshotHistoricalContext = { capturedAt: Date | null }
+```
+
+(a bare `capturedAt` parameter is sufficient where no other context is
+needed). The one shared mixed-Class-A qualification path
+(`qualifyMixedClassASnapshot` or equivalent, replacing the current
+`isClassASnapshot`) receives:
+
+- the raw `SnapshotV2` data;
+- `projectId` where currently required;
+- the trusted capture timestamp (`snapshot.createdAt`).
+
+It produces **one qualification result** (approved entries, per-ResourceType
+captured-NR counts, and fail-closed reasons) computed before
+materialisation and consumed by: restorability classification
+(`classifySnapshotRestorability`), translation and rollback preflight
+(`translateV2SnapshotProfiles` / `recreateV2CapacityProfiles`), retention
+(`snapshotUtils.pruneSnapshots`), remediation planning
+(`productionRemediationPlan`), migration readiness
+(`productionMigrationReadiness`), sanitized snapshot evidence
+(`snapshotEvidence`), rewrite validation (`productionRemediationApply`),
+and direct utilities/tests. There is no parallel remediation-plan policy,
+no classifier/translator circular dependency (predicates feed the
+qualification; the qualification feeds translation; translation never
+feeds the qualification), and the era check is implemented exactly once.
+
+**Fail-closed rules.**
+
+- A row-8 companion at/after the approved boundary
+  (`2026-05-05T00:00:00Z` UTC, the exact instant the `74b98d3` scheduler
+  branch existed; comparisons are instant-based in UTC, never date-only)
+  may qualify.
+- A row-8 companion before the boundary does **not** qualify for the 1–99
+  translation (it keeps its current classification; its percentage is
+  never silently changed to 100).
+- Missing, invalid or untrusted capture timestamp → row 8 does not
+  qualify; the snapshot stays under its current classification.
+- Every unrelated proven companion category continues to use its own
+  exact predicate and is unaffected by the era gate.
+- A snapshot containing an unqualified row-8 entry remains quarantined.
+
+**Required future tests (for #438, not this PR):** immediately before /
+ at / immediately after the boundary instant; missing timestamp; invalid
+timestamp; post-boundary row 8 accepted; pre-boundary row 8 rejected;
+classifier/translator agreement; rollback preflight/materialisation
+agreement; retention agreement; remediation-plan agreement; readiness
+agreement; evidence agreement.
 
 ### 11.6 Final policy table
 
@@ -1246,7 +1354,7 @@ rules.
 | Alias-conflict entries (2/snapshot in M1–M6/M8; 3 in M7) | conflicting populated primary/alias pair, `CAPACITY_PLAN`-era | scheduler-irrelevant for NR `CAPACITY_PLAN` (alias pair consumed); per-entry mode unproven | per-entry unproven | defect entry (already-valid finding at plan level) | **decision-required** | per-entry mode/alias evidence absent; deterministic candidates, not unrecoverable | no mode assumption | none now |
 | Partial-window entries (≥1 per M9–M18) | one effective edge non-negative integer, other null, `CAPACITY_PLAN` | per-orientation provable (`[0,N]`, `[N,∞)`, `[0,∞)`) | unproven | defect entry → `decisionRequired` (windowless message) | **decision-required** | orientation + percent not in sanitized report | no invented windows | none now |
 | NamedResource Class A (43) | all four window fields null; explicit `CAPACITY_PLAN`; `allocationPercent` 100 + `allocationPct` 100; no conflicts/defects | unbounded (`0..∞` gate) | 100 (both era branches) | quarantined (Class A) | **deterministic unbounded 100%** | scheduler gate + explicit percentage branch prove the weekly capacity | inherited mode; percents ≠ 100; partial windows; any conflict/defect | deterministic translation (null-window 100% profile); count changes |
-| ResourceType Class A (531) | `allocationStartWeek`/`allocationEndWeek` null; `CAPACITY_PLAN`; `allocationPercent` 100; valid captured `count`; snapshot satisfies the corrected mixed-Class-A condition (Section 11.5D) | unbounded (all weeks) | per-ResourceType equation of Section 11.5C: Σ captured NR contributions + `max(0, count − captured NR count) × hpd × 5` per week (RT fields not scheduler inputs; `count` not guaranteed ≥ NR count — legacy PUT wrote it unsynchronised) | quarantined (Class A) | **deterministic full capacity** | scheduler summed NR rows + phantom slots; companion entries preserved by their proven translations (Section 11.5B); lossless representation uses the captured `count` (Section 11.5 four-case table) | any companion outside the proven categories (Section 11.5B rows 1–10, 12; row 11 unproven — gap G1), era-unproven row 8 (gap G2), any defect/decision/unsupported/quarantined/unresolved-ownership/unknown-mode/entry-error/structural-failure entry (fail closed per snapshot) | deterministic translation (ROLE null-window at `max(0, count − n) × 100`% + NRs at 100%; NOT a plain 100% ROLE — Section 11.7) |
+| ResourceType Class A (531) | `allocationStartWeek`/`allocationEndWeek` null; `CAPACITY_PLAN`; `allocationPercent` 100; valid captured `count`; snapshot satisfies the corrected mixed-Class-A condition (Section 11.5D) | unbounded (all weeks) | per-ResourceType equation of Section 11.5C: Σ captured NR contributions + `max(0, count − captured NR count) × hpd × 5` per week (RT fields not scheduler inputs; `count` not guaranteed ≥ NR count — legacy PUT wrote it unsynchronised) | quarantined (Class A) | **deterministic full capacity** | scheduler summed NR rows + phantom slots; companion entries preserved by their proven translations (Section 11.5B); lossless representation uses the captured `count` (Section 11.5 four-case table) | any companion outside the proven categories (Section 11.5B rows 1–10 and 12; row 11 approved under its exact predicate; row 8 era-unproven — the sole remaining gap), any defect/decision/unsupported/quarantined/unresolved-ownership/unknown-mode/entry-error/structural-failure entry (fail closed per snapshot) | deterministic translation (ROLE null-window at `max(0, count − n) × 100`% + NRs at 100%; NOT a plain 100% ROLE — Section 11.7) |
 | Live decisions (130) | unchanged (104 RT + 13 segmentless + 13 owner-kind) | n/a | n/a | `decisionRequired` | **unchanged, blocking** | out of snapshot scope | — | none |
 | Unsupported findings (0) | — | — | — | — | unchanged | — | — | none |
 
@@ -1330,11 +1438,13 @@ windowless quarantine class for the exact observed shape):**
   percents ≠ 100, non-finite percents, below-`-1`/fractional values,
   structural defects, mixed snapshots with unresolved defects, and every
   companion shape outside the proven Section 11.5B categories — including
-  ResourceType companions until gap G1 is resolved and era-unproven row-8
-  companions until gap G2 is resolved (Section 11.5B).
-- Expected count changes: quarantined 574 → 0; quarantined snapshots 49 →
-  0; restorable snapshots 38 → 87; deterministic findings +574 — **all
-  conditional on the corrected condition (Section 11.5D); snapshots whose
+  era-unproven row-8 companions (Section 11.5B, sole remaining gap) —
+  ResourceType companions are approved under the exact row-11 predicate
+  with the phantom aggregate ROLE translation (Sections 11.5B–11.5C).
+- Expected count changes (conditional target boundary — Section 11.8):
+  quarantined 574 → 0; quarantined snapshots 49 → 0; restorable snapshots
+  38 → 87; deterministic findings +574 — **all conditional on the corrected
+  condition (Section 11.5D) and the row-8 era evidence; snapshots whose
   companions include an unproven category stay quarantined (fail closed).**
 
 **Implementation guidance for #438 (corrected design):**
@@ -1346,32 +1456,43 @@ windowless quarantine class for the exact observed shape):**
   classifier and translator (predicates feed the qualification; the
   qualification feeds translation; translation never feeds the
   qualification).
-- Two-phase (or equivalent) translation: (1) identify the exact approved
-  entries (Class A, S) and companion eligibility per the corrected
-  condition; (2) build the complete translated profile set and
-  structurally validate it as one snapshot set before acceptance.
-- ROLE phantom percentage `max(0, count − total captured NamedResources of
-  that ResourceType) × 100` — the subtraction uses **all** captured
-  NamedResources of the parent ResourceType, never only the exact Class A
-  NamedResources.
-- Ordinary companion profiles are preserved according to the existing
-  translation semantics (Sections 11.5B rows 1–10, 12); the never-active
-  companions (row 7) keep the zero-capacity representation; the exact S
-  entries keep the zero-capacity representation.
-- Exact negative tests for unproven companion variants: ResourceType
-  companions (until gap G1 closes), row-8 shapes in pre-2026-05-05
-  snapshots (until gap G2 closes), and every excluded shape of the
-  corrected condition.
+- Inputs: the raw `SnapshotV2` plus the trusted capture timestamp
+  (`BacklogSnapshot.createdAt`, Section 11.5E) — the qualification path
+  receives both; classifier and translator consume the same qualification
+  result.
+- One exact era gate (implemented once, in the shared qualification path)
+  for row-8 companions: trusted `capturedAt` at/after
+  `2026-05-05T00:00:00Z` (UTC instant comparison).
+- Two-phase (or equivalent) translation: (1) exact per-entry qualification
+  (Class A, S, row-11, row-7, row-8-era-gated, ordinary companions) before
+  any profile is materialised; (2) build the complete translated profile
+  set and structurally validate it as one snapshot set before acceptance.
+- **One aggregate ROLE profile per ResourceType** derived from the captured
+  `count` minus **all** captured NamedResources of that ResourceType:
+  `defaultPercent = max(0, count − total captured NamedResources) × 100`;
+  `ownerKind: ROLE`; `planningBasis: AVAILABILITY_WINDOW`; `source: LEGACY`;
+  null window; no segments. Applies to every approved ResourceType — exact
+  Class A and exact row-11 companions alike; never only the exact Class A
+  subset. A plain 100% ROLE is emitted only when the derived phantom
+  percentage equals 100.
+- Existing proven NamedResource mode-specific translations are preserved
+  (Sections 11.5B rows 1–7, 9–10, 12); exact Class A NamedResources stay
+  null-window 100%; row-7 never-active and exact S entries keep the
+  deterministic-zero representation.
+- Exact negative tests for unproven companion variants: row-8 shapes in
+  pre-boundary or era-unknown snapshots (the sole remaining evidence gap),
+  and every excluded shape of the corrected condition.
 - Scheduler-equivalence tests across representative weeks via
   `resolveSchedulerCapacity` + `getWeeklyCapacity` — not only
   profile-shape assertions — covering: mixed snapshots with multiple
   ResourceTypes; count cases `n = 0`, `n < count`, `n = count`, `n > count`;
-  companion windows and percentages represented in the fixtures (alias
-  windows, partial primary windows, 1–99% percents, `(-1,-1)` pairs); and
-  the `routes/resourceProfile.ts` n=0 display branch caveat.
-- No hardcoded production counts, IDs, fingerprints or row categories in
-  runtime logic; the corrected condition is a predicate over the captured
-  payload only.
+  `phantomSlots = 0`, `phantomSlots = 1`, `phantomSlots ≥ 2`; companion
+  windows and percentages represented in the fixtures (alias windows,
+  partial primary windows, 1–99% percents, `(-1,-1)` pairs); and the
+  `routes/resourceProfile.ts` n=0 display branch caveat.
+- No hardcoded production counts, IDs, fingerprints, timestamps or
+  evidence-row numbers in runtime logic; the corrected condition is a
+  predicate over the captured payload plus the trusted capture timestamp.
 
 **Focused tests for the implementation issue:** classifier predicates
 (accept the exact S and Class A shapes; reject every listed exclusion),
@@ -1411,39 +1532,60 @@ percent-category evidence that the versioned report does not contain
 (Section 11.4). Do not request that evidence while this issue's policy
 decision does not depend on it.
 
-### 11.8 Authoritative expected counts (recommended policy)
+### 11.8 Expected counts — current observed boundary and conditional target boundary
 
-Arithmetic from the current reviewed boundary (`019db41b`, evidence report):
+**Current observed production boundary (authoritative until a corrected
+implementation is merged and production-revalidated under #404).**
+Observed at application commit `b6daa164ded0950e1c510b82da97913424b59155`
+(post-#439; plan fingerprint `115b0524…`, baseline `09b504b5…`):
 
-- Current: 4,536 findings = 2,216 deterministic + 496 decisionRequired + 0
-  unsupported + 1,250 alreadyValid + 574 quarantined; 2,011 operations
-  (0 rewrite); 496 decisions = 366 snapshot (359 windowless + 7
-  single-negative) + 130 live; 105 snapshots = 38 restorable + 49
-  quarantined + 18 defect; plan exit 2; readiness exit 1.
-- Amendment 1 (S): 7 decisions become deterministic → 489 decisions total
-  (359 snapshot + 130 live); deterministic +7.
-- Amendment 2 (Class A): 574 quarantined findings become deterministic;
-  quarantined snapshots 49 → 0; restorable snapshots 38 → 87. The totals are
-  unchanged by the corrected ResourceType proof (Section 11.5): `count` and
-the per-RT NamedResource set are captured for every one of the 531
-ResourceType entries, so the lossless aggregate representation is derivable
-for all of them; the classification change is per-entry-predicate, not
-per-count-dependent.
+| Metric | Current observed boundary |
+|---|---|
+| Deterministic snapshot-entry findings | **212** (205 never-active + 7 S) |
+| Deterministic findings total (plan) | **2,223** |
+| Quarantined entries | **574** (Class A) |
+| Quarantined snapshots | **49** |
+| Defect snapshots | **18** |
+| Restorable snapshots | **38** |
+| Snapshot decisions | **359** |
+| Live decisions | **130** (unchanged, blocking) |
+| Unsupported findings | **0** |
+| Rewrite operations | **0** |
+| Plan exit | **2** (359 + 130 decisions remain) |
+| Readiness exit | **1** (18 defect snapshots + live-state blockers) |
 
-| Metric | Current | Recommended |
-|---|---|---|
-| Deterministic snapshot-entry findings | 205 (never-active) | **786** (205 + 574 Class A + 7 S) |
-| Deterministic findings total (plan) | 2,216 | **2,797** (2,216 + 581) |
-| Quarantined entries (by class) | 574 (Class A) | **0** |
-| Quarantined snapshots | 49 | **0** |
-| Defect snapshots | 18 | **18** (unchanged) |
-| Restorable snapshots | 38 | **87** |
-| Snapshot decisions | 366 | **359** (133 seven-subgroup + 226 eleven-subgroup) |
-| Live decisions | 130 | **130** (unchanged, blocking) |
-| Unsupported findings | 0 | **0** |
-| Rewrite operations | 0 | **0** |
-| Plan exit | 2 | **2** (359 + 130 decisions remain) |
-| Readiness exit | 1 | **1** (18 defect snapshots + live-state blockers) |
+Full plan arithmetic at the reviewed pre-amendment boundary (`019db41b`):
+4,536 findings = 2,216 deterministic + 496 decisionRequired + 0 unsupported
++ 1,250 alreadyValid + 574 quarantined; 2,011 operations (0 rewrite); 496
+decisions = 366 snapshot (359 windowless + 7 single-negative) + 130 live;
+105 snapshots = 38 restorable + 49 quarantined + 18 defect. The post-#439
+boundary adds the 7 S to deterministic (366 → 359 snapshot decisions;
+2,216 → 2,223 deterministic findings).
+
+**Conditional target boundary (NOT current, NOT already authorized).** The
+following values are the target **only if** all of: (1) the row-8 era
+extraction proves the required production population (every row-8
+companion captured at/after the approved scheduler boundary
+`2026-05-05T00:00:00Z`); (2) the trusted capture-timestamp contract
+(Section 11.5E) is approved and implemented; (3) every companion in each
+snapshot satisfies a proven predicate (Sections 11.5B–11.5D); (4) the
+complete translated profile set structurally validates; (5) production
+revalidation passes under #404:
+
+| Metric | Conditional target boundary |
+|---|---|
+| Deterministic snapshot-entry findings | **786** (212 + 574 Class A) |
+| Deterministic findings total (plan) | **2,797** (2,223 + 574; = 2,216 + 581 = 574 + 7) |
+| Quarantined entries | **0** |
+| Quarantined snapshots | **0** |
+| Defect snapshots | **18** (unchanged) |
+| Restorable snapshots | **87** (38 + 49) |
+| Snapshot decisions | **359** (unchanged) |
+| Live decisions | **130** (unchanged, blocking) |
+| Unsupported findings | **0** |
+| Rewrite operations | **0** |
+| Plan exit | **2** |
+| Readiness exit | **1** |
 
 No double counting: the 7 S records are separate from the 133 windowless
 decisions (they leave the decision set while the 133 stay); the 574 Class A
@@ -1462,14 +1604,14 @@ PR #439 (post-#439 production revalidation observed 0 single-minus-one
 snapshot decisions and 212 deterministic snapshot-entry findings =
 205 never-active + 7 S). The 359 snapshot decisions and 130 live decisions
 remain unchanged and blocking; unsupported stays 0; rewrite operations
-stay 0. All totals above reconcile against the current post-#439
-production boundary (`b6daa16`, plan fingerprint `115b0524…`, baseline
-`09b504b5…`): 786 − 212 = 574; 2,797 − 2,223 = 574; 2,797 − 2,216 = 581 =
-574 + 7; 87 − 38 = 49; 359 = 366 − 7. These counts are the authoritative
-expected boundary **under the corrected condition** (Section 11.5D); if the
-required companion evidence (Section 11.5B gaps G1/G2) shows any of the 49
-snapshots contains an unproven companion category, that snapshot stays
-quarantined and the affected counts reduce accordingly (fail closed).
+stay 0. Arithmetic against the current boundary: 786 − 212 = 574;
+2,797 − 2,223 = 574; 2,797 − 2,216 = 581 = 574 + 7; 87 − 38 = 49;
+359 = 366 − 7. The conditional values must not be presented as the current
+or already-approved production outcome: if the row-8 era evidence (Section
+11.5B, the sole remaining gap) shows any of the 49 snapshots contains a
+pre-boundary or era-unknown row-8 companion, that snapshot stays
+quarantined and the final counts are recalculated from reviewed evidence
+rather than forced.
 
 ### 11.9 Simplicity Check (final)
 
@@ -1486,9 +1628,10 @@ fail-closed exclusions.
 result, required only to avoid classifier/translator divergence on the
 same snapshot (Sections 11.5D, 11.7).
 - **Deferred:** the 359 remaining snapshot decisions; generic historical
-translation frameworks; additional mode support; the row-11 ResourceType
-companion proof (gap G1) and the row-8 era proof (gap G2) until their
-smallest extractions return; migration work.
+translation frameworks; additional mode support; the row-8 era proof
+(the sole remaining evidence gap) until its smallest extraction returns
+and the trusted timestamp contract (Section 11.5E) is approved;
+migration work.
 - **Responsibilities:** predicates identify exact raw shapes; the
 qualification combines them per snapshot; the translator materializes the
 complete profile set; the structural validator validates the combined
@@ -1541,9 +1684,10 @@ this predicate or translates deterministically at full capacity (proven
 for the 49 observed snapshots)" and the snapshot-wide
 `max(count, namedResources.length) × hoursPerDay × 5` result): superseded
 for the snapshot-wide condition by the version-2 companion evidence
-(Sections 11.5A–11.5D, 2026-08-06) — the 49 snapshots contain 1,014
-companion entries; the corrected condition is Section 11.5D and the
-corrected capacity rule is Section 11.5C. The per-entry Class A analysis
+(Sections 11.5A–11.5E, 2026-08-06) — the 49 snapshots contain 1,014
+companion entries; the corrected condition is Section 11.5D, the
+corrected capacity rule is Section 11.5C and the trusted-era contract is
+Section 11.5E. The per-entry Class A analysis
 (Section 11.5, 43 NamedResource + 531 ResourceType entries) remains
 valid.
 - Section 4.3 ("cannot be decided from the available sanitized evidence"):
