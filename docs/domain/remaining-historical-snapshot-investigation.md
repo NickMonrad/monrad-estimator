@@ -1127,30 +1127,40 @@ duplicate owner, unknown mode, invalid/non-finite value or structural
 defect. The approval is not generalised to arbitrary unobserved
 ResourceType shapes.
 
-**Sole remaining evidence gap — row 8 era dependency.** Rows 8–10 carry
-`allocationPercent` 1–99. For TIMELINE (rows 9–10) the percentage branch
-existed in both eras, so they are era-independent. For explicit
-`CAPACITY_PLAN` (row 8), the `allocationPercent` branch began at
-`74b98d3` (2026-05-05); before that the scheduler defaulted to 100, so a
-pre-boundary row-8 entry would historically have contributed 100% but
-translates at 1–99%. The version-2 evidence reports no companion-era
-buckets, so the row-8 population cannot yet be proven captured under the
-later scheduler contract. Until the row-8 era extraction returns and the
-trusted capture-timestamp contract (Section 11.5E) is approved, the
-corrected condition fails closed on row-8 companions (era-unknown) and
-snapshots containing them keep their current classification. No new
-predicate is invented; no code is implemented here.
+**Sole remaining evidence gap — row 8 activation dependency.** Rows 8–10
+carry `allocationPercent` 1–99. For TIMELINE (rows 9–10) the percentage
+branch existed throughout the snapshot era, so they are independent of the
+transition. For explicit `CAPACITY_PLAN` (row 8), the scheduler consumed
+`allocationPercent` only from the `74b98d3` branch onward (committed
+2026-05-05T01:59:46Z, merged to `main` via PR #239 at
+2026-05-05T03:16:19Z); before that the scheduler defaulted to 100, so a
+snapshot captured under the earlier scheduler would historically have
+contributed 100% but translates at 1–99%. The version-2 evidence reports
+no snapshot-era buckets, and — decisively — **no reviewed evidence proves
+when any commit containing the `74b98d3` percentage branch was installed
+and active on the snapshot-writing environment** (Section 11.5E): the
+midnight `2026-05-05T00:00:00Z` cutoff is withdrawn and no safe timestamp
+boundary is currently proven. Until a reviewed activation instant exists
+and the row-8 extraction is run against it, the corrected condition fails
+closed on row-8 companions and snapshots containing them keep their
+current classification. No new predicate is invented; no code is
+implemented here.
 
-**Sole additional aggregate production extraction needed (read-only,
-sanitized, aggregate-only — extend the reviewed snapshot-evidence command's
-`classACompanionEvidence` section with snapshot-era categories, run under
-#404):**
+**Sole additional evidence required (two stages, read-only and sanitized):**
 
-1. Row-8 entry count by trusted snapshot-era category: before the approved
-   scheduler boundary (`2026-05-05T00:00:00Z`); at/after the boundary;
-   capture timestamp unavailable or invalid.
-2. Distinct selected snapshot count containing row-8 entries in each of
-   those categories.
+1. **Operational activation evidence (first):** a reviewed record under
+   #404 of the earliest UTC instant at which a `main` commit containing the
+   `74b98d3` percentage branch was installed and serving on the
+   snapshot-writing environment (e.g. that machine's local
+   deployment/launchd/checkout/install records). No evidence tooling is
+   authorized against an invented boundary.
+2. **Aggregate extraction (only after stage 1):** extend the reviewed
+   snapshot-evidence command's `classACompanionEvidence` section to report
+   row-8 entry count by trusted snapshot-era category against the reviewed
+   activation instant (before / at-or-after / capture timestamp
+   unavailable-or-invalid) and the distinct selected snapshot count
+   containing row-8 entries in each category. No identifiers, names,
+   payloads, raw timestamps or exact per-record values are emitted.
 
 No ResourceType count/cardinality extraction is required.
 
@@ -1228,12 +1238,15 @@ and keeps the approved per-entry predicates unchanged:
 4. Every NamedResource companion matches one exact proven observed
    predicate: rows 1–7, 9–10 and 12 under their existing mode-specific
    rules; row 7 through the existing never-active rule; row 8 only when
-   the trusted capture timestamp (Section 11.5E) is at/after the approved
-   scheduler boundary `2026-05-05T00:00:00Z`.
+   the trusted capture timestamp (`BacklogSnapshot.createdAt`, Section
+   11.5E) is at/after an **independently proven scheduler activation
+   instant** (`ROW8_PROVEN_SAFE_AFTER`; none is currently proven, so row 8
+   fails closed).
 5. Companion acceptance is based on exact raw predicates and proven
    historical scheduler semantics, **not** on the current plan label
    (`alreadyValid`), generic translation success, generic deterministic
-   translation, all-windowless, all-100% or "full capacity".
+   translation, calendar date alone, commit time alone, all-windowless,
+   all-100% or "full capacity".
 6. No entry may require a decision, be unsupported, remain quarantined
    outside the exact Class A entry being resolved, have unresolved
    ownership, use an unknown mode, carry invalid or non-finite fields,
@@ -1247,8 +1260,9 @@ and keeps the approved per-entry predicates unchanged:
 9. These cases fail closed (the snapshot keeps its current classification;
    the 49 quarantined snapshots remain quarantined until every companion
    of the snapshot is proven): empty snapshot; no exact Class A
-   ResourceType entry; pre-boundary row-8 entry; missing/invalid/untrusted
-   capture era; unobserved companion shape; inherited-mode entries;
+   ResourceType entry; no reviewed activation boundary; row-8 `createdAt`
+   before the proven activation instant; missing or invalid `createdAt`;
+   unobserved or unproven companion shape; inherited-mode entries;
    partial CAPACITY_PLAN windows; alias conflicts; percents outside the
    observed categories; any other unproven entry.
 
@@ -1261,11 +1275,13 @@ rules.
 
 ### 11.5E Trusted snapshot-era context (design only, for the later #438 implementation)
 
-The row-8 era gate requires trusted capture-time metadata to reach the one
-shared qualification path. This subsection defines the smallest viable
-contract; **nothing here is implemented by this design PR.**
+The row-8 gate requires two separate facts: **when the snapshot row was
+captured** and **when the scheduler behaviour that consumed
+`allocationPercent` for explicit `CAPACITY_PLAN` was known to be active on
+the snapshot-writing environment**. The design must keep them distinct;
+**nothing here is implemented by this design PR.**
 
-**Authoritative timestamp source — `BacklogSnapshot.createdAt`.**
+**Fact 1 — capture time: `BacklogSnapshot.createdAt` (proven).**
 Repository evidence:
 
 - `server/prisma/schema.prisma`: `BacklogSnapshot.createdAt DateTime
@@ -1279,34 +1295,63 @@ Repository evidence:
 - The only `backlogSnapshot.update` (`productionRemediationApply.ts`)
   rewrites only the `snapshot` JSON field; no write path modifies
   `createdAt` — it is immutable in practice.
-- The reviewed snapshot-evidence command already derives
-  `snapshotEraCategory(createdAtIso)` from this field for the era buckets
-  of the emitted reports (`server/src/lib/snapshotEvidence.ts`), with the
-  exact boundary constant `2026-05-05T00:00:00Z` (UTC).
 
-Caveat recorded by the evidence command: the timestamp is the capture/insert
-time, not proof of the exact historical writer. That is sufficient for the
-row-8 era gate, whose boundary is a scheduler-contract date (`74b98d3`,
-2026-05-05); the row-8 era extraction (Section 11.5B) validates the
-production population against the same boundary before the conditional
-target is authorized. Current time, project timestamps, Git commit dates
-and payload-derived eras are never used.
+`createdAt` proves **when the snapshot row was inserted**. It does **not**
+identify which application commit was running when that snapshot was
+created. The reviewed snapshot-evidence command's `snapshotEraCategory`
+helper (`server/src/lib/snapshotEvidence.ts`) is **observational evidence
+only** — its own documentation states the era category is "a directly
+available metadata grouping only" and is not proof of the exact historical
+writer. It is not implementation authority for the row-8 gate and its
+`2026-05-05T00:00:00Z` date buckets are not a runtime cutoff.
 
-**Shared design contract.** One narrow, direct input — no generic
-historical-policy framework:
+**Fact 2 — scheduler activation instant: NOT currently proven.** The
+`allocationPercent` branch for explicit `CAPACITY_PLAN` entered the code
+base at commit `74b98d30b871b1928f039df033f9cc175044c3a7`
+(`fix(#233): stabilize squad planner timeline`, committed
+2026-05-05T01:59:46Z) and reached `main` via PR #239 (merge commit
+`ee6d178`, merged 2026-05-05T03:16:19Z). Neither the commit nor the merge
+timestamp establishes when that code was **installed and active** on the
+machine that wrote the historical snapshots. No reviewed evidence of any
+deployment, installation or activation of `74b98d3`/PR #239 or a
+descendant on the snapshot-writing environment exists: the repository has
+no deployment records or releases, and the only documented production
+installs (under #404) begin 2026-08-01 with commit `282f9bd`. A snapshot
+created on the same calendar date as the commit did not necessarily run
+that commit. **The design therefore withdraws the earlier
+`2026-05-05T00:00:00Z` midnight cutoff and states that no safe timestamp
+boundary is currently proven.** Commit author/committer time, merge time,
+calendar dates, current application state, snapshot payload shape and
+project modification timestamps are never used as activation evidence.
+
+**Smallest operational evidence required to establish an activation
+boundary.** A reviewed record, posted under #404, of the earliest UTC
+instant at which a `main` commit containing the `74b98d3` percentage branch
+(PR #239 merge `ee6d178` or a descendant) was installed and serving on the
+environment that wrote the historical snapshots — e.g. the machine's local
+deployment/launchd/checkout or install records. Until such evidence exists,
+the activation boundary constant remains unspecified and row 8 stays
+fail-closed. No evidence tooling is authorized against an invented
+boundary.
+
+**Shared design contract.** One narrow, direct input plus one reviewed
+policy constant — no generic historical-policy framework:
 
 ```ts
 type SnapshotHistoricalContext = { capturedAt: Date | null }
+// plus one reviewed constant or injected policy value representing the
+// proven activation instant (called e.g. ROW8_PROVEN_SAFE_AFTER);
+// unspecified until the operational evidence above exists.
 ```
 
-(a bare `capturedAt` parameter is sufficient where no other context is
-needed). The one shared mixed-Class-A qualification path
+The one shared mixed-Class-A qualification path
 (`qualifyMixedClassASnapshot` or equivalent, replacing the current
 `isClassASnapshot`) receives:
 
 - the raw `SnapshotV2` data;
 - `projectId` where currently required;
-- the trusted capture timestamp (`snapshot.createdAt`).
+- the trusted capture timestamp (`snapshot.createdAt`);
+- the reviewed activation-instant constant.
 
 It produces **one qualification result** (approved entries, per-ResourceType
 captured-NR counts, and fail-closed reasons) computed before
@@ -1320,26 +1365,31 @@ materialisation and consumed by: restorability classification
 and direct utilities/tests. There is no parallel remediation-plan policy,
 no classifier/translator circular dependency (predicates feed the
 qualification; the qualification feeds translation; translation never
-feeds the qualification), and the era check is implemented exactly once.
+feeds the qualification), and **one** row-8 comparison — never an
+independently reimplemented cutoff.
 
-**Fail-closed rules.**
+**Fail-closed rules (row 8).**
 
-- A row-8 companion at/after the approved boundary
-  (`2026-05-05T00:00:00Z` UTC, the exact instant the `74b98d3` scheduler
-  branch existed; comparisons are instant-based in UTC, never date-only)
-  may qualify.
-- A row-8 companion before the boundary does **not** qualify for the 1–99
+- With a proven activation instant `A` (exact UTC instant, instant
+  comparison, never date-only): a row-8 companion with `createdAt ≥ A`
+  may qualify; with `createdAt < A` it does **not** qualify for the 1–99
   translation (it keeps its current classification; its percentage is
   never silently changed to 100).
-- Missing, invalid or untrusted capture timestamp → row 8 does not
-  qualify; the snapshot stays under its current classification.
+- Missing or invalid `createdAt` → does not qualify.
+- **No proven activation instant** → does not qualify (boundary
+  unavailable or unapproved).
+- The row-8 raw shape differs from the exact approved shape → does not
+  qualify.
 - Every unrelated proven companion category continues to use its own
-  exact predicate and is unaffected by the era gate.
-- A snapshot containing an unqualified row-8 entry remains quarantined.
+  exact predicate and is unaffected by the row-8 gate.
+- A snapshot containing an unqualified row-8 entry remains under its
+  current quarantine classification.
 
-**Required future tests (for #438, not this PR):** immediately before /
- at / immediately after the boundary instant; missing timestamp; invalid
-timestamp; post-boundary row 8 accepted; pre-boundary row 8 rejected;
+**Required future tests (for #438, not this PR):** activation boundary
+unavailable; capturedAt missing; capturedAt invalid; immediately before
+the proven activation instant; exactly at the proven activation instant;
+immediately after it; **commit timestamp alone does not grant eligibility**;
+pre-activation row 8 remains quarantined; post-activation row 8 qualifies;
 classifier/translator agreement; rollback preflight/materialisation
 agreement; retention agreement; remediation-plan agreement; readiness
 agreement; evidence agreement.
@@ -1456,13 +1506,16 @@ windowless quarantine class for the exact observed shape):**
   classifier and translator (predicates feed the qualification; the
   qualification feeds translation; translation never feeds the
   qualification).
-- Inputs: the raw `SnapshotV2` plus the trusted capture timestamp
-  (`BacklogSnapshot.createdAt`, Section 11.5E) — the qualification path
-  receives both; classifier and translator consume the same qualification
-  result.
-- One exact era gate (implemented once, in the shared qualification path)
-  for row-8 companions: trusted `capturedAt` at/after
-  `2026-05-05T00:00:00Z` (UTC instant comparison).
+- Inputs: the raw `SnapshotV2`, the trusted capture timestamp
+  (`BacklogSnapshot.createdAt`, Section 11.5E) and **one reviewed
+  activation-instant constant** (`ROW8_PROVEN_SAFE_AFTER`, exact UTC
+  instant; currently unspecified because no activation evidence is
+  proven) — the qualification path receives all three; classifier and
+  translator consume the same qualification result.
+- One exact row-8 comparison (implemented once, in the shared
+  qualification path): trusted `capturedAt` at/after the proven
+  activation instant (instant comparison, never date-only); with no
+  proven activation instant the comparison fails closed.
 - Two-phase (or equivalent) translation: (1) exact per-entry qualification
   (Class A, S, row-11, row-7, row-8-era-gated, ordinary companions) before
   any profile is materialised; (2) build the complete translated profile
@@ -1491,8 +1544,10 @@ windowless quarantine class for the exact observed shape):**
   partial primary windows, 1–99% percents, `(-1,-1)` pairs); and the
   `routes/resourceProfile.ts` n=0 display branch caveat.
 - No hardcoded production counts, IDs, fingerprints, timestamps or
-  evidence-row numbers in runtime logic; the corrected condition is a
-  predicate over the captured payload plus the trusted capture timestamp.
+  evidence-row numbers in runtime logic; the activation-instant constant
+  is a single reviewed/injected policy value, never embedded ad hoc; the
+  corrected condition is a predicate over the captured payload plus the
+  trusted capture timestamp plus that constant.
 
 **Focused tests for the implementation issue:** classifier predicates
 (accept the exact S and Class A shapes; reject every listed exclusion),
@@ -1552,7 +1607,7 @@ Observed at application commit `b6daa164ded0950e1c510b82da97913424b59155`
 | Unsupported findings | **0** |
 | Rewrite operations | **0** |
 | Plan exit | **2** (359 + 130 decisions remain) |
-| Readiness exit | **1** (18 defect snapshots + live-state blockers) |
+| Readiness exit (expected/derived — the post-#439 production run did not execute permanent readiness) | **1** (18 defect snapshots + live-state blockers) |
 
 Full plan arithmetic at the reviewed pre-amendment boundary (`019db41b`):
 4,536 findings = 2,216 deterministic + 496 decisionRequired + 0 unsupported
@@ -1563,14 +1618,15 @@ boundary adds the 7 S to deterministic (366 → 359 snapshot decisions;
 2,216 → 2,223 deterministic findings).
 
 **Conditional target boundary (NOT current, NOT already authorized).** The
-following values are the target **only if** all of: (1) the row-8 era
-extraction proves the required production population (every row-8
-companion captured at/after the approved scheduler boundary
-`2026-05-05T00:00:00Z`); (2) the trusted capture-timestamp contract
-(Section 11.5E) is approved and implemented; (3) every companion in each
-snapshot satisfies a proven predicate (Sections 11.5B–11.5D); (4) the
-complete translated profile set structurally validates; (5) production
-revalidation passes under #404:
+following values are the target **only if** all of: (1) a reviewed
+scheduler activation instant is established from operational evidence and
+the row-8 extraction against it proves the required production population
+(every row-8 companion captured at/after the proven activation instant;
+Section 11.5E — none is currently proven); (2) the trusted capture-time
+and activation-instant contract (Section 11.5E) is approved and
+implemented; (3) every companion in each snapshot satisfies a proven
+predicate (Sections 11.5B–11.5D); (4) the complete translated profile set
+structurally validates; (5) production revalidation passes under #404:
 
 | Metric | Conditional target boundary |
 |---|---|
@@ -1585,7 +1641,7 @@ revalidation passes under #404:
 | Unsupported findings | **0** |
 | Rewrite operations | **0** |
 | Plan exit | **2** |
-| Readiness exit | **1** |
+| Readiness exit (expected) | **1** |
 
 No double counting: the 7 S records are separate from the 133 windowless
 decisions (they leave the decision set while the 133 stay); the 574 Class A
@@ -1628,10 +1684,11 @@ fail-closed exclusions.
 result, required only to avoid classifier/translator divergence on the
 same snapshot (Sections 11.5D, 11.7).
 - **Deferred:** the 359 remaining snapshot decisions; generic historical
-translation frameworks; additional mode support; the row-8 era proof
-(the sole remaining evidence gap) until its smallest extraction returns
-and the trusted timestamp contract (Section 11.5E) is approved;
-migration work.
+translation frameworks; additional mode support; the row-8 proof (the
+sole remaining evidence gap) until a reviewed scheduler activation
+instant is established, the row-8 extraction against it returns and the
+trusted capture-time + activation-instant contract (Section 11.5E) is
+approved; migration work.
 - **Responsibilities:** predicates identify exact raw shapes; the
 qualification combines them per snapshot; the translator materializes the
 complete profile set; the structural validator validates the combined

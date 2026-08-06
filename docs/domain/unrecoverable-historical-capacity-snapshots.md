@@ -797,9 +797,12 @@ the captured snapshot** — their historical phantom contribution
 derivable from the captured `count` and NamedResource collection, so **no
 ResourceType count/cardinality production extraction is required**. Row 8
 (1–99% `allocationPercent` on explicit `CAPACITY_PLAN`) remains the sole
-production evidence gap (era dependency; investigation Section 11.5B). See
-the investigation document Sections 11.5A–11.5E and 11.7 for the full
-corrected proof and the sole remaining extraction.
+production evidence gap (scheduler-activation dependency: no reviewed
+evidence proves when a commit containing the `74b98d3` percentage branch
+was installed and active on the snapshot-writing environment —
+investigation Sections 11.5B and 11.5E). See the investigation document
+Sections 11.5A–11.5E and 11.7 for the full corrected proof and the sole
+remaining evidence requirement.
 
 ## 12. Evidence-backed amendment (Issue #430) — design only, not implemented
 
@@ -880,8 +883,9 @@ Class A or the exact observed row-11 TIMELINE/null-window/100 shape and
 to translate to the captured phantom aggregate ROLE representation, every
 NamedResource companion to match an exact proven observed predicate
 (investigation Section 11.5B rows 1–7, 9–10 and 12; row 7 via the
-never-active rule; row 8 only with trusted capturedAt at/after the
-approved scheduler boundary `2026-05-05T00:00:00Z`), no companion to
+never-active rule; row 8 only with trusted capturedAt at/after an
+independently proven scheduler activation instant — none is currently
+proven, so row 8 fails closed), no companion to
 require a decision, be unsupported, quarantined, unresolved, unknown-mode,
 erroring or structurally failing, the S predicate independently accepted,
 all translated profiles validated as one complete set, and fail-closed
@@ -959,15 +963,18 @@ deterministic; the S changes were already implemented (PR #439); the 359
 snapshot and 130 live decisions remain unchanged. These target values are
 the **conditional target boundary** (investigation Section 11.8), not the
 current production boundary: the current observed boundary at `b6daa16`
-(212 / 2,223 / 574 / 49 / 18 / 38 / 359 / 130 / 0 / 0 / exit 2 / exit 1)
-remains authoritative until a corrected implementation is merged and
-revalidated under #404. The target applies only if the row-8 era evidence
-proves the required population, the trusted capture-timestamp contract is
-approved and implemented, every companion satisfies a proven predicate,
-the complete translated set validates and production revalidation passes;
-any snapshot with a pre-boundary or era-unknown row-8 companion stays
-quarantined and the final counts are recalculated from reviewed evidence
-rather than forced.
+(212 / 2,223 / 574 / 49 / 18 / 38 / 359 / 130 / 0 / 0 / plan exit 2 /
+expected readiness exit 1) remains authoritative until a corrected
+implementation is merged and revalidated under #404 (the post-#439
+production run did not execute permanent readiness; exit 1 is
+expected/derived, not observed). The target applies only if a reviewed
+scheduler activation instant is established, the row-8 extraction against
+it proves the required population, the trusted capture-time and
+activation-instant contract is approved and implemented, every companion
+satisfies a proven predicate, the complete translated set validates and
+production revalidation passes; any snapshot with a pre-activation or
+unproven-era row-8 companion stays quarantined and the final counts are
+recalculated from reviewed evidence rather than forced.
 
 ## Appendix — Sources reviewed
 
