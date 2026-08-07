@@ -779,6 +779,31 @@ document and in
 Section 11 (Issue #430). No runtime behaviour changes through that
 investigation; the amendment is design-only pending review.
 
+**Correction (2026-08-06) — version-2 Class A companion evidence (Issue
+#442, design correction; Issue #404 comment `5199220388`, run at commit
+`b6daa164ded0950e1c510b82da97913424b59155`, PR #441, formatVersion 2;
+sanitized summary at Issue #438 comment `5199221492`):** the 49 Class A
+snapshots are **not** an all-windowless/full-capacity population — they
+contain 1,014 companion entries (71 ResourceType + 943 NamedResource) with
+mixed modes, windows and percentages, including 377 NamedResources with
+`allocationPercent` 1–99 and many windowed entries. The snapshot-wide
+condition in Section 12.2 is therefore corrected: companions are accepted
+only under their own proven historical translation semantics (Sections
+11.5A–11.5B of the investigation document), the per-ResourceType capacity
+rule becomes the corrected equation of investigation Section 11.5C, and
+the 71 ResourceType TIMELINE companions (row 11) are **deterministic from
+the captured snapshot** — their historical phantom contribution
+`max(0, count − total captured NamedResources) × hoursPerDay × 5` is fully
+derivable from the captured `count` and NamedResource collection, so **no
+ResourceType count/cardinality production extraction is required**. Row 8
+(1–99% `allocationPercent` on explicit `CAPACITY_PLAN`) remains the sole
+production evidence gap (scheduler-activation dependency: no reviewed
+evidence proves when a commit containing the `74b98d3` percentage branch
+was installed and active on the snapshot-writing environment —
+investigation Sections 11.5B and 11.5E). See the investigation document
+Sections 11.5A–11.5E and 11.7 for the full corrected proof and the sole
+remaining evidence requirement.
+
 ## 12. Evidence-backed amendment (Issue #430) — design only, not implemented
 
 Status: **design only, pending review** — this section amends the approved
@@ -848,9 +873,35 @@ the legacy `resourceTypes.ts` `PUT` (`74b98d3`) accepted `count` from the
 request body without synchronising the NamedResource collection, so no
 historical invariant guaranteed `count ≥ namedResources.length`. `count`,
 `hoursPerDay` and the per-RT NamedResource set are all captured in the V2
-payload. The condition is snapshot-wide: the predicate fails closed if any
-entry of the snapshot is not windowless-100% (or otherwise
-deterministically full-capacity).
+payload. The original snapshot-wide condition — every entry windowless-100%
+(or otherwise deterministically full-capacity) — is **superseded by the
+corrected mixed-Class-A condition** (investigation document Section 11.5D):
+the version-2 companion evidence proves the 49 snapshots contain 1,014
+companion entries, so the corrected condition requires at least one exact
+Class A ResourceType entry, every ResourceType entry to be either exact
+Class A or the exact observed row-11 TIMELINE/null-window/100 shape and
+to translate to the captured phantom aggregate ROLE representation, every
+NamedResource companion to match an exact proven observed predicate
+(investigation Section 11.5B rows 1–7, 9–10 and 12; row 7 via the
+never-active rule; row 8 only with trusted capturedAt at/after an
+independently proven scheduler activation instant — none is currently
+proven, so row 8 fails closed), no companion to
+require a decision, be unsupported, quarantined, unresolved, unknown-mode,
+erroring or structurally failing, the S predicate independently accepted,
+all translated profiles validated as one complete set, and fail-closed
+handling of empty snapshots, snapshots without an exact Class A
+ResourceType entry, pre-era/unknown-era row-8 entries and every
+unobserved or unproven shape. The per-ResourceType capacity rule is the
+corrected equation of investigation Section 11.5C: `Σ captured
+NamedResource contributions + max(0, count − captured NamedResource count)
+× hoursPerDay × 5`, where the phantom subtraction uses **all** captured
+NamedResources of the ResourceType, never only the exact Class A subset,
+and every approved ResourceType (exact Class A and exact row-11)
+materialises the aggregate ROLE at `max(0, count − total captured
+NamedResources) × 100`. The simplified
+`max(count, namedResources.length) × hoursPerDay × 5` formula is retained
+only as the explanation of the former all-NamedResources-unbounded-100%
+assumption.
 
 **Lossless translation (verified against the current capacity-consumption
 contract):** the current scheduler contract consumes ROLE profile segments
@@ -904,6 +955,26 @@ restorable snapshots 38 → 87; snapshot decisions 366 → 359; live decisions
 130 (unchanged); unsupported 0; rewrite operations 0; plan exit 2;
 readiness exit 1. See the investigation document Section 11.8 for the full
 table and arithmetic.
+
+The 1,014 companion entries change no count: they are already represented
+by existing deterministic (204 never-active) and alreadyValid (810) plan
+findings; only the 574 exact Class A entries change from quarantined to
+deterministic; the S changes were already implemented (PR #439); the 359
+snapshot and 130 live decisions remain unchanged. These target values are
+the **conditional target boundary** (investigation Section 11.8), not the
+current production boundary: the current observed boundary at `b6daa16`
+(212 / 2,223 / 574 / 49 / 18 / 38 / 359 / 130 / 0 / 0 / plan exit 2 /
+expected readiness exit 1) remains authoritative until a corrected
+implementation is merged and revalidated under #404 (the post-#439
+production run did not execute permanent readiness; exit 1 is
+expected/derived, not observed). The target applies only if a reviewed
+scheduler activation instant is established, the row-8 extraction against
+it proves the required population, the trusted capture-time and
+activation-instant contract is approved and implemented, every companion
+satisfies a proven predicate, the complete translated set validates and
+production revalidation passes; any snapshot with a pre-activation or
+unproven-era row-8 companion stays quarantined and the final counts are
+recalculated from reviewed evidence rather than forced.
 
 ## Appendix — Sources reviewed
 
